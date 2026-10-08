@@ -137,7 +137,7 @@
       "reachable": true
     },
     "transcription.route": {
-      "what": "Where dictation audio goes: the local engine, or a named cloud provider and model.",
+      "what": "Where dictation audio goes (the local engine, or a named cloud provider and model), and Dictation's languages: local Whisper decodes with them, and a cloud route is sent the language when exactly one is chosen and detects it otherwise (KNEG-370). Imports share both.",
       "writtenBy": [
         "dictation_use_local",
         "dictation_set_cloud_provider",
@@ -236,6 +236,14 @@
       "ui": "Settings > Meetings",
       "reachable": true
     },
+    "meetings.deleteRecordings": {
+      "what": "Whether each meeting's recording is deleted once its note is saved with a whole transcript (KNEG-409). Off by default. Read once, by MeetingRuntime::start, into the meeting's plan, which the session holds and which is written beside the recording, so Stop and a later recovery act on the choice the meeting started with; a recovered recording with no plan beside it follows the setting as it is then. Discard ignores it: Discard always deletes the recording. A note saved from typed notes alone, or from the running transcript because the whole-recording pass failed, keeps its recording, and both the outcome and the note's recording details say so; so does a deletion that fails.",
+      "writtenBy": [
+        "meeting_set_delete_recordings"
+      ],
+      "ui": "Settings > Meetings",
+      "reachable": true
+    },
     "calendar.google.clientId": {
       "what": "The OAuth client ID the user registers themselves. There is no embedded client; the screen says why.",
       "writtenBy": [
@@ -277,7 +285,7 @@
       "reachable": true
     },
     "audio.inputDevice": {
-      "what": "The microphone dictation and meetings record from, by device name; absent for the system default (KNEG-341). One choice for both tasks, the owner's call on 2026-10-06: read at startup into dictation's recorder and by MeetingRuntime::start when a meeting begins. Until then the choice lived only in memory and was gone after every restart, and meetings always opened the default. A device that is not connected when recording starts falls back to the system default (kw_audio_core::Capture::start); the Dictation microphone menu and the Meetings microphone chip say so beforehand.",
+      "what": "The microphone dictation and meetings record from, by device name; absent for the system default (KNEG-341). One choice for both tasks, the owner's call on 2026-10-06: read at startup into dictation's recorder and by MeetingRuntime::start when a meeting begins. Until then the choice lived only in memory and was gone after every restart, and meetings always opened the default. Chosen in the microphone menu on Dictation or on Meetings (KNEG-364), both through dictation_set_device, and read by the Meetings microphone check (microphone_check) as a meeting reads it. A device that is not connected when recording starts falls back to the system default (kw_audio_core::Capture::start); both microphone menus say so beforehand. A meeting already running keeps the microphone it opened, and its live view names that one.",
       "writtenBy": [
         "dictation_set_device"
       ],

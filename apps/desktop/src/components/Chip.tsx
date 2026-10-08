@@ -16,16 +16,17 @@ import { Icon } from "./Icon";
  *     up in Settings; until then each is a link) -- and so gets
  *     `aria-pressed`.
  *   - **Static**, with neither: not a control at all but a statement of what
- *     is in effect -- Meetings' microphone, which is chosen on Dictation and
- *     shared (KNEG-341), and every chip in its live view, where nothing can be changed
- *     until the meeting ends. That one is a `span.chip.chip-static`: drawn
+ *     is in effect -- every chip in Meetings' live view, where nothing can be
+ *     changed until the meeting ends, the microphone among them: the one the
+ *     meeting opened (KNEG-364). That one is a `span.chip.chip-static`: drawn
  *     like the others so the strip reads as one row, but not a button, so it
  *     is not in the tab order and does not offer a press that does nothing.
  *
  * A chip that chooses among values in place is not this component but
  * `ChipMenu`, which draws the same chip and opens a menu from it -- since
  * KNEG-385, Dictation's microphone, which was a native select styled as a
- * chip before that.
+ * chip before that, and since KNEG-364 Meetings' microphone before a meeting
+ * starts.
  *
  * The label ellipsises inside the chip's 260px cap, so `title` defaults to the
  * whole label: "Microphone Array (Realtek(R) Audio)" still reads in full under
@@ -50,7 +51,8 @@ import { Icon } from "./Icon";
  *     press does nothing. `disabled` stays for a chip that is simply
  *     unavailable.
  *   - `srText` is visually hidden text after the label, for what `title`
- *     explains -- Meetings' microphone, which one it is and where it is chosen.
+ *     explains -- the live meeting's microphone, that it is the one the
+ *     meeting opened and a choice made now waits for the next recording.
  */
 export function Chip({
   icon,

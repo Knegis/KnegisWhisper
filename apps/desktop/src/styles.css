@@ -511,6 +511,26 @@ h2,
 .hero-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 16px; margin-top: 24px; }
 .hero-actions > button { margin: 0; height: 38px; padding: 0 16px; border-radius: 2px; font-size: 14.5px; }
 .hero-actions > .learn-more { margin: 0; }
+
+/*
+ * A capture's live level (`components/LevelMeter.tsx`, KNEG-371): flat square
+ * segments in a row, lit from the left. Lit is `--band`, as the live
+ * transcript's caret is (`.live-caret`): a live fill beside a recording, not
+ * the marked state, which is a band with text on it. Unlit is `--faint`, so
+ * the meter's length shows at silence and a quiet room reads as quiet rather
+ * than as a meter that is missing. The one
+ * transition is the fill swap, 80ms -- short enough that ten readings a
+ * second read as movement, not lag. Reduced motion takes it away, and
+ * `useAudioLevel` holds the meter to four changes a second.
+ */
+.level-meter { display: inline-flex; align-items: center; gap: 2px; flex: none; vertical-align: middle; }
+.level-segment { display: block; width: 6px; height: 10px; background: var(--faint); transition: background-color 80ms linear; }
+.level-segment-lit { background: var(--band); }
+@media (prefers-reduced-motion: reduce) { .level-segment { transition: none; } }
+/* Dictation's, under "Listening…": wide enough to see from across the desk. */
+.hero-meter { display: flex; margin-top: 14px; }
+.hero-meter .level-segment { width: 8px; height: 12px; }
+
 /*
  * A shortcut's keys may break onto the next line between keys, never inside
  * one. They were kept on one line together, and a four-key accelerator at
@@ -648,7 +668,22 @@ button.control-copy { display: inline-flex; align-items: center; gap: 6px; heigh
 /* Dictation's Discard, drawn as Meetings' is (`.live-actions`): the Kit's secondary edge, and its icon. */
 .control-row > button.secondary { display: inline-flex; align-items: center; gap: 8px; }
 /* The body's gap spaces its children; a caveat's or a disclosure's own top margin would double it. */
-.control-body > .caveat, .control-body > .learn-more { margin: 0; }
+.control-body > .caveat, .control-body > .learn-more, .control-body > .failure-line { margin: 0; }
+/*
+ * Meetings' microphone check (KNEG-364): its line, and while it listens the
+ * meter beside it, wrapping under it in a narrow window. "Heard nothing" is a
+ * caveat, as wide as the others.
+ */
+.microphone-check { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; min-width: 0; }
+.microphone-check > p { margin: 0; }
+.microphone-check > .caveat { flex: 1 1 100%; }
+/*
+ * Meetings' name field (KNEG-365), in the room left of Start, at the row's
+ * 38px and the Kit's 2px corner. Its fill is every text field's (`# Text
+ * fields keep theirs`, below). It wraps onto a line of its own, whole, where
+ * the row is too narrow for both.
+ */
+.control-row > input.meeting-name { flex: 1 1 220px; min-width: 0; height: 38px; margin: 0; border-radius: 2px; }
 /* Meetings' Start carries the recording mark, the one round shape the Kit allows. */
 .start-dot { width: 10px; height: 10px; flex-shrink: 0; border-radius: 50%; background: currentColor; }
 
@@ -681,8 +716,12 @@ button.control-copy { display: inline-flex; align-items: center; gap: 6px; heigh
 .live-status-stalled { color: var(--text); }
 .live-clock { color: var(--text); font-variant-numeric: tabular-nums; }
 .rec-dot { width: 8px; height: 8px; flex-shrink: 0; border-radius: 50%; background: var(--rec); }
-.live-title { margin: 8px 0 0; font-family: var(--font-sans); font-size: 28px; line-height: 36px; letter-spacing: -0.3px; text-transform: none; color: var(--text); }
+.live-title { margin: 8px 0 0; font-family: var(--font-sans); font-size: 28px; line-height: 36px; letter-spacing: -0.3px; text-transform: none; color: var(--text); overflow-wrap: anywhere; }
 .live-sub { margin: 2px 0 0; font-size: 13.5px; line-height: 20px; color: var(--muted); overflow-wrap: anywhere; }
+/* The two captures' levels, each named in the machine voice, wrapping under each other in a narrow window. */
+.live-levels { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 24px; margin-top: 10px; }
+.live-level { display: inline-flex; align-items: center; gap: 10px; }
+.live-level-label { min-width: 6ch; font: 12px/16px var(--font-mono); letter-spacing: .5px; text-transform: uppercase; color: var(--muted); }
 .live-caveats { display: flex; flex-direction: column; gap: 10px; padding: 14px 28px 0; }
 .live-caveats > .caveat, .live-caveats > .error { margin: 0; }
 .live-transcript { flex: 1; min-height: 160px; display: flex; flex-direction: column; padding: 18px 28px 0; }
@@ -1397,6 +1436,22 @@ button.transcript-play:hover:not(:disabled) { color: var(--text); }
 .transcript-row-current { background: var(--band-wash); }
 .transcript .transcript-row-current .transcript-clock { color: var(--band-text); }
 
+/*
+ * A playing row with word timings (KNEG-408) is drawn word by word, and the
+ * word being said is a solid `--band` fill with `--band-ink` text -- the
+ * marked colours, on the row's wash. The shadow widens the fill without
+ * moving a letter. `TranscriptPanel` moves the class every animation frame;
+ * under reduced motion the fill jumps from word to word rather than fading.
+ */
+.transcript-word {
+  border-radius: 2px;
+  cursor: pointer;
+  transition: background-color 120ms ease-out, color 120ms ease-out, box-shadow 120ms ease-out;
+}
+.transcript-word:hover { text-decoration: underline; text-underline-offset: 3px; }
+.transcript-word-current { background: var(--band); color: var(--band-ink); box-shadow: 0 0 0 2px var(--band); }
+@media (prefers-reduced-motion: reduce) { .transcript-word { transition: none; } }
+
 /* Wrap on narrow notes while keeping the field and actions beside their label when space permits. */
 .transcript-rename {
   display: flex;
@@ -1756,6 +1811,15 @@ label:has(> input[type="checkbox"]) {
   .indicator-recording {
     animation: none;
   }
+}
+
+/* The microphone's level beside "Recording", at the panel's right edge (KNEG-371). */
+.overlay-level {
+  margin-left: auto;
+}
+
+.overlay-level .level-segment {
+  width: 5px;
 }
 
 /* ------------------------------------------------- meeting notification */
@@ -2258,6 +2322,10 @@ button.floating-microphone:hover:not(:disabled) { background: transparent; color
 .microphone-glyph { position: relative; display: block; width: 20px; height: 20px; background: currentColor; mask: url('./assets/microphone.svg') center / contain no-repeat; opacity: 0; transform: scale(0.8); transition: opacity 120ms ease, transform 160ms ease; pointer-events: none; }
 .floating-microphone:is(:hover, :focus-visible, :active, [data-expanded="true"]) .microphone-glyph { opacity: 1; transform: scale(1); }
 .microphone-glyph.speaking { mask-image: url('./assets/microphone-speaking.svg'); }
+/* The level, a 2px strip under the glyph inside the recording pill (KNEG-371): the glyph's white, unlit at a third. */
+.microphone-level { position: absolute; left: 50%; bottom: 3px; gap: 1px; transform: translateX(-50%); pointer-events: none; }
+.microphone-level .level-segment { width: 3px; height: 2px; background: rgb(255 255 255 / 0.35); }
+.microphone-level .level-segment-lit { background: currentColor; }
 .microphone-spinner { position: relative; display: block; width: 18px; height: 18px; border: 2px solid #8888; border-top-color: currentColor; border-radius: 50%; animation: microphone-spin 1s linear infinite; }
 @keyframes microphone-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .microphone-spinner { animation: none; } .microphone-controls::before, .microphone-glyph { transition: none; } }
@@ -2380,6 +2448,8 @@ button.microphone-language-toggle:hover:not(:disabled) { background: transparent
 .notes-main:has(> .note-detail-wide) { overflow: hidden; scrollbar-gutter: auto; }
 .note-detail-wide > .note-body { scrollbar-gutter: stable; }
 .notes-notices { flex: none; padding-top: 12px; }
+/* Always drawn, as the page's live region (KNEG-401), and taking no room while it says nothing. */
+.notes-notices:empty { padding-top: 0; }
 .notes-main:has(> .note-detail-wide) > .notes-notices { width: calc(100% - 340px); overflow: hidden; scrollbar-gutter: stable; }
 .notes-notices > p { margin-block: 0 6px; }
 .notes-notices .row { display: flex; flex-wrap: wrap; gap: 2px 10px; padding-block: 0 6px; }
@@ -2433,6 +2503,15 @@ button.notes-folder-toggle:hover:not(:disabled) { background: var(--panel-hover)
 .notes-folder-notes > .panel-item { padding-left: 45px; }
 .notes-folder-empty { margin: 0; padding: 5px 10px 5px 45px; font-size: 12.5px; line-height: 18px; color: var(--muted); }
 .notes-hit .panel-item-meta { overflow-wrap: anywhere; }
+/* A person in the library's People list (KNEG-362): a folder's row -- icon, name, count -- that
+ * narrows the library while pressed, filled as a current row is. */
+/* Trash, at the foot of the panel (KNEG-401), is the same row: icon, name, count, filled while
+ * its notes replace the tree. Its own classes, so nothing counting people counts it. */
+button:is(.notes-person, .notes-trash) { display: flex; align-items: center; gap: 7px; width: 100%; height: 32px; margin: 0; padding: 0 10px 0 12px; border-radius: 2px; text-align: left; font-size: 14px; line-height: 20px; }
+button:is(.notes-person, .notes-trash):hover:not(:disabled) { background: var(--panel-hover); }
+button:is(.notes-person, .notes-trash)[aria-pressed="true"], button:is(.notes-person, .notes-trash)[aria-pressed="true"]:hover:not(:disabled) { background: var(--selected); }
+:is(.notes-person, .notes-trash) > .icon:first-child { color: var(--muted); }
+:is(.notes-person-name, .notes-trash-label) { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 /* Filing by drag: the note in the air fades, the group under the pointer gets the site blue as
  * an outline, and a "No folder" strip appears below the folders while a filed note is being
  * dragged, so taking a note out of a folder has somewhere to land even when nothing is unfiled.
@@ -2503,11 +2582,53 @@ button.notes-folder-toggle:hover:not(:disabled) { background: var(--panel-hover)
 .note-actions { display: flex; align-items: center; gap: 4px; margin-left: auto; }
 .note-actions .save-status { flex: none; margin: 0 8px 0 0; font-size: 12.5px; }
 button.note-action-button { flex: none; display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; margin: 0; padding: 0; border-radius: 2px; }
-.note-page, .notes-notices > * { max-width: 760px; margin-inline: auto; padding-right: 40px; padding-left: clamp(40px, calc(468px - 50%), 88px); }
+.note-page, .notes-notices > *, .trash-space, .trash-choose { max-width: 760px; margin-inline: auto; padding-right: 40px; padding-left: clamp(40px, calc(468px - 50%), 88px); }
+/*
+ * Trash's page (KNEG-401): what its recordings take and Empty trash, in the note's measure, above
+ * the note in Trash that is open, which reads as a note does but can't be edited: a banner saying
+ * where it is, with Restore and Delete forever, its title as the title field draws one, and its
+ * typed notes as plain text.
+ */
+.trash-space { width: 100%; padding-top: 24px; padding-bottom: 4px; }
+.trash-space > p { margin: 0 0 6px; }
+.trash-space > button { margin: 8px 0 0; }
+.trash-choose { width: 100%; margin-block: 24px 0; }
+.trashed-note { flex: none; }
+.trashed-note-banner { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 10px 14px; border: 1px solid var(--rule); border-radius: 2px; }
+.trashed-note-banner > p { flex: 1 1 12rem; margin: 0; }
+.trashed-note-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.trashed-note-actions > button { margin: 0; }
+.trashed-note-header .note-meta { margin-top: 12px; }
+.trashed-note-title { margin: 22px 0 0; color: var(--text); font-family: inherit; font-size: 32px; line-height: 40px; letter-spacing: -0.4px; text-transform: none; overflow-wrap: anywhere; }
+.trashed-note-text { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.6; }
+/* "Your notes" in the machine voice the workspace's `h2` gives it; an `h3` here, under the title's `h2`. */
+.trashed-note .note-section-heading { margin-top: 24px; font-family: var(--font-mono); line-height: 16px; letter-spacing: 0.5px; text-transform: uppercase; }
 .note-page { padding-top: 14px; padding-bottom: 32px; }
 .note-page > .save-status.error { margin: 0 0 12px; }
 .note-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 18px; margin: 12px 0 0; padding: 0; list-style: none; font-size: 13.5px; line-height: 20px; color: var(--muted); }
 .note-meta li { display: flex; align-items: center; gap: 6px; min-width: 0; }
+/*
+ * A note's people (`components/NotePeople.tsx`, KNEG-362): one item of the
+ * meta row, each person a chip in `--text` with a small remove button, then
+ * Add person. The chips wrap within the item, and while the form or a refusal
+ * is showing the item takes the row's whole width, so they sit on lines of
+ * their own under the chips rather than squeezed beside them.
+ */
+.note-meta li.note-people { flex-wrap: wrap; row-gap: 6px; }
+.note-meta li.note-people[data-open], .note-meta li.note-people[data-error] { flex-basis: 100%; }
+.note-people-list { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; margin: 0; padding: 0; list-style: none; }
+.note-meta li.note-person { gap: 0; height: 24px; padding: 0 0 0 8px; border: 1px solid var(--rule); border-radius: 2px; color: var(--text); }
+.note-person-name { min-width: 0; max-width: 240px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+button.note-person-remove { display: flex; align-items: center; justify-content: center; width: 22px; height: 22px; margin: 0; padding: 0; color: var(--muted); }
+button.note-person-remove:hover:not(:disabled) { color: var(--text); }
+button.note-people-add { display: inline-flex; align-items: center; gap: 4px; height: 24px; margin: 0; padding: 0 6px; color: var(--muted); font-size: 13px; }
+button.note-people-add:hover:not(:disabled), button.note-people-add[aria-expanded="true"] { color: var(--text); }
+.note-people-form { flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; }
+.note-people-form label { display: flex; flex-direction: column; gap: 2px; flex: 1 1 12rem; min-width: 0; max-width: 18rem; font-size: 12.5px; }
+.note-people-form input { width: 100%; min-width: 0; height: 32px; }
+.note-people-form-actions { display: flex; gap: 4px; }
+.note-people-form button { height: 32px; margin: 0; padding: 0 12px; }
+.note-people-error { flex-basis: 100%; margin: 0; overflow-wrap: anywhere; }
 /*
  * The note's tabs: the open one underlined in `--band` over a rule the width
  * of the page. The underline is a rule, so it is square. Scoped to

@@ -692,7 +692,16 @@ export type MeetingState = "idle" | "recording" | "recording-without-transcript"
  * never worked produces. [`Delivered`] carries which of the possible answers
  * applies, and says plainly that two of them cannot be told apart.
  */
-export type Sources = { microphone: boolean, systemAudio: boolean,
+export type Sources = { microphone: boolean,
+/**
+ * The microphone the meeting opened, by its device name; `None` when
+ * the device gave none (KNEG-364). From the capture
+ * (`kw_audio_core::Capture::device_name`), not from the setting: a choice
+ * that was not connected falls back to the default, and a choice made
+ * while the meeting runs applies to the next one, so the live view names
+ * this rather than what is chosen now.
+ */
+microphoneName: string | null, systemAudio: boolean,
 /**
  * Why system audio is not being captured, when it is not.
  */
@@ -717,6 +726,45 @@ systemAudioReason: string | null, };
 export type Delivered = "not-captured" | "nothing" | "silence" | "audio";
 
 /**
+ * What a meeting is saved as, chosen before it starts (KNEG-365).
+ *
+ * Held by the session and written beside the recording
+ * ([`draft::write_plan`]) as it starts, so every way a meeting ends applies
+ * it: Stop or Discard from the meeting window with the Meetings page not
+ * open, the local API, and recovery after a crash. The page that chose it
+ * keeps nothing.
+ *
+ * `#[serde(default)]` on the whole struct, so a plan written before a field
+ * was added still reads, with that field's default.
+ */
+export type MeetingPlan = {
+/**
+ * The meeting's name, tidied as the note's title will be
+ * ([`note_title`]). `None` names the note for when the meeting started.
+ */
+title: string | null,
+/**
+ * The folder the note is saved to, or `None` for no folder. A folder
+ * deleted before the note is saved is left out, and the outcome says so
+ * (`MeetingOutcome::Saved::folder_missing`).
+ */
+folderId: number | null,
+/**
+ * Whether the recording is deleted once its transcript is saved
+ * (KNEG-409): Settings > Meetings' choice, read at Start
+ * ([`plan_at_start`]), never a caller's. A plan written before this
+ * existed reads `false`, and keeps its recording.
+ */
+deleteRecording: boolean, };
+
+/**
+ * What became of a saved meeting's recording, when it was to be deleted.
+ *
+ * `None` in the outcome where it was not asked to be.
+ */
+export type RecordingRemoval = "deleted" | "kept-incomplete" | "delete-failed";
+
+/**
  * What can be said about the meeting session.
  */
 export type MeetingStatus = { state: MeetingState,
@@ -739,7 +787,12 @@ transcriptFailure: string | null,
 /**
  * The provider in use, while there is one.
  */
-provider: string | null, elapsedSeconds: number, sources: Sources | null,
+provider: string | null,
+/**
+ * What the running meeting will be saved as (KNEG-365). `None` unless a
+ * meeting is recording: like `provider`, it belongs to the session.
+ */
+plan: MeetingPlan | null, elapsedSeconds: number, sources: Sources | null,
 /**
  * What this platform can do about system audio, whether or not a meeting is
  * running.
@@ -816,7 +869,22 @@ reconnects: number,
  * True when the whole-file pass failed and the overlapping live
  * partials were saved instead.
  */
-transcriptIsPartials: boolean, } | { "outcome": "nothing-transcribed", recordingPath: string, mic: Delivered, system: Delivered,
+transcriptIsPartials: boolean,
+/**
+ * True when the folder chosen before Start was deleted before the
+ * note was saved, so the note is in no folder (KNEG-365).
+ */
+folderMissing: boolean,
+/**
+ * What became of the recording when the meeting was to delete it
+ * once saved (KNEG-409); `None` when it was not, or when it could
+ * not be attached (`recording_attached` says that).
+ */
+recordingRemoval: RecordingRemoval | null,
+/**
+ * Why deleting it failed, with `RecordingRemoval::DeleteFailed`.
+ */
+recordingRemovalError: string | null, } | { "outcome": "nothing-transcribed", recordingPath: string, mic: Delivered, system: Delivered,
 /**
  * Scheduled live-session reconnects still happened even when no words
  * were produced. Keeping the count makes this successful provider work
@@ -824,7 +892,13 @@ transcriptIsPartials: boolean, } | { "outcome": "nothing-transcribed", recording
  */
 reconnects: number, } | { "outcome": "cancelled", noteId: number | null, } | { "outcome": "failed", message: string, };
 
-export type RecoverableRecording = { storageKey: string, hasNotes: boolean, };
+export type RecoverableRecording = { storageKey: string, hasNotes: boolean,
+/**
+ * The name the meeting was given before Start, from the plan beside it
+ * (KNEG-365), tidied as the recovered note's title will be. `None` when
+ * it was given none, or has no plan.
+ */
+title: string | null, };
 
 /**
  * An offer to record a meeting that appears to be happening.
@@ -963,7 +1037,22 @@ endpoints: number, } | { "state": "failed", mechanism: string, reason: string, }
 /**
  * A note, as listed.
  */
-export type Note = { id: number, title: string, content: string, recordingDetails: string | null, noteType: string, enhancedContent: string | null, folderId: number | null, transcript: string | null, participants: string | null, audioDurationSeconds: number | null, createdAt: string | null, updatedAt: string | null, };
+export type Note = { id: number, title: string, content: string, recordingDetails: string | null, noteType: string, enhancedContent: string | null, folderId: number | null, transcript: string | null, participants: string | null, audioDurationSeconds: number | null,
+/**
+ * Where the transcript was made: a [`TranscribedBy`] as JSON, kept raw
+ * and read leniently, as `participants` is (KNEG-368). `None` when it was
+ * never recorded -- notes from before then, typed notes, and OpenWhispr
+ * and shared-folder imports.
+ */
+transcribedBy: string | null, createdAt: string | null, updatedAt: string | null,
+/**
+ * When the note was moved to Trash (KNEG-401), `None` while it is not in
+ * it. A note in Trash is the same row with this set: it keeps its
+ * recording, its search index rows and its people, and every list,
+ * search and count leaves it out until it is restored. Only [`get`]
+ * returns it, so the screen can say it is in Trash.
+ */
+trashedAt: string | null, };
 
 /**
  * A folder.
@@ -1030,6 +1119,66 @@ participants?: string | null, audioDurationSeconds?: number | null, };
 export type NoteUpdateRequest = { title?: string | null, content?: string | null, folderId?: number | null, };
 
 /**
+ * One of a note's people, as the renderer sends them: an email, a name, or
+ * both (KNEG-362). Checked and tidied by `people::set_participants`.
+ */
+export type ParticipantRequest = { email?: string | null, displayName?: string | null, };
+
+/**
+ * Someone named by email on at least one note: a row of the Notes panel's
+ * People list.
+ */
+export type Person = {
+/**
+ * Trimmed and lower-case, which is how a person is told apart, and what
+ * [`list_by_person`] is given to find their notes.
+ */
+email: string,
+/**
+ * The display name on the most recently updated note that gives one.
+ * `None` when no note names them.
+ */
+name: string | null,
+/**
+ * How many notes they are on.
+ */
+noteCount: number, };
+
+/**
+ * A note in Trash, as the Trash lists it.
+ */
+export type TrashedNote = { id: number, title: string,
+/**
+ * When it was moved to Trash, as SQLite's `CURRENT_TIMESTAMP` writes it.
+ */
+trashedAt: string,
+/**
+ * Whether a recording is attached: it is deleted with the note.
+ */
+hasRecording: boolean,
+/**
+ * The attached recording's length. `None` with no recording, or one
+ * whose length was never measured.
+ */
+recordingSeconds: number | null,
+/**
+ * What the recording's file takes on disk, read from the file itself. 0
+ * with no recording, or one whose file is missing.
+ */
+recordingBytes: number,
+/**
+ * The name of the file the recording was copied from, for an import. The
+ * original was never the app's and deleting forever doesn't touch it.
+ */
+originalFilename: string | null, };
+
+/**
+ * Everything in Trash, most recently trashed first, and what their
+ * recordings take on this computer altogether.
+ */
+export type TrashSummary = { notes: Array<TrashedNote>, recordingBytes: number, };
+
+/**
  * Which format to emit.
  */
 export type Format = "txt" | "md" | "json" | "srt" | "vtt";
@@ -1048,6 +1197,12 @@ filename: string, content: string,
  * say so rather than showing an export that looks empty for no reason.
  */
 segmentCount: number, };
+
+/**
+ * One timed word of a [`Segment`] (KNEG-408): seconds from the start of the
+ * recording, or epoch milliseconds when its segment's are.
+ */
+export type Word = { text: string, start: number, end: number, };
 
 /**
  * One transcript segment as a playable row: normalised to seconds from the
@@ -1084,7 +1239,16 @@ speaker: string | null,
  * The raw diarisation label a rename addresses; absent for typed names,
  * capture sources, and anonymous segments without a label.
  */
-speakerId: string | null, text: string, };
+speakerId: string | null, text: string,
+/**
+ * The row word by word, on the row's clock, for highlighting each word
+ * as the recording plays (KNEG-408). Empty unless the segment's words
+ * still spell its text, whitespace aside: a row whose text changed after
+ * it was transcribed is highlighted as a row, never at words it no
+ * longer has. Empty, too, for every note saved before KNEG-408 and every
+ * engine but local Whisper.
+ */
+words: Array<Word>, };
 
 /**
  * A recording attached to a note, as stored.
@@ -1226,7 +1390,64 @@ leavesDevice: boolean,
 /**
  * Present when the route cannot be resolved at all.
  */
-problem: string | null, };
+problem: string | null,
+/**
+ * The language a cloud route sends with the audio, as `route::resolve`
+ * settled it from Dictation's languages and each provider's own rule
+ * (xAI and Mistral drop one outside the languages they list, Corti
+ * needs one). `None` where the
+ * provider detects the language itself, on the local route, which reads
+ * the languages on its own, and on a route with a problem (KNEG-370).
+ * Read rather than re-derived, so a screen never repeats those rules.
+ */
+cloudLanguage: string | null, };
+
+/* ----------------------------------------------------------- sound levels */
+/**
+ * What a level is for, so each meter listens only to its own.
+ */
+export type LevelSession = "dictation" | "meeting" | "microphone-check";
+
+/**
+ * Which capture a level is from.
+ */
+export type LevelSource = "microphone" | "system";
+
+/**
+ * One reading of one capture's level.
+ */
+export type AudioLevel = { session: LevelSession, source: LevelSource,
+/**
+ * 0 at −60 dBFS or quieter, 1 at full scale, linear in decibels
+ * (`kw_audio_core::level_from_rms`). The loudest block since the last
+ * reading, so a short sound is not missed between two.
+ */
+level: number, };
+
+/**
+ * What a microphone check found.
+ */
+export type MicrophoneCheck = {
+/**
+ * The microphone the check opened, by its device name; `None` when the
+ * device gave none.
+ */
+device: string | null,
+/**
+ * The microphone chosen, when it was not connected and the check tested
+ * the system default (`device`) instead; `None` when it tested the one
+ * chosen, or none was chosen.
+ */
+fellBack: string | null,
+/**
+ * Whether it heard someone: [`HEARD_READINGS`] readings at
+ * [`HEARD_LEVEL`] or louder.
+ */
+heard: boolean,
+/**
+ * The loudest reading, 0..1 as the meter shows it.
+ */
+peakLevel: number, };
 
 /* ---------------------------------------------------- local transcription */
 /**
@@ -1396,6 +1617,12 @@ export type UsedFor = "dictation" | "meetings";
  * rather than wonder whether the list is broken.
  */
 export type SherpaModelStatus = { id: string, name: string, sizeMb: number | null, language: string | null,
+/**
+ * The registry's language codes, which the settings list filters by
+ * (KNEG-330). `language` says only "multilingual" for two models that do
+ * not share a language list: one has Swedish, the other does not.
+ */
+supportedLanguages: Array<string> | null,
 /**
  * Whether the extracted directory has the measured transducer layout.
  *

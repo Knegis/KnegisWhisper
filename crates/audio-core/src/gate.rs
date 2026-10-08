@@ -100,21 +100,15 @@ impl SpeechGate {
     }
 
     /// Observe a block of samples, computing its RMS and peak.
+    ///
+    /// The arithmetic is [`crate::level::block_rms_peak`]'s, shared with the
+    /// level meter so the two cannot disagree about how loud a block was.
     pub fn observe_samples(&mut self, samples: &[f32]) {
         if samples.is_empty() {
             return;
         }
 
-        let mut sum_squares = 0.0_f64;
-        let mut peak = 0.0_f32;
-        for sample in samples {
-            sum_squares += f64::from(*sample) * f64::from(*sample);
-            peak = peak.max(sample.abs());
-        }
-
-        #[allow(clippy::cast_possible_truncation)]
-        let rms = (sum_squares / samples.len() as f64).sqrt() as f32;
-
+        let (rms, peak) = crate::level::block_rms_peak(samples);
         self.observe(rms, peak);
     }
 

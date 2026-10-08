@@ -74,7 +74,9 @@ needs its own format and usability decision.
 
 ## Import and export properties to verify in a prototype
 
-- Export reads a consistent snapshot of the selected notes and related data.
+- Export reads a consistent snapshot of the selected notes and related data. A note in
+  Trash (KNEG-401) is in neither the preview nor a package: one moved there after the
+  preview is refused as moved or deleted.
   Audio copying must account for deletion or missing files during export.
 - Export flushes pending edits before capture and publishes the final file only
   after completion. Missing recordings require an explicit result, not silent loss.
@@ -139,7 +141,10 @@ state when transcripts are included. Without transcripts, summary source links a
 removed and metadata/source snapshots are excluded. No generation jobs are copied.
 Recording entries retain the original audio bytes, duration and a basename only for
 the original filename. Account settings, credentials, machine paths, calendar
-connections and voice profiles are excluded.
+connections and voice profiles are excluded. Where a note was transcribed
+(`transcribed_by`, KNEG-368) is not carried either, so the format is unchanged and a
+shared note arrives saying nothing about it. Export reads every `Note` column through
+`notes::COLUMNS`, so a column added to notes does not break it.
 
 Limits: 10,000 notes; 20,001 entries; 32 GiB uncompressed total; 4 GiB per recording;
 16 MiB per note; 256 MiB note documents in aggregate; 8 MiB manifest. WAV recordings

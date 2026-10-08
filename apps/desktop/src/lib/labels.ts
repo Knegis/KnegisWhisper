@@ -59,7 +59,6 @@ import type {
 } from "./ipc.js";
 
 import type { DiarizationRole } from "../generated/providers.js";
-import { LANGUAGES } from "./controlBar.js";
 import { meetingRecordingWarning } from "./meetingRecordingWarning.js";
 
 /**
@@ -987,6 +986,10 @@ export function meetingOutcomeLabel(outcome: MeetingOutcome): { text: string; mo
     case "saved": {
       const minutes = Math.round(outcome.durationSeconds / 60);
       const parts = [`Saved as a note (${minutes} min).`];
+      // The folder chosen before Start went while the meeting ran, and Rust
+      // saved the note rather than refuse it (KNEG-365). Said beside where it
+      // went, since the chip said somewhere else.
+      if (outcome.folderMissing) parts.push("The folder you chose was deleted, so the note isn't in a folder.");
       const recordingWarning = meetingRecordingWarning(outcome.recordingAttached);
       if (recordingWarning) parts.push(recordingWarning);
       if (outcome.transcriptIsPartials) {
@@ -1009,12 +1012,25 @@ export function meetingOutcomeLabel(outcome: MeetingOutcome): { text: string; mo
           `${outcome.gaps} stretch(es) of audio were never transcribed — the transcriber could not keep up.`,
         );
       }
+      // Settings › Meetings asked for the recording to go once the transcript
+      // was saved (KNEG-409), and this is what became of it. A deleted one
+      // has no path to give; one that couldn't be deleted says why behind
+      // Learn more.
+      const removal = outcome.recordingRemoval;
+      if (removal === "deleted") parts.push("The recording was deleted; the transcript is in the note.");
+      if (removal === "kept-incomplete") parts.push("The recording was kept because the transcript may be incomplete.");
+      if (removal === "delete-failed") parts.push("The recording couldn't be deleted, so it's still attached to the note.");
       if (outcome.reconnects > 0) {
         parts.push(reconnectLabel(outcome.reconnects));
       }
+      const why = removal === "delete-failed" && outcome.recordingRemovalError !== null
+        ? ` Deleting it failed: ${outcome.recordingRemovalError}`
+        : "";
       return {
         text: parts.join(" "),
-        more: `Note ${outcome.noteId}. The recording is at ${outcome.recordingPath}.`,
+        more: removal === "deleted"
+          ? `Note ${outcome.noteId}.`
+          : `Note ${outcome.noteId}. The recording is at ${outcome.recordingPath}.${why}`,
       };
     }
     case "nothing-transcribed":
@@ -1139,15 +1155,6 @@ export function useForLabel(used: UsedFor, inUse: boolean): string {
     case "meetings":
       return inUse ? "In use for meetings" : "Use for meetings";
   }
-}
-
-/**
- * A local model's language as a word: the registry stores a code, or
- * `multilingual` (KNEG-343). A code with no name here is shown as itself.
- */
-export function modelLanguage(code: string): string {
-  if (code === "multilingual") return "Many languages";
-  return LANGUAGES.find(([known]) => known === code)?.[1] ?? code;
 }
 
 /**

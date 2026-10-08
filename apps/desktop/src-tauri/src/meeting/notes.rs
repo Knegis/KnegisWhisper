@@ -48,6 +48,8 @@ pub(super) fn segment(
             AudioSource::Mic => "mic".to_owned(),
             AudioSource::System => "system".to_owned(),
         }),
+        // A live caption is timed as a whole, never word by word.
+        words: Vec::new(),
     }
 }
 
@@ -156,6 +158,38 @@ pub(super) async fn select_transcript(
     }
 }
 
+/// The route of the text `select_transcript` chose to save (KNEG-368): the
+/// live provider's when it is the live text -- a finished local stream, or the
+/// live partials kept because the whole-recording pass failed -- and `local`
+/// when it is that pass, which always runs on this computer. `None` when
+/// nothing was transcribed.
+pub(super) fn saved_provider<'a>(provider_id: &'a str, saved: &SavedTranscript) -> Option<&'a str> {
+    if saved.segments.is_empty() {
+        None
+    } else if saved.used_streaming || saved.from_partials {
+        Some(provider_id)
+    } else {
+        Some("local")
+    }
+}
+
+/// Where a meeting's saved transcript was made. A whole-recording pass after
+/// live captions from a provider off this computer names that provider as
+/// `live_name` (the ruling on KNEG-368): "on this computer" alone could read
+/// as a claim that no audio left it.
+pub(super) fn transcribed_by(
+    provider_id: &str,
+    saved: &SavedTranscript,
+) -> Option<kw_notes_core::TranscribedBy> {
+    let mut by = crate::transcribed_by::route(saved_provider(provider_id, saved)?)?;
+    if by.on_this_computer {
+        by.live_name = crate::transcribed_by::route(provider_id)
+            .filter(|live| !live.on_this_computer)
+            .map(|live| live.name);
+    }
+    Some(by)
+}
+
 /// What one pass over the finished recording produced.
 ///
 /// `timings` is empty when the engine returned none. Whisper answers that way
@@ -261,6 +295,19 @@ pub(super) fn labelled(
             }),
             speaker_is_placeholder: speaker.is_some(),
             source: None,
+            // Whisper's words for the passage, so its row highlights word by
+            // word as the recording plays (KNEG-408). The text is trimmed
+            // here and the words are not; the row compares them with
+            // whitespace aside, so the trim costs nothing.
+            words: timed
+                .words
+                .iter()
+                .map(|word| kw_notes_core::Word {
+                    text: word.text.clone(),
+                    start: word.start,
+                    end: word.end,
+                })
+                .collect(),
         });
     }
 
@@ -417,6 +464,104 @@ mod tests {
         assert_eq!(saved.segments.len(), 2);
     }
 
+    /* ------------------------------------- where it was transcribed (KNEG-368) */
+
+    #[tokio::test]
+    async fn a_streamed_local_transcript_was_made_on_this_computer() {
+        let saved = select_transcript(
+            "local-streaming",
+            &stream_transcript(),
+            None,
+            true,
+            std::future::pending(),
+        )
+        .await;
+        assert_eq!(
+            saved_provider("local-streaming", &saved),
+            Some("local-streaming")
+        );
+        let by = transcribed_by("local-streaming", &saved).unwrap();
+        assert!(by.on_this_computer);
+        assert_eq!(by.name, "this computer");
+        assert_eq!(by.live_name, None);
+    }
+
+    #[tokio::test]
+    async fn the_whole_pass_after_cloud_captions_is_local_and_names_the_captions() {
+        // The ruling: "on this computer" alone could read as a claim that no
+        // audio left it, when the live captions came from a cloud provider.
+        let saved = select_transcript(
+            "deepgram-realtime",
+            &stream_transcript(),
+            None,
+            true,
+            async { Ok((vec![segment("whole recording", 0.0, None)], None)) },
+        )
+        .await;
+        assert_eq!(saved_provider("deepgram-realtime", &saved), Some("local"));
+        let by = transcribed_by("deepgram-realtime", &saved).unwrap();
+        assert_eq!(by.provider, "local");
+        assert!(by.on_this_computer);
+        assert_eq!(by.live_name.as_deref(), Some("Deepgram Realtime"));
+
+        // Captions made on this computer too add nothing.
+        let saved = select_transcript("local", &stream_transcript(), None, true, async {
+            Ok((vec![segment("whole recording", 0.0, None)], None))
+        })
+        .await;
+        let by = transcribed_by("local", &saved).unwrap();
+        assert!(by.on_this_computer);
+        assert_eq!(by.live_name, None);
+    }
+
+    #[tokio::test]
+    async fn cloud_captions_kept_because_the_whole_pass_failed_name_the_cloud() {
+        let saved = select_transcript(
+            "deepgram-realtime",
+            &stream_transcript(),
+            None,
+            true,
+            async { Err("offline engine unavailable".into()) },
+        )
+        .await;
+        assert!(saved.from_partials);
+        assert_eq!(
+            saved_provider("deepgram-realtime", &saved),
+            Some("deepgram-realtime")
+        );
+        let by = transcribed_by("deepgram-realtime", &saved).unwrap();
+        assert_eq!(by.name, "Deepgram Realtime");
+        assert!(!by.on_this_computer);
+        assert_eq!(by.live_name, None);
+    }
+
+    #[tokio::test]
+    async fn nothing_transcribed_says_nothing_about_where() {
+        let quiet = select_transcript(
+            "local-streaming",
+            &MeetingTranscript::default(),
+            None,
+            false,
+            async { panic!("quiet streaming must not retranscribe") },
+        )
+        .await;
+        let empty_pass = select_transcript(
+            "deepgram-realtime",
+            &MeetingTranscript::default(),
+            None,
+            true,
+            async { Ok((Vec::new(), None)) },
+        )
+        .await;
+        for (provider, saved) in [
+            ("local-streaming", &quiet),
+            ("deepgram-realtime", &empty_pass),
+        ] {
+            assert_eq!(saved_provider(provider, saved), None, "{provider}");
+            assert_eq!(transcribed_by(provider, saved), None, "{provider}");
+        }
+    }
+
     #[test]
     fn pcm_round_trips_through_the_one_encoder() {
         // A second clamp-and-scale would be a second thing to get wrong, so this
@@ -455,6 +600,46 @@ mod tests {
             text: text.to_owned(),
             start,
             end,
+            words: Vec::new(),
+        }
+    }
+
+    fn timed_word(text: &str, start: f64, end: f64) -> kw_transcription_core::local::TimedWord {
+        kw_transcription_core::local::TimedWord {
+            text: text.to_owned(),
+            start,
+            end,
+        }
+    }
+
+    #[test]
+    fn a_passages_words_stay_with_its_segment_labelled_or_not() {
+        // KNEG-408: the meeting's whole-recording pass keeps the words
+        // whisper timed, so its note's rows highlight word by word.
+        let mut pass = two_utterances();
+        pass.timings[0].words = vec![
+            timed_word("Morning", 0.0, 0.6),
+            timed_word("all.", 0.7, 1.9),
+        ];
+        let expected = vec![
+            kw_notes_core::Word {
+                text: "Morning".to_owned(),
+                start: 0.0,
+                end: 0.6,
+            },
+            kw_notes_core::Word {
+                text: "all.".to_owned(),
+                start: 0.7,
+                end: 1.9,
+            },
+        ];
+        let turns = [turn(0, 0.0, 2.2), turn(1, 2.4, 5.1)];
+        for (segments, _) in [
+            labelled(&pass, None, false),
+            labelled(&pass, Some(&turns), true),
+        ] {
+            assert_eq!(segments[0].words, expected);
+            assert!(segments[1].words.is_empty());
         }
     }
 

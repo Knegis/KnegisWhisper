@@ -8,7 +8,7 @@
 //! prose, not query expressions.
 
 use kw_storage::StorageError;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, SqliteConnection, SqlitePool};
 use std::collections::BTreeMap;
 use ts_rs::TS;
@@ -29,8 +29,43 @@ pub struct Note {
     pub transcript: Option<String>,
     pub participants: Option<String>,
     pub audio_duration_seconds: Option<f64>,
+    /// Where the transcript was made: a [`TranscribedBy`] as JSON, kept raw
+    /// and read leniently, as `participants` is (KNEG-368). `None` when it was
+    /// never recorded -- notes from before then, typed notes, and OpenWhispr
+    /// and shared-folder imports.
+    pub transcribed_by: Option<String>,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
+    /// When the note was moved to Trash (KNEG-401), `None` while it is not in
+    /// it. A note in Trash is the same row with this set: it keeps its
+    /// recording, its search index rows and its people, and every list,
+    /// search and count leaves it out until it is restored. Only [`get`]
+    /// returns it, so the screen can say it is in Trash.
+    pub trashed_at: Option<String>,
+}
+
+/// Where a note's transcript was made, as `Note::transcribed_by` stores it.
+///
+/// `provider` is the id the route reported (`local`, a registry id, a live
+/// meeting provider's id, `self-hosted` or `custom`); `name` is what a person
+/// reads. `live_name` is a meeting's live-caption provider when the saved
+/// transcript was made on this computer and the captions were not.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscribedBy {
+    pub provider: String,
+    pub name: String,
+    pub on_this_computer: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live_name: Option<String>,
+}
+
+impl TranscribedBy {
+    /// The JSON `Note::transcribed_by` holds.
+    #[must_use]
+    pub fn to_json(&self) -> Option<String> {
+        serde_json::to_string(self).ok()
+    }
 }
 
 /// A folder.
@@ -54,6 +89,8 @@ pub struct NewNote {
     pub transcript: Option<String>,
     pub participants: Option<String>,
     pub audio_duration_seconds: Option<f64>,
+    /// [`TranscribedBy`] as JSON, for a note saved with a transcript.
+    pub transcribed_by: Option<String>,
 }
 
 /// Create a note, returning its id.
@@ -78,8 +115,8 @@ async fn create_on<'e, E: sqlx::Executor<'e, Database = sqlx::Sqlite>>(
     let id: i64 = sqlx::query_scalar(
         "INSERT INTO notes
             (title, content, note_type, folder_id, transcript, participants,
-             audio_duration_seconds, recording_details)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             audio_duration_seconds, recording_details, transcribed_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
          RETURNING id",
     )
     .bind(&title)
@@ -90,6 +127,7 @@ async fn create_on<'e, E: sqlx::Executor<'e, Database = sqlx::Sqlite>>(
     .bind(&note.participants)
     .bind(note.audio_duration_seconds)
     .bind(&note.recording_details)
+    .bind(&note.transcribed_by)
     .fetch_one(pool)
     .await?;
 
@@ -154,9 +192,13 @@ async fn create_with_recording_on(
     Ok((id, recording))
 }
 
-const COLUMNS: &str =
+/// Every column `Note` is read from. Crate-wide, so every reader of a whole
+/// note -- `sharing::capture` too -- follows a column added here instead of
+/// failing to decode it.
+pub(crate) const COLUMNS: &str =
     "id, title, content, recording_details, note_type, enhanced_content, folder_id, transcript, \
-                       participants, audio_duration_seconds, created_at, updated_at";
+                       participants, audio_duration_seconds, transcribed_by, created_at, updated_at, \
+                       trashed_at";
 
 /// One note by id.
 pub async fn get(pool: &SqlitePool, id: i64) -> Result<Option<Note>, StorageError> {
@@ -185,19 +227,18 @@ pub async fn list(
     // get an honest `has_more` and no cursor rather than a broken one.
     //
     // The WHERE clause is assembled from fixed fragments and every value is
-    // bound, so nothing a caller sends reaches the SQL text.
+    // bound, so nothing a caller sends reaches the SQL text. A note in Trash
+    // is never listed (KNEG-401).
     let mut sql = format!("SELECT {COLUMNS} FROM notes");
-    let mut clauses: Vec<&str> = Vec::new();
+    let mut clauses: Vec<&str> = vec!["trashed_at IS NULL"];
     if note_type.is_some() {
         clauses.push("note_type = ?");
     }
     if folder_id.is_some() {
         clauses.push("folder_id = ?");
     }
-    if !clauses.is_empty() {
-        sql.push_str(" WHERE ");
-        sql.push_str(&clauses.join(" AND "));
-    }
+    sql.push_str(" WHERE ");
+    sql.push_str(&clauses.join(" AND "));
     sql.push_str(" ORDER BY updated_at DESC LIMIT ?");
 
     let mut query = sqlx::query_as::<_, Note>(&sql);
@@ -227,7 +268,8 @@ impl NoteUpdate {
     }
 }
 
-/// Apply a partial update, returning whether the note existed.
+/// Apply a partial update, returning whether the note existed. A note in
+/// Trash is not edited, and answers as one that isn't there (KNEG-401).
 ///
 /// Partial rather than whole-record, because a caller that only wants to move a
 /// note to a folder should not have to send the content back — and a caller that
@@ -243,7 +285,7 @@ pub async fn update(pool: &SqlitePool, id: i64, change: &NoteUpdate) -> Result<b
     if change.is_empty() {
         // Nothing asked for, so nothing done -- but the caller still wants to
         // know whether the note is there.
-        let exists = sqlx::query("SELECT 1 FROM notes WHERE id = ?")
+        let exists = sqlx::query("SELECT 1 FROM notes WHERE id = ? AND trashed_at IS NULL")
             .bind(id)
             .fetch_optional(pool)
             .await?;
@@ -262,7 +304,10 @@ pub async fn update(pool: &SqlitePool, id: i64, change: &NoteUpdate) -> Result<b
     }
     sets.push("updated_at = CURRENT_TIMESTAMP");
 
-    let sql = format!("UPDATE notes SET {} WHERE id = ?", sets.join(", "));
+    let sql = format!(
+        "UPDATE notes SET {} WHERE id = ? AND trashed_at IS NULL",
+        sets.join(", ")
+    );
     let mut query = sqlx::query(&sql);
     if let Some(title) = &change.title {
         query = query.bind(title.clone());
@@ -372,7 +417,8 @@ const SEGMENT_SPAN: i64 = 1 << 20;
 ///
 /// Returns an empty result for a query with nothing searchable in it, rather
 /// than every note — an empty search box should not look like a full-table
-/// scan.
+/// scan. A note in Trash keeps its index rows, so Restore needs no
+/// re-indexing, and is never a hit (KNEG-401).
 pub async fn search(
     pool: &SqlitePool,
     query: &str,
@@ -394,7 +440,7 @@ pub async fn search(
                 CASE WHEN notes.id IN (SELECT rowid FROM notes_fts WHERE content MATCH ?1) THEN 1 WHEN notes.id IN (SELECT rowid FROM notes_fts WHERE transcript_text MATCH ?1) THEN 3 ELSE -1 END AS matched
          FROM notes_fts
          JOIN notes ON notes.id = notes_fts.rowid
-         WHERE notes_fts MATCH ?1
+         WHERE notes_fts MATCH ?1 AND notes.trashed_at IS NULL
          ORDER BY rank
          LIMIT ?2",
     )
@@ -517,6 +563,25 @@ pub async fn folders(pool: &SqlitePool) -> Result<Vec<Folder>, StorageError> {
     .await?)
 }
 
+/// `folder_id` while that folder still exists, and `None` once it is gone.
+///
+/// For a folder chosen before the note it is for exists -- a meeting's,
+/// chosen at Start and used at Stop (KNEG-365). `notes.folder_id` references
+/// `folders` and the foreign key is enforced, so a note saved with a deleted
+/// folder's id is refused outright rather than filed nowhere.
+pub async fn existing_folder(
+    pool: &SqlitePool,
+    folder_id: Option<i64>,
+) -> Result<Option<i64>, StorageError> {
+    let Some(id) = folder_id else {
+        return Ok(None);
+    };
+    Ok(sqlx::query_scalar("SELECT id FROM folders WHERE id = ?")
+        .bind(id)
+        .fetch_optional(pool)
+        .await?)
+}
+
 /// Delete a folder. Its notes survive, with no folder.
 pub async fn delete_folder(pool: &SqlitePool, id: i64) -> Result<bool, StorageError> {
     let result = sqlx::query("DELETE FROM folders WHERE id = ?")
@@ -532,13 +597,14 @@ pub async fn delete_folder(pool: &SqlitePool, id: i64) -> Result<bool, StorageEr
 /// "leave it alone" -- the right reading for a partial update and the wrong
 /// one for "no folder", so a caller could never unfile a note through it.
 /// `updated_at` is deliberately not touched: filing a note is not working on
-/// it, and the sidebar orders by that column.
+/// it, and the sidebar orders by that column. A note in Trash is not moved,
+/// and answers as one that isn't there (KNEG-401).
 pub async fn set_folder(
     pool: &SqlitePool,
     id: i64,
     folder_id: Option<i64>,
 ) -> Result<bool, StorageError> {
-    let result = sqlx::query("UPDATE notes SET folder_id = ? WHERE id = ?")
+    let result = sqlx::query("UPDATE notes SET folder_id = ? WHERE id = ? AND trashed_at IS NULL")
         .bind(folder_id)
         .bind(id)
         .execute(pool)
@@ -607,6 +673,78 @@ mod tests {
         assert!(
             !delete(p, id).await.unwrap(),
             "deleting twice is not a second removal"
+        );
+    }
+
+    /* ------------------------------------------- where it was transcribed */
+
+    #[tokio::test]
+    async fn where_a_note_was_transcribed_is_saved_and_read_back() {
+        // KNEG-368. Stored as written: the reader parses it, leniently.
+        let db = db().await;
+        let by = TranscribedBy {
+            provider: "openai".to_owned(),
+            name: "OpenAI".to_owned(),
+            on_this_computer: false,
+            live_name: None,
+        };
+        let id = create(
+            db.pool(),
+            &NewNote {
+                title: "Interview".to_owned(),
+                transcribed_by: by.to_json(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let note = get(db.pool(), id).await.unwrap().unwrap();
+        assert_eq!(
+            note.transcribed_by.as_deref(),
+            Some(r#"{"provider":"openai","name":"OpenAI","onThisComputer":false}"#)
+        );
+        assert_eq!(
+            list(db.pool(), None, None, 10).await.unwrap()[0].transcribed_by,
+            note.transcribed_by,
+            "listed as it is got"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_note_says_nothing_about_where_it_was_transcribed_unless_told() {
+        assert_eq!(NewNote::default().transcribed_by, None);
+        let db = db().await;
+        let id = add(db.pool(), "Typed", "no transcript at all").await;
+        assert_eq!(
+            get(db.pool(), id).await.unwrap().unwrap().transcribed_by,
+            None
+        );
+    }
+
+    #[test]
+    fn live_captions_are_named_only_when_there_were_some_to_name() {
+        let local = TranscribedBy {
+            provider: "local".to_owned(),
+            name: "this computer".to_owned(),
+            on_this_computer: true,
+            live_name: None,
+        };
+        assert_eq!(
+            local.to_json().as_deref(),
+            Some(r#"{"provider":"local","name":"this computer","onThisComputer":true}"#)
+        );
+        let captioned = TranscribedBy {
+            live_name: Some("Deepgram Realtime".to_owned()),
+            ..local
+        };
+        let json = captioned.to_json().unwrap();
+        assert_eq!(
+            json,
+            r#"{"provider":"local","name":"this computer","onThisComputer":true,"liveName":"Deepgram Realtime"}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<TranscribedBy>(&json).unwrap(),
+            captioned
         );
     }
 
@@ -711,6 +849,21 @@ mod tests {
             .unwrap()
             .expect("the note should survive");
         assert_eq!(survivor.folder_id, None, "it should just lose its folder");
+    }
+
+    #[tokio::test]
+    async fn a_folder_chosen_earlier_is_kept_only_while_it_exists() {
+        // KNEG-365: a meeting's folder is chosen at Start and used at Stop,
+        // and `notes.folder_id` refuses an id whose folder was deleted between.
+        let db = db().await;
+        let p = db.pool();
+        let kept = create_folder(p, "Customer calls").await.unwrap();
+        let gone = create_folder(p, "Temporary").await.unwrap();
+        assert!(delete_folder(p, gone).await.unwrap());
+
+        assert_eq!(existing_folder(p, Some(kept)).await.unwrap(), Some(kept));
+        assert_eq!(existing_folder(p, Some(gone)).await.unwrap(), None);
+        assert_eq!(existing_folder(p, None).await.unwrap(), None);
     }
 
     /* --------------------------------------------------------- query escaping */
@@ -1099,6 +1252,35 @@ mod tests {
             assert_eq!(hits.len(), 1, "{query:?}");
             assert_eq!(hits[0].transcript_row, None, "{query:?}");
         }
+    }
+
+    /// KNEG-408. Both search indexes read a segment's `text` alone, so a word
+    /// held only in its timed `words` -- which a note never shows on its own
+    /// -- finds nothing, and the words beside it change nothing about a hit.
+    #[tokio::test]
+    async fn timed_words_are_not_searched() {
+        let db = db().await;
+        let p = db.pool();
+        let id = meeting(
+            p,
+            "Worded",
+            r#"[{"text":"Hej då.","timestamp":1.0,"endTimestamp":2.0,
+                 "words":[{"text":"Hej","start":1.0,"end":1.3},{"text":"giraffe","start":1.4,"end":1.8}]}]"#,
+        )
+        .await;
+
+        assert!(search(p, "giraffe", 10).await.unwrap().is_empty());
+        let hits = search(p, "Hej", 10).await.unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].id, id);
+        assert_eq!(hits[0].snippet, "[Hej] då.");
+        assert_eq!(
+            hits[0].transcript_row,
+            Some(SearchHitRow {
+                index: 0,
+                start_seconds: Some(1.0)
+            })
+        );
     }
 
     /// A row with no timestamp is still the row the words are in. It is named

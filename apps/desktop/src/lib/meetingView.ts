@@ -25,10 +25,10 @@
  * transcript is sent: a privacy line that errs errs towards saying so.
  */
 
-import type { Detected, InputDevice, Sources, SummarySettings } from "../generated/ipc-types.js";
+import type { Detected, Folder, InputDevice, MicrophoneCheck, Sources, SummarySettings } from "../generated/ipc-types.js";
 import { PROVIDER_REGISTRY, type ProviderRegistry } from "../generated/providers.js";
 import type { MenuOption } from "./chipMenu.js";
-import { destinationName, LANGUAGES, languageLabel } from "./controlBar.js";
+import { destinationName, LANGUAGES, languageLabel, microphoneMenu } from "./controlBar.js";
 import { parseStoredTime, timeOfDay } from "./dayGroups.js";
 
 /**
@@ -75,10 +75,42 @@ export function recordingStartedAt(storageKey: string): Date | null {
  * ("Saved as a note (38 min)."). The notes sentence is true whatever was
  * typed: `MeetingRuntime::cancel` keeps typed notes as a note when there are
  * any, and when there are none there is nothing to lose.
+ *
+ * `unconfirmed` is "Discard anyway"'s question (KNEG-418), asked after the
+ * meeting window did not confirm it saved the notes. `cancel` still keeps the
+ * notes Rust already holds (`notes.take()`), so only an edit the window had
+ * not sent yet is lost -- the autosave's last 800 ms, or everything since a
+ * save that failed -- and the last sentence says that instead.
  */
-export function discardQuestion(elapsedSeconds: number): string {
+export function discardQuestion(elapsedSeconds: number, unconfirmed = false): string {
   const length = elapsedSeconds < 60 ? "under a minute" : `${Math.round(elapsedSeconds / 60)} min`;
-  return `Discard this meeting? The recording so far (${length}) will be deleted and can't be recovered. Any notes you typed are kept as a separate note.`;
+  const notes = unconfirmed
+    ? "Notes the app already has are kept as a separate note; your latest edit may be missing."
+    : "Any notes you typed are kept as a separate note.";
+  return `Discard this meeting? The recording so far (${length}) will be deleted and can't be recovered. ${notes}`;
+}
+
+/**
+ * Whether the meeting running after Discard's question is the one it asked
+ * about (KNEG-394). The question holds the page, so in the meantime the
+ * meeting may have been stopped from its own window, or stopped and another
+ * started.
+ *
+ * Compared by when each began, from Rust: `elapsedSeconds` counts from the
+ * start and does not stop at a stall, so the same meeting gives the same start
+ * on every read, and a meeting started later gives a later one. `beganMs` is
+ * the start read before the question; `after` is the status read once it was
+ * answered, at `nowMs`. Two reads of one meeting still differ by the time
+ * each took to come back from Rust before the page read its clock, hence the
+ * tolerance.
+ */
+export function sameMeetingStart(
+  beganMs: number,
+  after: { elapsedSeconds: number },
+  nowMs: number,
+  toleranceMs = 2000,
+): boolean {
+  return Math.abs(nowMs - after.elapsedSeconds * 1000 - beganMs) <= toleranceMs;
 }
 
 /** A meeting's running time as `hh:mm:ss`, the canvas' recording clock. */
@@ -263,6 +295,40 @@ export function meetingLanguageMenu(
 }
 
 /**
+ * The Meetings page's Folder chip: where the meeting's note will be saved,
+ * chosen before Start (KNEG-365), and its menu -- "No folder", the word Notes'
+ * own Move to folder uses, then every folder in the order Notes lists them.
+ *
+ * A chosen folder that is not in `folders` -- deleted in Notes since it was
+ * chosen -- reads as no folder, so the chip never names a folder the note
+ * cannot go to, and `folderId`, what Start sends, is the folder the chip
+ * names. Rust makes the same call at Stop for a folder deleted while the
+ * meeting ran, and the outcome says so.
+ */
+export function folderMenu(
+  folders: readonly Folder[],
+  chosen: number | null,
+): { label: string; folderId: number | null; options: MenuOption[] } {
+  const folder = folders.find((f) => f.id === chosen) ?? null;
+  const row = (id: string, label: string, current: boolean): MenuOption => ({
+    id,
+    label,
+    group: null,
+    current,
+    disabled: false,
+    reason: null,
+  });
+  return {
+    label: folder === null ? "Save to Notes" : `Save to ${folder.name}`,
+    folderId: folder?.id ?? null,
+    options: [
+      row("", "No folder", folder === null),
+      ...folders.map((f) => row(String(f.id), f.name, f.id === folder?.id)),
+    ],
+  };
+}
+
+/**
  * The Meetings hero's line under "Record a meeting", which was the page's
  * `PageHeader` intro (`lib/pages.ts`) -- and it promises a summary only when
  * one will come. A saved meeting is summarised by itself only while automatic
@@ -290,30 +356,66 @@ export function privacyProvider<T>(live: T | null, selected: T | null, savedUnus
   return live ?? (savedUnusable ? null : selected);
 }
 
+/** The heading over the Meetings microphone menu's rows (KNEG-364). */
+const MICROPHONE_HEADING = "Used by meetings and dictation";
+
 /**
- * The Meetings microphone chip: what a meeting will record from, and the
- * sentence its hover and screen-reader text carry (KNEG-341).
+ * The Meetings microphone chip and its menu, before a meeting starts: what a
+ * meeting will record from, chosen here (KNEG-364), and the sentence its
+ * hover carries.
  *
- * Meetings record the microphone chosen on Dictation -- one choice for both,
- * saved across restarts (`dictation.rs` `INPUT_DEVICE_KEY`). A chosen device
- * that is not connected is recorded as the system default instead
- * (`kw_audio_core::Capture::start`), so the chip says that before Start rather
- * than naming a microphone that will not be used. `devices` is `null` until the
- * list arrives, and then a choice is named rather than called unplugged.
+ * One choice for both tasks, saved across restarts (`dictation.rs`
+ * `INPUT_DEVICE_KEY`, KNEG-341), so the menu is Dictation's
+ * (`microphoneMenu`) under a heading that says so, and the chip's `title`
+ * says that choosing here changes dictation's microphone too. A chosen device
+ * that is not connected is listed as itself, "(not connected)", and recorded
+ * as the system default instead (`kw_audio_core::Capture::start`).
+ *
+ * `devices` is `null` until the list arrives. Until then the choice is listed
+ * as itself and not called unplugged: nothing is known yet either way.
  */
 export function meetingMicrophone(
   devices: readonly InputDevice[] | null,
   chosen: string | null,
-): { label: string; title: string } {
-  const shared = "Dictation and meetings use the same microphone, chosen on Dictation.";
-  if (chosen === null) {
-    return { label: "Default microphone", title: `Meetings record the system default microphone. ${shared}` };
-  }
-  if (devices !== null && !devices.some((device) => device.name === chosen)) {
-    return {
-      label: `${chosen} (not connected)`,
-      title: `${chosen} isn't connected, so meetings record the system default microphone until it is.`,
-    };
-  }
-  return { label: chosen, title: `Meetings record ${chosen}. ${shared}` };
+): { label: string; title: string; missing: string | null; options: MenuOption[] } {
+  const known = devices ?? (chosen === null ? [] : [{ name: chosen, isDefault: false }]);
+  return {
+    ...microphoneMenu(known, chosen, MICROPHONE_HEADING),
+    title: "Meetings and dictation use the same microphone. Choosing one here changes it for dictation too.",
+  };
+}
+
+/**
+ * The live view's microphone chip: the microphone the running meeting opened,
+ * as Rust reports it (`Sources.microphoneName`, from the capture), and not the
+ * one chosen now. A choice made while it runs -- here before it started, or
+ * on Dictation -- is used from the next recording, and the chip must not move
+ * with it (KNEG-364). A device that gave no name, or sources not read yet, are
+ * "your microphone" rather than a name invented for them.
+ */
+export function liveMicrophone(sources: Sources | null): { label: string; title: string } {
+  const name = sources?.microphoneName ?? null;
+  const later = "A microphone chosen now is used from the next recording.";
+  return name === null
+    ? { label: "Microphone", title: `This meeting is recording from your microphone. ${later}` }
+    : { label: name, title: `This meeting is recording from ${name}. ${later}` };
+}
+
+/** What the page says while "Test microphone" listens (KNEG-364). */
+export const MICROPHONE_CHECK_LISTENING = "Listening for 5 seconds — say something. Nothing is recorded.";
+
+/**
+ * What a finished microphone check found, as the Meetings page says it
+ * (KNEG-364): which microphone it heard you on, or heard nothing from -- and
+ * first, when the one chosen was not connected, that the default stood in.
+ *
+ * `device` is `null` only for a device that gave no name, and a chosen device
+ * is found by its name, so that is the system default.
+ */
+export function microphoneCheckLine(check: MicrophoneCheck): string {
+  const tested = check.device ?? "the system default microphone";
+  const result = check.heard
+    ? `Heard you on ${tested}.`
+    : `Heard nothing from ${tested}. Check it isn't muted, or choose another microphone.`;
+  return check.fellBack === null ? result : `${check.fellBack} isn't connected, so this tested ${tested}. ${result}`;
 }

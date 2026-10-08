@@ -145,7 +145,7 @@ pub async fn preview(
         .await
         .map_err(err)?
         .ok_or("This folder no longer exists.")?;
-    let rows = sqlx::query("SELECT n.id,n.title,r.storage_key,LENGTH(CAST(n.content AS BLOB))+COALESCE(LENGTH(CAST(n.transcript AS BLOB)),0)+COALESCE(LENGTH(CAST(n.enhanced_content AS BLOB)),0)+COALESCE(LENGTH(CAST(m.source_transcript AS BLOB)),0) AS text_bytes FROM notes n LEFT JOIN note_recordings r ON r.note_id=n.id LEFT JOIN note_summary_meta m ON m.note_id=n.id WHERE n.folder_id=? ORDER BY n.created_at,n.id LIMIT 10001")
+    let rows = sqlx::query("SELECT n.id,n.title,r.storage_key,LENGTH(CAST(n.content AS BLOB))+COALESCE(LENGTH(CAST(n.transcript AS BLOB)),0)+COALESCE(LENGTH(CAST(n.enhanced_content AS BLOB)),0)+COALESCE(LENGTH(CAST(m.source_transcript AS BLOB)),0) AS text_bytes FROM notes n LEFT JOIN note_recordings r ON r.note_id=n.id LEFT JOIN note_summary_meta m ON m.note_id=n.id WHERE n.folder_id=? AND n.trashed_at IS NULL ORDER BY n.created_at,n.id LIMIT 10001")
         .bind(folder_id).fetch_all(pool).await.map_err(err)?;
     if rows.len() > MAX_NOTES {
         return Err("A shared folder can contain at most 10,000 notes.".into());
@@ -201,9 +201,20 @@ pub async fn capture(
         .ok_or("This folder no longer exists.")?;
     let mut notes = Vec::new();
     let mut document_bytes = 0;
+    // Every column `Note` decodes, so a column added to it is read here too.
+    // A note moved to Trash since the preview is not packed (KNEG-401).
+    let select_note = format!(
+        "SELECT {} FROM notes WHERE id=? AND folder_id=? AND trashed_at IS NULL",
+        crate::notes::COLUMNS
+    );
     for id in ids {
-        let note: crate::Note = sqlx::query_as("SELECT id,title,content,recording_details,note_type,enhanced_content,folder_id,transcript,participants,audio_duration_seconds,created_at,updated_at FROM notes WHERE id=? AND folder_id=?")
-            .bind(id).bind(folder_id).fetch_optional(&mut *tx).await.map_err(err)?.ok_or("A selected note was moved or deleted. Reopen Share folder and try again.")?;
+        let note: crate::Note = sqlx::query_as(&select_note)
+            .bind(id)
+            .bind(folder_id)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(err)?
+            .ok_or("A selected note was moved or deleted. Reopen Share folder and try again.")?;
         let speakers = if options.transcripts {
             sqlx::query_as::<_, (String, String)>(
                 "SELECT speaker_id,display_name FROM speaker_mappings WHERE note_id=?",
@@ -1043,6 +1054,45 @@ mod tests {
         .unwrap();
         assert_ne!(duplicate, imported);
         assert!(root.join("original.wav").exists());
+    }
+    #[tokio::test]
+    async fn a_note_that_says_where_it_was_transcribed_is_shared_without_saying_so() {
+        // KNEG-368. Capture reads the note through `notes::COLUMNS`, so a
+        // column added to `Note` is read here too rather than failing the
+        // decode; the package format is unchanged, so the shared copy is a
+        // note with no record of where it was transcribed.
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("audio");
+        let (db, folder, note) = fixture(&root).await;
+        sqlx::query("UPDATE notes SET transcribed_by=? WHERE id=?")
+            .bind(r#"{"provider":"openai","name":"OpenAI","onThisComputer":false}"#)
+            .bind(note)
+            .execute(db.pool())
+            .await
+            .unwrap();
+        let package = temp.path().join("folder.knegis");
+        export(&db, &root, folder, note, ShareOptions::default(), &package).await;
+        let receiver = kw_storage::Db::open_in_memory().await.unwrap();
+        let target = temp.path().join("target");
+        let (operation, staged) = stage(&receiver, &target, &package).await;
+        let json = serde_json::to_string(&staged.notes).unwrap();
+        assert!(json.contains("Göteborg"), "the transcript is shared");
+        assert!(!json.contains("OpenAI"), "{json}");
+        let imported = restore(
+            receiver.pool(),
+            &target,
+            &operation,
+            staged,
+            "Imported",
+            &AtomicBool::new(false),
+        )
+        .await
+        .unwrap();
+        let notes = notes::list(receiver.pool(), None, Some(imported), 10)
+            .await
+            .unwrap();
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].transcribed_by, None);
     }
     #[tokio::test]
     async fn all_content_combinations_exclude_private_data_and_restore_without_jobs() {

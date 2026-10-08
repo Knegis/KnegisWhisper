@@ -42,6 +42,11 @@ export async function jsonAt(port, path) {
   return response.json();
 }
 
+/**
+ * `extraArgs` go on Edge's command line before the URL, for a check that needs
+ * the browser itself set up differently: `note-playback.mjs` passes
+ * `--mute-audio`, so a run that plays a recording makes no sound.
+ */
 export async function launchEdge({
   edge,
   port,
@@ -49,6 +54,7 @@ export async function launchEdge({
   url,
   width = 1000,
   height = 720,
+  extraArgs = [],
 }) {
   await mkdir(out, { recursive: true });
   const executable = findEdge(edge);
@@ -63,6 +69,7 @@ export async function launchEdge({
       "--disable-extensions",
       "--hide-scrollbars",
       `--window-size=${width},${height}`,
+      ...extraArgs,
       url,
     ],
     { stdio: "ignore", windowsHide: true },

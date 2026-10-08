@@ -119,7 +119,9 @@ enum Notes {
         #[arg(long, value_name = "ID")]
         folder: Option<i64>,
     },
-    /// Delete a note.
+    /// Move a note to Trash. It stays there, with its recording, until it is
+    /// restored or Trash is emptied in the app; from then on this tool treats
+    /// it as gone.
     Delete { id: i64 },
 }
 
@@ -422,7 +424,10 @@ async fn dispatch(client: &Client, command: &Command) -> Result<(Value, String),
             client
                 .request(Method::DELETE, &format!("/v1/notes/{id}"), None)
                 .await?;
-            Ok((Value::Null, format!("deleted note {id}")))
+            Ok((
+                Value::Null,
+                format!("moved note {id} to Trash; restore it or empty Trash in the app"),
+            ))
         }
 
         Command::Folders(Folders::List) => {

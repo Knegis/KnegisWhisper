@@ -4,21 +4,26 @@ import {
   activeCall,
   discardQuestion,
   elapsedLabel,
+  folderMenu,
   interruptedTitle,
   liveElapsed,
+  liveMicrophone,
   meetingLanguageMenu,
   meetingIntro,
   meetingMicrophone,
+  MICROPHONE_CHECK_LISTENING,
+  microphoneCheckLine,
   privacyProvider,
   reviewIsFor,
   recentMeta,
   recordedSources,
   recordingStartedAt,
+  sameMeetingStart,
   summaryModelName,
   summaryPrivacyLine,
 } from "../src/lib/meetingView.js";
 import { timeOfDay } from "../src/lib/dayGroups.js";
-import type { Detected, SummarySettings } from "../src/generated/ipc-types.js";
+import type { Detected, Folder, MicrophoneCheck, SummarySettings } from "../src/generated/ipc-types.js";
 
 // The dev fixtures' pair (`lib/devFixtures.ts`): Teams open and idle, Zoom in a call.
 const TEAMS: Detected = { provider: "meeting-detect:teams", name: "Microsoft Teams", evidence: "ms-teams.exe", inCall: false, signal: "none" };
@@ -79,13 +84,14 @@ test("liveElapsed is never negative", () => {
 });
 
 test("recordedSources says which captures opened, and why the second did not", () => {
-  assert.equal(recordedSources({ microphone: true, systemAudio: true, systemAudioReason: null }), "Your microphone and the other participants");
-  assert.equal(recordedSources({ microphone: true, systemAudio: false, systemAudioReason: null }), "Your microphone only");
+  const mic = { microphoneName: "Microphone Array (Realtek(R) Audio)" };
+  assert.equal(recordedSources({ ...mic, microphone: true, systemAudio: true, systemAudioReason: null }), "Your microphone and the other participants");
+  assert.equal(recordedSources({ ...mic, microphone: true, systemAudio: false, systemAudioReason: null }), "Your microphone only");
   assert.equal(
-    recordedSources({ microphone: true, systemAudio: false, systemAudioReason: "system audio was not requested" }),
+    recordedSources({ ...mic, microphone: true, systemAudio: false, systemAudioReason: "system audio was not requested" }),
     "Your microphone only — system audio was not requested",
   );
-  assert.equal(recordedSources({ microphone: false, systemAudio: false, systemAudioReason: null }), "Nothing is being recorded");
+  assert.equal(recordedSources({ microphone: false, microphoneName: null, systemAudio: false, systemAudioReason: null }), "Nothing is being recorded");
   assert.equal(recordedSources(null), null);
 });
 
@@ -194,37 +200,105 @@ test("meetingLanguageMenu lists a saved value it does not know as itself, so the
   assert.equal(menu.length, 10);
 });
 
-/* ------------------------------- the microphone a meeting records (KNEG-341) */
+/* -------------- the microphone a meeting records (KNEG-341), chosen here (KNEG-364) */
 
 const MICROPHONES = [
   { name: "Microphone Array (Realtek(R) Audio)", isDefault: true },
   { name: "Headset (Jabra Evolve2 65)", isDefault: false },
 ];
+const SHARED = "Meetings and dictation use the same microphone. Choosing one here changes it for dictation too.";
+const HEADING = "Used by meetings and dictation";
 
-test("meetingMicrophone: nothing chosen is the system default", () => {
-  assert.deepEqual(meetingMicrophone(MICROPHONES, null), {
-    label: "Default microphone",
-    title: "Meetings record the system default microphone. Dictation and meetings use the same microphone, chosen on Dictation.",
-  });
+test("meetingMicrophone: the chip is a menu of Dictation's rows under one heading, and says the choice is shared", () => {
+  const microphone = meetingMicrophone(MICROPHONES, null);
+  assert.equal(microphone.label, "System default");
+  assert.equal(microphone.title, SHARED);
+  assert.equal(microphone.missing, null);
+  assert.deepEqual(
+    microphone.options.map((o) => [o.group, o.id, o.label, o.current]),
+    [
+      [HEADING, "", "System default", true],
+      [HEADING, "Microphone Array (Realtek(R) Audio)", "Microphone Array (Realtek(R) Audio) (default)", false],
+      [HEADING, "Headset (Jabra Evolve2 65)", "Headset (Jabra Evolve2 65)", false],
+    ],
+  );
+  // Nothing says "chosen on Dictation" any more: it is chosen here too.
+  assert.ok(!microphone.title.includes("chosen on Dictation"), microphone.title);
 });
 
-test("meetingMicrophone: a chosen microphone that is connected is named", () => {
-  assert.deepEqual(meetingMicrophone(MICROPHONES, "Headset (Jabra Evolve2 65)"), {
-    label: "Headset (Jabra Evolve2 65)",
-    title: "Meetings record Headset (Jabra Evolve2 65). Dictation and meetings use the same microphone, chosen on Dictation.",
-  });
+test("meetingMicrophone: a chosen microphone that is connected is named and current", () => {
+  const microphone = meetingMicrophone(MICROPHONES, "Headset (Jabra Evolve2 65)");
+  assert.equal(microphone.label, "Headset (Jabra Evolve2 65)");
+  assert.equal(microphone.title, SHARED);
+  assert.deepEqual(microphone.options.filter((o) => o.current).map((o) => o.id), ["Headset (Jabra Evolve2 65)"]);
 });
 
-test("meetingMicrophone: a chosen microphone that is unplugged says the default is recorded instead", () => {
-  assert.deepEqual(meetingMicrophone(MICROPHONES, "USB Mic"), {
-    label: "USB Mic (not connected)",
-    title: "USB Mic isn't connected, so meetings record the system default microphone until it is.",
+test("meetingMicrophone: a chosen microphone that is unplugged is listed as itself, not connected", () => {
+  const microphone = meetingMicrophone(MICROPHONES, "USB Mic");
+  assert.equal(microphone.label, "USB Mic (not connected)");
+  assert.equal(microphone.missing, "USB Mic");
+  assert.deepEqual(microphone.options[0], {
+    id: "USB Mic", label: "USB Mic (not connected)", group: HEADING, current: true, disabled: false, reason: null,
   });
 });
 
 test("meetingMicrophone: before the device list arrives, a choice is named rather than called unplugged", () => {
-  assert.equal(meetingMicrophone(null, "USB Mic").label, "USB Mic");
-  assert.equal(meetingMicrophone(null, null).label, "Default microphone");
+  const early = meetingMicrophone(null, "USB Mic");
+  assert.equal(early.label, "USB Mic");
+  assert.equal(early.missing, null);
+  assert.deepEqual(early.options.map((o) => [o.id, o.current]), [["", false], ["USB Mic", true]]);
+  assert.equal(meetingMicrophone(null, null).label, "System default");
+});
+
+test("liveMicrophone: the live chip names the microphone the meeting opened, not the one chosen now", () => {
+  const sources = { microphone: true, microphoneName: "Headset (Jabra Evolve2 65)", systemAudio: false, systemAudioReason: null };
+  assert.deepEqual(liveMicrophone(sources), {
+    label: "Headset (Jabra Evolve2 65)",
+    title: "This meeting is recording from Headset (Jabra Evolve2 65). A microphone chosen now is used from the next recording.",
+  });
+  // A device that gave no name, and sources not read yet, are said without inventing one.
+  const unnamed = liveMicrophone({ ...sources, microphoneName: null });
+  assert.equal(unnamed.label, "Microphone");
+  assert.equal(unnamed.title, "This meeting is recording from your microphone. A microphone chosen now is used from the next recording.");
+  assert.deepEqual(liveMicrophone(null), unnamed);
+});
+
+/* ------------------------------------------- the microphone check (KNEG-364) */
+
+const check = (over: Partial<MicrophoneCheck>): MicrophoneCheck => ({
+  device: "Headset (Jabra Evolve2 65)", fellBack: null, heard: true, peakLevel: 0.6, ...over,
+});
+
+test("microphoneCheckLine: heard, and heard nothing, each name the microphone tested", () => {
+  assert.equal(microphoneCheckLine(check({})), "Heard you on Headset (Jabra Evolve2 65).");
+  assert.equal(
+    microphoneCheckLine(check({ heard: false, peakLevel: 0 })),
+    "Heard nothing from Headset (Jabra Evolve2 65). Check it isn't muted, or choose another microphone.",
+  );
+});
+
+test("microphoneCheckLine: a choice that wasn't connected says what was tested instead, first", () => {
+  const fellBack = check({ device: "Microphone Array (Realtek(R) Audio)", fellBack: "USB Mic" });
+  assert.equal(
+    microphoneCheckLine(fellBack),
+    "USB Mic isn't connected, so this tested Microphone Array (Realtek(R) Audio). Heard you on Microphone Array (Realtek(R) Audio).",
+  );
+  assert.equal(
+    microphoneCheckLine({ ...fellBack, heard: false }),
+    "USB Mic isn't connected, so this tested Microphone Array (Realtek(R) Audio). Heard nothing from Microphone Array (Realtek(R) Audio). Check it isn't muted, or choose another microphone.",
+  );
+});
+
+test("microphoneCheckLine: a device with no name is the system default, which is what opens then", () => {
+  assert.equal(microphoneCheckLine(check({ device: null })), "Heard you on the system default microphone.");
+  assert.equal(
+    microphoneCheckLine(check({ device: null, fellBack: "USB Mic", heard: false })),
+    "USB Mic isn't connected, so this tested the system default microphone. Heard nothing from the system default microphone. Check it isn't muted, or choose another microphone.",
+  );
+});
+
+test("the check's running line says how long, what to do, and that nothing is recorded", () => {
+  assert.equal(MICROPHONE_CHECK_LISTENING, "Listening for 5 seconds — say something. Nothing is recorded.");
 });
 
 test("the hero promises a summary only while automatic summaries are on", () => {
@@ -267,4 +341,87 @@ test("Discard's question names the recording's length and what happens to typed 
   assert.match(discardQuestion(90), /\(2 min\)/);
   assert.match(discardQuestion(42), /\(under a minute\)/);
   assert.match(discardQuestion(0), /\(under a minute\)/);
+});
+
+// KNEG-418: "Discard anyway" asks after the meeting window didn't confirm it
+// saved the notes. Rust still keeps what it already holds (`cancel` takes
+// `notes`), so the question says so, and says the newest edit may not be
+// among it -- the one sentence that changes from Discard's.
+test("Discard anyway's question says the latest edit may be missing", () => {
+  assert.equal(
+    discardQuestion(38 * 60 + 10, true),
+    "Discard this meeting? The recording so far (38 min) will be deleted and can't be recovered. Notes the app already has are kept as a separate note; your latest edit may be missing.",
+  );
+  assert.match(discardQuestion(42, true), /\(under a minute\)/);
+  // The default is Discard's own question, unchanged.
+  assert.equal(discardQuestion(90, false), discardQuestion(90));
+});
+
+// KNEG-394's guard, out of `Meetings.tsx`: the meeting asked about is the one
+// still running only when the start Rust reports after the question is within
+// 2 s of the start it reported before. `elapsedSeconds` counts from the start,
+// so the same meeting gives the same start on every read.
+test("sameMeetingStart holds within 2 s either way, and not a millisecond past", () => {
+  const began = 1_000_000;
+  const tenMinutesIn = { elapsedSeconds: 600 };
+  assert.equal(sameMeetingStart(began, tenMinutesIn, 1_600_000), true);
+  // Read 2 s later than the count says: a start 2 s after the one asked about.
+  assert.equal(sameMeetingStart(began, tenMinutesIn, 1_602_000), true);
+  assert.equal(sameMeetingStart(began, tenMinutesIn, 1_602_001), false);
+  // And 2 s earlier.
+  assert.equal(sameMeetingStart(began, tenMinutesIn, 1_598_000), true);
+  assert.equal(sameMeetingStart(began, tenMinutesIn, 1_597_999), false);
+});
+
+test("sameMeetingStart: a meeting started while the question was open is another meeting", () => {
+  // Ten minutes in before the question, one second in after it.
+  assert.equal(sameMeetingStart(1_000_000, { elapsedSeconds: 1 }, 1_600_000), false);
+});
+
+test("sameMeetingStart takes another tolerance", () => {
+  assert.equal(sameMeetingStart(1_000_000, { elapsedSeconds: 600 }, 1_600_500, 500), true);
+  assert.equal(sameMeetingStart(1_000_000, { elapsedSeconds: 600 }, 1_600_501, 500), false);
+});
+
+// KNEG-365: the Meetings page's Folder chip. Its menu is "No folder" -- the
+// word Notes' own Move to folder uses -- then every folder in Notes' order;
+// the chip says where the note will go.
+const FOLDERS: Folder[] = [
+  { id: 1, name: "Inbox", isDefault: true, sortOrder: 0 },
+  { id: 2, name: "Customer calls", isDefault: false, sortOrder: 1 },
+  { id: 3, name: "Internal", isDefault: false, sortOrder: 2 },
+];
+
+test("folderMenu offers no folder, then every folder, ticking the one chosen", () => {
+  const menu = folderMenu(FOLDERS, 3);
+  assert.equal(menu.label, "Save to Internal");
+  // The folder Start sends: the one the chip names.
+  assert.equal(menu.folderId, 3);
+  assert.deepEqual(
+    menu.options.map((option) => [option.id, option.label, option.current]),
+    [["", "No folder", false], ["1", "Inbox", false], ["2", "Customer calls", false], ["3", "Internal", true]],
+  );
+  assert.ok(menu.options.every((option) => option.group === null && !option.disabled && option.reason === null));
+});
+
+test("folderMenu with no folder chosen saves to Notes", () => {
+  const menu = folderMenu(FOLDERS, null);
+  assert.equal(menu.label, "Save to Notes");
+  assert.equal(menu.folderId, null);
+  assert.deepEqual(menu.options.filter((option) => option.current).map((option) => option.id), [""]);
+  // With no folders at all, the one row is still there to say where it goes.
+  assert.deepEqual(folderMenu([], null), {
+    label: "Save to Notes",
+    folderId: null,
+    options: [{ id: "", label: "No folder", group: null, current: true, disabled: false, reason: null }],
+  });
+});
+
+test("folderMenu treats a chosen folder that is gone as no folder", () => {
+  // Deleted in Notes while it was chosen here: the chip must not name it.
+  const menu = folderMenu(FOLDERS.filter((folder) => folder.id !== 3), 3);
+  assert.equal(menu.label, "Save to Notes");
+  // And Start sends no folder, as the chip says, rather than the stale id.
+  assert.equal(menu.folderId, null);
+  assert.deepEqual(menu.options.filter((option) => option.current).map((option) => option.id), [""]);
 });

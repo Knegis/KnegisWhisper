@@ -1,24 +1,14 @@
 /**
  * What a note's header says about it besides its title: the folder its
- * breadcrumb names, and the date, length and participants in its meta row.
+ * breadcrumb names, and the date, length and where it was transcribed in its
+ * meta row. The people beside them are `NotePeople`'s, read by `lib/people.ts`
+ * (KNEG-362).
  *
  * Pure, and with no React: `tests/noteMeta.test.ts` imports this directly.
  */
 import type { Folder, Note } from "../generated/ipc-types.js";
 import { parseStoredTime } from "./dayGroups.js";
 
-/**
- * The names in a note's stored `participants`, a JSON array of
- * `{displayName, email}`: the display name where there is one, the email
- * where there is not.
- *
- * The same reading as `notes_core::transcript::participants`, which puts
- * these names in an export's header, so the note on screen and the file
- * written from it name the same people. That includes its two refusals: a
- * value that does not parse is no participants rather than an error -- it is
- * not worth failing a header over -- and a name that is blank is dropped
- * rather than shown as an empty entry.
- */
 /**
  * Whether a note's stored transcript (`Note.transcript`, a JSON array of
  * segments) has a row.
@@ -38,29 +28,37 @@ export function hasStoredTranscript(json: string | null): boolean {
   }
 }
 
-export function parseParticipants(json: string | null): string[] {
-  if (json === null) return [];
+/**
+ * The meta row's line for where a note's transcript was made, from its
+ * stored `transcribedBy` -- Rust's `TranscribedBy` as JSON (KNEG-368): "on
+ * this computer", naming a meeting's live-caption provider beside it when the
+ * captions came from elsewhere, or "by" whoever made it.
+ *
+ * Read leniently, as `lib/people.ts` reads participants: a record that is
+ * missing -- every note saved before it was kept -- or that will not read
+ * says nothing, rather than a guess or an error in the header.
+ */
+export function transcribedLine(json: string | null): string | null {
+  if (json === null) return null;
   let parsed: unknown;
   try {
     parsed = JSON.parse(json);
   } catch {
-    return [];
+    return null;
   }
-  if (!Array.isArray(parsed)) return [];
-  const names: string[] = [];
-  for (const entry of parsed) {
-    if (typeof entry !== "object" || entry === null) continue;
-    const { displayName, email } = entry as { displayName?: unknown; email?: unknown };
-    const name = typeof displayName === "string" ? displayName : typeof email === "string" ? email : null;
-    if (name !== null && name.trim() !== "") names.push(name);
-  }
-  return names;
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
+  const { name, onThisComputer, liveName } = parsed as { name?: unknown; onThisComputer?: unknown; liveName?: unknown };
+  if (typeof name !== "string" || name.trim() === "" || typeof onThisComputer !== "boolean") return null;
+  if (!onThisComputer) return `Transcribed by ${name}`;
+  return typeof liveName === "string" && liveName.trim() !== ""
+    ? `Transcribed on this computer · live captions by ${liveName}`
+    : "Transcribed on this computer";
 }
 
 /**
- * The header's facts about `note`. Each is `null` (or, for participants,
- * empty) when the note does not have it, and the header then leaves that part
- * out rather than printing a placeholder.
+ * The header's facts about `note`. Each is `null` when the note does not have
+ * it, and the header then leaves that part out rather than printing a
+ * placeholder.
  *
  * - `folder` is the name of the folder `folderId` points at. A folder that is
  *   not in `folders` -- deleted since the list was read -- is `null`, the
@@ -68,16 +66,17 @@ export function parseParticipants(json: string | null): string[] {
  * - `date` is the creation time, read by `parseStoredTime` as the list's
  *   tooltip reads it.
  * - `minutes` is the recording's length rounded to whole minutes.
+ * - `transcribed` is `transcribedLine`'s line for where it was transcribed.
  */
 export function noteMeta(
   note: Note,
   folders: readonly Folder[],
-): { folder: string | null; date: Date | null; minutes: number | null; participants: string[] } {
+): { folder: string | null; date: Date | null; minutes: number | null; transcribed: string | null } {
   const folder = note.folderId === null ? null : (folders.find((item) => item.id === note.folderId)?.name ?? null);
   return {
     folder,
     date: parseStoredTime(note.createdAt),
     minutes: note.audioDurationSeconds === null ? null : Math.round(note.audioDurationSeconds / 60),
-    participants: parseParticipants(note.participants),
+    transcribed: transcribedLine(note.transcribedBy),
   };
 }

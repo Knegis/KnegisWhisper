@@ -11,6 +11,7 @@
 //! connection tests are explicitly invoked by the user, never run at startup.
 //! See `docs/NETWORK_BOUNDARY.md`.
 
+mod audio_level;
 mod automation;
 mod binary_locator;
 mod calendar;
@@ -33,6 +34,7 @@ mod media;
 mod media_job;
 mod meeting;
 mod meeting_window;
+mod microphone_check;
 mod overlay;
 mod persistent_overlay;
 mod reasoning;
@@ -43,6 +45,7 @@ mod sherpa_stream;
 mod shortcuts;
 mod state;
 mod summaries;
+mod transcribed_by;
 mod tray;
 mod update_window;
 mod updater;
@@ -288,6 +291,8 @@ pub fn run() -> anyhow::Result<()> {
             tauri::async_runtime::block_on(session.restore_device());
 
             app.manage(session);
+            // The Meetings page's "Test microphone": one at a time (KNEG-364).
+            app.manage(microphone_check::MicrophoneChecks::default());
 
             // Meetings. Nothing starts here and nothing is scheduled: a meeting
             // begins only when somebody presses the button, which is what "the
@@ -487,7 +492,13 @@ pub fn run() -> anyhow::Result<()> {
             commands::notes_create,
             commands::notes_update,
             commands::notes_set_folder,
-            commands::notes_delete,
+            commands::notes_set_participants,
+            commands::people_list,
+            commands::notes_trash,
+            commands::notes_restore,
+            commands::notes_delete_forever,
+            commands::notes_trash_list,
+            commands::notes_empty_trash,
             commands::note_recording_get,
             commands::note_recording_attach_from_dialog,
             commands::note_transcript_rows,
@@ -522,6 +533,7 @@ pub fn run() -> anyhow::Result<()> {
             dictation::dictation_set_device,
             dictation::dictation_device,
             dictation::input_devices,
+            microphone_check::microphone_check,
             dictation::insertion_supported,
             local_model::local_model_status,
             local_model::local_model_install,
@@ -570,6 +582,8 @@ pub fn run() -> anyhow::Result<()> {
             meeting::meeting_set_language,
             meeting::meeting_provider,
             meeting::meeting_set_provider,
+            meeting::meeting_delete_recordings,
+            meeting::meeting_set_delete_recordings,
             vocabulary::vocabulary_list,
             vocabulary::vocabulary_update,
             vocabulary::vocabulary_edit,

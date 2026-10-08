@@ -26,6 +26,27 @@
  * Two states that look alike and are not: `hits === null` means nobody has
  * searched, and `hits === []` means somebody searched and nothing matched.
  * Collapsing them would show the full note list as though it were the result.
+ *
+ * People, under the folders and the notes in none, lists everyone named by
+ * email on a note and how many notes each is on (KNEG-362). Pressing one
+ * shows "Notes with" them in place of the tree, fetched from Rust, as search
+ * hits replace it, with Show all notes to come back -- the hundred most
+ * recently edited, as the library's own list is, and a line saying so when
+ * they are on more. Like the search it is the panel's state, not a place:
+ * opening a note from the list keeps it, and back and forward never return to
+ * it. A search typed meanwhile shows its hits over it.
+ *
+ * Trash (KNEG-401), at the foot of the panel with how many notes it holds, is
+ * the panel's third state. Delete moves a note there without asking -- "Moved
+ * “X” to Trash." with Undo, above the note that opens in its place -- and
+ * nothing leaves it on its own. Pressed, Trash lists its notes in place of the
+ * tree, and the main area says what their recordings take, with Empty trash.
+ * A note in Trash opens read-only (`TrashedNote`, never a workspace, so
+ * nothing autosaves into it) with Restore and Delete forever, the two that
+ * ask first being Delete forever and Empty trash. Every list here comes from
+ * Rust, which leaves notes in Trash out of all of them; only `getNote` and
+ * `getTrash` return one. So a note in Trash is reached only from Trash, or by
+ * Back to where it was open, and either way it shows as in Trash.
  */
 
 import {
@@ -44,22 +65,26 @@ import { Icon } from "../components/Icon";
 import { FolderSharing } from "../components/FolderSharing";
 import { NoteWorkspace, type NoteWorkspaceHandle } from "../components/NoteWorkspace";
 import { PanelAction, PanelHeader, PanelItem, PanelSection } from "../components/Panel";
-import { formatClock } from "../components/RecordingPlayer";
 import { Row } from "../components/Row";
 import { SplitView } from "../components/SplitView";
+import { TrashedNote } from "../components/TrashedNote";
 import {
   createFolder,
   createNote,
   deleteFolder,
-  deleteNote,
+  deleteNoteForever,
+  emptyTrash,
   exportNoteToFile,
   EXPORT_FORMATS,
   getFolders,
   getNotes,
   getNote,
+  getPeople,
+  getTrash,
+  restoreNote,
   searchNotes,
   setNoteFolder,
-  getNoteRecording,
+  trashNote,
   type ExportFormat,
   type Folder,
   type Note,
@@ -68,7 +93,9 @@ import {
 import { parseStoredTime } from "../lib/dayGroups";
 import { recentMeta } from "../lib/meetingView";
 import { groupNotesByFolder } from "../lib/noteGroups";
+import { noteCount, personLabel } from "../lib/people";
 import { hitMeta } from "../lib/searchHit";
+import { deleteForeverQuestion, emptyTrashQuestion, movedToTrash, trashedMeta, trashSpaceLine } from "../lib/trash";
 import { carriesNote, draggedNoteId, folderChange, NOTE_DRAG_TYPE } from "../lib/noteDrag";
 import { useRefresh } from "../lib/useRefresh";
 
@@ -83,9 +110,16 @@ function noteDate(value: string | null) {
  * here rather than in the component because the page unmounts whenever another
  * one opens, as the transcript column's choice is held in `NoteWorkspace.tsx`.
  * Never cleared: a note deleted since -- here or through the API -- is simply
- * not found on the way back, and the most recently edited one opens instead.
+ * not found on the way back, and the most recently edited one opens instead,
+ * as it does for a note moved to Trash since.
  */
 let lastOpenNoteId: number | null = null;
+
+/** The most notes "Notes with" a person lists: as many as the library's own list, `notes_list`'s default. */
+const PERSON_NOTES = 100;
+
+/** Where focus goes once a Trash action has finished: see `focusAfter` in `Notes`. */
+type FocusTarget = "undo" | "title" | "trash";
 
 /**
  * The right-click menu's target: a note, or a folder heading. `fromButton` when the open note's
@@ -154,11 +188,45 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
   }, []);
 
   const load = useCallback(async () => {
-    const [notes, folders] = await Promise.all([getNotes(), getFolders()]);
-    return { notes, folders };
+    const [notes, folders, people, trash] = await Promise.all([getNotes(), getFolders(), getPeople(), getTrash()]);
+    return { notes, folders, people, trash };
   }, []);
 
   const { data, error, guard, reload, fail } = useRefresh(load);
+
+  // The person the library is narrowed to (KNEG-362), by email, and their notes as Rust lists them:
+  // found among every note rather than picked from the library's newest hundred, and, as the
+  // library's own list is, at most a hundred, the most recently edited first -- each comes with its
+  // whole transcript. Panel state, as the search is: a note opened from the list keeps it, and
+  // navigation never comes back to it. Read again on every reload, so a person added to or removed
+  // from a note shows here at once.
+  const [personEmail, setPersonEmail] = useState<string | null>(null);
+  const [personNotes, setPersonNotes] = useState<{ email: string; notes: Note[] } | null>(null);
+  const personGeneration = useRef(0);
+  useEffect(() => {
+    const generation = ++personGeneration.current;
+    if (personEmail === null) { setPersonNotes(null); return; }
+    void getNotes({ person: personEmail, limit: PERSON_NOTES })
+      .then(found => { if (generation === personGeneration.current) setPersonNotes({ email: personEmail, notes: found }); })
+      .catch(fail);
+  }, [personEmail, data, fail]);
+
+  // Trash (KNEG-401): panel state, as the person filter is, and never at the same time. A note
+  // opened from it is a place, though: Back to it shows it read-only, Trash open or not.
+  const [trashOpen, setTrashOpen] = useState(false);
+  // "Moved “X” to Trash." with Undo, shown above the note open once the move was made, and gone as
+  // soon as another opens. `reopen` when X was the open note, so Undo opens it again.
+  const [moved, setMoved] = useState<{ id: number; title: string; reopen: boolean; shownWith: number | null } | null>(null);
+  // Where focus goes once a Trash action has finished and the page has been read again. What had
+  // focus -- a library row, a button of the note in Trash -- is gone by then, and focus would fall to
+  // the page's body, behind the rail and the library, with Undo out of a keyboard's reach. "undo":
+  // the Undo beside "Moved to Trash"; "title": the open note's title, once its editor is ready and
+  // the field enabled; "trash": Trash's page -- its "Choose a note" line, or, with nothing left to
+  // choose, the line saying what Trash holds. A request per action, so the same target twice moves
+  // focus twice. `from` is what had focus when the action was pressed: focus moves only while nothing
+  // else has taken it since, so a person who put it somewhere while the action finished, or while the
+  // title waited for its editor, keeps it there.
+  const [focusAfter, setFocusAfter] = useState<{ target: FocusTarget; from: Element | null; at: number } | null>(null);
 
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<SearchHit[] | null>(null);
@@ -182,10 +250,41 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
     if (last === null) { newest(); return; }
     // Not among the library's newest notes -- an older one opened from search -- so fetched, as an
     // open request is. Not opened once the page has gone: `onOpenNote` would navigate back to it.
-    void getNote(last).then(note => { if (!alive.current) return; if (note) open(note); else newest(); }).catch(fail);
+    // Nor once it is in Trash (KNEG-401): coming back to Notes opens the newest note, as for one
+    // deleted.
+    void getNote(last).then(note => { if (!alive.current) return; if (note && note.trashedAt === null) open(note); else newest(); }).catch(fail);
   }, [data, initialNoteId, openRequest, onOpenNote, reveal, fail]);
   useEffect(() => { if (openNoteId !== null) lastOpenNoteId = openNoteId; }, [openNoteId]);
   const mainRef = useRef<HTMLElement>(null);
+  // Tried every 50 ms for up to 3 s: the title stays disabled until the editor beneath it is ready,
+  // which the page is never told, and a note opened by navigation arrives a moment after the reload.
+  // Given up as soon as focus is somewhere the action didn't leave it -- not on what was pressed, and
+  // not fallen to the page's body when that went -- since then the person has put it there.
+  useEffect(() => {
+    if (focusAfter === null) return;
+    const find = (): HTMLElement | null => {
+      const main = mainRef.current;
+      if (!main) return null;
+      if (focusAfter.target === "undo") return main.querySelector<HTMLElement>(".notes-moved button");
+      if (focusAfter.target === "title") return main.querySelector<HTMLElement>('.note-detail input[aria-label="Title"]:not(:disabled)');
+      return main.querySelector<HTMLElement>(".trash-choose") ?? main.querySelector<HTMLElement>(".trash-space-line");
+    };
+    const untouched = () => {
+      const active = document.activeElement;
+      return active === null || active === document.body || active === focusAfter.from || !active.isConnected;
+    };
+    let tries = 0;
+    const timer = setInterval(() => {
+      if (!untouched()) { clearInterval(timer); return; }
+      const element = find();
+      if (element || ++tries > 60) {
+        clearInterval(timer);
+        element?.focus();
+      }
+    }, 50);
+    return () => clearInterval(timer);
+  }, [focusAfter]);
+  const focusLater = (target: FocusTarget, from: Element | null) => setFocusAfter({ target, from, at: Date.now() });
   // A note opens at its top. The pane outlives the note inside it, so on its own it keeps the
   // previous note's offset, clamped against the new note's first layout before the editor has its
   // content: measured on 2026-09-26 at 122px in a 480px window. An open request used to call
@@ -206,6 +305,8 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
       const note = await getNote(openRequest.id);
       if (cancelled) return;
       if (!note) throw new Error("This note is no longer available.");
+      // A note in Trash -- Back to it -- shows read-only; a live one leaves Trash for the library.
+      if (note.trashedAt === null) setTrashOpen(false);
       setRequestedNote(note); reveal(note.folderId); setQuery(""); setHits(null); setOpenNoteId(note.id);
     })().catch(e => { if (!cancelled) fail(e); });
     return () => { cancelled = true; };
@@ -215,9 +316,103 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
     await workspaceRef.current?.flush();
     const note = await getNote(id);
     if (!note) throw new Error("This note is no longer available.");
+    if (note.trashedAt === null) setTrashOpen(false);
     setRequestedNote(note);
     setOpenNoteId(id);
     onOpenNote?.(id, transcriptRow);
+  };
+  // Trash pressed: the open note is saved first, as opening another is, since Trash's own page takes
+  // the main area; pressed again, it is left as Show all notes leaves it.
+  const toggleTrash = () => {
+    if (trashOpen) { leaveTrash(); return; }
+    void (async () => { await workspaceRef.current?.flush(); setPersonEmail(null); setTrashOpen(true); })().catch(fail);
+  };
+  // What opens once the open note has gone to or left Trash: nothing while Trash stays open, so its
+  // page shows, and otherwise the newest note, as on a first visit. Returns the note opened.
+  const openNewest = async (stayInTrash: boolean): Promise<number | null> => {
+    const [newest] = stayInTrash ? [] : await getNotes({ limit: 1 });
+    if (newest) { await selectNote(newest.id); return newest.id; }
+    setOpenNoteId(null);
+    return null;
+  };
+  // Leaving Trash -- Show all notes, Trash pressed again, a person pressed -- shows the library with a
+  // note open: the one that was, while it is live, and the newest otherwise, so the page is never left
+  // empty after Delete forever or Empty trash.
+  const leaveTrash = () => {
+    setTrashOpen(false);
+    const open = data?.notes.find(note => note.id === openNoteId) ?? (requestedNote?.id === openNoteId ? requestedNote : null);
+    if (open === null || open.trashedAt !== null) void openNewest(false).catch(fail);
+  };
+  // Runs a Trash action as `guard` runs any change -- the error in view, the page read again -- and
+  // says whether it got to its end, so focus moves only after one that did.
+  const finished = async (work: () => Promise<boolean>): Promise<boolean> => {
+    let done = false;
+    await guard(async () => { done = await work(); });
+    return done;
+  };
+  // Delete (KNEG-401): to Trash, without a question -- Undo is beside the line that says so, and
+  // focus goes to it. The open note is saved first, as a move is, and the newest note opens in its
+  // place.
+  const moveToTrash = (note: Note) => {
+    const from = document.activeElement;
+    void finished(async () => {
+      const wasOpen = note.id === openNoteId;
+      if (wasOpen) await workspaceRef.current?.flush();
+      if (!(await trashNote(note.id))) return false;
+      const shownWith = wasOpen ? await openNewest(false) : openNoteId;
+      setMoved({ id: note.id, title: note.title, reopen: wasOpen, shownWith });
+      return true;
+    }).then(done => { if (done) focusLater("undo", from); });
+  };
+  const undoTrash = () => {
+    if (moved === null) return;
+    const from = document.activeElement;
+    const { id, reopen } = moved;
+    setMoved(null);
+    void finished(async () => { if ((await restoreNote(id)) && reopen) await selectNote(id); return true; })
+      .then(done => { if (done) focusLater("title", from); });
+  };
+  // Restore, from a note in Trash: it comes back to the library, open, in its folder -- or in none,
+  // when its folder was deleted meanwhile -- with focus on its title.
+  const restoreTrashed = (note: Note) => {
+    const from = document.activeElement;
+    void finished(async () => {
+      if (!(await restoreNote(note.id))) return false;
+      setMoved(current => (current?.id === note.id ? null : current));
+      setTrashOpen(false);
+      const back = await getNote(note.id);
+      if (back) { setRequestedNote(back); reveal(back.folderId); }
+      return true;
+    }).then(done => { if (done) focusLater("title", from); });
+  };
+  // Delete forever and Empty trash ask first, from what Trash holds now, so the question names the
+  // recordings that would go. Inside Trash, focus goes to its page; reached by Back, to the note that
+  // opens in its place.
+  const deleteForever = (id: number) => {
+    const inTrash = trashOpen;
+    const from = document.activeElement;
+    void finished(async () => {
+      const entry = (await getTrash()).notes.find(item => item.id === id);
+      if (!entry || !window.confirm(deleteForeverQuestion(entry))) return false;
+      if (!(await deleteNoteForever(id))) return false;
+      setMoved(current => (current?.id === id ? null : current));
+      if (id === openNoteId) await openNewest(inTrash);
+      return true;
+    }).then(done => { if (done) focusLater(inTrash ? "trash" : "title", from); });
+  };
+  // Only the notes the question counted: one moved to Trash while it was open -- through the local
+  // API, say -- isn't among them, and Rust leaves it in Trash.
+  const emptyAll = () => {
+    const from = document.activeElement;
+    void finished(async () => {
+      const held = await getTrash();
+      if (held.notes.length === 0 || !window.confirm(emptyTrashQuestion(held))) return false;
+      await emptyTrash(held.notes.map(item => item.id));
+      const gone = (id: number | null) => held.notes.some(item => item.id === id);
+      setMoved(current => (current !== null && gone(current.id) ? null : current));
+      if (gone(openNoteId)) await openNewest(true);
+      return true;
+    }).then(done => { if (done) focusLater("trash", from); });
   };
   const newNote = () => guard(async () => {
     await workspaceRef.current?.flush();
@@ -305,9 +500,20 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
     );
   }
 
-  const { notes, folders } = data;
+  const { notes, folders, people, trash } = data;
   const openNote = notes.find((note) => note.id === openNoteId) ?? (requestedNote?.id === openNoteId ? requestedNote : null);
+  // A note in Trash, reached from Trash or by Back, opens read-only.
+  const trashedView = openNote !== null && openNote.trashedAt !== null
+    ? <TrashedNote key={openNote.id} note={openNote} entry={trash.notes.find(item => item.id === openNote.id) ?? null}
+        onRestore={() => restoreTrashed(openNote)} onDeleteForever={() => deleteForever(openNote.id)} />
+    : null;
+  const movedLine = moved !== null && moved.shownWith === openNoteId ? movedToTrash(moved.title) : null;
   const groups = groupNotesByFolder(notes, folders);
+  // The person the library is narrowed to, by the name the People list gives them -- their email
+  // once no note names them any more.
+  const person = personEmail === null ? null : (people.find((item) => item.email === personEmail) ?? null);
+  const personName = person !== null ? personLabel(person) : (personEmail ?? "");
+  const personList = personEmail !== null && personNotes?.email === personEmail ? personNotes.notes : null;
   const now = new Date();
   const renderEntry = (note: Note) => {
     // The Meetings list's meta line, "26 Aug · 31 min", so a meeting reads the same in both panels.
@@ -326,6 +532,72 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
         aria-haspopup="dialog" />
     );
   };
+
+  // Everyone named by email on a note, with how many notes they are on (KNEG-362). Pressing one
+  // narrows the library to their notes; pressing it again, or Show all notes, brings the tree back.
+  const peopleSection = people.length === 0 ? (
+    <div className="panel-section">
+      <h2 className="panel-label">People</h2>
+      <p className="panel-note">No people yet. Add someone to a note, under its title.</p>
+    </div>
+  ) : (
+    <PanelSection label="People">
+      {people.map((item) => {
+        const pressed = personEmail === item.email;
+        return (
+          <button key={item.email} type="button" className="notes-person" aria-pressed={pressed}
+            // The address behind a name, and the whole of either when the row cuts it off.
+            title={item.name === null ? item.email : `${item.name}\n${item.email}`}
+            onClick={() => { if (trashOpen) leaveTrash(); setPersonEmail(pressed ? null : item.email); }}>
+            <Icon name="meetings" size={16} />
+            <span className="notes-person-name">{personLabel(item)}</span>
+            <span className="notes-folder-count"><span aria-hidden="true">{item.noteCount}</span><span className="sr-only">, {noteCount(item.noteCount)}</span></span>
+          </button>
+        );
+      })}
+    </PanelSection>
+  );
+  // In place of the tree while a person is pressed, as search hits are: their notes, fetched from
+  // Rust, and the way back.
+  const personSection = (
+    <>
+      <PanelSection label={`Notes with ${personName}`}>
+        <PanelAction icon="back" label="Show all notes" onClick={() => setPersonEmail(null)} />
+        {personList?.map(renderEntry)}
+      </PanelSection>
+      {personList === null ? <p className="panel-note" role="status">Loading…</p>
+        : personList.length === 0 ? <p className="panel-note">{`No notes with ${personName}.`}</p>
+        // The count beside their name is every note they are on; the list stops at a hundred. Only
+        // at the cap: just after a reload the count can be a step ahead of a list being read again.
+        : personList.length >= PERSON_NOTES && person !== null && person.noteCount > personList.length ? <p className="panel-note">{`Showing the ${personList.length} most recently edited of ${person.noteCount} notes.`}</p>
+        : null}
+    </>
+  );
+  // At the foot of the panel, under People: Trash and how many notes it holds (KNEG-401). Pressed,
+  // its notes replace the tree, as a person's do, most recently deleted first.
+  const trashEntry = (
+    <PanelSection label={null}>
+      <button type="button" className="notes-trash" aria-pressed={trashOpen}
+        title="Deleted notes, kept until you empty Trash" onClick={toggleTrash}>
+        <Icon name="discard" size={16} />
+        <span className="notes-trash-label">Trash</span>
+        <span className="notes-folder-count"><span aria-hidden="true">{trash.notes.length}</span><span className="sr-only">, {noteCount(trash.notes.length)}</span></span>
+      </button>
+    </PanelSection>
+  );
+  const trashSection = (
+    <>
+      <PanelSection label="Trash">
+        <PanelAction icon="back" label="Show all notes" onClick={leaveTrash} />
+        {trash.notes.map((item) => (
+          <PanelItem key={item.id} className="notes-trashed" titleClassName="notes-entry-title" title={item.title}
+            meta={trashedMeta(item, now)} current={openNoteId === item.id} tooltip={item.title}
+            onClick={() => { void selectNote(item.id).catch(fail); }} />
+        ))}
+      </PanelSection>
+      {trash.notes.length === 0 ? <p className="panel-note">Trash is empty.</p> : null}
+    </>
+  );
 
   const panel = (
     <>
@@ -359,7 +631,19 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
           </PanelSection>
         )}
 
-        {hits !== null ? null : (
+        {hits !== null ? null : personEmail !== null ? (
+          <>
+            {personSection}
+            {peopleSection}
+            {trashEntry}
+          </>
+        ) : trashOpen ? (
+          <>
+            {trashSection}
+            {peopleSection}
+            {trashEntry}
+          </>
+        ) : (
           <>
             <div className="panel-section">
               <div className="notes-folders-head">
@@ -415,6 +699,9 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
               )}
             </div>
             {groups.unfiled.length > 0 && <PanelSection label="Not in a folder">{groups.unfiled.map(renderEntry)}</PanelSection>}
+            {/* Under the whole tree, so the folders and the notes in none stay together (ruling, KNEG-362). */}
+            {peopleSection}
+            {trashEntry}
           </>
         )}
       </div>
@@ -424,13 +711,24 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
   return (
     <SplitView label="Notes library" heading="Notes" panel={panel}>
       <section className="notes-main" aria-label="Note editor" ref={mainRef}>
-        {error || exportedTo ? (
-          <div className="notes-notices">
-            {error ? <p className="error">{error}</p> : null}
-            {exportedTo ? <Row label="Written to" value={exportedTo} /> : null}
-          </div>
-        ) : null}
-        {openNote ? (
+        {/* Always drawn, empty when there is nothing to say, so what comes into it -- a failure, "Moved
+            to Trash", "Written to" -- is announced: a live region added already filled often is not. */}
+        <div className="notes-notices" role="status">
+          {error ? <p className="error">{error}</p> : null}
+          {movedLine !== null ? <p className="notes-moved">{movedLine} <button type="button" onClick={undoTrash}>Undo</button></p> : null}
+          {exportedTo ? <Row label="Written to" value={exportedTo} /> : null}
+        </div>
+        {trashOpen ? (
+          <>
+            {/* Trash's page (KNEG-401): what its recordings take, and Empty trash. Nothing empties it on its own. */}
+            <div className="trash-space">
+              <p className="trash-space-line" tabIndex={-1}>{trashSpaceLine(trash)}</p>
+              <p className="muted">Deleted notes stay in Trash, with their recordings, until you empty it.</p>
+              <button type="button" disabled={trash.notes.length === 0} onClick={emptyAll}>Empty trash</button>
+            </div>
+            {trashedView ?? (trash.notes.length === 0 ? null : <p className="trash-choose muted" tabIndex={-1}>Choose a note in Trash to see it, restore it or delete it forever.</p>)}
+          </>
+        ) : trashedView ?? (openNote ? (
           <NoteWorkspace
             key={openNote.id}
             ref={workspaceRef}
@@ -441,7 +739,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
             onMore={anchor => toggleMoreMenu(openNote, anchor)}
             moreOpen={context?.fromButton === true && context.kind === "note" && context.note.id === openNote.id}
           />
-        ) : <div className="notes-empty"><h2>Your writing space</h2><p className="muted">Choose a note or meeting from the list, or start a new note.</p><button type="button" className="primary" onClick={() => { void newNote(); }}>New note</button> <button type="button" onClick={onImport}>Import audio or video</button></div>}
+        ) : <div className="notes-empty"><h2>Your writing space</h2><p className="muted">Choose a note or meeting from the list, or start a new note.</p><button type="button" className="primary" onClick={() => { void newNote(); }}>New note</button> <button type="button" onClick={onImport}>Import audio or video</button></div>)}
       </section>
       {context && createPortal(<div ref={contextRef} className="notes-context-menu" role="dialog" aria-label={context.kind === "note" ? `Actions for ${context.note.title}` : `Actions for folder ${context.folder.name}`} style={{ left: context.x, top: context.y }} onContextMenu={event => event.preventDefault()} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget) && !(context.fromButton && event.relatedTarget === context.anchor)) setContext(null); }}>
         {context.kind === "note" ? <>
@@ -454,33 +752,8 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
                 >
                   Export…
                 </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setContext(null);
-                    void getNoteRecording(context.note.id)
-                      .then(async (recording) => {
-                        const recordingMessage = recording
-                          ? ` It has a recording (${
-                              recording.durationSeconds === null
-                                ? "duration unknown"
-                                : formatClock(recording.durationSeconds)
-                            }, ${recording.storageKey}) and deleting the note deletes it too.`
-                          : " It has no recording.";
-                        if (!window.confirm(`Delete “${context.note.title}”?${recordingMessage}`)) return;
-                        await workspaceRef.current?.flush();
-                        await guard(async () => {
-                          await deleteNote(context.note.id);
-                          setOpenNoteId((current) =>
-                            current === context.note.id ? null : current,
-                          );
-                        });
-                      })
-                      .catch((cause: unknown) => {
-                        void guard(async () => { throw cause; });
-                      });
-                  }}
-                >
+                {/* To Trash, without a question: Undo is beside the line that says so (KNEG-401). */}
+                <button type="button" onClick={() => { setContext(null); moveToTrash(context.note); }}>
                   Delete
                 </button>
         <div className="row">
@@ -524,7 +797,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
           void guard(async () => { await deleteFolder(folder.id); });
         }}>Delete folder</button></>}
       </div>, document.body)}
-      <FolderSharing folder={shareFolder} trigger={shareTrigger.current} importRequest={shareImportRequest} close={() => setShareFolder(null)} flush={async () => { await workspaceRef.current?.flush(); }} imported={async folderId => { await workspaceRef.current?.flush(); await reload(); reveal(folderId); setQuery(""); setHits(null); const notes = await getNotes({ folderId, limit: 1 }); if (notes[0]) await selectNote(notes[0].id); }} />
+      <FolderSharing folder={shareFolder} trigger={shareTrigger.current} importRequest={shareImportRequest} close={() => setShareFolder(null)} flush={async () => { await workspaceRef.current?.flush(); }} imported={async folderId => { await workspaceRef.current?.flush(); await reload(); reveal(folderId); setQuery(""); setHits(null); setPersonEmail(null); const notes = await getNotes({ folderId, limit: 1 }); if (notes[0]) await selectNote(notes[0].id); }} />
     </SplitView>
   );
 }

@@ -44,9 +44,10 @@ pub struct ShapedRequest {
 }
 
 // There is deliberately no language list in this file. `route::resolve` drops a
-// language outside xAI's twenty-five before the request reaches here, so by this
-// point `language` is already known-good — and a second copy of that list would
-// be one more thing to keep in step with the first.
+// language outside xAI's twenty-five, or outside the thirteen Mistral documents,
+// before the request reaches here, so by this point `language` is already
+// known-good — and a second copy of either list would be one more thing to keep
+// in step with the first.
 
 /// Why Tinfoil is still refused, in one place so the message cannot drift.
 ///

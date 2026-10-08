@@ -25,7 +25,7 @@ checking and an update popup are not available merely because the app builds.
 | Meetings | Microphone and system-audio recording, live transcription, detection/recording offers and a notification panel. Windows WASAPI capture and local/OpenAI Realtime transcription have been exercised. Other cloud meeting providers and some detection/notification scenarios still need live validation. |
 | Notes | Independent title and Notes / Transcript / Replay tabs; in windows 1280px or wider the transcript is a column beside the note instead of a tab. Personal Markdown notes precede AI summaries; empty notes can start from the transcript. Playback continues across tabs. Folders, transcript-aware full-text search and txt/md/json/srt/vtt export remain available. See [Notes workspace](docs/NOTES_WORKSPACE.md). |
 | Meeting summaries | Optional automatic/manual summaries with an independent model, editable prose, transcript references, chunked processing and retry/cancel. Configure Settings > Cleanup & summaries. See [implementation and validation](docs/MEETING_SUMMARIES.md) for model-quality limits. |
-| Recording ownership | Older notes can attach an explicitly selected PCM16 mono/stereo WAV through a native dialog. The source is copied and preserved. Desktop and API note deletion share recording cleanup. Meeting attachment failure keeps the note and WAV and displays recovery guidance. |
+| Recording ownership | Older notes can attach an explicitly selected PCM16 mono/stereo WAV through a native dialog. The source is copied and preserved. Deleting a note, in the app or through the API, moves it to Trash with its recording; the copy is removed only by Delete forever or Empty trash, never on its own. Meeting attachment failure keeps the note and WAV and displays recovery guidance. |
 | Import | Local audio/video is converted with ffmpeg, transcribed and saved with retained audio for playback. UI and API imports share one active slot, with no queue. Progress survives navigation; job metadata survives restart, while unfinished jobs become failed rather than resuming. URL import remains disabled. OpenWhispr database import is a separate flow. |
 | Local inference | Whisper and Parakeet for dictation/import, local meeting routes including streaming models, and llama.cpp for dictation cleanup. Long Parakeet inputs can crash the current offline runtime; see the findings below. Whisper uses serialized on-demand recovery, without automatically replaying a submitted transcription. |
 | API, CLI and MCP | Opt-in loopback API, CLI and a stdio MCP server with 23 tools: notes, dictionary, history search, file transcription jobs, meeting recording, status and model discovery. Discovery permissions are verified before serving; detected permission widening revokes the token and stops service. Repair is attempted once, followed by explicit retry. |
@@ -81,7 +81,7 @@ that time; they are not a claim that previously completed work is still missing.
 
 Select the transcription provider/model in **Settings > Transcription**. Import audio or video
 uses that route; **Settings > Meetings** has its own provider selection. Converted import audio
-stays until its note is deleted, while the selected source file stays intact.
+stays until its note is deleted forever from Trash, while the selected source file stays intact.
 
 For a first local dictation, install the server/model from **Settings > Transcription**,
 select the local route, then configure the shortcut in **Settings > Shortcuts**. For cloud

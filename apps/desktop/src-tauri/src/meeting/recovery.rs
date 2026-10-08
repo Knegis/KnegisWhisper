@@ -18,6 +18,10 @@ use super::draft;
 pub struct RecoverableRecording {
     pub storage_key: String,
     pub has_notes: bool,
+    /// The name the meeting was given before Start, from the plan beside it
+    /// (KNEG-365), tidied as the recovered note's title will be. `None` when
+    /// it was given none, or has no plan.
+    pub title: Option<String>,
 }
 
 pub async fn scan(db: &Db, directory: &Path) -> Result<Vec<RecoverableRecording>, String> {
@@ -50,9 +54,13 @@ pub async fn scan(db: &Db, directory: &Path) -> Result<Vec<RecoverableRecording>
         }
         let has_notes = std::fs::symlink_metadata(draft::sidecar_path(&path))
             .is_ok_and(|metadata| metadata.is_file());
+        let title = draft::read_plan(&path)
+            .and_then(|plan| plan.title)
+            .and_then(|title| super::clean_title(&title));
         found.push(RecoverableRecording {
             storage_key: key.to_owned(),
             has_notes,
+            title,
         });
     }
     found.sort_by(|a, b| b.storage_key.cmp(&a.storage_key));
@@ -100,6 +108,63 @@ mod tests {
                 .unwrap()
                 .len(),
             1
+        );
+    }
+
+    /// KNEG-401. A note in Trash still owns its recording -- Restore brings
+    /// it back with it -- so its WAV is not an interrupted meeting, and
+    /// recovering it would make a second note of the same recording.
+    #[tokio::test]
+    async fn a_recording_whose_note_is_in_trash_is_not_offered() {
+        let db = Db::open_in_memory().await.unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("20261008-090000-a.wav"), b"wav").unwrap();
+        let note = kw_notes_core::notes::NewNote {
+            title: "Board review".into(),
+            ..Default::default()
+        };
+        let (id, _) = kw_notes_core::notes::create_meeting_with_recording(
+            db.pool(),
+            &note,
+            "20261008-090000-a.wav",
+            1.0,
+        )
+        .await
+        .unwrap();
+        assert!(kw_notes_core::trash::trash(db.pool(), id).await.unwrap());
+
+        assert!(scan(&db, dir.path()).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_interrupted_recording_is_offered_under_the_name_it_was_given() {
+        // KNEG-365: the name typed before Start is in the plan beside the WAV.
+        let db = Db::open_in_memory().await.unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let named = dir.path().join("20261008-073000-a.wav");
+        let unnamed = dir.path().join("20261008-063000-b.wav");
+        std::fs::write(&named, b"wav").unwrap();
+        std::fs::write(&unnamed, b"wav").unwrap();
+        draft::write_plan(
+            &named,
+            &crate::meeting::MeetingPlan {
+                title: Some("  Board review\n".into()),
+                ..crate::meeting::MeetingPlan::default()
+            },
+        )
+        .unwrap();
+
+        let candidates = scan(&db, dir.path()).await.unwrap();
+        let titles: Vec<_> = candidates
+            .iter()
+            .map(|c| (c.storage_key.as_str(), c.title.as_deref()))
+            .collect();
+        assert_eq!(
+            titles,
+            [
+                ("20261008-073000-a.wav", Some("Board review")),
+                ("20261008-063000-b.wav", None),
+            ]
         );
     }
 }

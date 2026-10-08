@@ -30,8 +30,8 @@ format limits, recovery behavior and validation commands.
 
 The library — folders, notes and search — is the list panel on the left, beside the
 open note. Coming back to Notes from another page reopens the note that was open, until the
-app closes; the first visit, or one after that note was deleted, opens the most recently
-edited note. The title is a separate autosaved text field above **Notes / Transcript /
+app closes; the first visit, or one after that note was deleted or moved to Trash, opens the
+most recently edited note. The title is a separate autosaved text field above **Notes / Transcript /
 Replay**.
 Notes opens by default, with personal Markdown notes first and an independently
 editable AI summary below. An empty personal note offers **Start from transcript**;
@@ -57,6 +57,82 @@ keys, Home and End; a hidden Transcript tab is skipped. At widths of 900px or le
 the list panel initially collapses (and collapses when entering that width); the
 title bar's list toggle reopens it. Tabs wrap when necessary.
 
+A row that local Whisper timed word by word (KNEG-408) -- a media import, or a
+meeting's whole-recording pass, on a Whisper engine -- is drawn word by word while
+it plays, and the word being said is marked. Clicking a word plays from it; a row
+or selection played with its Play button still stops at its end when the word is
+inside it. Every other row is marked as a whole row, as before: notes saved before
+word timings were kept, Parakeet, cloud providers and live captions, and a row whose
+text no longer matches its words. With reduced motion asked for, the mark jumps
+from word to word instead of fading. How far the mark sits from the sound on a real
+Swedish recording has not been judged by ear yet (see Data compatibility for what
+was measured).
+
+Under the title, the meta row gives the note's date, the recording's length, its
+people and where its transcript was made (KNEG-368): "Transcribed on this
+computer", or "Transcribed by" the provider or server that made it. A meeting
+whose saved transcript is the whole-recording pass was transcribed on this
+computer; when its live captions came from a provider off this computer, the line
+adds "· live captions by" that provider. A recovered meeting doesn't: it says only
+"Transcribed on this computer", wherever its live captions came from, because the
+`.meeting.json` kept beside the recording for recovery doesn't record the live
+provider. A meeting saved from its live captions --
+a finished local stream, or the captions kept because the whole-recording pass
+failed -- names the live provider. Typed notes alone, notes saved before this was
+recorded, and OpenWhispr and shared-folder imports say nothing.
+
+A note's people (KNEG-362) are chips in its meta row, each with a button that removes
+them, and **Add person** takes an email and, if wanted, a name. A person is their email:
+a new one is trimmed and lower-cased, a second entry for one address is dropped, one that
+isn't an address is refused in plain words under the row with the form still open, and a
+note keeps at most 200. An address an import already put on the note passes as it is, so
+one that was never checked can't block changes to the note's people. Imported notes come
+with theirs; nothing else fills them in yet (the calendar doing so is a follow-up). Saving
+people isn't editing the note, so it doesn't move it up the library. The library's
+**People** section, under the folders and the notes in no folder, lists everyone
+named by email on a note and how many notes they're on, by the name on the newest note
+that gives one; someone with a name and no email isn't listed. Pressing a person shows
+**Notes with** them in place of the folders, with **Show all notes** to come back. They are
+found among every note, not picked from the library's newest hundred, and listed as the
+library is, at most a hundred and the most recently edited first; past that, a line says
+how many of their notes are shown. Like the search, that is the panel's
+state: a note opened from it keeps it, and back and forward don't return to it. A note's
+people are part of what its summary was made from, so changing them marks a finished
+summary out of date and stops one being made; a summary still waiting to start uses the
+people on the note when it starts ([meeting summaries](MEETING_SUMMARIES.md)).
+
+**Trash** (KNEG-401). Delete, in a note's menu, moves the note to Trash without asking:
+"Moved “{title}” to Trash." shows above the note that opens in its place, the newest one,
+with **Undo**. Nothing is deleted: the note keeps its transcript, its recording and the file
+behind it, its people and its speaker names, and nothing empties Trash on its own -- it
+holds a note until a person restores it or empties it. A note in Trash is in no list,
+search, folder count, People count or shared folder, and the title bar's search and the
+Meetings list leave it out too. **Trash**, at the foot of the library under People, says
+how many notes it holds; pressed, its notes replace the tree, most recently deleted first,
+each with when it went and how long its recording runs ("Deleted 3 Oct · 31 min"), and the
+main area says what their recordings take on this computer ("Recordings in Trash take 412
+MB on this computer."), with **Empty trash**. A note in Trash opens read-only, never in the
+editor, so nothing saves into it: "This note is in Trash." with **Restore** and **Delete
+forever**, its title and its typed notes as plain text. The same view shows when Back
+returns to a note moved to Trash since. Restore brings it back as it was, in its folder --
+or in none, when the folder was deleted meanwhile. Delete forever and Empty trash ask first,
+naming the note and its recording's length, or how many notes and what their recordings
+take, and say "Your original file isn't touched." when a recording was copied from an
+imported file; no file name is shown. Empty trash deletes only the notes its question
+counted: one moved to Trash while it was asking, through the local API say, stays. A
+recording that can't be deleted -- an app holding the file open -- stops the whole
+deletion with a line saying so, the notes still in Trash, and pressing again finishes.
+After Delete, focus goes to Undo; after Undo or Restore, to the note's title; after Empty
+trash, or Delete forever inside Trash, to Trash's page; after Delete forever on a note
+reached by Back, to the title of the note that opens in its place. Focus moves only while
+nothing else has taken it since the button was pressed: put somewhere else while the action
+finishes, or while the title waits for its editor, it stays there. The line above the note
+that says these things is a live region, always there, so what comes into it is announced. Leaving Trash opens a note,
+the newest when the one open was deleted forever. Discarding a meeting is unchanged: its recording is
+deleted at once, not moved to Trash. The local API's `DELETE /v1/notes/{id}`, the CLI's
+`notes delete` and the MCP `notes_delete` move a note to Trash too, and from then on treat
+it as gone; only the app restores a note or deletes one forever.
+
 Title, personal notes and summaries flush before tab changes, note changes and
 native window closure. A failed save retains the draft and prevents those transitions;
 retry remains available. Blank titles become “Untitled note”.
@@ -66,11 +142,54 @@ the live **Transcript**. The editor autosaves to memory and a `.notes.md` sideca
 beside the WAV. The panel's Stop action flushes its draft before ending the meeting.
 Stop and Discard in Meetings ask the meeting window to flush and acknowledge the
 draft first; a reported save failure keeps the recording open and shows an error.
-If the panel cannot respond, Meetings offers **Stop recording anyway** so a broken
-window cannot leave capture running. It warns that the newest edit may be missing.
+If the panel cannot respond, Meetings offers **Stop recording anyway** and
+**Discard anyway** so a broken window cannot leave capture running or force a save
+of a meeting meant to be thrown away (KNEG-418). Neither asks the window again.
+Both keep the notes the app already has and warn that the newest edit may be
+missing; Discard anyway asks first, as Discard does.
 Typed notes become the saved note body even if transcription fails. Discarding a
 recording keeps nonempty typed notes as a notes-only meeting note. An interrupted
 WAV and its notes sidecar can be recovered from Meetings (KNEG-316).
+
+A meeting can be named, and given a folder in the Folder chip, before Start on
+the Meetings page (KNEG-365). Rust keeps both with the session and in a
+`.meeting.json` beside the WAV, so the saved note, a discarded meeting's
+notes-only note and a recovered note all take them, however the meeting ends. A
+meeting with no name is named for when it started. A folder deleted before the
+note is saved is left out; after Stop or Recover the outcome says the note isn't
+in a folder, while a discarded meeting's notes-only note, and the notes saved
+when a recording can't be closed, are left out of it without a word. The
+notification window's Record and the local API start an unnamed meeting in no
+folder.
+
+Settings › Meetings can delete each recording once its transcript is saved
+(KNEG-409), off by default. A meeting reads the switch when it starts and keeps
+that choice in the session and the `.meeting.json`, so changing it mid-meeting
+affects the next meeting. The recording is deleted only when its note was saved
+with a whole transcript: a note of typed notes alone, or of the running
+transcript saved because the whole-recording pass failed, keeps its recording,
+and the outcome says why. A finished local stream counts as a whole transcript:
+for that route it is the final transcript, not a fallback. The WAV is attached
+exactly as with the switch off, then the attachment and the file are removed in
+one transaction (`recordings::delete_attached`), which also adds "The recording
+was deleted after transcribing (Settings › Meetings)." to the note's recording
+details; a file that can't be removed stays attached, and the outcome says so.
+Nothing is removed until the note is on disk: commits are not synced (WAL,
+`synchronous = NORMAL`), so a full WAL checkpoint first writes them into the
+database file and syncs it, and if it can't finish -- a reader holding it back
+past the busy timeout -- the recording stays attached and the outcome says so.
+The outcome is seen only on the Meetings page while it is open, so the note's
+recording details say the same: a kept recording ends them with "The recording
+was kept because the transcript may be incomplete" -- or "because nothing was
+transcribed from it" -- "(Settings › Meetings asks for recordings to be deleted
+after transcribing).", written as the note is saved; a failed deletion adds
+"The recording couldn't be deleted after transcribing, so it's still attached
+(Settings › Meetings).", or, when the file went and only the note's update
+failed, the line a deleted one gets, though the note still lists the recording.
+A recording whose deletion failed is never tried again. The note
+keeps its transcript and typed notes, and Replay has no player. While the switch
+is on the Meetings page says so beside Start, at the foot of its list and in the
+live view of a meeting started that way. Discard always deletes the recording.
 
 ## Data compatibility
 
@@ -96,8 +215,67 @@ WAV and its notes sidecar can be recovered from Meetings (KNEG-316).
   default tokenizer folded å and ä to a and ö to o, so "for" found "för", "har" found
   "här" and "sa" found "så". Letter case still folds. Every accent now counts, so
   "cafe" no longer finds "café".
-- No new renderer command or user-editable transcript API was added. Existing note
-  exports and separate summary exports retain their behavior.
+- Migration `0010_transcribed_by.sql` adds `notes.transcribed_by`, returned as
+  nullable `Note.transcribedBy`: where the transcript was made, as JSON
+  (`provider`, `name`, `onThisComputer`, and `liveName` for a meeting's
+  live-caption provider), set by meeting saves, recovery and media imports.
+  Existing notes keep NULL and show nothing; nothing guesses where they were
+  transcribed. `notes_create` and the local API's create don't take it, and
+  shared-folder packages don't carry it.
+- A transcript segment may carry `words`, a list of `{text, start, end}` on the
+  segment's clock (KNEG-408). Only local Whisper writes them, from the per-token
+  times its server returns with every timed request, joined into words; no forced
+  alignment is run. The pinned server was seen sending them on 2026-10-08
+  (`crates/transcription-core/tests/word_timings.rs`, ignored, `ggml-tiny`, the
+  English fixture): every row came back with words that spell it. Against the
+  fixture's measured speech the first sentence's first word started 0.01 s late and
+  the second's 0.37 s early, and each row's last word ran on to the row's end. A
+  segment without words leaves the key out, so it is
+  stored byte for byte as before, and one with a `words` in any other shape, which
+  an imported transcript may carry, reads as none. Both search indexes read only
+  `text`, so a word is found by its row, never by its timing. `Note.transcript`, which
+  `notes_list` and the local API's notes return whole, grows by about 46 bytes a
+  word: a synthetic hour of 9,000 words is 169 KB without them and 589 KB with
+  (`an_hour_of_words_is_measured` in `transcript.rs`). Media import's own answer to
+  the screen (`MediaImportResult.segments`) carries no words.
+- Migration `0011_note_trash.sql` adds `notes.trashed_at`, returned as nullable
+  `Note.trashedAt`: when the note was moved to Trash, as `CURRENT_TIMESTAMP` writes it, and
+  NULL for every note the migration finds. Not `deleted_at`, which is OpenWhispr's sync
+  tombstone, refused by the schema checks and filtered out by the importer. A partial index
+  holds only the notes in Trash. Every query that lists, searches or counts notes asks for
+  `trashed_at IS NULL`. Its title, notes, folder, people and speaker names are refused for
+  one in Trash ("This note is in Trash. Restore it to edit it."), as are attaching a
+  recording and asking for a summary, and the local API answers `404` for one; `notes_get`
+  alone still returns it. Its search index rows are kept, so Restore needs no re-indexing.
+  `recordings::storage_keys` is deliberately not filtered: a note in Trash still owns its
+  WAV, so crash recovery never offers it as an interrupted meeting. Moving a note to Trash
+  cancels a summary queued or being made for it, and its summary can't be edited. Delete
+  forever and Empty trash follow `delete_attached`'s order (`recordings::empty_trash` says
+  why): a full WAL checkpoint first, so the move to Trash is on disk, and nothing deleted if
+  it can't finish; then, in one transaction, the rows of the notes still in Trash deleted and
+  their files removed, a file already gone counting as removed and any other failure rolling
+  the deletion back with a plain-words error; then the commit. A file is never removed after
+  the commit, where a crash would leave a WAV no note owns for recovery to offer back; the
+  worst left is notes still in Trash without their recordings -- after an error the person
+  saw (a later file that wouldn't go, a failed commit), or after a power loss before the
+  commit reached the disk, with no error at all -- and pressing again finishes. The OpenWhispr
+  importer still needs an empty `notes` table, and notes in Trash count; its refusal says
+  how many are there.
+- `notes.participants` keeps its shape, a JSON array of `{displayName, email}` read
+  leniently, and needed no migration (KNEG-362). `notes_set_participants` writes it
+  whole, and keeps what it didn't make: an entry sent back as the screen read it is
+  written back as stored, with every key and value an import put on it (its keys in
+  alphabetical order); an address already on the note passes unchecked; and entries the
+  screen can't show -- not objects, or with no text email or name -- stay, after the
+  people. Only new entries are written as `{displayName?, email?}`. What is lost: the
+  order of keys within a kept entry, the place of those unshown entries in the list, and
+  a value that isn't a JSON array at all (malformed JSON, an object, a string), which
+  shows as no people and is replaced by the first edit. An entry the person removes goes
+  whole. Emails and names are trimmed of what Rust's `str::trim` strips, in SQL and on
+  the screen alike. `people_list` and `notes_list`'s `person` (an email) read it; the
+  local API, CLI and MCP return it as before and have no people filter.
+- No user-editable transcript API was added. Existing note exports and separate summary
+  exports retain their behavior.
 
 ## Verification
 

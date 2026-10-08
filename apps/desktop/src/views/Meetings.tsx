@@ -8,16 +8,26 @@
  *     can be recorded (`lib/readiness.ts`) and, when it cannot, the one
  *     problem and the button that fixes it. Under it, a card while a meeting
  *     application is in a call, with a way to record that call. At the foot,
- *     the control bar: the microphone -- the system default, the only one the
- *     recorder opens -- whether the other participants are captured, a choice
+ *     the control bar: the microphone, chosen in its chip's menu and shared
+ *     with dictation, whose footer runs a five-second "Test microphone"
+ *     (KNEG-364) -- whether the other participants are captured, a choice
  *     kept on this page only, who transcribes in what language, each chosen in
- *     its chip's menu (`ChipMenu`), and whether a summary is made, a toggle
+ *     its chip's menu (`ChipMenu`), whether a summary is made, a toggle
  *     that is a link to Cleanup & summaries until a provider and model are
- *     chosen there. Then where the audio goes, which is never hidden, the
- *     caveats, and Start.
+ *     chosen there, and the folder the note is saved to. Then where the audio
+ *     goes, which is never hidden, the caveats, what the microphone check
+ *     heard, the meeting's name, and Start.
+ *     The name and the folder go to Rust with Start and stay with the meeting
+ *     (KNEG-365); the page keeps neither for a meeting already running.
+ *     While Settings > Meetings deletes each recording once its transcript
+ *     is saved, a note beside Start and the list's foot say so, and the live
+ *     view says it of a meeting started that way (KNEG-409).
  *   - **Live**, while a meeting is running: its state and a timer, which
- *     captures opened and where the audio goes, the live transcript, and a
- *     bar with what is in effect, Discard, and Stop.
+ *     captures opened and where the audio goes, how loud each capture is
+ *     ("You", and "Others" with system audio; `LevelMeter`, KNEG-371), the
+ *     live transcript, and a bar with what is in effect -- the microphone the
+ *     meeting actually opened, from Rust, not the one chosen now (KNEG-364)
+ *     -- Discard, and Stop.
  *   - **The list panel**: the meeting under way, the meetings saved lately --
  *     each opens its note in Notes -- and any recording an earlier session
  *     left behind, with Recover.
@@ -75,8 +85,10 @@ import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, u
 import { Chip } from "../components/Chip";
 import { ChipMenu, type ChipMenuHandle } from "../components/ChipMenu";
 import { ControlBar } from "../components/ControlBar";
+import { FailureLine } from "../components/FailureLine";
 import { Icon, IconFilled } from "../components/Icon";
 import { LearnMore } from "../components/LearnMore";
+import { LevelMeter } from "../components/LevelMeter";
 import { PanelAction, PanelHeader, PanelItem, PanelSection } from "../components/Panel";
 import { formatClock } from "../components/RecordingPlayer";
 import { PanelCollapsed, SplitView } from "../components/SplitView";
@@ -85,7 +97,10 @@ import { languageLabel, privacyLines } from "../lib/controlBar";
 import { timeOfDay } from "../lib/dayGroups";
 import {
   cancelMeeting,
+  checkMicrophone,
   flushMeetingPanelNotes,
+  getFolders,
+  getMeetingDeleteRecordings,
   getMeetingKeyterms,
   getMeetingLanguage,
   getMeetingProvider,
@@ -104,12 +119,14 @@ import {
   onMeetingState,
   onMeetingTranscript,
   recoverMeetingRecording,
+  setInputDevice,
   setSummarySettings,
   startMeeting,
   stopMeeting,
   type Detected,
   type MeetingOutcome,
   type MeetingState,
+  type MicrophoneCheck,
   type RecoverableRecording,
   type Sources,
 } from "../lib/ipc";
@@ -127,14 +144,19 @@ import {
   activeCall,
   discardQuestion,
   elapsedLabel,
+  folderMenu,
   interruptedTitle,
   liveElapsed,
+  liveMicrophone,
   meetingLanguageMenu,
   meetingIntro,
   meetingMicrophone,
+  MICROPHONE_CHECK_LISTENING,
+  microphoneCheckLine,
   privacyProvider,
   recentMeta,
   recordedSources,
+  sameMeetingStart,
   summaryPrivacyLine,
 } from "../lib/meetingView";
 import type { ViewId } from "../lib/navigation";
@@ -175,8 +197,11 @@ export function Meetings({
   // the summary settings are here, so while they load or fail the line has
   // nothing to go on and the page shows no control bar at all rather than a
   // line that might leave a summary out.
+  // Whether recordings are deleted once transcribed is read with them too:
+  // the page says so whenever it is on (KNEG-409), and a failure to read it
+  // must not leave the page saying nothing.
   const load = useCallback(async () => {
-    const [providers, status, provider, recoverable, language, keyterms, summaries] =
+    const [providers, status, provider, recoverable, language, keyterms, summaries, deleteRecordings] =
       await Promise.all([
         getMeetingProviders(),
         getMeetingStatus(),
@@ -185,8 +210,9 @@ export function Meetings({
         getMeetingLanguage(),
         getMeetingKeyterms(),
         getSummarySettings(),
+        getMeetingDeleteRecordings(),
       ]);
-    return { providers, status, provider, recoverable, language, keyterms, summaries };
+    return { providers, status, provider, recoverable, language, keyterms, summaries, deleteRecordings };
   }, []);
 
   const { data, error, reload, guard } = useRefresh(load);
@@ -206,25 +232,58 @@ export function Meetings({
     return { whisper, sherpa };
   }, []);
   const engines = useRefresh(loadEngines).data ?? null;
-  // The microphone chosen on Dictation, which meetings record too (KNEG-341).
-  // A failed read leaves the chip saying the default, which is what a meeting
-  // falls back to anyway.
+  // The microphone meetings and dictation both record (KNEG-341), chosen in
+  // the chip's menu here as on Dictation (KNEG-364), read on its own: a
+  // failed read leaves the chip saying the default, which is what a meeting
+  // falls back to anyway, with the failure in view under the bar. A choice is
+  // written through this read's `guard`, so it is read back -- the chip names
+  // what was saved -- and a failure to save it is in view the same way.
   const loadMicrophone = useCallback(async () => {
     const [devices, chosen] = await Promise.all([getInputDevices(), getInputDevice()]);
     return { devices, chosen };
   }, []);
-  const microphoneRead = useRefresh(loadMicrophone).data ?? null;
+  const microphoneRefresh = useRefresh(loadMicrophone);
+  const microphoneRead = microphoneRefresh.data ?? null;
   const microphone = meetingMicrophone(microphoneRead?.devices ?? null, microphoneRead?.chosen ?? null);
+  /**
+   * The five-second "Test microphone" (KNEG-364): listening, what it heard,
+   * or why it couldn't. `null` before the first. Start is held while it
+   * listens, and a choice made meanwhile applies to the next check -- this
+   * one keeps the microphone it opened, as a meeting does.
+   */
+  const [check, setCheck] = useState<
+    | { state: "listening" }
+    | { state: "done"; result: MicrophoneCheck }
+    | { state: "failed"; error: string }
+    | null
+  >(null);
+  const checking = check?.state === "listening";
+  // The folders the Folder chip offers (KNEG-365), read on their own for the
+  // same reason: a failure leaves only "No folder", which is where a note
+  // goes anyway, and nothing else on the page waits for them.
+  const folderRead = useRefresh(getFolders);
+  const folders = folderRead.data ?? [];
+  const reloadFolders = folderRead.reload;
   const recentGuard = recentRead.guard;
   const reloadRecent = useCallback(() => recentGuard(async () => {}), [recentGuard]);
   // Every read that follows a meeting ending or a recording being recovered
-  // reads both, since either can add a note to Recent.
+  // reads both, since either can add a note to Recent -- and the folders,
+  // since an outcome can say the chosen one was deleted, and the chip should
+  // stop naming it then.
   const reloadAll = useCallback(async () => {
-    await Promise.all([reload(), reloadRecent()]);
-  }, [reload, reloadRecent]);
+    await Promise.all([reload(), reloadRecent(), reloadFolders()]);
+  }, [reload, reloadRecent, reloadFolders]);
 
   const [state, setState] = useState<MeetingState | null>(null);
   const [wantSystem, setWantSystem] = useState(true);
+  /**
+   * What the next meeting started here is saved as (KNEG-365): its name, and
+   * the folder chosen in the Folder chip. Kept on this page only, like
+   * `wantSystem`, and handed to Rust at Start, which keeps them with the
+   * meeting however it ends. The name clears once a start from here works.
+   */
+  const [meetingName, setMeetingName] = useState("");
+  const [folderId, setFolderId] = useState<number | null>(null);
   const [sources, setSources] = useState<Sources | null>(null);
   const [transcript, setTranscript] = useState(emptyLiveTranscript);
   const [outcome, setOutcome] = useState<MeetingOutcome | null>(null);
@@ -265,8 +324,12 @@ export function Meetings({
       // A new meeting's own outcome has not happened yet, so the last one's
       // "Saved as note ..." must not sit under it. Start clears it too, but a
       // meeting started from the notification window never passes through
-      // this page's Start.
-      if (next === "recording") setOutcome(null);
+      // this page's Start. The same for what the last microphone check heard;
+      // one still listening is left to finish.
+      if (next === "recording") {
+        setOutcome(null);
+        setCheck((last) => (last?.state === "listening" ? last : null));
+      }
       // The state event carries the state and nothing else, and the sentence
       // explaining it lives on `MeetingStatus`. Reloading is how it gets here
       // -- the same thing the outcome listener below does, for the same reason.
@@ -460,8 +523,10 @@ export function Meetings({
   // missing, no provider, a provider or language write in flight, or the
   // review still describing the previous configuration -- its answer arrives
   // after the re-read, and until it does `readiness` cannot be trusted to
-  // know that the new provider needs a language.
-  const startHeld = startBlocked || selected === null || writing || !reviewCurrent;
+  // know that the new provider needs a language. And the microphone check
+  // while it listens: five seconds, and a meeting would open the microphone
+  // under it (KNEG-364).
+  const startHeld = startBlocked || selected === null || writing || !reviewCurrent || checking;
   // While a meeting is running, the provider it is running with -- which the
   // notification's Record button may have picked rather than this page.
   const liveProvider =
@@ -471,6 +536,10 @@ export function Meetings({
   const transcriber = liveProvider ?? selectedProvider;
   const systemAudioAvailable = status.systemAudio.state === "available";
   const liveSources = sources ?? status.sources;
+  // The running meeting's name, from Rust rather than this page: a meeting
+  // started from the notification window has none, and one started here may
+  // have been named before the page was last mounted (KNEG-365).
+  const liveTitle = status.plan?.title ?? "Meeting";
   const language = languageLabel(data.language.trim() === "" ? [] : [data.language.trim()]);
   // The privacy fact, never hidden: whether this meeting's audio leaves this
   // computer, from `audioLeavesDevice` -- the field Rust sets for exactly that
@@ -505,6 +574,9 @@ export function Meetings({
   // is not what is saved, so choosing it is the write that replaces it.
   const providerOptions = providerMenu(providers, data.provider, selected);
   const languageOptions = meetingLanguageMenu(data.language, selectedProvider);
+  // Its `folderId` is the folder Start sends: the one the chip names, so a
+  // folder deleted in Notes since it was chosen here is no folder.
+  const folderChoice = folderMenu(folders, folderId);
   const choose = (write: () => Promise<void>) => {
     // One write at a time, as Dictation's switch does: a second choice made
     // while the first is in flight is ignored, so `writing` clears only when
@@ -514,19 +586,44 @@ export function Meetings({
     void guard(write).finally(() => setWriting(false));
   };
 
+  // The microphone chip's choice: written, then the microphone read again,
+  // through that read's own `guard`. Shared with dictation (KNEG-341), so
+  // this changes its microphone too, as the chip's title says.
+  const chooseMicrophone = (id: string) => {
+    void microphoneRefresh.guard(() => setInputDevice(id || null));
+  };
+  // "Test microphone": Rust opens the saved microphone for five seconds and
+  // sends its level as `microphone-check` meanwhile (KNEG-364). Its refusals
+  // -- a meeting under way, a dictation recording, a check already running --
+  // start "Not now: ", and `FailureLine` shows them as the line itself.
+  const testMicrophone = () => {
+    if (checking) return;
+    setCheck({ state: "listening" });
+    checkMicrophone()
+      .then((result) => setCheck({ state: "done", result }))
+      .catch((cause: unknown) => setCheck({ state: "failed", error: message(cause) }));
+  };
+
   const start = (withSystem: boolean) => {
     if (startHeld) return;
     void guard(async () => {
       setOutcome(null);
+      setCheck(null);
       // The outcome event clears the last meeting's lines; this makes sure a
       // new meeting never opens on them should that event not have arrived.
       setTranscript(emptyLiveTranscript());
-      setSources(await startMeeting(selected, withSystem));
+      // Rust tidies the name (`note_title`); a blank one is no name.
+      const title = meetingName.trim() === "" ? null : meetingName;
+      setSources(await startMeeting(selected, withSystem, { title, folderId: folderChoice.folderId }));
+      // That meeting has the name now; the next one starts unnamed. The
+      // folder stays chosen, as the chips do.
+      setMeetingName("");
     });
   };
   // Stop and Discard first ask the meeting window to save what was typed in
   // it, so the note Stop saves has the last edit; a flush that fails says so
-  // and offers "Stop recording anyway" rather than losing the recording.
+  // and offers "Stop recording anyway" and "Discard anyway" rather than
+  // leaving the meeting recording with no way to end it (KNEG-418).
   const stop = () => {
     void guard(async () => {
       try { await flushMeetingPanelNotes(); }
@@ -535,29 +632,28 @@ export function Meetings({
       setOutcome(await stopMeeting());
     });
   };
-  // Asks first, with what is about to be lost (KNEG-394): Discard sits
-  // beside Stop and save and deleted the recording on one click. Saying no
-  // changes nothing; the meeting goes on recording.
+  // Discard asks first, with what is about to be lost (KNEG-394): it sat
+  // beside Stop and save and deleted the recording on one click. True only
+  // for a yes about the meeting still running; saying no changes nothing, and
+  // the meeting goes on recording.
+  const confirmDiscard = async (question: (elapsedSeconds: number) => string): Promise<boolean> => {
+    const before = await getMeetingStatus();
+    if (!meetingIsLive(before.state)) return false;
+    const began = Date.now() - before.elapsedSeconds * 1000;
+    // The page's clock, which stops at a stall, when it has one; Rust's
+    // count before the page has read a start, so the length is never
+    // "under a minute" for a meeting it has not timed yet.
+    if (!window.confirm(question(startedAt === null ? before.elapsedSeconds : elapsed))) return false;
+    // The question holds the page, so the meeting may have changed while it
+    // was open: stopped from its own window, or stopped and another one
+    // started. Nothing is discarded unless the meeting asked about is still
+    // running -- otherwise the page shows what happened instead.
+    const after = await getMeetingStatus();
+    return meetingIsLive(after.state) && sameMeetingStart(began, after, Date.now());
+  };
   const discard = () => {
     void guard(async () => {
-      // When the meeting began, from Rust: `elapsedSeconds` counts from the
-      // start and does not stop at a stall, so the same meeting gives the
-      // same start on every read, and a meeting started later gives a later
-      // one.
-      const startOf = (status: { elapsedSeconds: number }) => Date.now() - status.elapsedSeconds * 1000;
-      const before = await getMeetingStatus();
-      const began = startOf(before);
-      if (!meetingIsLive(before.state)) return;
-      // The page's clock, which stops at a stall, when it has one; Rust's
-      // count before the page has read a start, so the length is never
-      // "under a minute" for a meeting it has not timed yet.
-      if (!window.confirm(discardQuestion(startedAt === null ? before.elapsedSeconds : elapsed))) return;
-      // The question holds the page, so the meeting may have changed while it
-      // was open: stopped from its own window, or stopped and another one
-      // started. Nothing is discarded unless the meeting asked about is still
-      // running -- otherwise the page shows what happened instead.
-      const after = await getMeetingStatus();
-      if (!meetingIsLive(after.state) || Math.abs(startOf(after) - began) > 2000) return;
+      if (!(await confirmDiscard((seconds) => discardQuestion(seconds)))) return;
       try { await flushMeetingPanelNotes(); }
       catch (cause) { setNotesFlushFailed(true); throw cause; }
       setNotesFlushFailed(false);
@@ -566,6 +662,17 @@ export function Meetings({
   };
   const stopAnyway = () => {
     void guard(async () => { setOutcome(await stopMeeting()); setNotesFlushFailed(false); });
+  };
+  // Discard without asking the meeting window again: it already didn't
+  // answer. `cancel` still keeps the notes Rust holds (`notes.take()`,
+  // `meeting.rs`), so what is lost is an edit the window hadn't sent -- the
+  // question says so (KNEG-418).
+  const discardAnyway = () => {
+    void guard(async () => {
+      if (!(await confirmDiscard((seconds) => discardQuestion(seconds, true)))) return;
+      await cancelMeeting();
+      setNotesFlushFailed(false);
+    });
   };
   const recover = (candidate: RecoverableRecording) => {
     setRecoveringKey(candidate.storageKey);
@@ -621,7 +728,7 @@ export function Meetings({
           lines below.
         </p>
       ) : null}
-      {recording && notesFlushFailed && <p className="caveat">The meeting panel could not confirm its latest note save. Stopping anyway keeps the recording and any notes already received by the app; the most recent edit may be missing.</p>}
+      {recording && notesFlushFailed && <p className="caveat">The meeting window didn't confirm it saved your latest notes. Stop recording anyway saves the meeting; Discard anyway deletes the recording. Either way, notes the app already has are kept, and your most recent edit may be missing.</p>}
       {outcome ? <OutcomeCaveat outcome={outcome} /> : null}
     </>
   );
@@ -635,7 +742,8 @@ export function Meetings({
       {recording ? (
         <PanelSection label="Now">
           <PanelItem
-            title="Meeting"
+            title={liveTitle}
+            tooltip={liveTitle}
             current
             meta={
               // Stalled is not recording -- nothing is being captured -- so
@@ -683,7 +791,9 @@ export function Meetings({
       {recoverable.length === 0 ? null : (
         <PanelSection label="Interrupted">
           {recoverable.map((candidate) => {
-            const title = interruptedTitle(candidate.storageKey, now);
+            // The name it was given before Start, from the plan Rust kept
+            // beside it (KNEG-365); otherwise when it started.
+            const title = candidate.title ?? interruptedTitle(candidate.storageKey, now);
             const busy = recoveringKey === candidate.storageKey;
             return (
               // Not a `PanelItem`: that is a button, and Recover is a button
@@ -697,7 +807,7 @@ export function Meetings({
                   <button
                     type="button"
                     className="panel-inline"
-                    aria-label={`${busy ? "Recovering" : "Recover"} ${lowerFirst(title)}`}
+                    aria-label={`${busy ? "Recovering" : "Recover"} ${candidate.title ?? lowerFirst(title)}`}
                     disabled={recording || current === "finishing" || recoveringKey !== null}
                     onClick={() => recover(candidate)}
                   >
@@ -711,7 +821,7 @@ export function Meetings({
       )}
       <div className="panel-foot">
         <Icon name="lock" size={14} />
-        <span>Recordings are saved on this computer.</span>
+        <span>{data.deleteRecordings ? "Recordings are deleted after transcribing." : "Recordings are saved on this computer."}</span>
       </div>
     </>
   );
@@ -725,7 +835,13 @@ export function Meetings({
         : transcriber.audioLeavesDevice
           ? `Sent to ${transcriber.name}`
           : "Transcribed on this computer",
+      // This meeting's own choice, taken at its Start (KNEG-409): the
+      // setting may have changed since, and applies to the next one.
+      status.plan?.deleteRecording ? "Recording deleted after saving" : null,
     ].filter((part): part is string => part !== null);
+    // The microphone this meeting opened, as Rust reports it, and not the
+    // setting: a choice made now applies to the next recording (KNEG-364).
+    const openedMicrophone = liveMicrophone(liveSources);
     return (
       <SplitView label="Meetings list" heading="Meetings" panel={panel}>
         <section data-surface="meetings.record" className="meeting-live" aria-label="Meeting">
@@ -740,8 +856,23 @@ export function Meetings({
               <span role="status">{meetingStateLabel(current)}</span>
               <span className="live-clock">{elapsedLabel(elapsed)}</span>
             </p>
-            <h2 className="live-title" ref={liveHeading} tabIndex={-1}>Meeting</h2>
+            <h2 className="live-title" ref={liveHeading} tabIndex={-1}>{liveTitle}</h2>
             <p className="live-sub">{sub.join(" · ")}</p>
+            {/* How loud each capture is (KNEG-371): you, and the others only
+                when system audio opened -- the sub-line above says which.
+                Decoration, labels included: `LevelMeter` says why. */}
+            <div className="live-levels" aria-hidden="true">
+              <span className="live-level">
+                <span className="live-level-label">You</span>
+                <LevelMeter session="meeting" source="microphone" />
+              </span>
+              {liveSources?.systemAudio ? (
+                <span className="live-level">
+                  <span className="live-level-label">Others</span>
+                  <LevelMeter session="meeting" source="system" />
+                </span>
+              ) : null}
+            </div>
           </header>
           {error || stalled || transcriptEnded || notesFlushFailed || outcome ? (
             <div className="live-caveats">
@@ -755,7 +886,7 @@ export function Meetings({
               rather than controls. */}
           <div className="live-bar">
             <div className="live-chips" role="group" aria-label="In effect for this meeting">
-              <Chip icon="microphone" label={microphone.label} title={microphone.title} srText={microphone.title} />
+              <Chip icon="microphone" label={openedMicrophone.label} title={openedMicrophone.title} srText={openedMicrophone.title} />
               {liveSources?.systemAudio ? <Chip icon="others" label="Other participants" /> : null}
               <Chip icon="computer" label={transcriber ? transcriber.name : "Not set up"} />
               <Chip icon="language" label={language} />
@@ -772,7 +903,12 @@ export function Meetings({
             {/* Never held back by readiness: a meeting that is running has to
                 be stoppable whatever the settings now say. */}
             <div className="live-actions">
-              {notesFlushFailed && <button type="button" onClick={stopAnyway}>Stop recording anyway</button>}
+              {notesFlushFailed ? (
+                <>
+                  <button type="button" onClick={stopAnyway}>Stop recording anyway</button>
+                  <button type="button" onClick={discardAnyway}>Discard anyway</button>
+                </>
+              ) : null}
               <button type="button" className="secondary" onClick={discard}>
                 <Icon name="discard" size={16} />
                 Discard
@@ -860,7 +996,8 @@ export function Meetings({
               {/* Held back exactly as Start is (ruling R9), and recording
                   what the "Other participants" chip below says, as Start
                   does (R21): the card is a quicker way to the same start,
-                  not a second choice about who is recorded. */}
+                  not a second choice about who is recorded. Both are pinned
+                  by tools/visual-check/chip-menus.mjs check 10. */}
               <button
                 type="button"
                 className="secondary"
@@ -882,11 +1019,21 @@ export function Meetings({
           <ControlBar
             strip={
               <>
-                {/* Static: the microphone is chosen on Dictation, and both
-                    tasks share it (KNEG-341). The `title` is a hover away,
-                    so the same sentence is also the chip's hidden text for a
-                    screen reader. */}
-                <Chip icon="microphone" label={microphone.label} title={microphone.title} srText={microphone.title} />
+                {/* Chosen here as on Dictation, one choice for both tasks
+                    (KNEG-341, KNEG-364): the rows sit under a heading that
+                    says so, and the `title` says choosing here changes
+                    dictation's too. The footer runs the five-second test;
+                    it is left off while one listens, so it is never a press
+                    that does nothing. */}
+                <ChipMenu
+                  icon="microphone"
+                  name="Microphone"
+                  label={microphone.label}
+                  title={microphone.title}
+                  options={microphone.options}
+                  onChoose={chooseMicrophone}
+                  {...(checking ? {} : { footer: { label: "Test microphone", onClick: testMicrophone } })}
+                />
                 {/* Unpressed, not just disabled, where system audio cannot be
                     captured: a pressed "Other participants" beside a caution
                     saying they cannot be recorded would be two answers on one
@@ -955,6 +1102,17 @@ export function Meetings({
                     onClick={() => onGoTo("intelligence")}
                   />
                 )}
+                {/* Where the note goes (KNEG-365). Page state, not a
+                    setting: it applies to the next meeting started here and
+                    goes to Rust with it, so it holds however that meeting
+                    ends. */}
+                <ChipMenu
+                  icon="folder"
+                  name="Folder"
+                  label={folderChoice.label}
+                  options={folderChoice.options}
+                  onChoose={(id) => setFolderId(id === "" ? null : Number(id))}
+                />
               </>
             }
             privacy={privacy}
@@ -962,6 +1120,39 @@ export function Meetings({
             {error ? <p className="error">{error}</p> : null}
             {pollError ? (
               <p className="error">{`Couldn't check whether a meeting app is in a call: ${pollError}`}</p>
+            ) : null}
+            {/* The microphone chip's own read and write (KNEG-364): a choice
+                that couldn't be saved, or a list that couldn't be read, in
+                view, with what the software said under Details. */}
+            {microphoneRefresh.error !== null ? (
+              <FailureLine text="The microphone choice couldn't be read or saved." detail={microphoneRefresh.error} />
+            ) : null}
+            {microphone.missing !== null ? (
+              <p className="control-note">
+                Not connected, so meetings and dictation use the system default
+                until it is plugged back in.
+              </p>
+            ) : null}
+            {/* The microphone check (KNEG-364). One live region from
+                "Listening" to what it heard, so the result is read out when
+                it replaces the line; the meter beside the line is decoration
+                (`LevelMeter`). Heard nothing is a caveat: something to look
+                at before a meeting, not a failure. A refusal or a failure is
+                `FailureLine`'s, outside the region, as an alert. */}
+            {check !== null && check.state !== "failed" ? (
+              <div className="microphone-check" role="status">
+                {check.state === "listening" ? (
+                  <>
+                    <p className="control-note">{MICROPHONE_CHECK_LISTENING}</p>
+                    <LevelMeter session="microphone-check" source="microphone" />
+                  </>
+                ) : (
+                  <p className={check.result.heard ? "control-note" : "caveat"}>{microphoneCheckLine(check.result)}</p>
+                )}
+              </div>
+            ) : null}
+            {check?.state === "failed" ? (
+              <FailureLine text="The microphone couldn't be tested." detail={check.error} />
             ) : null}
             {/* Why the chip is off, said beside it in every state -- the
                 hero's caution is only there while the page is Ready, and a
@@ -997,6 +1188,12 @@ export function Meetings({
                     }`}
               </p>
             </LearnMore>
+            {/* Said in view while it is on (KNEG-409): the switch is on
+                Settings > Meetings, and a note with no recording would
+                otherwise be the first anyone heard of it. */}
+            {data.deleteRecordings ? (
+              <p className="control-note">Recordings are deleted once each meeting is transcribed.</p>
+            ) : null}
             {caveats}
 
             {/* The Interrupted rows are in the list panel; what recovering
@@ -1023,26 +1220,44 @@ export function Meetings({
             ) : null}
             {recoveringKey !== null ? (
               <p className="control-note" role="status">
-                Recovering the {lowerFirst(interruptedTitle(recoveringKey, now))}…
+                Recovering{" "}
+                {recoverable.find((candidate) => candidate.storageKey === recoveringKey)?.title ??
+                  `the ${lowerFirst(interruptedTitle(recoveringKey, now))}`}
+                …
               </p>
             ) : null}
             {recoveryOutcome && <OutcomeCaveat outcome={recoveryOutcome} />}
             {recoveryError && <p className="error" role="alert">{recoveryError}</p>}
 
             <div className="control-row">
-              <div className="control-spacer" />
+              {/* The meeting's name, the note's title (KNEG-365); left
+                  blank, the note is named for when the meeting started.
+                  Rust caps a title at 200 characters. */}
+              <input
+                type="text"
+                className="meeting-name"
+                value={meetingName}
+                maxLength={200}
+                placeholder="Name this meeting (optional)"
+                aria-label="Meeting name (optional)"
+                onChange={(event) => setMeetingName(event.target.value)}
+              />
               {/* Off whenever the hero says Needs setup, not only when no
                   provider is selected: with a language the provider requires
                   left blank, `start_live` refuses (`resolve_provider_config`,
                   src-tauri/src/meeting.rs), so the button would lead straight
                   into an error, and with the saved provider unusable it would
                   record with one nobody chose. The hero says what is wrong,
-                  and its fix -- not this -- is the filled button then. */}
+                  and its fix -- not this -- is the filled button then.
+                  Records what the "Other participants" chip says, as the
+                  call card does (R21): where system audio can't be captured
+                  the chip reads unpressed, so Start doesn't ask for it
+                  (KNEG-412). */}
               <button
                 type="button"
                 className={startBlocked ? "control-start" : "primary control-start"}
                 disabled={startHeld || current === "finishing"}
-                onClick={() => start(wantSystem)}
+                onClick={() => start(wantSystem && systemAudioAvailable)}
               >
                 <span className="start-dot" aria-hidden="true" />
                 Start recording

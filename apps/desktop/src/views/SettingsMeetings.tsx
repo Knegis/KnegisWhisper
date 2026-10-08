@@ -1,7 +1,8 @@
 /**
  * Settings > Meetings: how meetings are transcribed, detected and labelled.
  *
- * The provider, the language and the vocabulary a meeting will use, the
+ * The provider, the language and the vocabulary a meeting will use, whether
+ * its recording is deleted once its transcript is saved (KNEG-409), the
  * notification window, which applications count as a meeting, speaker labels,
  * and every provider this build describes. The recording itself -- Start,
  * Stop, the live transcript, interrupted recordings -- is on the Meetings page
@@ -48,6 +49,7 @@ import { LearnMore } from "../components/LearnMore";
 import { Row } from "../components/Row";
 import {
   getDiarizationStatus,
+  getMeetingDeleteRecordings,
   getMeetingDetectLists,
   getMeetingKeyterms,
   getMeetingLanguage,
@@ -58,6 +60,7 @@ import {
   onMeetingState,
   resetMeetingNotificationPlacement,
   setDiarizationEnabled,
+  setMeetingDeleteRecordings,
   setMeetingDetectLists,
   setMeetingLanguage,
   setMeetingPrompt,
@@ -83,7 +86,7 @@ import { useRefresh } from "../lib/useRefresh";
 
 export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () => void }) {
   const load = useCallback(async () => {
-    const [providers, status, language, keyterms, detect, diarization, provider] =
+    const [providers, status, language, keyterms, detect, diarization, provider, deleteRecordings] =
       await Promise.all([
         getMeetingProviders(),
         getMeetingStatus(),
@@ -92,8 +95,9 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
         getMeetingDetectLists(),
         getDiarizationStatus(),
         getMeetingProvider(),
+        getMeetingDeleteRecordings(),
       ]);
-    return { providers, status, language, keyterms, detect, diarization, provider };
+    return { providers, status, language, keyterms, detect, diarization, provider, deleteRecordings };
   }, []);
 
   const { data, error, reload, guard } = useRefresh(load);
@@ -373,6 +377,43 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
             {languageWarning ? <p className="caveat">{languageWarning}</p> : null}
           </>
         ) : null}
+      </section>
+
+      {/* KNEG-409. Not held while a meeting records: the meeting took its
+          choice at Start, which the Learn more says, and the next one takes
+          what is ticked here. What it costs -- no playback -- is in view. */}
+      <section>
+        <h2>Recordings</h2>
+        <div className="row">
+          <span className="row-label">Delete recordings</span>
+          <span className="row-value controls">
+            <label>
+              <input
+                type="checkbox"
+                checked={data.deleteRecordings}
+                onChange={(e) => {
+                  const enabled = e.target.checked;
+                  void guard(async () => {
+                    await setMeetingDeleteRecordings(enabled);
+                    await reload();
+                  });
+                }}
+              />
+              Delete each recording once its transcript is saved
+            </label>
+          </span>
+        </div>
+        <p className="caveat">
+          The note keeps the transcript and your typed notes, but can't be
+          played back. If the transcript may be incomplete, the recording is
+          kept.
+        </p>
+        <LearnMore>
+          <p>
+            Changing this doesn't affect a meeting that's already recording.
+            Discard always deletes the recording.
+          </p>
+        </LearnMore>
       </section>
 
       <section>

@@ -50,8 +50,10 @@
 //!   `--no-timestamps` produced, which was checked rather than assumed.
 //! * **The cost lands only where it is asked for.** Timestamps cost 3-7% on the
 //!   `json` path, which dictation uses. `verbose_json` costs about 45% more,
-//!   because it carries per-word timings and probabilities, and only media
-//!   import asks for it -- see [`WhisperServer::timed`].
+//!   because it carries per-token timings and probabilities, and only media
+//!   import and the meeting's whole-recording pass ask for it -- see
+//!   [`WhisperServer::timed`]. Both keep those timings as words (KNEG-408, see
+//!   [`TimedSegment::words`]).
 //!
 //! What is *not* ported: upstream converts every input with ffmpeg before
 //! sending, because it accepts arbitrary media. `kw_audio_core` produces 16 kHz
@@ -209,9 +211,28 @@ pub enum Inference {
 ///
 /// `Serialize` only. This crate has no `ts-rs` dependency and should not gain
 /// one for a type the desktop crate can name in its own IPC struct.
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TimedSegment {
+    pub text: String,
+    pub start: f64,
+    pub end: f64,
+    /// The utterance word by word, when whisper timed every word of it
+    /// (KNEG-408). Empty -- and left out of the JSON -- otherwise: every
+    /// engine but the whisper server, and any utterance one of whose words
+    /// came back without a time. See [`merge_tokens`].
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub words: Vec<TimedWord>,
+}
+
+/// One word of a [`TimedSegment`], on the same clock.
+///
+/// Whisper times *tokens*, not words: " Stock" and "holm" are two. A word is
+/// the tokens from one that starts with a space up to the next, so its start
+/// is its first token's and its end its last's. Rounded to 0.01 s, which is
+/// the server's own resolution (it reports centiseconds times 0.01).
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct TimedWord {
     pub text: String,
     pub start: f64,
     pub end: f64,
@@ -233,6 +254,15 @@ struct SegmentBody {
     /// reason these are `Option`: a missing timing must not become `0.0`.
     start: Option<f64>,
     end: Option<f64>,
+    /// The segment's tokens, each `{"word", "start", "end", ...}`, as
+    /// whisper.cpp's server writes them for `verbose_json`: read in its
+    /// source at b4938, and seen from the pinned server on 2026-10-08
+    /// (`tests/word_timings.rs`). The key is `word` although the value is a
+    /// token. Kept as raw JSON and read leniently: words are extra, and a
+    /// token in a shape this does not expect must cost the words, never the
+    /// transcript.
+    #[serde(default)]
+    words: serde_json::Value,
 }
 
 /// How much of an error body is worth repeating.
@@ -306,9 +336,104 @@ fn timed_segments(bodies: &[SegmentBody]) -> Vec<TimedSegment> {
         if text.is_empty() {
             continue;
         }
-        out.push(TimedSegment { text, start, end });
+        let mut words = merge_tokens(body.words.as_array().map_or(&[], Vec::as_slice));
+        // Words are shown in place of the row's text, so words that no
+        // longer spell it -- a token can be half a character, which the
+        // server writes as U+FFFD -- are not kept.
+        if !spells(&words, &text) {
+            words.clear();
+        }
+        out.push(TimedSegment {
+            text,
+            start,
+            end,
+            words,
+        });
     }
     out
+}
+
+/// A segment's tokens, joined into timed words (KNEG-408).
+///
+/// A token that starts with a space starts a word, and any other token --
+/// "holm" after " Stock", or "," -- ends up in the word before it. A token
+/// with no text is skipped, and so are special tokens such as `[_BEG_]` and
+/// `<|endoftext|>`; whisper.cpp's server already leaves those out, so this
+/// only keeps one that slipped through out of a note.
+///
+/// All or nothing per segment, the rule [`timed_segments`] follows for
+/// segments: one token with text and no time -- missing, negative or not a
+/// number -- and the segment has no words, rather than words highlighted at
+/// a time nobody reported. Times are rounded to 0.01 s.
+fn merge_tokens(tokens: &[serde_json::Value]) -> Vec<TimedWord> {
+    let mut words: Vec<TimedWord> = Vec::new();
+    // Whether the next token starts a word even without a leading space:
+    // the first one does, and so does one after a token of spaces alone.
+    let mut breaks = true;
+    for token in tokens {
+        let Some(raw) = token.get("word").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        if raw.trim().is_empty() {
+            breaks = breaks || !raw.is_empty();
+            continue;
+        }
+        if is_special(raw.trim()) {
+            continue;
+        }
+        let (Some(start), Some(end)) = (token_time(token, "start"), token_time(token, "end"))
+        else {
+            return Vec::new();
+        };
+        let starts_word = breaks || raw.starts_with(char::is_whitespace);
+        breaks = raw.ends_with(char::is_whitespace);
+        match words.last_mut() {
+            Some(word) if !starts_word => {
+                word.text.push_str(raw.trim_end());
+                word.end = word.end.max(end);
+            }
+            _ => words.push(TimedWord {
+                text: raw.trim().to_owned(),
+                start,
+                end: end.max(start),
+            }),
+        }
+    }
+    for word in &mut words {
+        word.start = hundredths(word.start);
+        word.end = hundredths(word.end).max(word.start);
+    }
+    words
+}
+
+/// `[_BEG_]`, `[_TT_150]`, `<|endoftext|>`, `<|sv|>`: tokens that are not
+/// speech.
+fn is_special(token: &str) -> bool {
+    (token.starts_with("[_") && token.ends_with(']'))
+        || (token.starts_with("<|") && token.ends_with("|>"))
+}
+
+/// A token's time, if it has a real one.
+fn token_time(token: &serde_json::Value, key: &str) -> Option<f64> {
+    token
+        .get(key)
+        .and_then(serde_json::Value::as_f64)
+        .filter(|seconds| seconds.is_finite() && *seconds >= 0.0)
+}
+
+/// `seconds` to the nearest hundredth.
+pub(crate) fn hundredths(seconds: f64) -> f64 {
+    (seconds * 100.0).round() / 100.0
+}
+
+/// Whether `words` spell `text`, spaces aside. True for no words.
+fn spells(words: &[TimedWord], text: &str) -> bool {
+    words.is_empty()
+        || words
+            .iter()
+            .flat_map(|word| word.text.chars())
+            .filter(|c| !c.is_whitespace())
+            .eq(text.chars().filter(|c| !c.is_whitespace()))
 }
 
 fn truncate(body: &str) -> String {
@@ -858,9 +983,10 @@ mod tests {
     /* ------------------------------------- what the server actually answers */
 
     /// `verbose_json` from a server started with the cap, measured on
-    /// 2026-08-31 against `ggml-tiny`. Trimmed to the fields this code reads;
-    /// the real response also carries `tokens`, `words`, `temperature`,
-    /// `avg_logprob` and `no_speech_prob` per segment.
+    /// 2026-08-31 against `ggml-tiny`. Trimmed to the fields this code read
+    /// then; the real response also carries `tokens`, `words` (read since
+    /// KNEG-408, see `WORDS_BODY`), `temperature`, `avg_logprob` and
+    /// `no_speech_prob` per segment.
     const TIMED_BODY: &str = r#"{
       "task":"transcribe","language":"english","duration":13.524999618530273,
       "text":" The quick brown fox jumps over the lazy dog.\n Second sentence, spoken after a pause, so the server has somewhere to cut.\n Third and last sentence of the probe recording.\n",
@@ -942,6 +1068,167 @@ mod tests {
             {"text":"b"}
         ]}"#;
         assert!(matches!(interpret(200, body), Inference::Text(_)));
+    }
+
+    /* --------------------------------------------- words (KNEG-408) */
+
+    /// `merge_tokens` over a JSON list of tokens, as the server sends them.
+    fn merged(tokens: &str) -> Vec<(String, f64, f64)> {
+        let tokens: Vec<serde_json::Value> = serde_json::from_str(tokens).unwrap();
+        merge_tokens(&tokens)
+            .into_iter()
+            .map(|word| (word.text, word.start, word.end))
+            .collect()
+    }
+
+    fn word(text: &str, start: f64, end: f64) -> (String, f64, f64) {
+        (text.to_owned(), start, end)
+    }
+
+    #[test]
+    fn a_token_without_a_leading_space_is_part_of_the_word_before_it() {
+        // Whisper's tokens are not words: " Stock" and "holm" are one.
+        assert_eq!(
+            merged(
+                r#"[{"word":" i","start":0.5,"end":0.62},
+                    {"word":" Stock","start":0.62,"end":0.9},
+                    {"word":"holm","start":0.9,"end":1.24}]"#
+            ),
+            [word("i", 0.5, 0.62), word("Stockholm", 0.62, 1.24)]
+        );
+    }
+
+    #[test]
+    fn punctuation_joins_the_word_it_follows() {
+        assert_eq!(
+            merged(
+                r#"[{"word":" Hej","start":0.0,"end":0.4},
+                    {"word":",","start":0.4,"end":0.4},
+                    {"word":" då","start":0.5,"end":0.8},
+                    {"word":".","start":0.8,"end":0.82}]"#
+            ),
+            [word("Hej,", 0.0, 0.4), word("då.", 0.5, 0.82)]
+        );
+    }
+
+    #[test]
+    fn special_tokens_and_tokens_with_no_text_are_dropped() {
+        // whisper.cpp's server leaves out every token from end-of-text on,
+        // which is all of these; they are dropped anyway, so a server that
+        // sent one would not put "[_BEG_]" in a note.
+        assert_eq!(
+            merged(
+                r#"[{"word":"[_BEG_]","start":0.0,"end":0.0},
+                    {"word":"<|sv|>","start":0.0,"end":0.0},
+                    {"word":" Ja","start":0.1,"end":0.3},
+                    {"word":"","start":0.3,"end":0.3},
+                    {"start":0.3,"end":0.3},
+                    {"word":"[_TT_150]"},
+                    {"word":"<|endoftext|>","start":1.5,"end":1.5}]"#
+            ),
+            [word("Ja", 0.1, 0.3)]
+        );
+    }
+
+    #[test]
+    fn a_token_without_a_time_leaves_the_segment_with_no_words() {
+        // All or nothing, for the reason `timed_segments` gives: words timed
+        // for some of the row and not the rest would be highlighted wrongly.
+        for untimed in [
+            r#"{"word":" b"}"#,
+            r#"{"word":" b","start":1.0}"#,
+            r#"{"word":" b","start":1.0,"end":null}"#,
+            r#"{"word":" b","start":-0.01,"end":-0.01}"#,
+            r#"{"word":" b","start":"1.0","end":1.2}"#,
+        ] {
+            let tokens = format!(r#"[{{"word":" a","start":0.0,"end":0.5}},{untimed}]"#);
+            assert!(merged(&tokens).is_empty(), "{untimed}");
+        }
+    }
+
+    #[test]
+    fn word_times_are_rounded_to_a_hundredth() {
+        // The server multiplies centiseconds by 0.01, which is not exact in
+        // binary; a hundredth is all the resolution there is.
+        assert_eq!(
+            merged(
+                r#"[{"word":" x","start":0.30000000000000004,"end":1.2349},
+                    {"word":" y","start":1.2351,"end":1.239}]"#
+            ),
+            [word("x", 0.3, 1.23), word("y", 1.24, 1.24)]
+        );
+    }
+
+    /// `verbose_json` as whisper.cpp's server writes a segment's tokens,
+    /// trimmed to the fields read and `probability`: the shape read in its
+    /// source at b4938, not captured from a run.
+    const WORDS_BODY: &str = r#"{
+      "text":" Hej från Stockholm.\n Ja.\n",
+      "segments":[
+        {"id":0,"text":" Hej från Stockholm.","start":0.0,"end":2.0,"words":[
+          {"word":" Hej","start":0.12,"end":0.48,"t_dtw":-1,"probability":0.98},
+          {"word":" från","start":0.48,"end":0.8,"t_dtw":-1,"probability":0.97},
+          {"word":" Stock","start":0.9,"end":1.3,"t_dtw":-1,"probability":0.91},
+          {"word":"holm","start":1.3,"end":1.7,"t_dtw":-1,"probability":0.99},
+          {"word":".","start":1.7,"end":1.71,"t_dtw":-1,"probability":0.8}]},
+        {"id":1,"text":" Ja.","start":2.5,"end":3.0,"words":[
+          {"word":" Ja","start":2.5,"probability":0.9},
+          {"word":".","start":2.9,"end":3.0,"probability":0.9}]}
+      ]}"#;
+
+    #[test]
+    fn a_timed_response_keeps_each_segments_words() {
+        let Inference::Timed { segments, .. } = interpret(200, WORDS_BODY) else {
+            panic!("expected timed segments");
+        };
+        let words: Vec<_> = segments[0]
+            .words
+            .iter()
+            .map(|w| (w.text.clone(), w.start, w.end))
+            .collect();
+        assert_eq!(
+            words,
+            [
+                word("Hej", 0.12, 0.48),
+                word("från", 0.48, 0.8),
+                word("Stockholm.", 0.9, 1.71)
+            ]
+        );
+        // The second segment's first token came back without an end: the
+        // segment keeps its row and loses only its words.
+        assert_eq!(segments[1].text, "Ja.");
+        assert!(segments[1].words.is_empty());
+    }
+
+    #[test]
+    fn words_that_do_not_spell_their_segment_are_not_kept() {
+        // A token can be half a character -- the server replaces a split
+        // UTF-8 sequence with U+FFFD -- and words that no longer spell their
+        // row's text could never be shown against it.
+        let body = r#"{"text":" på","segments":[{"text":" på","start":0.0,"end":1.0,"words":[
+            {"word":" p","start":0.0,"end":0.3},
+            {"word":"�","start":0.3,"end":0.5},
+            {"word":"�","start":0.5,"end":0.6}]}]}"#;
+        let Inference::Timed { segments, .. } = interpret(200, body) else {
+            panic!("expected timed segments");
+        };
+        assert_eq!(segments[0].text, "på");
+        assert!(segments[0].words.is_empty());
+    }
+
+    #[test]
+    fn a_segment_without_words_serializes_as_it_did_before() {
+        // Sherpa's segments, and whisper's when a word went untimed.
+        let bare = TimedSegment {
+            text: "Hej.".to_owned(),
+            start: 0.5,
+            end: 1.5,
+            words: Vec::new(),
+        };
+        assert_eq!(
+            serde_json::to_string(&bare).unwrap(),
+            r#"{"text":"Hej.","start":0.5,"end":1.5}"#
+        );
     }
 
     #[test]

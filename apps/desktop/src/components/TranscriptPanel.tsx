@@ -1,9 +1,17 @@
-import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from "react";
+import { Fragment, useEffect, useId, useMemo, useRef, useState, type FormEvent } from "react";
 
 import type { NoteRecording, TranscriptRow } from "../lib/ipc";
 import { normaliseSpeakerName, renameHeading, suggestionsFor } from "../lib/speakerNames";
 import { message } from "../lib/useRefresh";
+import { wordAt, wordsMatchText } from "../lib/wordTiming";
 import { formatClock } from "./RecordingPlayer";
+
+const CURRENT_WORD = "transcript-word-current";
+
+/** Scrolls jump rather than glide when the person asked for less motion. */
+function scrollBehavior(): ScrollBehavior {
+  return typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
+}
 
 type TranscriptPanelProps = {
   sourceRequest?: { index: number; nonce: number } | null;
@@ -21,6 +29,10 @@ type TranscriptPanelProps = {
   playing: boolean;
   visible: boolean;
   playInterval: (start: number, end: number | null) => void;
+  /** The player's time now (`RecordingPlayerHandle.time`), read every animation frame while a row with words plays. */
+  time: () => number | null;
+  /** Go to a clicked word's start (`RecordingPlayerHandle.seek`). */
+  seek: (seconds: number) => void;
   suggestions: readonly string[];
   onRename: (speakerId: string, name: string) => Promise<void>;
 };
@@ -74,8 +86,10 @@ function RenameForm({ target, suggestions, onRename, onClose }: {
   </form>;
 }
 
-export function TranscriptPanel({ sourceRequest, onSourceShown, rows, recording, currentTime, playing, visible, playInterval, suggestions, onRename }: TranscriptPanelProps) {
+export function TranscriptPanel({ sourceRequest, onSourceShown, rows, recording, currentTime, playing, visible, playInterval, time, seek, suggestions, onRename }: TranscriptPanelProps) {
   const rowRefs = useRef(new Map<number, HTMLLIElement>());
+  // The playing row's words, when it is drawn word by word.
+  const wordsRef = useRef<HTMLSpanElement>(null);
   const [selected, setSelected] = useState<Set<number>>(() => new Set());
   const [anchor, setAnchor] = useState<number | null>(null);
   const [renaming, setRenaming] = useState<RenameTarget | null>(null);
@@ -86,7 +100,7 @@ export function TranscriptPanel({ sourceRequest, onSourceShown, rows, recording,
     const row = rows.find(item => item.index === sourceRequest.index);
     if (!row) return;
     setSelected(new Set([row.index])); setAnchor(row.index);
-    rowRefs.current.get(row.index)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    rowRefs.current.get(row.index)?.scrollIntoView({ block: "nearest", behavior: scrollBehavior() });
     onSourceShown?.();
   }, [sourceRequest, rows, visible, onSourceShown]);
 
@@ -105,6 +119,39 @@ export function TranscriptPanel({ sourceRequest, onSourceShown, rows, recording,
       rowRefs.current.get(activeRow.index)?.scrollIntoView({ block: "nearest" });
     }
   }, [activeRow, visible]);
+
+  // The playing row's words, when it has words that spell it (KNEG-408). Every other row --
+  // notes saved before, and every engine but local Whisper -- highlights as a row, as before.
+  const activeWords = useMemo(
+    () => (activeRow !== null && wordsMatchText(activeRow.words, activeRow.text) ? activeRow.words : null),
+    [activeRow],
+  );
+
+  // Which word is being said moves faster than `timeupdate` (four a second) and the row's React
+  // render, so while a row with words plays and the panel shows, each animation frame reads the
+  // player's time and moves one class between two spans, with no render. Nothing runs otherwise.
+  useEffect(() => {
+    const container = wordsRef.current;
+    if (!playing || !visible || activeWords === null || container === null) return;
+    const spans = container.querySelectorAll<HTMLElement>(".transcript-word");
+    let lit: number | null = null;
+    let frame = 0;
+    const step = () => {
+      const now = time();
+      const next = now === null ? null : wordAt(activeWords, now);
+      if (next !== lit) {
+        if (lit !== null) spans[lit]?.classList.remove(CURRENT_WORD);
+        if (next !== null) spans[next]?.classList.add(CURRENT_WORD);
+        lit = next;
+      }
+      frame = requestAnimationFrame(step);
+    };
+    frame = requestAnimationFrame(step);
+    return () => {
+      cancelAnimationFrame(frame);
+      if (lit !== null) spans[lit]?.classList.remove(CURRENT_WORD);
+    };
+  }, [activeWords, playing, visible, time]);
 
   const playableSelected = rows.filter((row) => selected.has(row.index) && row.startSeconds !== null);
   const selectionStart = playableSelected[0]?.startSeconds ?? null;
@@ -219,7 +266,20 @@ export function TranscriptPanel({ sourceRequest, onSourceShown, rows, recording,
                   </button>
                 ) : null}
               </span>
-              <span className="transcript-text">{row.text}</span>
+              {isActive && activeWords !== null ? (
+                // Word by word while it plays. A click on a word goes there, and only there: the
+                // row's own click would select or deselect it.
+                <span className="transcript-text" ref={wordsRef}>
+                  {activeWords.map((word, at) => (
+                    <Fragment key={at}>
+                      {at > 0 ? " " : null}
+                      <span className="transcript-word" onClick={(event) => { event.stopPropagation(); seek(word.start); }}>{word.text}</span>
+                    </Fragment>
+                  ))}
+                </span>
+              ) : (
+                <span className="transcript-text">{row.text}</span>
+              )}
             </li>
           );
         })}

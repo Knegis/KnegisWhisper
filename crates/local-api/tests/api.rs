@@ -257,7 +257,7 @@ async fn notes_are_listed_read_patched_and_deleted() {
         .unwrap();
     assert_eq!(body["data"].as_array().unwrap().len(), 1);
 
-    // Delete
+    // Delete: the note goes to Trash, and the API treats it as gone (KNEG-401).
     let response = harness
         .send(reqwest::Method::DELETE, &format!("/v1/notes/{id}"), None)
         .await;

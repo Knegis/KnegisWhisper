@@ -9,7 +9,10 @@ Click to start dictation and click again to finish. Existing hotkeys and the
 meeting indicators retain their behavior.
 
 The supplied microphone SVGs are bundled as theme-aware masks. Recording uses the
-speaking icon even during silence, with the same blue selection color as settings. Transcription and insertion show a busy state
+speaking icon even during silence, with the same blue selection color as settings.
+Under the icon, a 2px strip of six segments shows the microphone's live level
+while recording (KNEG-371); the icon itself does not follow the level, so a pause
+never makes a recording microphone look idle. Transcription and insertion show a busy state
 and reject duplicate actions. Failed operations show a dismissible message;
 unknown backend state never presents a ready microphone.
 

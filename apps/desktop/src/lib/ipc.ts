@@ -37,6 +37,7 @@ import type {
   Accelerator,
   AccountStatus,
   AppleCalendarSupport,
+  AudioLevel,
   AudioSource,
   Availability,
   BinaryLocation,
@@ -81,6 +82,8 @@ import type {
   InputDevice,
   InstallProgress,
   KeytermSupport,
+  LevelSession,
+  LevelSource,
   Lists,
   LocalApiStatus,
   LocalLlmModelStatus,
@@ -95,10 +98,12 @@ import type {
   MediaImportSource,
   MediaSidecar,
   MeetingOutcome,
+  MeetingPlan,
   RecoverableRecording,
   MeetingProviderSummary,
   MeetingState,
   MeetingStatus,
+  MicrophoneCheck,
   MicrophoneSupport,
   ModelCacheStatus,
   ModelStatus,
@@ -110,6 +115,8 @@ import type {
   Offer,
   Outcome,
   OverlayStatus,
+  ParticipantRequest,
+  Person,
   ProbeKind,
   ProbeOutcome,
   ProbeReport,
@@ -143,9 +150,12 @@ import type {
   TranscriptEvent,
   Transcription,
   TranscriptRow,
+  TrashedNote,
+  TrashSummary,
   UnhandledAction,
   UpdateCheckResult,
   VerifiedBy,
+  Word,
 } from "../generated/ipc-types.js";
 
 /*
@@ -157,6 +167,7 @@ export type {
   Accelerator,
   AccountStatus,
   AppleCalendarSupport,
+  AudioLevel,
   AudioSource,
   BinaryLocation,
   Binding,
@@ -199,6 +210,8 @@ export type {
   InputDevice,
   InstallProgress,
   KeytermSupport,
+  LevelSession,
+  LevelSource,
   Lists,
   LocalApiStatus,
   LocalLlmModelStatus,
@@ -213,10 +226,12 @@ export type {
   MediaImportSource,
   MediaSidecar,
   MeetingOutcome,
+  MeetingPlan,
   RecoverableRecording,
   MeetingProviderSummary,
   MeetingState,
   MeetingStatus,
+  MicrophoneCheck,
   MicrophoneSupport,
   ModelCacheStatus,
   ModelStatus,
@@ -225,6 +240,8 @@ export type {
   NoteRecording,
   Offer,
   OverlayStatus,
+  ParticipantRequest,
+  Person,
   ProbeKind,
   ProbeOutcome,
   ProbeReport,
@@ -257,9 +274,12 @@ export type {
   TranscriptEvent,
   Transcription,
   TranscriptRow,
+  TrashedNote,
+  TrashSummary,
   UnhandledAction,
   UpdateCheckResult,
   VerifiedBy,
+  Word,
 };
 
 /** `local_model::Availability` — whether a server binary exists for this platform. */
@@ -364,7 +384,11 @@ export async function saveMeetingNotificationPlacement(): Promise<void> { return
 export async function resetMeetingNotificationPlacement(): Promise<void> { return invoke("meeting_notification_placement_reset"); }
 
 /**
- * Start recording a meeting.
+ * Start recording a meeting, saved under `plan`'s name in its folder
+ * (KNEG-365). Rust keeps the plan with the meeting, so it applies however the
+ * meeting ends; without one, the meeting is unnamed and in no folder. Whether
+ * its recording is deleted once saved is not sent: Rust reads Settings ›
+ * Meetings' choice at Start (KNEG-409).
  *
  * Returns which captures actually started: a meeting works microphone-only, and
  * the user should be told which one they got rather than left to assume.
@@ -372,8 +396,9 @@ export async function resetMeetingNotificationPlacement(): Promise<void> { retur
 export async function startMeeting(
   provider: string,
   systemAudio: boolean,
+  plan: Omit<MeetingPlan, "deleteRecording"> = { title: null, folderId: null },
 ): Promise<Sources> {
-  return invoke<Sources>("meeting_start", { provider, systemAudio });
+  return invoke<Sources>("meeting_start", { provider, systemAudio, title: plan.title, folderId: plan.folderId });
 }
 
 export async function stopMeeting(): Promise<MeetingOutcome> {
@@ -394,7 +419,9 @@ export async function flushMeetingPanelNotes(): Promise<void> {
   const unlisten = await listen<MeetingNotesFlush>("meeting-notes-flushed", event => {
     if (event.payload.requestId === requestId) receive(event.payload);
   });
-  const timeout = window.setTimeout(() => receive({ requestId, error: "The meeting panel did not confirm that your notes were saved. Try again." }), 5000);
+  // Said beside Meetings' caveat, which names the two ways on from here: so the same noun, and no
+  // "Try again" to contradict them.
+  const timeout = window.setTimeout(() => receive({ requestId, error: "The meeting window didn't answer when asked to save your notes." }), 5000);
   try {
     await emitTo("meeting", "meeting-notes-flush", { requestId });
     const result = await reply;
@@ -455,6 +482,19 @@ export async function dismissMeetingOffer(): Promise<void> {
 
 export async function setMeetingPrompt(enabled: boolean): Promise<void> {
   return invoke("meeting_set_prompt", { enabled });
+}
+
+/**
+ * Whether each meeting's recording is deleted once its transcript is saved
+ * (KNEG-409). Off until it is turned on. A meeting reads it when it starts,
+ * so a running meeting's own choice is `MeetingStatus.plan.deleteRecording`.
+ */
+export async function getMeetingDeleteRecordings(): Promise<boolean> {
+  return invoke<boolean>("meeting_delete_recordings");
+}
+
+export async function setMeetingDeleteRecordings(enabled: boolean): Promise<void> {
+  return invoke("meeting_set_delete_recordings", { enabled });
 }
 
 /** The two diarization models, and whether speaker labels can run. */
@@ -737,13 +777,36 @@ export async function setKeepRawText(enabled: boolean): Promise<void> {
 export async function getNotes(options?: {
   noteType?: string;
   folderId?: number;
+  /**
+   * An email: the notes that person is on, for the People list (KNEG-362). A
+   * filter of its own -- Rust refuses it beside `noteType` or `folderId`.
+   */
+  person?: string;
   limit?: number;
 }): Promise<Note[]> {
   return invoke<Note[]>("notes_list", {
     noteType: options?.noteType ?? null,
     folderId: options?.folderId ?? null,
+    person: options?.person ?? null,
     limit: options?.limit ?? null,
   });
+}
+
+/**
+ * Everyone named by email on a note, the most notes first (KNEG-362). People
+ * with a name and no email are not listed: the email is who they are.
+ */
+export async function getPeople(): Promise<Person[]> {
+  return invoke<Person[]>("people_list");
+}
+
+/**
+ * Replace a note's people, returning whether the note existed. Rust checks
+ * and tidies the list, and what it refuses -- an email that isn't one --
+ * comes back in plain words, to be shown as it is.
+ */
+export async function setNoteParticipants(id: number, participants: ParticipantRequest[]): Promise<boolean> {
+  return invoke<boolean>("notes_set_participants", { id, participants });
 }
 
 /** Full-text search. The query is prose; Rust escapes it into FTS5 syntax. */
@@ -782,8 +845,43 @@ export async function setNoteFolder(id: number, folderId: number | null): Promis
   return invoke<boolean>("notes_set_folder", { id, folderId });
 }
 
-export async function deleteNote(id: number): Promise<boolean> {
-  return invoke<boolean>("notes_delete", { id });
+/* --------------------------------------------------------------------- trash */
+
+/**
+ * Move a note to Trash (KNEG-401): what Delete does, with nothing deleted.
+ * Returns whether it moved -- `false` for a note that isn't there or is
+ * already in Trash. `restoreNote` undoes it.
+ */
+export async function trashNote(id: number): Promise<boolean> {
+  return invoke<boolean>("notes_trash", { id });
+}
+
+/** Bring a note back from Trash. Returns whether it came back. */
+export async function restoreNote(id: number): Promise<boolean> {
+  return invoke<boolean>("notes_restore", { id });
+}
+
+/**
+ * Delete a note in Trash forever, with its recording. Returns whether it went:
+ * Rust refuses a note that isn't in Trash, so a live note can never be deleted
+ * for good from here.
+ */
+export async function deleteNoteForever(id: number): Promise<boolean> {
+  return invoke<boolean>("notes_delete_forever", { id });
+}
+
+/** Everything in Trash, most recently trashed first, with what their recordings take. */
+export async function getTrash(): Promise<TrashSummary> {
+  return invoke<TrashSummary>("notes_trash_list");
+}
+
+/**
+ * Delete forever, with their recordings, the notes `ids` that are still in Trash: the ones Empty
+ * trash asked about, so a note moved to Trash while the question was open -- through the local API,
+ * say -- stays. Returns how many went.
+ */
+export async function emptyTrash(ids: number[]): Promise<number> {
+  return invoke<number>("notes_empty_trash", { ids });
 }
 
 export async function getFolders(): Promise<Folder[]> {
@@ -982,6 +1080,12 @@ export async function getInputDevices(): Promise<InputDevice[]> {
   return invoke<InputDevice[]>("input_devices");
 }
 
+/**
+ * Choose the microphone dictation and meetings record from, or `null` for the
+ * system default: one choice for both, made on either page, saved before it
+ * is applied (`audio.inputDevice`, KNEG-341). A meeting already running keeps
+ * the microphone it opened.
+ */
 export async function setInputDevice(device: string | null): Promise<void> {
   return invoke<void>("dictation_set_device", { device });
 }
@@ -990,11 +1094,22 @@ export async function setInputDevice(device: string | null): Promise<void> {
  * The microphone the next recording will use, or `null` for the system
  * default. Read back so the screen can show the choice rather than assume
  * one -- the select was uncontrolled and showed "System default" whatever
- * was chosen. The choice itself still lives only in memory and is forgotten
- * on restart; that is KNEG-341, not fixed here.
+ * was chosen. Saved (`audio.inputDevice`) and brought back at startup since
+ * KNEG-341, and meetings read the same choice at Start.
  */
 export async function getInputDevice(): Promise<string | null> {
   return invoke<string | null>("dictation_device");
+}
+
+/**
+ * The Meetings page's "Test microphone" (KNEG-364): five seconds of the saved
+ * microphone, then what was heard. Its level arrives meanwhile as
+ * `audio-level` with session `microphone-check`. Nothing is recorded or sent.
+ * Refused, in a sentence starting "Not now: ", while a meeting is under way,
+ * a dictation records, or another check runs.
+ */
+export async function checkMicrophone(): Promise<MicrophoneCheck> {
+  return invoke<MicrophoneCheck>("microphone_check");
 }
 
 /**
@@ -1021,6 +1136,19 @@ export async function onDictationOutcome(
   return listen<DictationOutcome>("dictation-outcome", (event) =>
     handler(event.payload),
   );
+}
+
+/* ------------------------------------------------------------ sound levels */
+
+/**
+ * Every capture's live level (KNEG-371): about ten a second while it runs,
+ * and a last 0 when it stops. One event for all of them; `session` and
+ * `source` say whose, so a meter keeps only its own (`useAudioLevel`).
+ */
+export async function onAudioLevel(
+  handler: (reading: AudioLevel) => void,
+): Promise<UnlistenFn> {
+  return listen<AudioLevel>("audio-level", (event) => handler(event.payload));
 }
 
 /* -------------------------------------------------------- local transcription */

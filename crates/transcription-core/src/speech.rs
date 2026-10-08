@@ -70,7 +70,7 @@ use std::path::{Path, PathBuf};
 
 use kw_audio_core::vad::VadConfig;
 
-use crate::local::{Inference, TimedSegment};
+use crate::local::{hundredths, Inference, TimedSegment, TimedWord};
 use crate::scratch::{unique_wav_path, ScratchWav};
 
 /// A pause this long or longer ends a chunk.
@@ -260,6 +260,24 @@ pub fn stitch(parts: Vec<(Span, Inference)>) -> Inference {
                         text: row.text,
                         start,
                         end: (row.end + chunk.start).clamp(start, chunk.end),
+                        // Moved and clamped as the row is, then rounded
+                        // again: a chunk starts at whatever the speech
+                        // finder said, so the sum is rarely a hundredth.
+                        words: row
+                            .words
+                            .into_iter()
+                            .map(|word| {
+                                let start = hundredths((word.start + chunk.start).min(chunk.end));
+                                TimedWord {
+                                    text: word.text,
+                                    start,
+                                    end: hundredths(
+                                        (word.end + chunk.start).clamp(start, chunk.end),
+                                    )
+                                    .max(start),
+                                }
+                            })
+                            .collect(),
                     }
                 }));
             }
@@ -727,9 +745,77 @@ mod tests {
                     text: (*t).to_owned(),
                     start: *s,
                     end: *e,
+                    words: Vec::new(),
                 })
                 .collect(),
         }
+    }
+
+    fn worded(text: &str, start: f64, end: f64, words: &[(&str, f64, f64)]) -> Inference {
+        Inference::Timed {
+            text: text.to_owned(),
+            segments: vec![TimedSegment {
+                text: text.to_owned(),
+                start,
+                end,
+                words: words
+                    .iter()
+                    .map(|(t, s, e)| TimedWord {
+                        text: (*t).to_owned(),
+                        start: *s,
+                        end: *e,
+                    })
+                    .collect(),
+            }],
+        }
+    }
+
+    fn words_of(inference: &Inference) -> Vec<(String, f64, f64)> {
+        match inference {
+            Inference::Timed { segments, .. } => segments
+                .iter()
+                .flat_map(|s| &s.words)
+                .map(|w| (w.text.clone(), w.start, w.end))
+                .collect(),
+            other => panic!("expected timed rows, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn each_chunks_words_move_onto_the_recordings_clock_rounded() {
+        // KNEG-408. A chunk starts wherever the speech finder put it, so
+        // 29.8 + 0.2 is 30.000000000000004 until it is rounded.
+        let stitched = stitch(vec![(
+            Span::new(29.8, 40.0),
+            worded("Hej då.", 0.2, 0.9, &[("Hej", 0.2, 0.5), ("då.", 0.5, 0.9)]),
+        )]);
+        assert_eq!(
+            words_of(&stitched),
+            [
+                ("Hej".to_owned(), 30.0, 30.3),
+                ("då.".to_owned(), 30.3, 30.7)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_word_never_runs_past_its_chunk() {
+        let stitched = stitch(vec![(
+            Span::new(40.0, 50.0),
+            worded(
+                "Long words",
+                8.0,
+                20.0,
+                &[("Long", 9.5, 10.4), ("words", 10.6, 11.0)],
+            ),
+        )]);
+        assert_eq!(
+            words_of(&stitched),
+            [
+                ("Long".to_owned(), 49.5, 50.0),
+                ("words".to_owned(), 50.0, 50.0)
+            ]
+        );
     }
 
     #[test]

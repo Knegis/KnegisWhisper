@@ -5,7 +5,7 @@ import type { Folder, Note } from "../src/generated/ipc-types.js";
 
 const note = (id: number, folderId: number | null): Note => ({
   id, title: `Note ${id}`, content: "", recordingDetails: null, noteType: "note", enhancedContent: null,
-  folderId, transcript: null, participants: null, audioDurationSeconds: null, createdAt: null, updatedAt: null,
+  folderId, transcript: null, participants: null, audioDurationSeconds: null, transcribedBy: null, createdAt: null, updatedAt: null, trashedAt: null,
 });
 const folder = (id: number, name: string): Folder => ({ id, name, isDefault: false, sortOrder: id });
 

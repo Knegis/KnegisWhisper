@@ -10,12 +10,15 @@ use kw_notes_core::{notes, recordings, NoteRecording};
 use kw_storage::Db;
 
 pub(crate) async fn ensure_available(db: &Db, id: i64) -> Result<(), String> {
-    if notes::get(db.pool(), id)
+    let Some(note) = notes::get(db.pool(), id)
         .await
         .map_err(|e| format!("Could not read the note: {e}"))?
-        .is_none()
-    {
+    else {
         return Err("This note no longer exists.".to_owned());
+    };
+    // A note in Trash is read-only until it is restored (KNEG-401).
+    if note.trashed_at.is_some() {
+        return Err("This note is in Trash. Restore it to attach a recording.".to_owned());
     }
     if recordings::get(db.pool(), id)
         .await
@@ -151,10 +154,13 @@ pub(crate) async fn from_selection(
 mod tests {
     use super::*;
 
+    /// KNEG-401, over real IPC: Delete moves the note to Trash with its copy
+    /// kept, a note in Trash refuses an attachment, and Delete forever then
+    /// removes the copy -- never the original it was copied from.
     #[cfg(feature = "tauri-test")]
     // get_ipc_response blocks its caller; keep the SQL pool driver runnable.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn desktop_delete_removes_an_attached_copy_through_real_ipc() {
+    async fn desktop_delete_moves_to_trash_and_delete_forever_removes_the_copy_through_real_ipc() {
         let dir = tempfile::tempdir().unwrap();
         let source = dir.path().join("original.wav");
         let root = dir.path().join("recordings");
@@ -171,30 +177,50 @@ mod tests {
             .unwrap();
         let app = tauri::test::mock_builder()
             .manage(state)
-            .invoke_handler(tauri::generate_handler![crate::commands::notes_delete])
+            .invoke_handler(tauri::generate_handler![
+                crate::commands::notes_trash,
+                crate::commands::notes_delete_forever
+            ])
             .build(tauri::test::mock_context(tauri::test::noop_assets()))
             .unwrap();
         let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
             .build()
             .unwrap();
-        let result = tauri::test::get_ipc_response(
-            &webview,
-            tauri::webview::InvokeRequest {
-                cmd: "notes_delete".to_owned(),
-                callback: tauri::ipc::CallbackFn(0),
-                error: tauri::ipc::CallbackFn(1),
-                url: webview.url().unwrap(),
-                body: tauri::ipc::InvokeBody::Json(serde_json::json!({"id": id})),
-                headers: Default::default(),
-                invoke_key: tauri::test::INVOKE_KEY.to_owned(),
-            },
-        )
-        .unwrap()
-        .deserialize::<bool>()
-        .unwrap();
-        assert!(result);
+        let invoke = |cmd: &str| {
+            tauri::test::get_ipc_response(
+                &webview,
+                tauri::webview::InvokeRequest {
+                    cmd: cmd.to_owned(),
+                    callback: tauri::ipc::CallbackFn(0),
+                    error: tauri::ipc::CallbackFn(1),
+                    url: webview.url().unwrap(),
+                    body: tauri::ipc::InvokeBody::Json(serde_json::json!({"id": id})),
+                    headers: Default::default(),
+                    invoke_key: tauri::test::INVOKE_KEY.to_owned(),
+                },
+            )
+            .unwrap()
+            .deserialize::<bool>()
+            .unwrap()
+        };
+        let copy = root.join(&recording.storage_key);
+
+        assert!(invoke("notes_trash"));
+        assert!(notes::get(db.pool(), id)
+            .await
+            .unwrap()
+            .unwrap()
+            .trashed_at
+            .is_some());
+        assert!(copy.exists(), "in Trash, the note keeps its recording");
+        assert_eq!(
+            ensure_available(&db, id).await.unwrap_err(),
+            "This note is in Trash. Restore it to attach a recording."
+        );
+
+        assert!(invoke("notes_delete_forever"));
         assert!(notes::get(db.pool(), id).await.unwrap().is_none());
-        assert!(!root.join(recording.storage_key).exists());
+        assert!(!copy.exists());
         assert!(source.exists());
     }
 
@@ -239,7 +265,11 @@ mod tests {
                 crate::commands::notes_search,
                 crate::commands::notes_get,
                 crate::commands::notes_update,
-                crate::commands::notes_delete,
+                crate::commands::notes_trash,
+                crate::commands::notes_restore,
+                crate::commands::notes_delete_forever,
+                crate::commands::notes_trash_list,
+                crate::commands::people_list,
                 crate::commands::folders_list,
                 crate::commands::note_transcript_rows,
                 crate::commands::note_recording_get,
@@ -323,7 +353,8 @@ mod tests {
         let response = crate::recordings::response_for(&request, &copy);
         assert_eq!(response.status(), tauri::http::StatusCode::PARTIAL_CONTENT);
         assert_eq!(response.body(), &original[44..64]);
-        assert!(recordings::delete_with_recording(db.pool(), id, &root)
+        assert!(kw_notes_core::trash::trash(db.pool(), id).await.unwrap());
+        assert!(recordings::delete_forever(db.pool(), id, &root)
             .await
             .unwrap());
         assert!(!copy.exists());

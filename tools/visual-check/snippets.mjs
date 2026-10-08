@@ -376,6 +376,32 @@ export function startMeetingRecording(systemAudio) {
   `);
 }
 
+/**
+ * `startMeetingRecording`'s other way in: sets the "Other participants" chip
+ * the same way, then presses the call card's "Record this call", which the
+ * Meetings page shows while a meeting app is in a call nobody is recording.
+ * Returns what the chip reads when the button is pressed, and whether it was
+ * enabled.
+ */
+export function recordThisCall(systemAudio) {
+  return source(`
+    return (async () => {
+      const chip = [...document.querySelectorAll('button.chip')]
+        .find((item) => item.textContent.trim() === 'Other participants');
+      if (!chip) throw new Error('Other participants chip is missing');
+      const pressed = () => chip.getAttribute('aria-pressed') === 'true';
+      if (pressed() !== ${JSON.stringify(systemAudio)} && !chip.disabled) chip.click();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const record = [...document.querySelectorAll('.call-card button')]
+        .find((item) => item.textContent.trim() === 'Record this call');
+      if (!record) throw new Error('Record this call button is missing');
+      const enabled = !record.disabled;
+      record.click();
+      return { systemAudio: pressed(), enabled };
+    })();
+  `);
+}
+
 export function meetingProviderValue(label) {
   return source(`
     const wanted = ${JSON.stringify(label)}.toLowerCase();
@@ -478,6 +504,375 @@ export function emitDictationState(state) {
   `);
 }
 
+/* --------------------------------------------------------- meeting discard */
+
+/** The names of the logged calls among `commands`, oldest first, so a check can read their order. */
+export function stubSequence(commands) {
+  return source(`
+    const wanted = ${JSON.stringify(commands)};
+    return (window.__chipStub?.log ?? [])
+      .filter((entry) => wanted.includes(entry.cmd))
+      .map((entry) => entry.cmd);
+  `);
+}
+
+/**
+ * The dev console's `kw.meetingWindowSilent`: whether the fixtures stop
+ * answering for the meeting window when Stop or Discard asks it to save its
+ * notes, so the page's 5 s wait runs out as it would for a window that hung.
+ */
+export function meetingWindowSilent(silent) {
+  return source(`
+    if (!globalThis.kw?.meetingWindowSilent) throw new Error('The fixture dev console has no meetingWindowSilent');
+    globalThis.kw.meetingWindowSilent(${JSON.stringify(silent)});
+    return true;
+  `);
+}
+
+/**
+ * Replaces `window.confirm` with a scripted answer, keeping every question
+ * asked in `window.__confirmQuestions` and, where the invoke stub is
+ * installed, logging it there as `window.confirm`, so its place among the
+ * calls can be read. `mergeWhileOpen` is laid over the stub's `merge` while
+ * the question is "open" -- after it is asked and before it is answered --
+ * for what changes behind a modal dialog; it needs `installInvokeStub` first.
+ * `invokeWhileOpen`, `{ cmd, args }`, is a command sent while the question is
+ * open, not waited for -- another client changing something meanwhile, as the
+ * local API can move a note to Trash while Empty trash is asking (KNEG-401).
+ */
+export function scriptConfirm(answer, mergeWhileOpen = null, invokeWhileOpen = null) {
+  return source(`
+    const merge = ${JSON.stringify(mergeWhileOpen)};
+    const call = ${JSON.stringify(invokeWhileOpen)};
+    window.__confirmQuestions = [];
+    window.confirm = (question) => {
+      window.__confirmQuestions.push(String(question));
+      window.__chipStub?.log.push({ cmd: 'window.confirm', args: { question: String(question) } });
+      if (merge !== null) {
+        const stub = window.__chipStub;
+        if (!stub) throw new Error('The invoke stub is not installed');
+        for (const [cmd, value] of Object.entries(merge)) stub.merge[cmd] = value;
+      }
+      // Something else happening while the question is open, as another client of the app would.
+      if (call !== null) void window.__TAURI_INTERNALS__.invoke(call.cmd, call.args);
+      return ${JSON.stringify(answer)};
+    };
+    return true;
+  `);
+}
+
+/** The questions the scripted `window.confirm` was asked, oldest first. */
+export function confirmQuestions() {
+  return source(`
+    return window.__confirmQuestions ?? [];
+  `);
+}
+
+/**
+ * The Meetings page, live or idle: whether the live view is up, its state
+ * label and its action buttons, the caveats and errors in view (the live
+ * view's or the control bar's), and Start.
+ */
+export function meetingPageState() {
+  return source(`
+    const text = (item) => item.textContent.trim();
+    const live = document.querySelector('.meeting-live');
+    const start = document.querySelector('.control-start');
+    return {
+      live: Boolean(live),
+      status: live?.querySelector('.live-status [role="status"]')?.textContent.trim() ?? null,
+      actions: live ? [...live.querySelectorAll('.live-actions button')].map(text) : [],
+      caveats: [...document.querySelectorAll('.live-caveats > .caveat, .control-body > .caveat')].map(text),
+      errors: [...document.querySelectorAll('.live-caveats > .error, .control-body > .error')].map(text),
+      start: start ? { text: text(start), disabled: start.disabled } : null,
+    };
+  `);
+}
+
+/* ------------------------------------------------------------- meeting plan */
+
+/**
+ * What the Meetings page says a meeting is saved as (KNEG-365): the name
+ * field (its value, placeholder and accessible name), the live view's title,
+ * and the titles of the list panel's rows under each heading -- "Now",
+ * "Recent", "Interrupted".
+ */
+export function meetingPlanState() {
+  return source(`
+    const field = document.querySelector('.control-row input.meeting-name');
+    const sections = {};
+    for (const section of document.querySelectorAll('.list-panel .panel-section')) {
+      const label = section.querySelector('.panel-label')?.textContent.trim();
+      if (!label) continue;
+      sections[label] = [...section.querySelectorAll('.panel-item-title')].map((item) => item.textContent.trim());
+    }
+    return {
+      name: field ? { value: field.value, placeholder: field.placeholder, label: field.getAttribute('aria-label') } : null,
+      liveTitle: document.querySelector('.meeting-live .live-title')?.textContent.trim() ?? null,
+      sections,
+    };
+  `);
+}
+
+/* ------------------------------------------------------- meeting recordings */
+
+/**
+ * Settings > Meetings' Recordings section (KNEG-409): its heading, the
+ * checkbox labelled `label` (whether it is there and ticked), and the
+ * caveats and Learn more text in the section around it.
+ */
+export function recordingsSetting(label) {
+  return source(`
+    const wanted = ${JSON.stringify(label)};
+    const box = [...document.querySelectorAll('label')]
+      .find((item) => item.textContent.trim() === wanted)?.querySelector('input[type="checkbox"]') ?? null;
+    const section = box?.closest('section') ?? null;
+    const text = (item) => item.textContent.trim();
+    return {
+      found: Boolean(box),
+      checked: box?.checked ?? null,
+      disabled: box?.disabled ?? null,
+      heading: section?.querySelector('h2')?.textContent.trim() ?? null,
+      caveats: section ? [...section.querySelectorAll(':scope > .caveat')].map(text) : [],
+      learnMore: section ? [...section.querySelectorAll('.learn-more .learn-more-body')].map(text) : [],
+    };
+  `);
+}
+
+/**
+ * What the Meetings page says about its recordings: the control bar's notes,
+ * the list panel's foot, the live view's sub-line, and the Learn more under
+ * the outcome caveat.
+ */
+export function meetingRecordingNotes() {
+  return source(`
+    const text = (item) => item.textContent.trim();
+    return {
+      controlNotes: [...document.querySelectorAll('.control-body p.control-note')].map(text),
+      panelFoot: [...document.querySelectorAll('.list-panel .panel-foot')].map(text),
+      liveSub: document.querySelector('.meeting-live .live-sub')?.textContent.trim() ?? null,
+      learnMore: [...document.querySelectorAll('.control-body > .learn-more .learn-more-body, .live-caveats > .learn-more .learn-more-body')].map(text),
+    };
+  `);
+}
+
+/**
+ * The open note's recording, as Notes shows it: how many players and row
+ * Play buttons there are, its transcript rows, its recording details, the
+ * "no recording attached" block, and which tab is selected.
+ */
+export function noteRecordingState() {
+  return source(`
+    const note = document.querySelector('.note-detail');
+    const text = (item) => item.textContent.trim();
+    return {
+      title: note?.querySelector('input[aria-label="Title"]')?.value ?? null,
+      tab: note?.querySelector('[role="tab"][aria-selected="true"]')?.textContent.trim() ?? null,
+      audios: note ? note.querySelectorAll('audio').length : null,
+      players: note ? note.querySelectorAll('.recording-player').length : null,
+      rowPlays: note ? note.querySelectorAll('.transcript-play').length : null,
+      rows: note ? [...note.querySelectorAll('.transcript-rows .transcript-text')].map(text) : [],
+      details: note ? [...note.querySelectorAll('.recording-details p')].filter((item) => !item.closest('[hidden]')).map(text) : [],
+      noRecording: note ? [...note.querySelectorAll('.recording-empty')].filter((item) => !item.closest('[hidden]')).map((item) => text(item.querySelector('p'))) : [],
+    };
+  `);
+}
+
+/**
+ * Clicks the library row titled exactly `title`, as a person opens a note.
+ */
+export function openNotesEntry(title) {
+  return source(`
+    const wanted = ${JSON.stringify(title)};
+    const entry = [...document.querySelectorAll('.list-panel .notes-entry')]
+      .find((item) => item.querySelector('.notes-entry-title')?.textContent === wanted);
+    if (!entry) throw new Error('No library row is titled ' + wanted);
+    entry.click();
+    return wanted;
+  `);
+}
+
+/**
+ * The open note's meta row under its title (KNEG-368): each item's text and
+ * the path of its icon, and whether any item reaches past the row, the note
+ * or the window.
+ */
+export function noteMetaState() {
+  return source(`
+    const note = document.querySelector('.note-detail');
+    const row = note?.querySelector('.note-detail-header .note-meta') ?? null;
+    const page = note?.querySelector('.note-page') ?? note;
+    const items = row ? [...row.querySelectorAll(':scope > li')].map((item) => {
+      const box = item.getBoundingClientRect();
+      return {
+        text: item.textContent.trim(),
+        icon: item.querySelector('svg path')?.getAttribute('d') ?? null,
+        left: Math.round(box.left),
+        right: Math.round(box.right),
+        height: Math.round(box.height),
+      };
+    }) : [];
+    const rowBox = row?.getBoundingClientRect() ?? null;
+    const pageBox = page?.getBoundingClientRect() ?? null;
+    return {
+      title: note?.querySelector('input[aria-label="Title"]')?.value ?? null,
+      row: Boolean(row),
+      items,
+      innerWidth,
+      scrollWidth: document.scrollingElement.scrollWidth,
+      rowRight: rowBox ? Math.round(rowBox.right) : null,
+      pageRight: pageBox ? Math.round(pageBox.right) : null,
+      rowOverflows: row ? row.scrollWidth > row.clientWidth : null,
+    };
+  `);
+}
+
+/**
+ * The Notes library's folders, each with the titles of the notes filed in
+ * it, and the notes in none ("Not in a folder").
+ */
+export function notesFolders() {
+  return source(`
+    const titles = (root) => [...root.querySelectorAll('.notes-entry-title')].map((item) => item.textContent.trim());
+    const folders = {};
+    for (const folder of document.querySelectorAll('.list-panel .notes-folder')) {
+      const name = folder.querySelector('.notes-folder-name')?.textContent.trim() ?? '';
+      folders[name] = titles(folder);
+    }
+    const unfiled = [...document.querySelectorAll('.list-panel .panel-section')]
+      .find((section) => section.querySelector('.panel-label')?.textContent.trim() === 'Not in a folder');
+    return { folders, unfiled: unfiled ? titles(unfiled) : [] };
+  `);
+}
+
+/**
+ * People (KNEG-362). The open note's people item in its meta row: each
+ * chip's name and its remove button's label, whether Add person's form is
+ * open, the refusal shown under it, and the item's right edge. The library's
+ * People list: each person's name, count and whether pressed. And the
+ * panel's section headings, the notes under a "Notes with" one with its
+ * actions, and how many folder groups are drawn.
+ */
+export function peopleState() {
+  return source(`
+    const text = (item) => item.textContent.trim();
+    const item = document.querySelector('.note-detail .note-meta > li.note-people');
+    const panel = document.querySelector('.list-panel');
+    const sections = panel ? [...panel.querySelectorAll('.panel-section')] : [];
+    const label = (section) => section.querySelector('.panel-label')?.textContent.trim() ?? null;
+    const filtered = sections.find((section) => (label(section) ?? '').startsWith('Notes with '));
+    const box = item?.getBoundingClientRect() ?? null;
+    return {
+      note: item ? {
+        chips: [...item.querySelectorAll('.note-person')].map((chip) => ({
+          name: chip.querySelector('.note-person-name')?.textContent.trim() ?? null,
+          remove: chip.querySelector('button')?.getAttribute('aria-label') ?? null,
+        })),
+        formOpen: Boolean(item.querySelector('form')),
+        email: item.querySelector('form input[type="email"]')?.value ?? null,
+        error: item.querySelector('[role="alert"]')?.textContent.trim() ?? null,
+        right: box ? Math.round(box.right) : null,
+      } : null,
+      people: [...(panel?.querySelectorAll('button.notes-person') ?? [])].map((row) => ({
+        name: row.querySelector('.notes-person-name')?.textContent.trim() ?? null,
+        count: Number(row.querySelector('.notes-folder-count [aria-hidden]')?.textContent ?? 'NaN'),
+        pressed: row.getAttribute('aria-pressed') === 'true',
+      })),
+      sections: sections.map(label),
+      filtered: filtered ? {
+        label: label(filtered),
+        titles: [...filtered.querySelectorAll('.notes-entry-title')].map(text),
+        actions: [...filtered.querySelectorAll('.panel-action')].map(text),
+      } : null,
+      folders: panel ? panel.querySelectorAll('.notes-folder').length : 0,
+      innerWidth,
+      scrollWidth: document.scrollingElement.scrollWidth,
+    };
+  `);
+}
+
+/**
+ * Trash (KNEG-401). The panel's Trash row (its count and whether pressed), the
+ * panel's section headings, the library's note titles, the Trash list's rows,
+ * the "Moved to Trash" line and its Undo, Trash's page in the main area, the
+ * read-only note in Trash, and whether a workspace or an editor is open.
+ */
+export function trashState() {
+  return source(`
+    const text = (item) => item.textContent.trim();
+    const panel = document.querySelector('.list-panel');
+    const entry = panel?.querySelector('button.notes-trash') ?? null;
+    const moved = document.querySelector('.notes-notices .notes-moved');
+    const space = document.querySelector('.notes-main .trash-space');
+    const view = document.querySelector('.notes-main .trashed-note');
+    return {
+      entry: entry ? {
+        count: Number(entry.querySelector('.notes-folder-count [aria-hidden]')?.textContent ?? 'NaN'),
+        pressed: entry.getAttribute('aria-pressed') === 'true',
+      } : null,
+      sections: panel ? [...panel.querySelectorAll('.panel-section .panel-label')].map(text) : [],
+      library: panel ? [...panel.querySelectorAll('.notes-entry .notes-entry-title')].map(text) : [],
+      trashed: panel ? [...panel.querySelectorAll('.notes-trashed')].map((row) => ({
+        title: row.querySelector('.notes-entry-title')?.textContent.trim() ?? null,
+        meta: row.querySelector('.panel-item-meta')?.textContent.trim() ?? null,
+        current: row.getAttribute('aria-current') === 'page',
+      })) : [],
+      panelNotes: panel ? [...panel.querySelectorAll('.panel-note')].map(text) : [],
+      moved: moved ? {
+        text: moved.firstChild?.textContent.trim() ?? null,
+        undo: [...moved.querySelectorAll('button')].map(text),
+      } : null,
+      space: space ? {
+        lines: [...space.querySelectorAll('p')].map(text),
+        emptyTrash: space.querySelector('button') ? { text: text(space.querySelector('button')), disabled: space.querySelector('button').disabled } : null,
+      } : null,
+      view: view ? {
+        banner: view.querySelector('.trashed-note-banner p')?.textContent.trim() ?? null,
+        buttons: [...view.querySelectorAll('.trashed-note-banner button')].map(text),
+        title: view.querySelector('.trashed-note-title')?.textContent.trim() ?? null,
+        meta: view.querySelector('.trashed-note-header .note-meta')?.textContent.trim() ?? null,
+        inputs: view.querySelectorAll('input, textarea, [contenteditable="true"]').length,
+      } : null,
+      workspace: Boolean(document.querySelector('.notes-main .note-detail')),
+      title: document.querySelector('.note-detail input[aria-label="Title"]')?.value ?? null,
+      error: document.querySelector('.notes-notices .error')?.textContent.trim() ?? null,
+      notices: (() => {
+        const region = document.querySelector('.notes-main > .notes-notices');
+        return region ? { role: region.getAttribute('role'), text: region.textContent.trim() } : null;
+      })(),
+      focus: (() => {
+        const active = document.activeElement;
+        if (!active || active === document.body) return null;
+        return {
+          tag: active.tagName.toLowerCase(),
+          className: typeof active.className === 'string' ? active.className : '',
+          text: active.textContent.trim().slice(0, 80),
+          label: active.getAttribute('aria-label'),
+          value: 'value' in active ? active.value : null,
+        };
+      })(),
+      innerWidth,
+      scrollWidth: document.scrollingElement.scrollWidth,
+    };
+  `);
+}
+
+/**
+ * Opens a library row's menu as a right-click does: a `contextmenu` event on
+ * the row titled exactly `title`, at its centre.
+ */
+export function openRowMenu(title) {
+  return source(`
+    const wanted = ${JSON.stringify(title)};
+    const row = [...document.querySelectorAll('.list-panel .notes-entry')]
+      .find((item) => item.querySelector('.notes-entry-title')?.textContent === wanted);
+    if (!row) throw new Error('No library row is titled ' + wanted);
+    const rect = row.getBoundingClientRect();
+    row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: rect.left + 10, clientY: rect.top + 10, button: 2 }));
+    return wanted;
+  `);
+}
+
 /**
  * The first chip whose name -- its aria-label, or its text where it has none --
  * starts with `prefix`, as a DOM expression for the other snippets to build on.
@@ -515,6 +910,21 @@ export function chipCenter(prefix) {
     if (!chip) throw new Error('No chip is named ' + ${JSON.stringify(prefix)});
     const rect = chip.getBoundingClientRect();
     return { x: (rect.left + rect.right) / 2, y: (rect.top + rect.bottom) / 2 };
+  `);
+}
+
+/**
+ * Scrolls the first element matching `selector` whose text is `text` into
+ * view, as a person scrolls a panel to reach a row below its fold, and says
+ * whether there was one.
+ */
+export function scrollToText(selector, text) {
+  return source(`
+    const wanted = ${JSON.stringify(text)};
+    const element = [...document.querySelectorAll(${JSON.stringify(selector)})]
+      .find((item) => item.textContent.trim() === wanted);
+    element?.scrollIntoView({ block: 'nearest' });
+    return Boolean(element);
   `);
 }
 
@@ -625,6 +1035,26 @@ export function taskPageState() {
   `);
 }
 
+/**
+ * The open language panel (`LocalLanguagePicker` in a chip's menu): the line
+ * under the choices, the languages ticked, whether Detect automatically is
+ * marked, and whether the picker is off.
+ */
+export function languagePanel() {
+  return source(`
+    const picker = document.querySelector('.chip-menu .local-language-picker');
+    if (!picker) return null;
+    return {
+      note: picker.querySelector('p.muted')?.textContent ?? null,
+      ticked: [...picker.querySelectorAll('.local-language-options label')]
+        .filter((label) => label.querySelector('input')?.checked)
+        .map((label) => label.textContent.trim()),
+      detect: picker.querySelector(':scope > button')?.getAttribute('aria-pressed') ?? null,
+      disabled: picker.disabled,
+    };
+  `);
+}
+
 /** Puts keyboard focus on the chip, as Tab would have. */
 export function focusChip(prefix) {
   return source(`
@@ -643,6 +1073,410 @@ export function themeState() {
       dark: matchMedia('(prefers-color-scheme: dark)').matches,
       menuBackground: menu ? getComputedStyle(menu).backgroundColor : null,
       pageBackground: getComputedStyle(document.body).backgroundColor,
+    };
+  `);
+}
+
+/* ------------------------------------------------------------- note playback */
+
+/**
+ * Which of a note's three player slots an `audio` element is in, as an
+ * expression over `audio`: the transcript column's foot (`side`), Replay's
+ * full player (`full`) or the mini player at the foot of the note (`mini`).
+ */
+const slotExpression = `(audio.closest('.note-side-player') ? 'side'
+  : audio.closest('.note-full-player') ? 'full'
+  : audio.closest('.note-mini-player') ? 'mini' : null)`;
+
+/**
+ * Every `audio` on the page -- its slot, whether it is paused, its time,
+ * speed and ready state, whether it plays the fixtures' blob, and the
+ * `data-probe` a check may tag it with -- and what the players say: their
+ * error lines and their clocks.
+ */
+export function playerState() {
+  return source(`
+    return {
+      audios: [...document.querySelectorAll('audio')].map((audio) => ({
+        slot: ${slotExpression},
+        hidden: Boolean(audio.closest('[hidden]')),
+        paused: audio.paused,
+        currentTime: audio.currentTime,
+        duration: Number.isFinite(audio.duration) ? audio.duration : null,
+        playbackRate: audio.playbackRate,
+        readyState: audio.readyState,
+        blob: audio.src.startsWith('blob:'),
+        probe: audio.dataset.probe ?? null,
+      })),
+      errors: [...document.querySelectorAll('.recording-player .error')]
+        .map((item) => item.textContent.trim()),
+      clocks: [...document.querySelectorAll('.recording-clock')]
+        .map((item) => item.textContent.trim()),
+    };
+  `);
+}
+
+/**
+ * Samples every `audio` every 50ms into `window.__playbackSamples`, from now
+ * on, replacing any sampler already running. A timer rather than animation
+ * frames, which a headless page may not draw. `t` is `performance.now()`.
+ */
+export function startPlaybackSampler() {
+  return source(`
+    if (window.__playbackSampler) clearInterval(window.__playbackSampler);
+    const samples = window.__playbackSamples = [];
+    const take = () => samples.push({
+      t: performance.now(),
+      audios: [...document.querySelectorAll('audio')].map((audio) => ({
+        slot: ${slotExpression},
+        paused: audio.paused,
+        currentTime: audio.currentTime,
+        playbackRate: audio.playbackRate,
+        readyState: audio.readyState,
+        probe: audio.dataset.probe ?? null,
+      })),
+    });
+    take();
+    window.__playbackSampler = setInterval(take, 50);
+    return performance.now();
+  `);
+}
+
+/** The sampler's samples so far, oldest first. */
+export function playbackSamples() {
+  return source(`
+    return window.__playbackSamples ?? [];
+  `);
+}
+
+/** Chooses a speed on the player inside `container`, as its select would be changed by hand. */
+export function choosePlayerSpeed(container, rate) {
+  return source(`
+    const select = document.querySelector(${JSON.stringify(`${container} .recording-player select`)});
+    if (!select) throw new Error('No player speed in ' + ${JSON.stringify(container)});
+    select.value = ${JSON.stringify(rate)};
+    if (select.value !== ${JSON.stringify(rate)}) throw new Error('The player has no speed ' + ${JSON.stringify(rate)});
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    return select.value;
+  `);
+}
+
+/* ------------------------------------------------------------ word timings */
+
+/** Note `id`'s transcript rows, words and all, as the page's own `note_transcript_rows` answers. */
+export function noteTranscriptRows(id) {
+  return source(`
+    return window.__TAURI_INTERNALS__.invoke('note_transcript_rows', { id: ${JSON.stringify(id)} });
+  `);
+}
+
+/**
+ * One read, in one task, of the recording's time and the open note's
+ * transcript rows (KNEG-408): for each row whether it is the playing one
+ * (`aria-current`) and selected, its text as drawn, how many word spans it
+ * draws, which of them carry `transcript-word-current`, and the first span's
+ * computed transition. Read together so the lit word and the time are of the
+ * same moment.
+ */
+export function wordHighlightState() {
+  return source(`
+    const audio = document.querySelector('audio');
+    const rows = [...document.querySelectorAll('.note-detail .transcript .transcript-rows li')];
+    return {
+      time: audio ? audio.currentTime : null,
+      paused: audio ? audio.paused : null,
+      rows: rows.map((row) => {
+        const words = [...row.querySelectorAll('.transcript-text .transcript-word')];
+        return {
+          current: row.getAttribute('aria-current') === 'true',
+          selected: row.getAttribute('aria-selected') === 'true',
+          text: row.querySelector('.transcript-text')?.textContent ?? null,
+          words: words.length,
+          lit: words.flatMap((word, at) => word.classList.contains('transcript-word-current') ? [at] : []),
+          transition: words[0] ? getComputedStyle(words[0]).transitionDuration : null,
+        };
+      }),
+    };
+  `);
+}
+
+/** Records where the one recording was when its next seek began and when it ended, into `window.__seek`. */
+export function watchSeek() {
+  return source(`
+    const audio = document.querySelector('audio');
+    if (!audio) throw new Error('No recording on the page');
+    const seek = window.__seek = { seeking: null, seeked: null };
+    audio.addEventListener('seeking', () => { seek.seeking = audio.currentTime; }, { once: true });
+    audio.addEventListener('seeked', () => { seek.seeked = audio.currentTime; }, { once: true });
+    return true;
+  `);
+}
+
+/** What `watchSeek` recorded so far. */
+export function seekRecord() {
+  return source(`
+    return window.__seek ?? null;
+  `);
+}
+
+/* ------------------------------------------------------------ level meters */
+
+/**
+ * Every live sound-level meter on the page (KNEG-371): where it sits, its
+ * label on the Meetings page, what it shows (`data-level`, `data-lit`, and
+ * the lit segments actually drawn), whether it is hidden from assistive
+ * technology and has no `role`, its segments' transition, the lit and unlit
+ * colours, and its box against the window and the button it sits in, if any.
+ */
+export function levelMeters() {
+  return source(`
+    const box = (element) => {
+      if (!element) return null;
+      const rect = element.getBoundingClientRect();
+      return { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom, width: rect.width, height: rect.height };
+    };
+    return [...document.querySelectorAll('.level-meter')].map((meter) => {
+      const segment = meter.querySelector('.level-segment:not(.level-segment-lit)');
+      const lit = meter.querySelector('.level-segment-lit');
+      const host = meter.closest('button');
+      return {
+        className: meter.className,
+        label: meter.closest('.live-level')?.querySelector('.live-level-label')?.textContent.trim() ?? null,
+        level: Number(meter.dataset.level),
+        lit: Number(meter.dataset.lit),
+        litDrawn: meter.querySelectorAll('.level-segment-lit').length,
+        segments: meter.querySelectorAll('.level-segment').length,
+        ariaHidden: meter.getAttribute('aria-hidden'),
+        hiddenFromAssistiveTechnology: meter.closest('[aria-hidden="true"]') !== null,
+        role: meter.getAttribute('role'),
+        transition: getComputedStyle(meter.querySelector('.level-segment')).transitionDuration,
+        colours: {
+          unlit: segment ? getComputedStyle(segment).backgroundColor : null,
+          lit: lit ? getComputedStyle(lit).backgroundColor : null,
+        },
+        box: box(meter),
+        host: host ? { className: host.className, box: box(host) } : null,
+        viewport: { width: innerWidth, height: innerHeight },
+      };
+    });
+  `);
+}
+
+/** One reading through the dev console's `kw.level`, as a capture's publisher sends one. */
+export function emitLevel(level, session = "dictation", sourceName = "microphone") {
+  return source(`
+    if (!globalThis.kw?.level) throw new Error('The fixture dev console has no level');
+    globalThis.kw.level(${JSON.stringify(level)}, ${JSON.stringify(session)}, ${JSON.stringify(sourceName)});
+    return true;
+  `);
+}
+
+/** The dev console's fake levels for `session` (`kw.levels`): ten a second, or stopped with a last 0. */
+export function fakeLevels(session, running) {
+  return source(`
+    if (!globalThis.kw?.levels) throw new Error('The fixture dev console has no levels');
+    globalThis.kw.levels(${JSON.stringify(session)}, ${JSON.stringify(running)});
+    return true;
+  `);
+}
+
+/**
+ * Timestamps every change of what the first meter matching `selector` shows
+ * (its `data-level`), from now until `levelChanges` reads them.
+ */
+export function watchLevelChanges(selector) {
+  return source(`
+    window.__levelWatch?.disconnect();
+    const meter = document.querySelector(${JSON.stringify(selector)});
+    if (!meter) throw new Error('No meter matches ' + ${JSON.stringify(selector)});
+    const changes = window.__levelChanges = [];
+    window.__levelWatch = new MutationObserver(() => changes.push({ t: performance.now(), level: meter.dataset.level }));
+    window.__levelWatch.observe(meter, { attributes: true, attributeFilter: ['data-level'] });
+    return true;
+  `);
+}
+
+/** The changes `watchLevelChanges` saw, oldest first, and stops watching. */
+export function levelChanges() {
+  return source(`
+    window.__levelWatch?.disconnect();
+    return window.__levelChanges ?? [];
+  `);
+}
+
+/* -------------------------------------------------------- meeting microphone */
+
+/**
+ * The Meetings microphone check (KNEG-364): its live region and the lines in
+ * it (text and class), the meter beside them (hidden from assistive
+ * technology, its level), every failure line in the control bar with what
+ * its Details hold, and whether Start and Record this call are held.
+ */
+export function microphoneCheckState() {
+  return source(`
+    const text = (item) => item.textContent.trim();
+    const region = document.querySelector('.control-body .microphone-check');
+    const meter = region?.querySelector('.level-meter') ?? null;
+    const start = document.querySelector('.control-start');
+    const record = [...document.querySelectorAll('.call-card button')].find((item) => text(item) === 'Record this call');
+    return {
+      role: region?.getAttribute('role') ?? null,
+      lines: region ? [...region.querySelectorAll('p')].map((item) => ({ text: text(item), className: item.className })) : [],
+      meter: meter && {
+        hiddenFromAssistiveTechnology: meter.closest('[aria-hidden="true"]') !== null,
+        role: meter.getAttribute('role'),
+        level: Number(meter.dataset.level),
+        lit: Number(meter.dataset.lit),
+        segments: meter.querySelectorAll('.level-segment').length,
+      },
+      failures: [...document.querySelectorAll('.control-body > .failure-line')].map((line) => ({
+        role: line.getAttribute('role'),
+        text: line.querySelector('p.error') ? text(line.querySelector('p.error')) : null,
+        summary: line.querySelector('summary') ? text(line.querySelector('summary')) : null,
+        details: [...line.querySelectorAll('.learn-more-body')].map(text),
+      })),
+      start: start ? { disabled: start.disabled } : null,
+      record: record ? { disabled: record.disabled } : null,
+    };
+  `);
+}
+
+/** The live view's chips -- statements, not buttons -- with each one's label, hover and hidden text. */
+export function liveChips() {
+  return source(`
+    return [...document.querySelectorAll('.meeting-live .live-chips .chip')].map((chip) => ({
+      tag: chip.tagName.toLowerCase(),
+      label: chip.querySelector('.chip-label')?.textContent ?? null,
+      title: chip.getAttribute('title'),
+      srText: chip.querySelector('.sr-only')?.textContent ?? null,
+    }));
+  `);
+}
+
+/* ------------------------------------------------------------ local models */
+
+const LOCAL_SECTION = `document.querySelector('[data-surface="settings.transcription.local"]')`;
+
+/**
+ * Settings > Transcription's local models (KNEG-330): the section's headings
+ * and lists, each row (its own line, detail lines, button and Details), the
+ * language filter, the caveats and Learn more summaries, which of `ids` show
+ * outside a closed Details, and whether every Details is closed. "Shown" is
+ * every text node not inside a closed `details`' body.
+ */
+export function localModelsState(ids = []) {
+  return source(`
+    const section = ${LOCAL_SECTION};
+    if (!section) return null;
+    const text = (item) => item.textContent.trim();
+    const own = (item) => [...item.childNodes].filter((node) => node.nodeType === 3).map((node) => node.textContent).join('').trim();
+    const shown = [];
+    const walker = document.createTreeWalker(section, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const closed = node.parentElement?.closest('details:not([open])');
+      if (closed && !node.parentElement.closest('summary')) continue;
+      shown.push(node.textContent);
+    }
+    const shownText = shown.join(' ');
+    const select = section.querySelector('select[aria-label="Show models for"]');
+    const row = (label) => [...section.querySelectorAll(':scope > .row')]
+      .find((item) => item.querySelector('.row-label')?.textContent.trim() === label);
+    return {
+      headings: [...section.querySelectorAll('h2, h3, h4')].map((item) => item.tagName.toLowerCase() + ':' + text(item)),
+      lists: section.querySelectorAll('ul').length,
+      rows: [...section.querySelectorAll('ul.list > li')].map((li) => ({
+        line: own(li),
+        details: [...li.querySelectorAll(':scope > em.row-detail')].map((item) => ({ text: text(item), warn: item.classList.contains('warn') })),
+        button: li.querySelector(':scope > button') ? {
+          text: text(li.querySelector(':scope > button')),
+          pressed: li.querySelector(':scope > button').getAttribute('aria-pressed'),
+          marked: li.querySelector(':scope > button').classList.contains('marked'),
+        } : null,
+        more: [...li.querySelectorAll('.learn-more-body p')].map(text),
+      })),
+      filter: select ? {
+        value: select.value,
+        shown: select.selectedOptions[0]?.textContent.trim() ?? null,
+        options: [...select.options].map((option) => option.textContent.trim()),
+      } : null,
+      empty: [...section.querySelectorAll(':scope > p.muted')].map(text).filter((line) => line.startsWith('No model here')),
+      caveats: [...section.querySelectorAll('.caveat')].map(text),
+      summaries: [...section.querySelectorAll('details > summary')].map(text),
+      openDetails: section.querySelectorAll('details[open]').length,
+      idsShown: ${JSON.stringify(ids)}.filter((id) => shownText.includes(id)),
+      idsAnywhere: ${JSON.stringify(ids)}.filter((id) => section.textContent.includes(id)),
+      engines: ['Speech engine', 'Parakeet engine'].map((label) => row(label) ? label + ': ' + text(row(label).querySelector('.row-value')) : null),
+    };
+  `);
+}
+
+/** The value of Settings > Transcription's "Dictation goes to" row. */
+export function dictationGoesTo() {
+  return source(`
+    const row = [...document.querySelectorAll('.row')]
+      .find((item) => item.querySelector('.row-label')?.textContent.trim() === 'Dictation goes to');
+    return row ? row.querySelector('.row-value').firstChild?.textContent.trim() ?? null : null;
+  `);
+}
+
+/**
+ * Scrolls the button of the local model row whose line starts with `name` into
+ * the middle of the window, and gives its centre to press with a real pointer.
+ */
+export function localModelButton(name) {
+  return source(`
+    const wanted = ${JSON.stringify(name)};
+    const li = [...${LOCAL_SECTION}.querySelectorAll('ul.list > li')].find((item) => {
+      const line = [...item.childNodes].filter((node) => node.nodeType === 3).map((node) => node.textContent).join('').trim();
+      return line === wanted || line.startsWith(wanted + ' · ');
+    });
+    const button = li?.querySelector(':scope > button');
+    if (!button) throw new Error('No local model row has a button for ' + wanted);
+    button.scrollIntoView({ block: 'center' });
+    const rect = button.getBoundingClientRect();
+    return { x: (rect.left + rect.right) / 2, y: (rect.top + rect.bottom) / 2, text: button.textContent.trim() };
+  `);
+}
+
+/**
+ * Chooses `value` in the select named `label` as a person's choice reaches
+ * React: through the element's own value setter, then a bubbling change.
+ */
+export function chooseSelect(label, value) {
+  return source(`
+    const select = document.querySelector('select[aria-label=' + JSON.stringify(${JSON.stringify(label)}) + ']');
+    if (!select) throw new Error('No select is named ' + ${JSON.stringify(label)});
+    Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(select, ${JSON.stringify(value)});
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    return select.value;
+  `);
+}
+
+/** Opens (or closes) every Details in the local models section, for a measure that includes what they hold. */
+export function openLocalDetails(open) {
+  return source(`
+    const all = [...${LOCAL_SECTION}.querySelectorAll('details')];
+    for (const details of all) details.open = ${JSON.stringify(open)};
+    return all.length;
+  `);
+}
+
+/** How far the document, the card's `.split-main` and the local models section scroll sideways. */
+export function localModelsOverflow() {
+  return source(`
+    const main = document.querySelector('.card .split-main');
+    const section = ${LOCAL_SECTION};
+    const wide = section ? [...section.querySelectorAll('*')]
+      .filter((item) => item.getBoundingClientRect().right > (main?.getBoundingClientRect().right ?? innerWidth) + 0.5)
+      .map((item) => item.tagName.toLowerCase() + '.' + item.className + ':' + item.textContent.trim().slice(0, 40)) : [];
+    return {
+      innerWidth,
+      scrollWidth: document.scrollingElement.scrollWidth,
+      mainClientWidth: main?.clientWidth ?? null,
+      mainScrollWidth: main?.scrollWidth ?? null,
+      sectionClientWidth: section?.clientWidth ?? null,
+      sectionScrollWidth: section?.scrollWidth ?? null,
+      pastTheCard: wide.slice(0, 5),
     };
   `);
 }

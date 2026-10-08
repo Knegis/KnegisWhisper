@@ -43,9 +43,10 @@ pub const OUTCOME_EVENT: &str = "dictation-outcome";
 
 /// What the microphone thread is asked to do.
 enum MicCommand {
+    /// Answered with the new capture's level, for the meter (KNEG-371).
     Start {
         device: Option<String>,
-        reply: tokio::sync::oneshot::Sender<Result<(), String>>,
+        reply: tokio::sync::oneshot::Sender<Result<kw_audio_core::LevelReader, String>>,
     },
     Finish {
         reply: tokio::sync::oneshot::Sender<Result<kw_audio_core::Recording, String>>,
@@ -53,11 +54,17 @@ enum MicCommand {
     Cancel,
 }
 
+/// Hands a started recording's level to whatever shows it.
+type OnLevel = Box<dyn Fn(kw_audio_core::LevelReader) + Send + Sync>;
+
 /// Records from the microphone on a dedicated thread.
 pub struct MicRecorder {
     commands: mpsc::Sender<MicCommand>,
     /// The input device the user chose, or `None` for the system default.
     device: RwLock<Option<String>>,
+    /// Given each recording's level as it starts (KNEG-371). `build` points
+    /// it at the Dictation page's meter and the overlay's.
+    on_level: Option<OnLevel>,
 }
 
 impl std::fmt::Debug for MicRecorder {
@@ -86,7 +93,21 @@ impl MicRecorder {
         Self {
             commands: tx,
             device: RwLock::new(None),
+            on_level: None,
         }
+    }
+
+    /// Give each recording's level to `on_level` as it starts.
+    ///
+    /// The reader answers `None` once that recording is finished or
+    /// cancelled, so whatever it is handed to needs no stop of its own.
+    #[must_use]
+    pub fn with_on_level(
+        mut self,
+        on_level: impl Fn(kw_audio_core::LevelReader) + Send + Sync + 'static,
+    ) -> Self {
+        self.on_level = Some(Box::new(on_level));
+        self
     }
 
     /// Choose the input device. Takes effect on the next recording.
@@ -113,8 +134,9 @@ impl MicRecorder {
                     let started = kw_audio_core::Capture::start(device.as_deref());
                     let answer = match started {
                         Ok(capture) => {
+                            let level = capture.level();
                             active = Some(capture);
-                            Ok(())
+                            Ok(level)
                         }
                         Err(err) => Err(err.to_string()),
                     };
@@ -156,9 +178,14 @@ impl MicRecorder {
 impl Recorder for MicRecorder {
     async fn start(&self) -> Result<(), DictationError> {
         let device = self.preferred_device();
-        self.ask(|reply| MicCommand::Start { device, reply })
+        let level = self
+            .ask(|reply| MicCommand::Start { device, reply })
             .await
-            .map_err(DictationError::Microphone)
+            .map_err(DictationError::Microphone)?;
+        if let Some(on_level) = &self.on_level {
+            on_level(level);
+        }
+        Ok(())
     }
 
     async fn finish(&self) -> Result<Capture, DictationError> {
@@ -766,7 +793,19 @@ impl DictationRuntime {
             generation: local_llm,
         } = local;
 
-        let recorder = Arc::new(MicRecorder::spawn());
+        // Each recording's level goes to the Dictation page and the overlay
+        // as an event, and stops with the recording (KNEG-371).
+        let recorder = Arc::new(MicRecorder::spawn().with_on_level({
+            let app = app.clone();
+            move |reader| {
+                crate::audio_level::publish(
+                    &app,
+                    crate::audio_level::LevelSession::Dictation,
+                    crate::audio_level::LevelSource::Microphone,
+                    reader,
+                );
+            }
+        }));
         let state = Arc::new(RwLock::new(SessionState::Idle));
 
         let session = kw_app_core::dictation::Dictation::new(
@@ -948,36 +987,41 @@ pub struct RouteReport {
     pub leaves_device: bool,
     /// Present when the route cannot be resolved at all.
     pub problem: Option<String>,
+    /// The language a cloud route sends with the audio, as `route::resolve`
+    /// settled it from Dictation's languages and each provider's own rule
+    /// (xAI and Mistral drop one outside the languages they list, Corti
+    /// needs one). `None` where the
+    /// provider detects the language itself, on the local route, which reads
+    /// the languages on its own, and on a route with a problem (KNEG-370).
+    /// Read rather than re-derived, so a screen never repeats those rules.
+    pub cloud_language: Option<String>,
 }
 
-/// Describe the resolved transcription route.
-#[tauri::command]
-pub async fn dictation_route(
-    runtime: tauri::State<'_, Arc<DictationRuntime>>,
-) -> Result<RouteReport, String> {
-    let registry = kw_provider_registry::registry().map_err(|err| err.to_string())?;
-    let settings = runtime.route_settings().await;
-
-    match kw_transcription_core::route::resolve(
-        registry,
-        &settings,
-        &kw_transcription_core::RouteRequest::default(),
-    ) {
-        Ok(Transport::Local { .. }) => Ok(RouteReport {
+/// Describe a resolved route for the screen.
+fn route_report(resolved: Result<Transport, kw_transcription_core::RouteError>) -> RouteReport {
+    match resolved {
+        Ok(Transport::Local { .. }) => RouteReport {
             destination: "local model".to_owned(),
             is_local: true,
             leaves_device: false,
             problem: None,
-        }),
-        Ok(Transport::ProviderClient { provider, .. }) => Ok(RouteReport {
+            cloud_language: None,
+        },
+        Ok(Transport::ProviderClient {
+            provider, language, ..
+        }) => RouteReport {
             destination: format!("{provider:?}").to_lowercase(),
             is_local: false,
             leaves_device: true,
             problem: None,
-        }),
+            cloud_language: language,
+        },
         Ok(Transport::HttpBatch {
-            provider, endpoint, ..
-        }) => Ok(RouteReport {
+            provider,
+            endpoint,
+            language,
+            ..
+        }) => RouteReport {
             // The endpoint matters: a self-hosted route on the user's own
             // network leaves this machine but not their control, and lumping it
             // in with a cloud provider would be misleading either way.
@@ -991,14 +1035,31 @@ pub async fn dictation_route(
             destination: provider,
             is_local: false,
             problem: None,
-        }),
-        Err(err) => Ok(RouteReport {
+            cloud_language: language,
+        },
+        Err(err) => RouteReport {
             destination: "nowhere".to_owned(),
             is_local: false,
             leaves_device: false,
             problem: Some(err.to_string()),
-        }),
+            cloud_language: None,
+        },
     }
+}
+
+/// Describe the resolved transcription route.
+#[tauri::command]
+pub async fn dictation_route(
+    runtime: tauri::State<'_, Arc<DictationRuntime>>,
+) -> Result<RouteReport, String> {
+    let registry = kw_provider_registry::registry().map_err(|err| err.to_string())?;
+    let settings = runtime.route_settings().await;
+
+    Ok(route_report(kw_transcription_core::route::resolve(
+        registry,
+        &settings,
+        &kw_transcription_core::RouteRequest::default(),
+    )))
 }
 
 /// Send dictations to the local model, or stop doing so.
@@ -1020,17 +1081,15 @@ pub async fn dictation_use_local(
         .map_err(|err| err.to_string())
 }
 
-/// Local decoder languages, independent of cloud-provider preferences.
+/// Dictation's languages, read by every route but a Parakeet model: local
+/// Whisper decodes with them, and a cloud route is sent the one when exactly
+/// one is chosen (KNEG-370, `RouteSettings::local_languages`). Imports share
+/// them, as they share the route. The command keeps its first name.
 #[tauri::command]
 pub async fn dictation_local_language(
     runtime: tauri::State<'_, Arc<DictationRuntime>>,
 ) -> Result<Vec<String>, String> {
-    let settings = runtime.route_settings().await;
-    Ok(if settings.local_languages.is_empty() {
-        settings.local_language.into_iter().collect()
-    } else {
-        settings.local_languages
-    })
+    Ok(runtime.route_settings().await.dictation_languages())
 }
 fn validated_local_languages(languages: Vec<String>) -> Result<Vec<String>, String> {
     if languages.len() > 2 {
@@ -1401,6 +1460,57 @@ mod tests {
     }
     use super::*;
 
+    /* ------------------------------------ the language a route sends (KNEG-370) */
+
+    #[test]
+    fn the_route_report_names_the_language_sent_only_on_a_cloud_route() {
+        use kw_transcription_core::{Auth, ProviderClientKind, RouteError};
+
+        let local = route_report(Ok(Transport::Local {
+            languages: vec!["sv".into()],
+        }));
+        assert!(local.is_local);
+        assert_eq!(local.cloud_language, None, "local Whisper is not sent one");
+
+        let batch = route_report(Ok(Transport::HttpBatch {
+            provider: "openai".into(),
+            endpoint: "https://api.openai.com/v1/audio/transcriptions".into(),
+            model: "whisper-1".into(),
+            auth: Auth::none(),
+            max_upload_bytes: None,
+            language: Some("sv".into()),
+        }));
+        assert_eq!(batch.destination, "openai");
+        assert_eq!(batch.cloud_language.as_deref(), Some("sv"));
+
+        let detecting = route_report(Ok(Transport::HttpBatch {
+            provider: "openai".into(),
+            endpoint: "https://api.openai.com/v1/audio/transcriptions".into(),
+            model: "whisper-1".into(),
+            auth: Auth::none(),
+            max_upload_bytes: None,
+            language: None,
+        }));
+        assert_eq!(detecting.cloud_language, None);
+
+        let client = route_report(Ok(Transport::ProviderClient {
+            provider: ProviderClientKind::Corti,
+            model: Some("corti-transcribe".into()),
+            language: Some("en".into()),
+            max_upload_bytes: None,
+            corti: None,
+        }));
+        assert_eq!(client.destination, "corti");
+        assert_eq!(client.cloud_language.as_deref(), Some("en"));
+
+        let failed = route_report(Err(RouteError::SelfHostedNotConfigured));
+        assert!(failed.problem.is_some());
+        assert_eq!(
+            failed.cloud_language, None,
+            "nothing is sent on a failed route"
+        );
+    }
+
     /* ------------------------------- a press during a model switch (KNEG-388) */
 
     #[test]
@@ -1696,7 +1806,10 @@ mod tests {
         assert_eq!(cleanup.clean("um, hello there").await, "um, hello there");
     }
 
+    // Ignored so `cargo test` never opens the microphone on its own, where
+    // there is one: run it by hand with `--ignored`.
     #[tokio::test]
+    #[ignore = "opens the real microphone"]
     async fn the_microphone_thread_answers_even_with_no_microphone() {
         // CI has no input device. The point is that the thread replies rather
         // than hanging, so a dictation fails with a message instead of wedging
@@ -1708,6 +1821,44 @@ mod tests {
                 recorder.cancel().await;
             }
             Err(err) => assert!(matches!(err, DictationError::Microphone(_))),
+        }
+    }
+
+    /// A recording that starts hands its level to the meter once, and that
+    /// level ends with the recording (KNEG-371). Like the test above it opens
+    /// the real default microphone where there is one, and is ignored for
+    /// the same reason; on a machine with none, the start fails and nothing
+    /// is handed over.
+    #[tokio::test]
+    #[ignore = "opens the real microphone"]
+    async fn a_started_recording_hands_its_level_over_and_it_ends_with_the_recording() {
+        let handed = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorder = MicRecorder::spawn().with_on_level({
+            let handed = Arc::clone(&handed);
+            move |reader| handed.lock().unwrap().push(reader)
+        });
+
+        if recorder.start().await.is_err() {
+            assert!(handed.lock().unwrap().is_empty(), "no recording, no level");
+            return;
+        }
+        let reader = {
+            let handed = handed.lock().unwrap();
+            assert_eq!(handed.len(), 1, "one level per recording started");
+            handed[0].clone()
+        };
+        assert!(reader.take().is_some(), "the recording is running");
+
+        recorder.cancel().await;
+        // `cancel` is a message to the microphone thread, which drops the
+        // capture when it reads it.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while reader.take().is_some() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the level outlived the cancelled recording"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
     }
 

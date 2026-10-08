@@ -1,13 +1,17 @@
 //! Typed meeting notes live in memory and beside the WAV for crash durability.
 //!
-//! An interrupted meeting's `.notes.md` sidecar can be recovered from Settings
-//! > Meetings with its orphan WAV. It is session data, not a settings key.
+//! An interrupted meeting's `.notes.md` sidecar can be recovered from the
+//! Meetings page with its orphan WAV. It is session data, not a settings key.
+//! So is the `.meeting.json` beside it, the name and folder chosen before
+//! Start (KNEG-365) and whether the recording is deleted once saved (KNEG-409).
 
 use std::{
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 use tauri::{Runtime, State, WebviewWindow};
+
+use super::MeetingPlan;
 
 /// The notes typed in the meeting panel while a meeting runs.
 #[derive(Debug, Default)]
@@ -92,12 +96,80 @@ pub fn sidecar_path(recording: &Path) -> PathBuf {
     recording.with_extension("notes.md")
 }
 
-/// Remove the sidecar after the notes are safely saved or discarded.
+/// `x.wav` becomes `x.meeting.json`: the meeting's plan, its name and folder
+/// (KNEG-365) and its delete choice (KNEG-409), beside the recording for the
+/// same reason the notes are.
+pub fn plan_path(recording: &Path) -> PathBuf {
+    recording.with_extension("meeting.json")
+}
+
+/// Write the meeting's plan beside its recording: to a temporary file, then
+/// renamed over the plan, so a crash mid-write never leaves half of one.
+pub fn write_plan(recording: &Path, plan: &MeetingPlan) -> Result<(), String> {
+    let target = plan_path(recording);
+    let mut tmp_name = target.as_os_str().to_os_string();
+    tmp_name.push(".tmp");
+    let tmp = PathBuf::from(tmp_name);
+    let json = serde_json::to_vec(plan).map_err(|e| e.to_string())?;
+    std::fs::write(&tmp, json).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, &target).map_err(|e| e.to_string())
+}
+
+/// The plan beside `recording`, or `None` when there is none to read: a
+/// recording made before plans existed, a plan whose write failed, or one
+/// that is not a regular file or not a plan, which is also logged.
+pub fn read_plan(recording: &Path) -> Option<MeetingPlan> {
+    let path = plan_path(recording);
+    match std::fs::symlink_metadata(&path) {
+        Ok(metadata) if metadata.is_file() => {}
+        Ok(_) => {
+            tracing::warn!(path = %path.display(), "the meeting plan is not a regular file; ignoring it");
+            return None;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(error) => {
+            tracing::warn!(%error, path = %path.display(), "could not inspect the meeting plan");
+            return None;
+        }
+    }
+    let read = std::fs::read(&path)
+        .map_err(|error| error.to_string())
+        .and_then(|bytes| serde_json::from_slice(&bytes).map_err(|error| error.to_string()));
+    match read {
+        Ok(plan) => Some(plan),
+        Err(error) => {
+            tracing::warn!(%error, path = %path.display(), "could not read the meeting plan; ignoring it");
+            None
+        }
+    }
+}
+
+/// Remove the typed notes' sidecar once the notes are safely saved or have
+/// nothing in them. The plan stays: see [`remove_sidecars`].
 pub fn remove_sidecar(recording: &Path) {
-    let sidecar = sidecar_path(recording);
-    if let Err(error) = std::fs::remove_file(&sidecar) {
+    remove_quietly(&sidecar_path(recording), "meeting notes sidecar");
+}
+
+/// Remove both sidecars, the notes and the plan, once the recording no longer
+/// needs them: it belongs to a saved note, or it was deleted. Where the
+/// recording is left with no note -- offered for recovery -- only
+/// [`remove_sidecar`] runs, so the recovered note still gets its name, folder
+/// and delete choice.
+pub fn remove_sidecars(recording: &Path) {
+    remove_sidecar(recording);
+    remove_plan(recording);
+}
+
+/// Remove the plan alone: the recording it describes is gone, but the typed
+/// notes beside it could not be saved and stay on disk.
+pub fn remove_plan(recording: &Path) {
+    remove_quietly(&plan_path(recording), "meeting plan");
+}
+
+fn remove_quietly(path: &Path, what: &str) {
+    if let Err(error) = std::fs::remove_file(path) {
         if error.kind() != std::io::ErrorKind::NotFound {
-            tracing::warn!(%error, path = %sidecar.display(), "could not remove meeting notes sidecar");
+            tracing::warn!(%error, path = %path.display(), "could not remove the {what}");
         }
     }
 }
@@ -168,6 +240,98 @@ mod tests {
             sidecar_path(Path::new("x.wav")),
             PathBuf::from("x.notes.md")
         );
+    }
+
+    /* ------------------------------------------------------- the plan (KNEG-365) */
+
+    #[test]
+    fn the_plan_sits_beside_the_recording_as_meeting_json() {
+        assert_eq!(
+            plan_path(Path::new("x.wav")),
+            PathBuf::from("x.meeting.json")
+        );
+    }
+
+    #[test]
+    fn a_plan_written_beside_the_recording_reads_back_as_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let wav = dir.path().join("x.wav");
+        let plan = MeetingPlan {
+            title: Some("Board review".into()),
+            folder_id: Some(3),
+            delete_recording: true,
+        };
+        write_plan(&wav, &plan).unwrap();
+        assert_eq!(read_plan(&wav), Some(plan));
+        // Replaced, not appended to, and no temporary file left behind.
+        write_plan(&wav, &MeetingPlan::default()).unwrap();
+        assert_eq!(read_plan(&wav), Some(MeetingPlan::default()));
+        let names: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(names, ["x.meeting.json"]);
+    }
+
+    #[test]
+    fn a_missing_or_unreadable_plan_is_no_plan() {
+        let dir = tempfile::tempdir().unwrap();
+        let wav = dir.path().join("x.wav");
+        assert_eq!(read_plan(&wav), None);
+        std::fs::write(plan_path(&wav), b"{ not json").unwrap();
+        assert_eq!(read_plan(&wav), None);
+        std::fs::write(plan_path(&wav), b"[1, 2]").unwrap();
+        assert_eq!(read_plan(&wav), None);
+    }
+
+    #[test]
+    fn a_plan_missing_fields_reads_with_their_defaults() {
+        // A plan written before a field existed still reads. One from before
+        // KNEG-409 has no delete choice, and reads as keeping the recording.
+        let dir = tempfile::tempdir().unwrap();
+        let wav = dir.path().join("x.wav");
+        std::fs::write(plan_path(&wav), br#"{"title":"Standup","folderId":4}"#).unwrap();
+        assert_eq!(
+            read_plan(&wav),
+            Some(MeetingPlan {
+                title: Some("Standup".into()),
+                folder_id: Some(4),
+                delete_recording: false,
+            })
+        );
+        std::fs::write(plan_path(&wav), b"{}").unwrap();
+        assert_eq!(read_plan(&wav), Some(MeetingPlan::default()));
+    }
+
+    #[test]
+    fn removing_the_sidecars_removes_the_notes_and_the_plan() {
+        let dir = tempfile::tempdir().unwrap();
+        let wav = dir.path().join("x.wav");
+        std::fs::write(&wav, b"audio").unwrap();
+        std::fs::write(sidecar_path(&wav), b"typed").unwrap();
+        write_plan(&wav, &MeetingPlan::default()).unwrap();
+
+        remove_sidecars(&wav);
+        assert!(!sidecar_path(&wav).exists());
+        assert!(!plan_path(&wav).exists());
+        assert!(wav.exists(), "the recording is not a sidecar");
+        // Nothing to remove is not a failure.
+        remove_sidecars(&wav);
+    }
+
+    #[test]
+    fn removing_the_plan_leaves_the_typed_notes() {
+        // Discard's notes that could not be saved stay on disk; the plan
+        // beside them describes a recording that is gone.
+        let dir = tempfile::tempdir().unwrap();
+        let wav = dir.path().join("x.wav");
+        std::fs::write(sidecar_path(&wav), b"typed").unwrap();
+        write_plan(&wav, &MeetingPlan::default()).unwrap();
+
+        remove_plan(&wav);
+        assert!(sidecar_path(&wav).exists());
+        assert!(!plan_path(&wav).exists());
+        remove_plan(&wav);
     }
 }
 

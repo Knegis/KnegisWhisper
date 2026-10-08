@@ -1,4 +1,4 @@
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { attachNoteRecording, getNoteRecording, getNoteSpeakerSuggestions, getNoteTranscriptRows, renameNoteSpeaker, updateNote, type Note, type NoteUpdate } from "../lib/ipc";
 import { useAutosave, type AutosaveStatus } from "../lib/useAutosave";
@@ -9,6 +9,7 @@ import { hasStoredTranscript, noteMeta } from "../lib/noteMeta";
 import { message } from "../lib/useRefresh";
 import { Icon } from "./Icon";
 import { NoteEditor } from "./NoteEditor";
+import { NotePeople } from "./NotePeople";
 import { SummaryPane, type SummaryPaneHandle } from "./SummaryPane";
 import { RecordingPlayer, type PlayerPosition, type RecordingPlayerHandle } from "./RecordingPlayer";
 import { TranscriptPanel } from "./TranscriptPanel";
@@ -194,8 +195,10 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
   const columnHiddenNow = useRef(columnHidden);
   // A note with no transcript has no column to show: a wide window gave a plain note a 340px one
   // saying "This note has no transcript." (KNEG-377). Read from the note, so it is right on the
-  // first frame, and kept in a ref for the media listener.
-  const hasTranscript = hasStoredTranscript(note.transcript);
+  // first frame, and kept in a ref for the media listener. Parsed once per transcript, not on every
+  // render: playback renders about four times a second, and an hour's transcript with its word
+  // timings is over half a megabyte (KNEG-408).
+  const hasTranscript = useMemo(() => hasStoredTranscript(note.transcript), [note.transcript]);
   const hasTranscriptNow = useRef(hasTranscript);
   useLayoutEffect(() => { hasTranscriptNow.current = hasTranscript; }, [hasTranscript]);
   // The layout, rather than the width: a window at the width with the column hidden lays the note
@@ -405,6 +408,10 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
     setPlaybackStarted(true); playerRef.current?.playInterval(start, end);
   }, []);
   const onPlayingChange = useCallback((value: boolean) => { setPlaying(value); if (value) setPlaybackStarted(true); }, []);
+  // For a transcript row highlighting word by word, and a word clicked (KNEG-408). Read through the
+  // ref, so whichever slot the one player is drawn in answers.
+  const playerTime = useCallback(() => playerRef.current?.time() ?? null, []);
+  const seek = useCallback((seconds: number) => { playerRef.current?.seek(seconds); }, []);
   // The Transcript at row `index`, selected and in view, and nothing else. False when the save
   // failed or the note has gone.
   const openRow = async (index: number): Promise<boolean> => {
@@ -441,11 +448,12 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
     autosave.schedule({ content });
   };
 
-  const { date, minutes, participants } = noteMeta(note, []);
+  const { date, minutes, transcribed } = noteMeta(note, []);
   const recordingDetails = note.recordingDetails && <details className="recording-details" open><summary>Recording details</summary><p>{note.recordingDetails}</p></details>;
   const transcriptBody = transcriptError ? <p className="error" role="alert">{transcriptError} <button type="button" onClick={() => { void loadTranscript(); }}>Retry</button></p> : !transcript ? <p role="status">Loading transcript and recording…</p> : transcript.rows.length ?
     <TranscriptPanel sourceRequest={sourceRequest} onSourceShown={clearSource} rows={transcript.rows}
       recording={transcript.recording} currentTime={currentTime} playing={playing} visible={wide || tab === "transcript"} playInterval={playInterval}
+      time={playerTime} seek={seek}
       suggestions={transcript.suggestions} onRename={async (speakerId, name) => {
         await renameNoteSpeaker(note.id, speakerId, name);
         // Rust resolves display names for both rows and export; reload those rows after each edit.
@@ -466,12 +474,15 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
             const value = event.target.value; draft.current.title = value; setTitle(value);
             autosave.schedule({ title: value.trim() || "Untitled note", content: draft.current.content });
           }} onBlur={normalizeTitle} />
-          {date !== null || minutes !== null || participants.length > 0 ? <ul className="note-meta">
+          {/* Always drawn: the people item is always there, so a note with nobody on it can be given someone (KNEG-362). */}
+          <ul className="note-meta">
             {date === null ? null : <li><Icon name="calendar" size={15} />{date.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}, {timeOfDay(date)}</li>}
             {/* At least a minute, as the Meetings list rounds it: a 20-second recording is not "0 min". */}
             {minutes === null ? null : <li><Icon name="clock" size={15} />{Math.max(1, minutes)} min</li>}
-            {participants.length === 0 ? null : <li><Icon name="meetings" size={15} /><span className="sr-only">Participants: </span>{participants.join(", ")}</li>}
-          </ul> : null}
+            <NotePeople noteId={note.id} participants={note.participants} onSaved={reload} />
+            {/* Where the transcript was made (KNEG-368). Notes saved before it was recorded say nothing. */}
+            {transcribed === null ? null : <li><Icon name="computer" size={15} />{transcribed}</li>}
+          </ul>
         </header>
         <div className="note-controls">
           <div className="summary-tabs note-tabs" role="tablist" aria-label="Note view">

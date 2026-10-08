@@ -125,9 +125,14 @@ copy here would be a second thing to keep in step.
 
 ## Things worth not getting wrong
 
-- **Deletions are real and immediate**, and the content is the user's own
-  dictation. Ask before `notes delete`, `history delete`, or their tool
-  equivalents, unless that is exactly what was requested.
+- **`notes delete` moves the note to Trash; `history delete` is real and
+  immediate.** A note in Trash keeps its text and recording until the user
+  restores it or empties Trash in the app -- nothing empties it on its own --
+  and from then on both tools treat it as gone: `notes get` exits 3, and list
+  and search leave it out. Neither tool can restore a note or delete one for
+  good. The content is the user's own either way: ask before `notes delete`,
+  `history delete`, or their tool equivalents, unless that is exactly what was
+  requested.
 - **Never print the bearer token** out of `~/.knegiswhisper/local-api.json`, and
   do not read that file yourself when a CLI command will do — both tools already
   handle it.

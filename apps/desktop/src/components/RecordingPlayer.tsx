@@ -28,6 +28,18 @@ export type RecordingPlayerHandle = {
    */
   position: () => PlayerPosition | null;
   resume: (from: PlayerPosition) => void;
+  /**
+   * The recording's time now, read from the element rather than from the
+   * last `timeupdate` (four a second), for a transcript row highlighting word
+   * by word on every animation frame (KNEG-408). `null` with no player.
+   */
+  time: () => number | null;
+  /**
+   * Go to `seconds`, playing on if it was playing: a word of the transcript
+   * clicked (KNEG-408). A row or selection being played still stops at its
+   * end when `seconds` is inside it, and plays on when it is past it.
+   */
+  seek: (seconds: number) => void;
 };
 
 type RecordingPlayerProps = {
@@ -154,6 +166,16 @@ export const RecordingPlayer = forwardRef<RecordingPlayerHandle, RecordingPlayer
             else clearIntervalPlayback();
           });
         },
+        time: () => audioRef.current?.currentTime ?? null,
+        seek: (seconds) => {
+          const audio = audioRef.current;
+          if (audio === null) return;
+          const end = intervalEndRef.current;
+          if (end !== null && seconds >= end) clearIntervalPlayback();
+          audio.currentTime = seconds;
+          setCurrentTime(seconds);
+          onCurrentTime(seconds);
+        },
       }),
       [beginIntervalCheck, clearIntervalPlayback, onCurrentTime, play],
     );
@@ -208,8 +230,10 @@ export const RecordingPlayer = forwardRef<RecordingPlayerHandle, RecordingPlayer
 
     return (
       <div className={`recording-player${compact ? " recording-player-compact" : ""}`} aria-label="Recording player">
-        {/* Browser dev fixtures intentionally have no recording server, so this
-            error state is expected outside Tauri rather than hidden. */}
+        {/* In browser dev the fixtures answer this URL with a two-minute WAV
+            for every note that has a recording (`lib/devFixtures.ts`'
+            `servePlayableRecordings`, KNEG-412), so the player plays there
+            too; an id they have no recording for fails as Rust's 404 would. */}
         <audio ref={audioRef} preload="metadata" src={recordingSrc(noteId)} className="recording-audio" />
         <button
           type="button"

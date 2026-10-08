@@ -13,22 +13,57 @@ time, so the model chosen for long recordings is also the one dictation uses, an
 the screen says so under the list. A separate model for long recordings was
 considered and not built (KNEG-407).
 
-The **Whisper dictation languages** picker is available in Settings, from the
-language chip on the Dictation page while dictation uses a local Whisper model,
-and from the `>` button beside the floating microphone. Pick one or two
-languages, or choose Detect automatically to clear the selection. The choice
-persists and stays in sync between all three. A single language forces that
-decoder language. Two languages first run local language detection, then decode
-using whichever selected language has the highest reported probability. This
-adds a detection pass and chooses one language per dictation; it does not
-guarantee accurate language switching within one sentence. If neither selected
-language has a reported score, the app asks for automatic detection or a single
-language.
+The **dictation languages** picker is available in Settings > Transcription,
+under where dictation goes, from the language chip on the Dictation page on every
+route but a Parakeet model's, and from the `>` button beside the floating
+microphone. Pick one or two languages, or choose Detect automatically to clear
+the selection. The choice persists and stays in sync between all three. On local
+Whisper a single language forces that decoder language. Two languages first run
+local language detection, then decode using whichever selected language has the
+highest reported probability. This adds a detection pass and chooses one
+language per dictation; it does not guarantee accurate language switching within
+one sentence. If neither selected language has a reported score, the app asks
+for automatic detection or a single language.
 
 Supported choices are Swedish, English, Danish, Norwegian, Finnish, German,
-French, and Spanish. The setting applies to local Whisper dictation; other local
-engines retain their model-defined languages. Changing this setting does not
-restart the model or change cloud-provider language preferences.
+French, and Spanish. Parakeet models keep their model-defined languages, and the
+picker is off while one is in use. Changing this setting does not restart the
+model.
+
+The same choice applies to cloud dictation and to imports, which share the
+dictation route (KNEG-370): a cloud provider is sent the language when exactly one
+is chosen, and detects it itself when none or two are. Three provider rules apply
+on top, in `route::resolve`:
+
+- xAI is not told a language outside the 25 it accepts (`XAI_STT_LANGUAGES`).
+  Norwegian and Finnish, two of the eight here, are not among them.
+- Mistral is not told a language outside the 13 its transcription documentation
+  lists (`MISTRAL_STT_LANGUAGES`). Swedish, Danish, Norwegian and Finnish are not
+  among them, so Mistral goes on detecting those itself, as it did for every
+  dictation before KNEG-370.
+- Corti, which needs a language, is told English unless exactly one is chosen.
+
+The line under the picker says which applies, read from the language the resolved
+route carries (`RouteReport.cloud_language`).
+
+What each provider does with the language is known to three different degrees.
+No cloud dictation with a chosen language has been run against a live provider.
+
+- **Documented:**
+  - Corti's language page (<https://docs.corti.ai/stt/languages>, read
+    2026-10-08) lists all eight codes for Transcribe. English, Danish, German and
+    French are Premier; Swedish, Norwegian (`no`), Finnish and Spanish are
+    Enhanced.
+  - Mistral's (<https://docs.mistral.ai/capabilities/audio_transcription>, read
+    the same day) lists English, Spanish, French and German of the eight, and
+    none of the other four, which are now filtered. It does not say what an
+    unlisted language would do.
+- **Believed:** OpenAI, Groq, Berget and a self-hosted or custom server are
+  Whisper-based and take ISO-639-1 codes. That they accept all eight is assumed,
+  not tried.
+- **By hand:** xAI is now sent `format=true` (inverse text normalisation) whenever
+  it is sent a language (`clients.rs`, the xAI arm). Before KNEG-370 it never was,
+  so numbers and dates on xAI dictations may now be written differently.
 
 These are KBLab's official default Stage 2 GGML Q5 models, specialized for Swedish.
 They supplement the existing Whisper models. The downloads are approximately

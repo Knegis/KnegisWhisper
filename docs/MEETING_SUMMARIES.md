@@ -20,7 +20,17 @@ that a model's claim is correct. Generated Markdown is escaped before rendering.
 Summary edits autosave independently. Regeneration asks before replacing edited or
 imported summaries and keeps the old content until successful. Copy, Export Markdown
 and Export text apply to the summary. Transcript changes mark a summary outdated and
-disable its old source links. Imported legacy summaries remain editable.
+disable its old source links, and so do changes to the note's people, which can be
+edited since KNEG-362. Only a summary being made when the people change is stopped,
+with "Generation stopped because the note, summary or job changed." under Retry
+summary; the retry starts over, since its saved progress was for the old people. A
+summary still queued -- the automatic one queued when a meeting is saved, which is when
+people get added -- takes the note's people as they are when it starts, keeping its
+saved progress only if they are unchanged. Imported legacy summaries remain editable.
+
+The model is told the note's people as spelling help: their display names,
+comma-separated and at most 256 characters, and never an email address (KNEG-362). A
+name holding an `@` is taken for an address and left out.
 
 ## Implementation
 
@@ -40,8 +50,9 @@ Long transcripts are extracted in bounded sections, then combined pairwise until
 summary remains. Completed extracts are persisted. Queued work survives restart;
 processing jobs become Interrupted and require explicit Retry. Checkpoints are reused
 only with unchanged settings and source. Stale or cancelled results cannot overwrite
-newer edits, changed sources or deleted notes. A failed summary never rolls back the
-saved transcript, note or recording.
+newer edits, changed sources or deleted notes. Moving a note to Trash cancels a summary
+queued or being made for it, and a note in Trash can't be summarized until it is restored
+(KNEG-401). A failed summary never rolls back the saved transcript, note or recording.
 
 Summary requests have a separate 600-second timeout per request. Empty, refused,
 truncated, invalid-JSON and unknown-source responses fail visibly without automatic

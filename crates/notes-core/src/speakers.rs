@@ -28,8 +28,8 @@ pub async fn mappings(
 }
 
 /// Name one speaker of one note. Whitespace is collapsed; an empty name removes
-/// the mapping. Returns false for a missing note or a blank speaker id, and
-/// writes nothing in either case.
+/// the mapping. Returns false for a missing note, a note in Trash (KNEG-401)
+/// or a blank speaker id, and writes nothing in any of them.
 pub async fn rename(
     pool: &SqlitePool,
     note_id: i64,
@@ -40,11 +40,12 @@ pub async fn rename(
         return Ok(false);
     }
     let mut tx = pool.begin().await?;
-    let exists = sqlx::query_scalar::<_, i64>("SELECT 1 FROM notes WHERE id = ?")
-        .bind(note_id)
-        .fetch_optional(&mut *tx)
-        .await?
-        .is_some();
+    let exists =
+        sqlx::query_scalar::<_, i64>("SELECT 1 FROM notes WHERE id = ? AND trashed_at IS NULL")
+            .bind(note_id)
+            .fetch_optional(&mut *tx)
+            .await?
+            .is_some();
     if !exists {
         return Ok(false);
     }
@@ -72,8 +73,9 @@ pub async fn rename(
 }
 
 /// Participants first, then names from other notes in most recently updated
-/// note order. Each spelling appears once, and names already assigned to this
-/// note are omitted. A missing note has no suggestions.
+/// note order -- not from notes in Trash (KNEG-401). Each spelling appears
+/// once, and names already assigned to this note are omitted. A missing note
+/// has no suggestions.
 pub async fn suggestions(pool: &SqlitePool, note_id: i64) -> Result<Vec<String>, StorageError> {
     let Some(note) = crate::notes::get(pool, note_id).await? else {
         return Ok(Vec::new());
@@ -87,7 +89,7 @@ pub async fn suggestions(pool: &SqlitePool, note_id: i64) -> Result<Vec<String>,
     };
     let others: Vec<(String,)> = sqlx::query_as(
         "SELECT sm.display_name FROM speaker_mappings sm \
-         JOIN notes n ON n.id = sm.note_id WHERE sm.note_id != ? \
+         JOIN notes n ON n.id = sm.note_id WHERE sm.note_id != ? AND n.trashed_at IS NULL \
          ORDER BY n.updated_at DESC, n.id DESC, sm.speaker_id",
     )
     .bind(note_id)

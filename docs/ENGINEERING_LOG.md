@@ -12,6 +12,139 @@ maintained in place rather than appended to, because its purpose is to be curren
 
 ---
 
+## 2026-10-08 — twelve issues on one branch, two migrations, and the builds that will refuse the profile
+
+Branch `twelve-issues`, from local `dev` at fd025b3: twelve issues, each reviewed as it landed,
+then a whole-branch review. The owner's answers of 2026-10-07 settled KNEG-409, 370, 408, 401 and
+362; the other seven were approved as their issues describe them.
+
+**What landed.**
+- **KNEG-412** (078878a): a playable fixture recording and the playback check; Meetings' Start
+  asks for system audio only when it is available, as the call card does.
+- **KNEG-418** (eb6a9ed): Stop recording anyway and Discard anyway when the meeting window doesn't
+  answer the request to save its notes.
+- **KNEG-365** (c3fb665): a meeting is named and filed before Start. Both live in the Rust session
+  and a `.meeting.json` beside the WAV, so Stop from the meeting window and recovery keep them.
+- **KNEG-409** (072328e, fede446, and the final fixes): Settings › Meetings can delete each
+  recording once its note is saved with a whole transcript, and only after a full WAL checkpoint
+  shows the note is on disk. The note's recording details say whether it was deleted, kept, or
+  couldn't be deleted.
+- **KNEG-371** (9fae57e): live sound-level meters for dictation, meetings and the overlay.
+- **KNEG-364** (0c85eba): the microphone is chosen on Meetings, with a five-second test.
+- **KNEG-370** (5d915cb, 18ba42b): cloud dictation uses Dictation's language chip; Mistral is told
+  only the languages its docs list.
+- **KNEG-330** (0445da2): one list of local speech models, with a language filter.
+- **KNEG-368** (0acde7b): the meta row says where a note's transcript was made. Migration 0010.
+- **KNEG-408** (6f076c8): the word being said is marked as a recording plays, from the word timings
+  local Whisper already returns. No DTW.
+- **KNEG-362** (de93a1a, 99108a5): people on a note's meta row, and a People list in the library.
+- **KNEG-401** (b8402f5, 1bf994b): Trash, with Restore, Delete forever and Empty trash.
+  Migration 0011.
+- **Final fixes** (the commit that adds this entry): KNEG-409's kept and failed recordings said
+  in the note, Trash's focus left where a person put it, the meeting window's error worded to
+  match its caveat, the transcript check memoised on the playback path, and three sentences in
+  `NOTES_WORKSPACE.md` that were each false on one path.
+
+**The cost to old builds.** The mechanism is 0008's (the 2026-10-07 entry below).
+`sqlx::migrate!` runs without `set_ignore_missing` (`crates/storage/src/lib.rs:164`), so a build
+whose migrations stop short of what a profile has applied refuses to open it. sqlx raises
+`VersionMissing(n)` for the first applied version it doesn't know, shown as "could not open the
+database", before anything is written. Debug and release builds share the OS profile
+(`data_dir()`, `crates/storage/src/paths.rs:45-67`) unless a **debug** build is given
+`KW_AUTOMATION_PROFILE`; a release build ignores it. The first run of merged dev against the
+owner's profile applies 0010 and 0011, and from then on:
+- **`VersionMissing(10)`:** local `dev` at fd025b3, and `origin/dev` (1d78d07) until merged dev
+  is pushed; the `codex/kneg-411-sharing` worktree (25d620f); this branch's 078878a to 0445da2,
+  which have neither migration.
+- **`VersionMissing(11)`:** this branch's 0acde7b to 99108a5, which have 0010 only.
+- **Already refused, since 0008 at the latest:** `origin/main` (d870dae, up to 0007) and any
+  installed release built from it; the `kneg-404` and `kneg-410` worktrees (0007); the other
+  codex worktrees (`codex/kneg-330` and the speaker-rename `worker-1` at 0006,
+  `codex/notes-frontend` at 0004, `codex/frontend` at 0002) and the locked `kneg-141-frozen`
+  (0001).
+
+Each ref's newest migration was read on 2026-10-08 with `git ls-tree` over
+`crates/storage/migrations/`. The refusal is read from sqlx's migrator and `lib.rs`; it was not
+run against a profile here.
+
+- **Before the first run of merged dev,** back up the database: `knegiswhisper.db` and its `-wal`
+  and `-shm`, with the app closed. There are no down-migrations, so going back means restoring
+  that copy.
+- **An older worktree** runs only against a disposable profile (`KW_AUTOMATION_PROFILE`, debug
+  builds) or after a rebase onto merged dev.
+
+**Rulings.** The run's ledger is git-ignored, so its rulings are kept here, one line each, with
+what each costs if it is wrong.
+- KNEG-409 deletes the recording only for a note saved with a whole-file transcript, never typed
+  notes alone or the live partials. If wrong: a partials-only meeting keeps a file the owner
+  wanted gone (said in the outcome and now the note).
+- KNEG-409 counts a successful local-streaming transcript as complete, so its recording is
+  deleted: for that route the stream is the final transcript, and only failure partials keep the
+  WAV. If wrong: a local-streaming user loses a file they could have re-transcribed (no
+  re-transcribe feature exists).
+- KNEG-364's microphone check is a 5 s test a button starts, not an always-on preview, which
+  would light the OS microphone indicator whenever Meetings is open. If wrong: the owner wanted a
+  continuous meter before recording.
+- KNEG-371's meters are `aria-hidden` decoration, not `role=meter`: ten updates a second can't be
+  announced usefully. If wrong: screen-reader users get no level information.
+- KNEG-371's publisher re-sends a steady level every 200 ms (the brief said only on a change of
+  0.01), or the page's 400 ms staleness would blank a steady sound. If wrong: about five extra
+  events a second per source while steady.
+- KNEG-412: Meetings' Start sends `wantSystem && systemAudioAvailable`, as the call card does.
+  If wrong: a Start while system audio is unavailable no longer asks Rust to try it (Rust would
+  have recorded the microphone only anyway).
+- KNEG-370 keeps Corti's "en" default when two languages are chosen (Corti takes one), and lets
+  imports share Dictation's language. If wrong: a two-language Corti user, or a cloud import in
+  another language, is told the wrong language; the note says what was sent.
+- KNEG-330 derives a Whisper model's languages from its id (`kb-whisper-*` Swedish, `-en`/`.en`
+  English, else many), pinned by a test against the registry. If wrong: a future model with an
+  unusual id is mislabelled until that test catches it.
+- KNEG-330's language filter starts at "Any language", with no purpose filter. If wrong: the
+  owner wanted a dictation/meetings filter.
+- KNEG-368: a whole-file pass on this computer after cloud live captions says "Transcribed on
+  this computer · live captions by {provider}", since the bare line could read as a privacy
+  claim. If wrong: the owner wanted the shorter line.
+- KNEG-368 records the live provider whenever it sends audio off the computer, even when that
+  session produced no captions (refused at connect, say). If wrong: a note can say "live captions
+  by X" where none arrived.
+- KNEG-368: shared-folder packages don't carry `transcribed_by`; the format is unchanged. If wrong:
+  shared notes lose their attribution.
+- KNEG-365: the three paths that leave a WAV unattached keep its `.meeting.json` and remove only
+  the notes sidecar, so a later recovery keeps the name and folder. If wrong: an orphan
+  `.meeting.json` lingers beside an orphan WAV until that WAV is recovered or discarded.
+- KNEG-362 leaves people without an email out of the People list, since the email is the
+  identity. If wrong: imported name-only people can't be filtered by.
+- KNEG-362: the summary prompt's participant hint sends display names only, where it sent the
+  first 256 characters of the JSON, emails included. If wrong: the model loses spelling hints
+  from emails.
+- KNEG-362: a summary queued but not started doesn't fail when people change; it starts from the
+  note as it is then. A running one may still stop and offer Retry. If wrong: a queued summary
+  uses the newer people list, which is what the person just entered.
+- KNEG-362: People sits after "Not in a folder", keeping the folders and their unfiled notes
+  together. If wrong: the owner wanted it directly under the folder list.
+- KNEG-401's column is `trashed_at`, since `deleted_at` is OpenWhispr's sync tombstone and on the
+  forbidden-column list. No cost recorded: the alternative was refused by the schema check, not
+  weighed.
+- KNEG-401: Delete moves to Trash without a dialog, with Undo; Delete forever and Empty trash ask
+  first. If wrong: the owner wanted a dialog on every delete.
+- KNEG-401: the local API's `DELETE` moves a note to Trash and the API then treats it as gone
+  (404), one meaning of delete on every surface. If wrong: the documented "real and immediate" API
+  delete changed; reverting is one handler.
+- KNEG-401's Delete forever and Empty trash use `delete_attached`'s order (checkpoint, then remove
+  the files inside the deleting transaction, then commit), overriding the plan's commit-first
+  order, so a recording deleted forever can never come back as an Interrupted meeting. If wrong:
+  notes can be left in Trash without their recordings, after a failed removal or commit (an error
+  is shown) or a power loss before the commit reached the disk (none is), and pressing again
+  finishes.
+- Process: Task 3's minors 1-6 went to Task 4, and Task 5's minors 1-3 to Task 6, since those
+  tasks edited the same paths. If wrong: those diffs were larger than their briefs.
+- Process: the final fix wave was Important 1 and 2, Minor 1 and 3, and two cheap deferred minors
+  (the memoised transcript check, and Trash's focus). Everything else from the reviews becomes a
+  Linear follow-up, and the by-hand checks go on KNEG-378. If wrong: those follow-ups wait for a
+  later pass.
+
+---
+
 ## 2026-10-07 (latest) — six one-answer issues: KNEG-331, 367, 415, 394, 407, 406
 
 The owner answered six issues on 2026-10-07, each with the recommended option. What the answers

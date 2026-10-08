@@ -12,11 +12,21 @@ import { getLocalDictationLanguages, setLocalDictationLanguages, onLocalDictatio
  * fieldset disabled: disabling the box that has focus drops focus to the page,
  * which left the Dictation panel with nothing for Escape to close (KNEG-385).
  *
- * In plain words (KNEG-343): it is shown only where dictation runs on a local
- * Whisper model, so its legend need not name the engine, and a failure is a
- * sentence with the error under Details.
+ * In plain words (KNEG-343): its legend names no engine, and a failure is a
+ * sentence with the error under Details. The languages are Dictation's, for
+ * local Whisper and cloud routes alike (KNEG-370), so the line under the
+ * choices is the page's to give: `note`, from `languageNote`, which says what
+ * the route in use does with them.
  */
-export function LocalLanguagePicker({ disabled = false, initial }: { disabled?: boolean; initial?: readonly string[] }) {
+export function LocalLanguagePicker({
+  disabled = false,
+  initial,
+  note,
+}: {
+  disabled?: boolean;
+  initial?: readonly string[];
+  note: string;
+}) {
   const [selected, setSelected] = useState<string[] | null>(initial ? [...initial] : null);
   const [busy, setBusy] = useState(false);
   const saving = useRef(false);
@@ -55,7 +65,7 @@ export function LocalLanguagePicker({ disabled = false, initial }: { disabled?: 
           onChange={e => void save(e.target.checked ? [...(selected ?? []), code] : (selected ?? []).filter(value => value !== code))} />{label}
       </label>)}
     </div>
-    <p className="muted">Choose up to two. With two, each dictation is checked for which one you spoke.</p>
+    <p className="muted">{note}</p>
     {error && <FailureLine text={error.text} detail={error.detail} />}
   </fieldset>;
 }

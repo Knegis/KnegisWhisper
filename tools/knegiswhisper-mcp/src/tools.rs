@@ -135,7 +135,9 @@ fn definition(name: &str) -> Value {
             }),
         ),
         "notes_delete" => (
-            "Delete a note. Maps to DELETE /v1/notes/{id}.",
+            "Move a note to Trash. Maps to DELETE /v1/notes/{id}. The note and its recording \
+             stay in Trash in the app until the user restores it or empties Trash; from then on \
+             the API treats it as gone.",
             id_schema("The note's id."),
         ),
         "folders_list" => (

@@ -142,7 +142,13 @@ impl kw_local_api::runtime::Runtime for DesktopRuntime {
         }
         value(
             runtime
-                .start(provider, system_audio)
+                // Unnamed and in no folder: the local API has no fields for
+                // either yet (KNEG-365).
+                .start(
+                    provider,
+                    system_audio,
+                    crate::meeting::MeetingPlan::default(),
+                )
                 .await
                 .map_err(unavailable)?,
         )

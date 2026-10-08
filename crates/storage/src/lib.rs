@@ -64,6 +64,18 @@ pub enum StorageError {
     Import(String),
 }
 
+impl StorageError {
+    /// Whether SQLite refused the statement on a foreign key: a row naming a
+    /// parent that does not exist. Foreign keys are enforced here, so a caller
+    /// holding an id read earlier -- a meeting's folder, chosen at Start and
+    /// used at Stop (KNEG-365) -- can tell "that parent has gone" from any
+    /// other failure, and save without it.
+    #[must_use]
+    pub fn is_foreign_key_violation(&self) -> bool {
+        matches!(self, Self::Sqlx(sqlx::Error::Database(error)) if error.is_foreign_key_violation())
+    }
+}
+
 /// Substrings that mark a column name as a probable credential.
 const CREDENTIAL_COLUMN_MARKERS: [&str; 7] = [
     "token",
@@ -283,8 +295,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            applied, 9,
-            "initial, note recordings, automation, desktop origin, summary, note workspace, search tokenizer, transcript row, and folder sharing migrations recorded exactly once"
+            applied, 11,
+            "initial, note recordings, automation, desktop origin, summary, note workspace, search tokenizer, transcript row, folder sharing, transcribed-by, and note trash migrations recorded exactly once"
         );
         second.close().await;
     }
@@ -497,6 +509,26 @@ mod tests {
             orphan.is_err(),
             "foreign_keys pragma should reject the orphan"
         );
+    }
+
+    #[tokio::test]
+    async fn a_refused_foreign_key_says_so_and_other_failures_do_not() {
+        let db = db().await;
+        let orphan: StorageError =
+            sqlx::query("INSERT INTO notes (title, folder_id) VALUES ('m', 9999)")
+                .execute(db.pool())
+                .await
+                .unwrap_err()
+                .into();
+        assert!(orphan.is_foreign_key_violation(), "{orphan}");
+
+        let other: StorageError = sqlx::query("INSERT INTO no_such_table VALUES (1)")
+            .execute(db.pool())
+            .await
+            .unwrap_err()
+            .into();
+        assert!(!other.is_foreign_key_violation(), "{other}");
+        assert!(!StorageError::Import("x".into()).is_foreign_key_violation());
     }
 
     #[tokio::test]
@@ -803,6 +835,106 @@ mod tests {
         assert_eq!(
             segment_rows(pool).await,
             [(second * SPAN, "gamma".to_owned())]
+        );
+    }
+
+    #[tokio::test]
+    async fn transcribed_by_migration_leaves_existing_notes_unattributed() {
+        // KNEG-368. Where a note saved before this was transcribed was never
+        // recorded, so the migration must not guess it: NULL, which the note
+        // shows as nothing.
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        for migration in [
+            include_str!("../migrations/0001_initial.sql"),
+            include_str!("../migrations/0002_note_recordings.sql"),
+            include_str!("../migrations/0003_automation.sql"),
+            include_str!("../migrations/0004_desktop_import_origin.sql"),
+            include_str!("../migrations/0005_meeting_summaries.sql"),
+            include_str!("../migrations/0006_note_workspace.sql"),
+            include_str!("../migrations/0007_search_tokenizer.sql"),
+            include_str!("../migrations/0008_transcript_rows.sql"),
+            include_str!("../migrations/0009_folder_sharing.sql"),
+        ] {
+            sqlx::raw_sql(migration).execute(&pool).await.unwrap();
+        }
+        let id: i64 = sqlx::query_scalar(
+            "INSERT INTO notes (title, content, transcript) VALUES ('Meeting', '', ?) RETURNING id",
+        )
+        .bind(r#"[{"text":"from before","timestamp":0}]"#)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        sqlx::raw_sql(include_str!("../migrations/0010_transcribed_by.sql"))
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let recorded: Option<String> =
+            sqlx::query_scalar("SELECT transcribed_by FROM notes WHERE id = ?")
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(recorded, None);
+    }
+
+    #[tokio::test]
+    async fn trash_migration_leaves_every_note_live() {
+        // KNEG-401. Trash is new: no note was deleted into it before this, so
+        // every note the migration finds stays where it was, and the index
+        // holds only the notes in Trash -- none yet.
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        for migration in [
+            include_str!("../migrations/0001_initial.sql"),
+            include_str!("../migrations/0002_note_recordings.sql"),
+            include_str!("../migrations/0003_automation.sql"),
+            include_str!("../migrations/0004_desktop_import_origin.sql"),
+            include_str!("../migrations/0005_meeting_summaries.sql"),
+            include_str!("../migrations/0006_note_workspace.sql"),
+            include_str!("../migrations/0007_search_tokenizer.sql"),
+            include_str!("../migrations/0008_transcript_rows.sql"),
+            include_str!("../migrations/0009_folder_sharing.sql"),
+            include_str!("../migrations/0010_transcribed_by.sql"),
+        ] {
+            sqlx::raw_sql(migration).execute(&pool).await.unwrap();
+        }
+        for title in ["Kickoff", "Weekly", "Scratch"] {
+            sqlx::query("INSERT INTO notes (title, content) VALUES (?, 'from before')")
+                .bind(title)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+
+        sqlx::raw_sql(include_str!("../migrations/0011_note_trash.sql"))
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let trashed: Vec<Option<String>> =
+            sqlx::query_scalar("SELECT trashed_at FROM notes ORDER BY id")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(trashed, vec![None, None, None]);
+        let index: String = sqlx::query_scalar(
+            "SELECT sql FROM sqlite_schema WHERE type = 'index' AND name = 'idx_notes_trashed'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(
+            index.contains("WHERE trashed_at IS NOT NULL"),
+            "only notes in Trash are indexed: {index}"
         );
     }
 }

@@ -5,15 +5,17 @@
  *
  *   - **The hero**, centred: whether dictation will work (`lib/readiness.ts`)
  *     and, when it will, the shortcut to press. When it will not, the one
- *     problem and the button that fixes it; while recording, "Listening…" and
- *     a timer.
+ *     problem and the button that fixes it; while recording, "Listening…", a
+ *     timer, and the microphone's live level (`LevelMeter`, KNEG-371).
  *   - **The control bar** at the foot: the microphone, and where speech
  *     becomes text -- an installed model on this computer or a cloud
  *     provider -- each chosen right here in its chip's menu (`ChipMenu`);
- *     on the local whisper route, the languages, in a panel holding the
- *     picker Settings > Transcription shows (that page keeps its own
- *     controls for the route and the languages). Those two are held while a
- *     dictation is under way, because Rust reads them at Stop. Then the
+ *     on every route but a Parakeet model's, the languages, in a panel
+ *     holding the picker Settings > Transcription shows, with a line saying
+ *     what the route does with them (`languageNote`, KNEG-370; that page
+ *     keeps its own controls for the route and the languages). Those two
+ *     are held while a dictation is under way, because Rust reads them at
+ *     Stop. Then the
  *     privacy line, which is never hidden and follows a switch as soon as it
  *     lands; the last result with a Copy button; the Tidy up chip -- a switch
  *     once cleanup has been set up in Cleanup & summaries (held during a
@@ -51,15 +53,30 @@ import { DictationHistoryPanel } from "../components/DictationHistoryPanel";
 import { Icon, IconFilled } from "../components/Icon";
 import { Keycaps } from "../components/Keycaps";
 import { LearnMore } from "../components/LearnMore";
+import { LevelMeter } from "../components/LevelMeter";
 import { LocalLanguagePicker } from "../components/LocalLanguagePicker";
 import { LocalServerHealth } from "../components/LocalServerHealth";
 import { PanelHeader } from "../components/Panel";
 import { SplitView } from "../components/SplitView";
 import { TaskHero } from "../components/TaskHero";
 import { cleanupConfigured, effectiveCleanup } from "../lib/cleanup";
-import { cleanupLabel, destinationName, languageLabel, microphoneMenu, privacyLines } from "../lib/controlBar";
+import {
+  cleanupLabel,
+  destinationName,
+  languageLabel,
+  languageNote,
+  microphoneMenu,
+  privacyLines,
+} from "../lib/controlBar";
 import { timeOfDay } from "../lib/dayGroups";
-import { localEngine, routeBusyLabel, routeHeld, routeMenu, type RouteChoice } from "../lib/dictationRoute";
+import {
+  languagesApply,
+  localEngine,
+  routeBusyLabel,
+  routeHeld,
+  routeMenu,
+  type RouteChoice,
+} from "../lib/dictationRoute";
 import {
   cancelDictation,
   getDictationRoute,
@@ -163,9 +180,9 @@ export function DictationView({
       getLocalStatus(),
       getSherpaStatus(),
     ]);
-    // Only local whisper has languages to choose -- a Parakeet model uses its
-    // own -- so only it is asked.
-    const languages = localEngine(route, sherpa) === "whisper" ? await getLocalDictationLanguages() : [];
+    // Every route but a Parakeet model's has languages to choose -- that model
+    // uses its own -- so the languages are asked for unless it is in use.
+    const languages = languagesApply(localEngine(route, sherpa)) ? await getLocalDictationLanguages() : [];
     return {
       hotkeys,
       session,
@@ -424,6 +441,7 @@ export function DictationView({
         extra: clock(recordingSince === null ? 0 : (now - recordingSince) / 1000),
       }}
       heading="Listening…"
+      meter={<LevelMeter session="dictation" source="microphone" segments={16} />}
       sub="Speak now, then press Stop and transcribe. The overlay is visible while you record."
     />
   ) : mic.busy ? (
@@ -516,15 +534,17 @@ export function DictationView({
                   onChoose={chooseRouteRow}
                   footer={{ label: "More in Settings…", onClick: () => onGoTo("transcription") }}
                 />
-                {/* Local whisper only: a Parakeet model uses its own
-                    languages, and Settings disables the picker under one.
-                    The picker writes, validates and announces the choice
-                    itself, and the page re-reads on that announcement. It
-                    starts from what this page read, so the panel opens on
-                    its first control rather than on a picker still loading. */}
-                {engine === "whisper" ? (
+                {/* Local whisper and cloud alike (KNEG-370): not under a
+                    Parakeet model, which uses its own languages, and
+                    Settings disables the picker under one. The picker
+                    writes, validates and announces the choice itself, and
+                    the page re-reads on that announcement -- the route too,
+                    so the note says what is now sent. It starts from what
+                    this page read, so the panel opens on its first control
+                    rather than on a picker still loading. */}
+                {languagesApply(engine) ? (
                   <ChipMenu icon="language" name="Language" label={languageLabel(languages)} held={held}>
-                    <LocalLanguagePicker initial={languages} />
+                    <LocalLanguagePicker initial={languages} note={languageNote(engine, route, languages)} />
                   </ChipMenu>
                 ) : null}
               </>

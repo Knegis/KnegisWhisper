@@ -35,6 +35,7 @@ import { mockIPC, mockWindows, mockConvertFileSrc } from "@tauri-apps/api/mocks"
 
 import type {
   Accelerator,
+  AudioLevel,
   Binding,
   CalendarStatus,
   CleanupRoute,
@@ -60,6 +61,8 @@ import type {
   ImportReport,
   InputDevice,
   InstallProgress,
+  LevelSession,
+  LevelSource,
   Lists,
   LocalApiStatus,
   LocalLlmProgress,
@@ -69,12 +72,15 @@ import type {
   MeetingProviderSummary,
   MeetingState,
   MeetingStatus,
+  MicrophoneCheck,
   NewNoteRequest,
   Note,
   NoteRecording,
   NoteUpdateRequest,
   Offer,
   Outcome,
+  ParticipantRequest,
+  Person,
   ProbeReport,
   ProviderSummary,
   ReasoningStatus,
@@ -88,12 +94,16 @@ import type {
   TranscriptEvent,
   TranscriptRow,
   Transcription,
+  TrashSummary,
   UpdateCheckResult,
+  Word,
 } from "../generated/ipc-types";
 // `OverlayPreferences` is hand-written in `ipc.ts`, not generated: Rust's
 // `persistent_overlay::Snapshot` has no `ts_rs` derive. A type-only import, so
 // this stays below the wrappers as the module doc above requires.
 import type { OverlayPreferences } from "./ipc";
+import { FIXTURE_RECORDING_SECONDS, toneWav } from "./fixtureWav";
+import { emailKey, HAS_SPACE, readParticipants, trimSpace } from "./people";
 import { summaryConfigured } from "./summaryConfigured";
 
 /* ------------------------------------------------------------- capabilities */
@@ -614,6 +624,7 @@ let meetingStatus: MeetingStatus = {
   state: "idle",
   transcriptFailure: null,
   provider: null,
+  plan: null,
   elapsedSeconds: 0,
   sources: null,
   systemAudio: DIAGNOSTICS.systemAudio,
@@ -653,6 +664,109 @@ let meetingStatus: MeetingStatus = {
 
 let meetingLanguage = "en";
 let meetingProvider: string | null = null;
+/** Settings › Meetings' "Delete each recording once its transcript is saved", off as in Rust (KNEG-409). */
+let meetingDeleteRecordings = false;
+/** When the fixture meeting started, which names its note when it has no name. */
+let meetingStartedAt: Date | null = null;
+
+/** A name typed before Start, tidied as Rust's `clean_title` tidies it (`meeting.rs`). */
+function fixtureMeetingTitle(given: string | null | undefined): string | null {
+  const line = (given ?? "").split(/[\r\n]/).map((part) => part.trim()).filter((part) => part !== "").join(" ");
+  const title = [...line].slice(0, 200).join("").trimEnd();
+  return title === "" ? null : title;
+}
+
+/** Rust's `note_title`: the name, or "Meeting — " and when it started, local time. */
+function fixtureNoteTitle(given: string | null, started: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const when = `${started.getFullYear()}-${pad(started.getMonth() + 1)}-${pad(started.getDate())} ${pad(started.getHours())}:${pad(started.getMinutes())}`;
+  return given ?? `Meeting — ${when}`;
+}
+
+/** What Rust's `delete_attached` adds to a note's recording details (`meeting/removal.rs`). */
+const RECORDING_DELETED_DETAILS = "The recording was deleted after transcribing (Settings › Meetings).";
+
+/**
+ * The fixture meeting stopping: idle again, and what Rust's `keep` would
+ * have made of it -- a new meeting note under the plan's name or when it
+ * started, in the plan's folder, or in none with `folderMissing` when that
+ * folder was deleted while it ran (KNEG-365). It has two transcript rows and
+ * the recording attached, as a whole-recording pass leaves it, unless the
+ * plan says to delete the recording once saved: then it has no recording,
+ * its details say why, and the outcome says `deleted` (KNEG-409). That pass
+ * runs on this computer, and a provider whose audio leaves it is named for
+ * the live captions, as Rust's `transcribed_by` names it (KNEG-368).
+ */
+function fixtureStop(): MeetingOutcome {
+  const provider = meetingStatus.provider;
+  const plan = meetingStatus.plan ?? { title: null, folderId: null, deleteRecording: false };
+  const startedAt = meetingStartedAt ?? new Date();
+  meetingStartedAt = null;
+  meetingStatus = {
+    ...meetingStatus,
+    state: "idle",
+    provider: null,
+    plan: null,
+    elapsedSeconds: 0,
+    sources: null,
+    offer: null,
+  };
+  // OpenAI is the provider whose capped sessions reconnect. Its fixture uses
+  // the quiet outcome so the second public shape carrying `reconnects` can be
+  // inspected in the browser; every other provider keeps the saved-note path.
+  if (provider === "meeting:openai-realtime") {
+    return {
+      outcome: "nothing-transcribed",
+      recordingPath:
+        "C:\\Users\\dev\\AppData\\Roaming\\KnegisWhisper\\recordings\\2026-08-26T09-00.wav",
+      mic: "silence",
+      system: "nothing",
+      reconnects: 1,
+    };
+  }
+  const folderId = folders.some((f) => f.id === plan.folderId) ? plan.folderId : null;
+  const noteId = nextNoteId++;
+  const segments = [
+    { text: "Let's start with the release.", timestamp: 4, endTimestamp: 9 },
+    { text: "The installer is signed now.", timestamp: 10, endTimestamp: 15 },
+  ];
+  const live = MEETING_PROVIDERS.find((summary) => summary.id === provider);
+  notes = [
+    fixtureNote({
+      id: noteId,
+      title: fixtureNoteTitle(plan.title, startedAt),
+      noteType: "meeting",
+      recordingDetails: plan.deleteRecording ? RECORDING_DELETED_DETAILS : null,
+      folderId,
+      transcript: JSON.stringify(segments),
+      audioDurationSeconds: 1847,
+      transcribedBy: fixtureTranscribedBy("local", live?.audioLeavesDevice ? live.name : null),
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+    }),
+    ...notes,
+  ];
+  noteTranscriptRows.set(noteId, segments.map((segment, index) => ({
+    index, text: segment.text, speaker: null, speakerId: null, startSeconds: segment.timestamp, endSeconds: segment.endTimestamp, words: [],
+  })));
+  if (!plan.deleteRecording) {
+    noteRecordings.set(noteId, { noteId, storageKey: `fixture-meeting-${noteId}.wav`, durationSeconds: FIXTURE_RECORDING_SECONDS, originalFilename: null, createdAt: nowIso() });
+  }
+  return {
+    outcome: "saved",
+    noteId,
+    durationSeconds: 1847,
+    recordingPath:
+      "C:\\Users\\dev\\AppData\\Roaming\\KnegisWhisper\\recordings\\2026-08-26T09-00.wav",
+    gaps: 0,
+    reconnects: 1,
+    transcriptIsPartials: false,
+    recordingAttached: true,
+    folderMissing: plan.folderId !== null && folderId === null,
+    recordingRemoval: plan.deleteRecording ? "deleted" : null,
+    recordingRemovalError: null,
+  };
+}
 
 /*
  * Empty, as a fresh profile has none; `kw.interrupted()` adds one, so the
@@ -675,6 +789,52 @@ let overlayPreferences: OverlayPreferences = {
 
 /** The meeting panel's typed-notes draft, read back after a webview reload. */
 let meetingNotes = "";
+
+/*
+ * Whether the meeting window answers when Stop or Discard asks it to save its
+ * notes (`flushMeetingPanelNotes`). There is no meeting window behind this tab
+ * -- `/#meeting` is a page load of its own -- so the `plugin:event|emit_to`
+ * handler answers for it, unless `kw.meetingWindowSilent()` has made it
+ * silent (KNEG-418).
+ */
+let meetingWindowSilent = false;
+
+/*
+ * Fake sound levels (KNEG-371), sent as Rust's publishers send them
+ * (`src-tauri/src/audio_level.rs`): one `audio-level` per capture every
+ * 100 ms while it runs, and a last 0 per capture when it stops. A meeting's
+ * start here, as in Rust; `kw.levels` for dictation, whose recording the
+ * fixtures only ever announce (`kw.dictationState`). The microphone moves
+ * around 0.62 and the others around 0.3, never meeting, so the Meetings
+ * page's two meters always show different values.
+ */
+const fakeLevels = new Map<LevelSession, { timer: ReturnType<typeof setInterval>; sources: LevelSource[] }>();
+
+function fakeLevel(source: LevelSource, tick: number): number {
+  return source === "microphone" ? 0.62 + 0.08 * Math.sin(tick / 2) : 0.3 + 0.08 * Math.sin(tick / 3 + 1);
+}
+
+function startFakeLevels(session: LevelSession, sources: LevelSource[]): void {
+  stopFakeLevels(session);
+  let tick = 0;
+  const timer = setInterval(() => {
+    tick += 1;
+    for (const source of sources) {
+      void emit("audio-level", { session, source, level: fakeLevel(source, tick) } satisfies AudioLevel);
+    }
+  }, 100);
+  fakeLevels.set(session, { timer, sources });
+}
+
+function stopFakeLevels(session: LevelSession): void {
+  const running = fakeLevels.get(session);
+  if (running === undefined) return;
+  clearInterval(running.timer);
+  fakeLevels.delete(session);
+  for (const source of running.sources) {
+    void emit("audio-level", { session, source, level: 0 } satisfies AudioLevel);
+  }
+}
 
 /*
  * The Meetings page reads this in its first load, for the control bar's line
@@ -758,6 +918,26 @@ const INPUT_DEVICES: InputDevice[] = [
 let dictationDevice: string | null = null;
 
 /**
+ * The microphone a capture opens, as `Capture::start` picks it: the one
+ * chosen when it is connected, the system default otherwise. What a fixture
+ * meeting's `Sources` names, and what the microphone check tested (KNEG-364).
+ */
+function fixtureOpenedMicrophone(): string | null {
+  const chosen = INPUT_DEVICES.find((device) => device.name === dictationDevice);
+  return (chosen ?? INPUT_DEVICES.find((device) => device.isDefault))?.name ?? null;
+}
+
+/**
+ * Whether a dictation is recording, as `kw.dictationState` last announced it
+ * -- the fixtures never record one -- so the microphone check can be refused
+ * as Rust refuses it (KNEG-364).
+ */
+let fixtureDictating = false;
+
+/** Whether the fixture microphone check is listening: one at a time, as in Rust. */
+let microphoneChecking = false;
+
+/**
  * What `dictation_set_cloud_provider` and `dictation_use_local` stored, which
  * `dictation_route` resolves, so a switch made on the Dictation page's route
  * menu or on Settings > Transcription reads back (KNEG-385). Resolved as
@@ -768,16 +948,30 @@ let dictationDevice: string | null = null;
  */
 const dictationRoute = { useLocal: false, provider: "openai", model: "whisper-1" };
 
+/**
+ * A cloud route's `cloudLanguage` as `route::resolve` gives it for the common
+ * case (KNEG-370): one dictation language is sent, none or two are not. The
+ * languages xAI and Mistral drop, and Corti's English, are not emulated -- the
+ * page reads whatever arrives and repeats none of those rules.
+ */
 function resolvedRoute(): RouteReport {
+  const [only, ...more] = localLanguages;
   return dictationRoute.useLocal
-    ? { destination: "local model", isLocal: true, leavesDevice: false, problem: null }
-    : { destination: dictationRoute.provider, isLocal: false, leavesDevice: true, problem: null };
+    ? { destination: "local model", isLocal: true, leavesDevice: false, problem: null, cloudLanguage: null }
+    : {
+        destination: dictationRoute.provider,
+        isLocal: false,
+        leavesDevice: true,
+        problem: null,
+        cloudLanguage: only !== undefined && more.length === 0 ? only : null,
+      };
 }
 
 /**
- * The local languages `dictation_set_local_language` stored. Swedish alone to
- * start, so the language chip -- shown on the local whisper route only --
- * reads as a choice rather than as "Detect language".
+ * Dictation's languages, as `dictation_set_local_language` stored them.
+ * Swedish alone to start, so the language chip -- shown on every route but a
+ * Parakeet model's -- reads as a choice rather than as "Detect language", and
+ * the fixtures' OpenAI route is told to expect it.
  */
 let localLanguages: string[] = ["sv"];
 
@@ -867,15 +1061,18 @@ const SHERPA: SherpaStatus = {
     state: "unknown",
     why: "it was installed before this application started recording what it installs",
   },
-  // One installed and selected, one installable, and the two streaming models
-  // carrying the reason they cannot be picked -- the three states this list has,
-  // so the screen is worked on against all of them rather than the easy one.
+  // One dictation model installed and selected, one installable, and two
+  // meetings models installed, one of them chosen -- so the screen is worked
+  // on against every state its rows have rather than the easy one. Languages
+  // as the registry lists them (KNEG-330): the list's language filter reads
+  // them, and Parakeet TDT's is the one with Swedish.
   models: [
     {
       id: "parakeet-unified-en-0.6b",
       name: "Parakeet Unified EN 0.6B",
       sizeMb: 630,
       language: "en",
+      supportedLanguages: ["en"],
       installed: true,
       usedFor: "dictation",
     },
@@ -883,7 +1080,11 @@ const SHERPA: SherpaStatus = {
       id: "parakeet-tdt-0.6b-v3",
       name: "Parakeet TDT 0.6B v3",
       sizeMb: 660,
-      language: null,
+      language: "multilingual",
+      supportedLanguages: [
+        "bg", "hr", "cs", "da", "nl", "en", "et", "fi", "fr", "de", "el", "hu", "it",
+        "lv", "lt", "mt", "pl", "pt", "ro", "sk", "sl", "es", "sv", "ru", "uk",
+      ],
       installed: false,
       usedFor: "dictation",
     },
@@ -896,6 +1097,18 @@ const SHERPA: SherpaStatus = {
       name: "Nemotron Speech Streaming EN 0.6B",
       sizeMb: 442,
       language: "en",
+      supportedLanguages: ["en"],
+      installed: true,
+      usedFor: "meetings",
+    },
+    {
+      // Installed and not chosen, so "Use for meetings" can be pressed: it
+      // moves meetings and leaves dictation where it was.
+      id: "nemotron-3.5-asr-streaming-0.6b",
+      name: "Nemotron 3.5 ASR Streaming 0.6B",
+      sizeMb: 650,
+      language: "multilingual",
+      supportedLanguages: ["en", "es", "fr", "it", "pt", "nl", "de", "tr", "ru", "ar", "hi", "ja", "ko", "vi", "uk"],
       installed: true,
       usedFor: "meetings",
     },
@@ -1225,14 +1438,215 @@ let folders: Folder[] = [
   { id: 3, name: "Internal", isDefault: false, sortOrder: 2 },
 ];
 
+/**
+ * Where a note's transcript was made, as Rust's `TranscribedBy` stores it
+ * (KNEG-368), for the two routes the fixtures transcribe by. Rust names every
+ * route (`src-tauri/src/transcribed_by.rs`); `liveName` is a meeting's
+ * live-caption provider when those captions came from off this computer.
+ */
+const FIXTURE_ROUTES: Record<string, { provider: string; name: string; onThisComputer: boolean }> = {
+  local: { provider: "local", name: "this computer", onThisComputer: true },
+  openai: { provider: "openai", name: "OpenAI", onThisComputer: false },
+};
+
+function fixtureTranscribedBy(provider: string, liveName: string | null = null): string | null {
+  const route = FIXTURE_ROUTES[provider];
+  if (route === undefined) return null;
+  return JSON.stringify(liveName === null ? route : { ...route, liveName });
+}
+
+/**
+ * A fixture note: the columns it is given, and every other one empty, as
+ * Rust reads a note that has none of them. The one place a column added to
+ * `Note` gets its empty value for every fixture note. Its times are given,
+ * not defaulted: `nowIso` is declared below the fixture notes that use this.
+ */
+function fixtureNote(given: Pick<Note, "id" | "title" | "noteType" | "createdAt" | "updatedAt"> & Partial<Note>): Note {
+  return {
+    content: "",
+    recordingDetails: null,
+    enhancedContent: null,
+    folderId: null,
+    transcript: null,
+    participants: null,
+    audioDurationSeconds: null,
+    transcribedBy: null,
+    trashedAt: null,
+    ...given,
+  };
+}
+
+/**
+ * The notes not in Trash (KNEG-401): every list, search and count reads these, as Rust's queries
+ * ask for `trashed_at IS NULL`. Only `notes_get` and the Trash read the rest.
+ */
+function liveNotes(): Note[] {
+  return notes.filter((note) => note.trashedAt === null);
+}
+
+/**
+ * As Rust's commands: a note in Trash refuses an edit in plain words (`commands::IN_TRASH`), and a
+ * note that isn't there is `false`. Returns whether the note is there to edit.
+ */
+function editable(id: number | undefined): boolean {
+  const note = notes.find((n) => n.id === id);
+  if (note?.trashedAt != null) throw new Error("This note is in Trash. Restore it to edit it.");
+  return note !== undefined;
+}
+
+/** A fixture recording's size on disk: 16 kHz mono 16-bit PCM and its 44-byte header, as `fixtureImport` counts it. */
+function fixtureRecordingBytes(recording: NoteRecording): number {
+  return recording.durationSeconds === null ? 0 : Math.round(recording.durationSeconds * 32000) + 44;
+}
+
+/** As `trash::list`: the notes in Trash, most recently trashed first, with what their recordings take. */
+function fixtureTrash(): TrashSummary {
+  const trashed = notes
+    .filter((note) => note.trashedAt !== null)
+    .sort((x, y) => (y.trashedAt ?? "").localeCompare(x.trashedAt ?? "") || y.id - x.id)
+    .map((note) => {
+      const recording = noteRecordings.get(note.id) ?? null;
+      return {
+        id: note.id,
+        title: note.title,
+        trashedAt: note.trashedAt ?? "",
+        hasRecording: recording !== null,
+        recordingSeconds: recording?.durationSeconds ?? null,
+        recordingBytes: recording === null ? 0 : fixtureRecordingBytes(recording),
+        originalFilename: recording?.originalFilename ?? null,
+      };
+    });
+  return { notes: trashed, recordingBytes: trashed.reduce((sum, note) => sum + note.recordingBytes, 0) };
+}
+
+/** As `recordings::empty_trash` and `delete_forever`: the note, its recording and its rows go. */
+function deleteFixtureNote(id: number): void {
+  notes = notes.filter((n) => n.id !== id);
+  noteRecordings.delete(id);
+  noteTranscriptRows.delete(id);
+  speakerNames.delete(id);
+}
+
+/**
+ * People on the fixture notes (KNEG-362), answered as Rust's `notes_core::people` answers. An email
+ * is kept as `normalise_email` keeps it -- trimmed, ASCII lower-case, one `@` with something on
+ * both sides, no whitespace, at most 254 characters -- or `null` when it isn't one.
+ */
+function fixtureEmail(input: string): string | null {
+  const email = emailKey(input);
+  if ([...email].length > 254 || HAS_SPACE.test(email)) return null;
+  const [local, domain, ...rest] = email.split("@");
+  return local && domain && rest.length === 0 ? email : null;
+}
+
+/**
+ * As `people::tidy`, throwing its plain-word refusals: an entry sent back as it was read is
+ * written back as stored, an address already on the note passes unchecked, a new one is checked,
+ * and stored entries the screen can't show stay, after the people.
+ */
+function fixtureTidyParticipants(current: string | null, list: readonly ParticipantRequest[]): string | null {
+  let stored: unknown[] = [];
+  try {
+    const parsed: unknown = current === null ? [] : JSON.parse(current);
+    if (Array.isArray(parsed)) stored = parsed;
+  } catch { /* not a list: nothing to keep */ }
+  const field = (entry: unknown, key: string): string | null => {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return null;
+    const value = (entry as Record<string, unknown>)[key];
+    return typeof value === "string" && trimSpace(value) !== "" ? trimSpace(value) : null;
+  };
+  const readable = (entry: unknown) => field(entry, "email") !== null || field(entry, "displayName") !== null;
+  const keyOf = (entry: unknown) => { const email = field(entry, "email"); return email === null ? null : emailKey(email); };
+  const storedEmails = new Set(stored.map(keyOf).filter((key) => key !== null));
+  const unmatched = stored.filter(readable);
+  const emails = new Set<string>();
+  const kept: unknown[] = [];
+  for (const entry of list) {
+    const name = trimSpace(entry.displayName ?? "") || null;
+    const raw = trimSpace(entry.email ?? "") || null;
+    if (name === null && raw === null) throw new Error("Each person needs an email address or a name.");
+    const key = raw === null ? null : emailKey(raw);
+    if (key !== null && emails.has(key)) continue;
+    const at = unmatched.findIndex((was) => keyOf(was) === key && field(was, "displayName") === name);
+    let value: unknown;
+    if (at !== -1) {
+      value = unmatched.splice(at, 1)[0];
+    } else {
+      const email = raw === null ? null : (fixtureEmail(raw) ?? (key !== null && storedEmails.has(key) ? raw : undefined));
+      if (email === undefined) throw new Error(`'${raw}' isn't an email address.`);
+      value = { ...(name === null ? {} : { displayName: name }), ...(email === null ? {} : { email }) };
+    }
+    if (kept.length === 200) throw new Error("A note can have at most 200 people.");
+    if (key !== null) emails.add(key);
+    kept.push(value);
+  }
+  kept.push(...stored.filter((entry) => !readable(entry)));
+  return kept.length === 0 ? null : JSON.stringify(kept);
+}
+
+/** As `people::people`: by email, the name from the newest note that has one, most notes first. */
+function fixturePeople(): Person[] {
+  const found = new Map<string, { name: string | null; notes: Set<number> }>();
+  const newestFirst = [...liveNotes()].sort((x, y) => (y.updatedAt ?? "").localeCompare(x.updatedAt ?? "") || y.id - x.id);
+  for (const note of newestFirst) {
+    for (const participant of readParticipants(note.participants)) {
+      if (participant.email === null) continue;
+      const email = emailKey(participant.email);
+      const person = found.get(email) ?? { name: null, notes: new Set<number>() };
+      person.name ??= participant.displayName;
+      person.notes.add(note.id);
+      found.set(email, person);
+    }
+  }
+  const people = [...found].map(([email, { name, notes: on }]) => ({ email, name, noteCount: on.size }));
+  // SQLite's order: `lower()` folds ASCII alone, and text compares code point by code point.
+  const order = (x: string, y: string) => (x < y ? -1 : x > y ? 1 : 0);
+  const label = (person: Person) => emailKey(person.name ?? person.email);
+  return people.sort((x, y) => y.noteCount - x.noteCount || order(label(x), label(y)) || order(x.email, y.email));
+}
+
+/** As `people::list_by_person`: the notes whose people include `email`, in any case. */
+function fixtureOnNote(note: Note, email: string): boolean {
+  const wanted = emailKey(email);
+  return readParticipants(note.participants).some((participant) => participant.email !== null && emailKey(participant.email) === wanted);
+}
+
+/** A stored segment as an import local Whisper timed word by word saves it (KNEG-408). */
+type StoredSegment = { text: string; timestamp: number; endTimestamp: number; words?: Word[] };
+
+/**
+ * One row of fixture note 105: `text`, a word every `step` seconds from `start`, each lasting
+ * most of its step, and the row ending just after its last word.
+ */
+function wordedSegment(start: number, step: number, text: string): StoredSegment {
+  const hundredths = (seconds: number) => Math.round(seconds * 100) / 100;
+  const words = text.split(" ").map((word, at) => ({
+    text: word,
+    start: hundredths(start + at * step),
+    end: hundredths(start + at * step + step * 0.8),
+  }));
+  return { text, timestamp: start, endTimestamp: hundredths((words.at(-1)?.end ?? start) + 0.3), words };
+}
+
+/**
+ * Fixture note 105's transcript: two rows timed word by word and one, as every note saved before
+ * KNEG-408 is, without words, all inside the fixture recording's first 20 s.
+ * `tools/visual-check/word-highlight.mjs` plays it.
+ */
+const WORD_TIMING_SEGMENTS: StoredSegment[] = [
+  wordedSegment(0.5, 0.65, "Hej och välkommen till genomgången av lanseringen, som flyttas till torsdag i nästa vecka."),
+  wordedSegment(10.2, 0.5, "Installationsprogrammet är signerat, så vi kan släppa när lokaliseringen är klar."),
+  { text: "Den här raden har inga ord, bara en tid.", timestamp: 16.4, endTimestamp: 19.6 },
+];
+
 let notes: Note[] = [
-  {
+  fixtureNote({
     id: 101,
     title: "Weekly sync — platform",
     content:
       "Release moves to Thursday. Localisation pass is the blocker; Anna owns it.\n\nOpen: who signs off the Windows installer?",
     noteType: "meeting",
-    recordingDetails: null, enhancedContent:
+    enhancedContent:
       "## Decisions\n\n- Release moves to **Thursday**.\n\n## Owners\n\n- Localisation pass — Anna\n\n## Open questions\n\n- Windows installer sign-off is unassigned.",
     folderId: 3,
     transcript: JSON.stringify([
@@ -1244,39 +1658,35 @@ let notes: Note[] = [
       { displayName: "Ravi Menon", email: "ravi@example.com" },
     ]),
     audioDurationSeconds: 1847,
+    // A meeting transcribed on this computer (KNEG-368).
+    transcribedBy: fixtureTranscribedBy("local"),
     createdAt: "2026-08-26T09:00:00Z",
     updatedAt: "2026-08-26T09:31:00Z",
-  },
-  {
+  }),
+  fixtureNote({
     id: 102,
     title: "Customer call — Nordbank",
     content:
       "They want on-prem transcription only. Cloud providers are a non-starter for the compliance team.",
     noteType: "meeting",
-    recordingDetails: null, enhancedContent: null,
     folderId: 2,
-    transcript: null,
     participants: JSON.stringify([
       { displayName: "Jonas Berg", email: "jonas@nordbank.example" },
     ]),
     audioDurationSeconds: 2612,
     createdAt: "2026-08-25T13:15:00Z",
     updatedAt: "2026-08-25T14:02:00Z",
-  },
-  {
+  }),
+  fixtureNote({
     id: 103,
     title: "Scratch",
     content: "check whether WASAPI loopback survives a device change mid-call",
     noteType: "note",
-    recordingDetails: null, enhancedContent: null,
     folderId: 1,
-    transcript: null,
-    participants: null,
-    audioDurationSeconds: null,
     createdAt: "2026-08-24T08:20:00Z",
     updatedAt: "2026-08-24T08:20:00Z",
-  },
-  {
+  }),
+  fixtureNote({
     id: 104,
     title:
       "A deliberately long title that exists so the notes list can be judged when someone types far more than the column was designed for",
@@ -1284,31 +1694,54 @@ let notes: Note[] = [
       "Long-form body text, here so wrapping and vertical rhythm can be seen honestly rather than guessed at.\n\n" +
       "The overlay, the list panel and this pane all share `styles.css`, so a change made against three short notes tends to look fine and then fall apart on a real one. " +
       "This note is the real one.\n\nIt has several paragraphs, a list:\n\n- one\n- two\n- three\n\nand a trailing line.",
-    noteType: "note",
-    recordingDetails: null, enhancedContent: null,
-    folderId: null,
+    // An import transcribed in the cloud, so a note says "Transcribed by OpenAI" (KNEG-368).
+    noteType: "import",
     // A transcript of its own, so `tools/visual-check/shell-rail.mjs` check 10 has a second note
     // with a transcript column: one with no transcript has no column (KNEG-377). 102 and 103 are
     // the notes without.
     transcript: JSON.stringify([
       { speaker: "Ravi", text: "This is the note with the long title, read aloud." },
     ]),
-    participants: null,
-    audioDurationSeconds: null,
+    transcribedBy: fixtureTranscribedBy("openai"),
     createdAt: "2026-08-20T19:45:00Z",
     updatedAt: "2026-08-23T07:10:00Z",
-  },
+  }),
+  fixtureNote({
+    id: 105,
+    // An import transcribed by local Whisper, whose rows highlight word by word (KNEG-408). The
+    // oldest note, so it is listed last and every check that opens the newest still opens 101.
+    title: "Word timings",
+    noteType: "import",
+    transcript: JSON.stringify(WORD_TIMING_SEGMENTS),
+    audioDurationSeconds: FIXTURE_RECORDING_SECONDS,
+    transcribedBy: fixtureTranscribedBy("local"),
+    createdAt: "2026-08-19T10:00:00Z",
+    updatedAt: "2026-08-19T10:12:00Z",
+  }),
 ];
 
+// Every note here is served the same playable WAV (`servePlayableRecordings`), so 101's recording
+// is as long as that WAV, not as the meeting: the note's own `audioDurationSeconds` still says the
+// meeting ran 1847 s.
 const noteRecordings = new Map<number, NoteRecording>([
   [
     101,
     {
       noteId: 101,
       storageKey: "20260901-101500.wav",
-      durationSeconds: 1847,
+      durationSeconds: FIXTURE_RECORDING_SECONDS,
       originalFilename: null,
       createdAt: "2026-08-26T09:00:00Z",
+    },
+  ],
+  [
+    105,
+    {
+      noteId: 105,
+      storageKey: "20260819-100000.wav",
+      durationSeconds: FIXTURE_RECORDING_SECONDS,
+      originalFilename: "genomgang.m4a",
+      createdAt: "2026-08-19T10:00:00Z",
     },
   ],
 ]);
@@ -1324,6 +1757,8 @@ const noteTranscriptRows = new Map<number, TranscriptRow[]>([
         speaker: "Anna",
         speakerId: "speaker_0",
         text: "The localisation pass needs two more days.",
+        // Saved before KNEG-408, as most notes were: highlighted as a row.
+        words: [],
       },
       {
         index: 1,
@@ -1332,13 +1767,23 @@ const noteTranscriptRows = new Map<number, TranscriptRow[]>([
         speaker: "Ravi",
         speakerId: "speaker_1",
         text: "Then Thursday is the earliest honest date.",
+        words: [],
       },
     ],
   ],
+  [105, WORD_TIMING_SEGMENTS.map((segment, index) => ({
+    index,
+    startSeconds: segment.timestamp,
+    endSeconds: segment.endTimestamp,
+    speaker: null,
+    speakerId: null,
+    text: segment.text,
+    words: segment.words ?? [],
+  }))],
 ]);
 const speakerNames = new Map<number, Map<string, string>>();
 
-let nextNoteId = 105;
+let nextNoteId = 106;
 let nextFolderId = 4;
 
 function fixtureImport(result: Omit<MediaImportResult, "noteId" | "recording" | "retainedBytes">): MediaImportResult {
@@ -1346,9 +1791,9 @@ function fixtureImport(result: Omit<MediaImportResult, "noteId" | "recording" | 
   const durationSeconds = result.durationMs / 1000;
   const recording: NoteRecording = { noteId, storageKey: `fixture-${noteId}.wav`, durationSeconds, originalFilename: "fixture.wav", createdAt: nowIso() };
   const segments = result.segments.length ? result.segments : [{ text: result.text, timestamp: 0, endTimestamp: durationSeconds }];
-  notes.unshift({ id: noteId, title: "Imported fixture", content: "", noteType: "import", recordingDetails: null, enhancedContent: null, folderId: null, transcript: JSON.stringify(segments), participants: null, audioDurationSeconds: durationSeconds, createdAt: nowIso(), updatedAt: nowIso() });
+  notes.unshift(fixtureNote({ id: noteId, title: "Imported fixture", noteType: "import", transcript: JSON.stringify(segments), audioDurationSeconds: durationSeconds, transcribedBy: fixtureTranscribedBy(result.provider), createdAt: nowIso(), updatedAt: nowIso() }));
   noteRecordings.set(noteId, recording);
-  noteTranscriptRows.set(noteId, segments.map((segment, index) => ({ index, text: segment.text, speaker: null, speakerId: null, startSeconds: segment.timestamp, endSeconds: segment.endTimestamp })));
+  noteTranscriptRows.set(noteId, segments.map((segment, index) => ({ index, text: segment.text, speaker: null, speakerId: null, startSeconds: segment.timestamp, endSeconds: segment.endTimestamp, words: [] })));
   const complete = { ...result, noteId, recording, retainedBytes: durationSeconds * 32000 + 44 };
   latestImportSnapshot = { operationId: `fixture-${noteId}`, stage: "succeeded", elapsedSeconds: 1, provider: result.provider, model: result.model, result: complete, error: null };
   return complete;
@@ -1370,6 +1815,8 @@ function arg<T>(args: Record<string, unknown>, key: string): T | undefined {
 }
 
 const nowIso = (): string => new Date().toISOString();
+/** Now as SQLite's `CURRENT_TIMESTAMP` writes it, UTC with no zone: how Rust stamps `trashed_at`. */
+const sqliteNow = (): string => new Date().toISOString().replace("T", " ").slice(0, 19);
 
 /* ---------------------------------------------------------------- handlers */
 
@@ -1541,8 +1988,17 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
   notes_list: (a) => {
     const noteType = arg<string | null>(a, "noteType");
     const folderId = arg<number | null>(a, "folderId");
+    const person = arg<string | null>(a, "person");
     const limit = arg<number | null>(a, "limit");
-    let out = notes;
+    let out = liveNotes();
+    // As Rust's `list_notes`: a filter of its own, refused beside the others (KNEG-362).
+    if (typeof person === "string") {
+      if (!person.trim()) throw new Error("a person filter needs an email");
+      if (noteType || typeof folderId === "number") {
+        throw new Error("'person' is a filter of its own: send it without 'noteType' or 'folderId'");
+      }
+      out = out.filter((n) => fixtureOnNote(n, person));
+    }
     if (noteType) out = out.filter((n) => n.noteType === noteType);
     if (typeof folderId === "number") {
       out = out.filter((n) => n.folderId === folderId);
@@ -1559,8 +2015,9 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
       `${text.slice(Math.max(0, at - 35), at)}[${text.slice(at, at + query.length)}]${text.slice(at + query.length, at + query.length + 35)}`;
     // As Rust answers it: the title or the notes first, with no row; otherwise
     // the transcript row the words are in, with its time and its own snippet
-    // (KNEG-406). A plain substring here, where Rust asks FTS5 for every word.
-    return notes.flatMap((n): SearchHit[] => {
+    // (KNEG-406). A plain substring here, where Rust asks FTS5 for every word. Never a note in
+    // Trash (KNEG-401).
+    return liveNotes().flatMap((n): SearchHit[] => {
       const at = n.content.toLowerCase().indexOf(query);
       if (at !== -1) return [{ id: n.id, title: n.title, snippet: marked(n.content, at), transcriptRow: null }];
       if (n.title.toLowerCase().includes(query)) {
@@ -1580,20 +2037,20 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
   notes_create: (a) => {
     const r = arg<NewNoteRequest>(a, "request");
     const id = nextNoteId++;
+    // As Rust's `notes_create`: where a transcript was made is not the caller's to say (KNEG-368).
     notes = [
-      {
+      fixtureNote({
         id,
         title: r?.title ?? "Untitled",
         content: r?.content ?? "",
         noteType: r?.noteType ?? "note",
-        recordingDetails: null, enhancedContent: null,
         folderId: r?.folderId ?? null,
         transcript: r?.transcript ?? null,
         participants: r?.participants ?? null,
         audioDurationSeconds: r?.audioDurationSeconds ?? null,
         createdAt: nowIso(),
         updatedAt: nowIso(),
-      },
+      }),
       ...notes,
     ];
     return id;
@@ -1601,7 +2058,7 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
   notes_update: (a) => {
     const id = arg<number>(a, "id");
     const r = arg<NoteUpdateRequest>(a, "request");
-    if (!notes.some((n) => n.id === id)) return false;
+    if (!editable(id)) return false;
     notes = notes.map((n) =>
       n.id === id
         ? {
@@ -1615,17 +2072,36 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
     );
     return true;
   },
-  notes_delete: (a) => {
+  // KNEG-401, as Rust's `trash` module and `recordings::delete_forever` / `empty_trash` answer.
+  notes_trash: (a) => {
     const id = arg<number>(a, "id");
-    if (typeof id !== "number") return false;
-    const before = notes.length;
-    notes = notes.filter((n) => n.id !== id);
-    noteRecordings.delete(id);
-    noteTranscriptRows.delete(id);
-    return notes.length !== before;
+    if (!notes.some((n) => n.id === id && n.trashedAt === null)) return false;
+    notes = notes.map((n) => (n.id === id ? { ...n, trashedAt: sqliteNow() } : n));
+    return true;
   },
-  // The fixture setup stubs convertFileSrc. It intentionally has no recording
-  // server, so the recording player's honest error state appears in browser dev.
+  notes_restore: (a) => {
+    const id = arg<number>(a, "id");
+    if (!notes.some((n) => n.id === id && n.trashedAt !== null)) return false;
+    notes = notes.map((n) => (n.id === id ? { ...n, trashedAt: null } : n));
+    return true;
+  },
+  notes_delete_forever: (a) => {
+    const id = arg<number>(a, "id");
+    if (typeof id !== "number" || !notes.some((n) => n.id === id && n.trashedAt !== null)) return false;
+    deleteFixtureNote(id);
+    return true;
+  },
+  notes_trash_list: () => fixtureTrash(),
+  notes_empty_trash: (a) => {
+    // Only the notes the question counted, and only while still in Trash.
+    const asked = arg<number[]>(a, "ids") ?? [];
+    const trashed = notes.filter((n) => n.trashedAt !== null && asked.includes(n.id)).map((n) => n.id);
+    for (const id of trashed) deleteFixtureNote(id);
+    return trashed.length;
+  },
+  // A note listed here gets a player, and the player's `recording` URL is
+  // answered with the fixtures' two-minute WAV (`servePlayableRecordings`).
+  // A note that is not has no player, as in the app.
   note_recording_get: (a) => {
     const id = arg<number>(a, "id");
     return typeof id === "number" ? noteRecordings.get(id) ?? null : null;
@@ -1638,7 +2114,7 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
     const id = arg<number>(a, "id");
     const speakerId = arg<string>(a, "speakerId");
     const rawName = arg<string>(a, "name");
-    if (typeof id !== "number" || !notes.some(note => note.id === id)) throw new Error("there is no note with that id");
+    if (typeof id !== "number" || !editable(id)) throw new Error("there is no note with that id");
     if (typeof speakerId !== "string" || !speakerId.trim()) throw new Error("a speaker id cannot be blank");
     const name = (rawName ?? "").trim().replace(/\s+/g, " ");
     const names = speakerNames.get(id) ?? new Map<string, string>();
@@ -1655,9 +2131,11 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
     const id = arg<number>(a, "id");
     if (typeof id !== "number") return [];
     const used = new Set((noteTranscriptRows.get(id) ?? []).map(row => row.speaker?.toLocaleLowerCase()).filter(name => name !== undefined));
+    // Other notes' names, never a note's in Trash (KNEG-401).
+    const live = new Set(liveNotes().map((note) => note.id));
     const candidates = [
       ...(id === 101 ? ["Anna Lind", "Erik Berg"] : []),
-      ...[...speakerNames].filter(([noteId]) => noteId !== id).flatMap(([, names]) => [...names.values()]),
+      ...[...speakerNames].filter(([noteId]) => noteId !== id && live.has(noteId)).flatMap(([, names]) => [...names.values()]),
     ];
     const seen = new Set<string>();
     return candidates.filter(name => {
@@ -1668,10 +2146,21 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
     }).slice(0, 20);
   },
   folders_list: () => folders,
+  // KNEG-362. As Rust: checked and tidied, refused in plain words, and `updatedAt` left alone.
+  people_list: () => fixturePeople(),
+  notes_set_participants: (a) => {
+    const id = arg<number>(a, "id");
+    if (!editable(id)) return false;
+    const note = notes.find((n) => n.id === id);
+    if (!note) return false;
+    const participants = fixtureTidyParticipants(note.participants, arg<ParticipantRequest[]>(a, "participants") ?? []);
+    notes = notes.map((n) => (n.id === id ? { ...n, participants } : n));
+    return true;
+  },
   notes_set_folder: (a) => {
     const id = arg<number>(a, "id");
     const folderId = arg<number | null>(a, "folderId") ?? null;
-    if (!notes.some((n) => n.id === id)) return false;
+    if (!editable(id)) return false;
     notes = notes.map((n) => (n.id === id ? { ...n, folderId } : n));
     return true;
   },
@@ -1789,6 +2278,36 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
     return null;
   },
   dictation_device: () => dictationDevice,
+  // Rust's `microphone_check` (`microphone_check.rs`): refused where Rust
+  // refuses, in its words; otherwise five seconds of fake levels on the
+  // check's own session, as its publisher sends them, with a last 0, and
+  // then what it heard. The fixtures' microphone always hears you; which one
+  // was tested follows `dictation_set_device`, the default standing in for
+  // a choice that isn't connected.
+  microphone_check: async () => {
+    if (meetingStatus.state !== "idle" && meetingStatus.state !== "finishing") {
+      throw new Error("Not now: a meeting is under way. Test the microphone once it has ended.");
+    }
+    if (fixtureDictating) {
+      throw new Error("Not now: a dictation is recording. Test the microphone once it has finished.");
+    }
+    if (microphoneChecking) throw new Error("Not now: the microphone is already being tested.");
+    microphoneChecking = true;
+    try {
+      startFakeLevels("microphone-check", ["microphone"]);
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+      stopFakeLevels("microphone-check");
+      const device = fixtureOpenedMicrophone();
+      return {
+        device,
+        fellBack: dictationDevice !== null && dictationDevice !== device ? dictationDevice : null,
+        heard: true,
+        peakLevel: 0.7,
+      } satisfies MicrophoneCheck;
+    } finally {
+      microphoneChecking = false;
+    }
+  },
   insertion_supported: () => true,
   dictation_route: () => resolvedRoute(),
   dictation_use_local: (a) => {
@@ -1854,6 +2373,18 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
     const model = SHERPA.models.find((m) => m.id === arg<string>(a, "modelId"));
     if (!model) throw new Error(`Unknown model: ${arg<string>(a, "modelId") ?? ""}`);
     SHERPA.selected = model.id;
+    return null;
+  },
+  // Refused where Rust refuses: an offline model, or one not installed. Moves
+  // only the meetings choice, as Rust writes only `meetings.streamModel`.
+  sherpa_use_stream_model: (a) => {
+    const model = SHERPA.models.find((m) => m.id === arg<string>(a, "modelId"));
+    if (!model) throw new Error(`Unknown model: ${arg<string>(a, "modelId") ?? ""}`);
+    if (model.usedFor !== "meetings") {
+      throw new Error(`${model.name} is an offline model, so it is for dictation rather than meetings.`);
+    }
+    if (!model.installed) throw new Error(`${model.name} is not installed. Install it before choosing it for meetings.`);
+    SHERPA.selectedStream = model.id;
     return null;
   },
   local_model_status: () => ({ ...LOCAL_MODELS }),
@@ -1928,70 +2459,73 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
       reconnects: 0,
       transcriptIsPartials: false,
       recordingAttached: true,
+      folderMissing: false,
+      recordingRemoval: null,
+      recordingRemovalError: null,
     } satisfies MeetingOutcome;
   },
+  // The plan comes back on `meeting_status` while the meeting runs, tidied,
+  // as Rust keeps it with the session (KNEG-365), with the delete choice
+  // read from the setting at Start (KNEG-409).
   meeting_start: (a) => {
     const wantsSystemAudio = arg<boolean>(a, "systemAudio") ?? false;
     const sources: Sources = {
       microphone: true,
+      // The microphone the meeting opened, kept for its whole run: a choice
+      // made afterwards does not move it, as in Rust (KNEG-364).
+      microphoneName: fixtureOpenedMicrophone(),
       systemAudio: wantsSystemAudio,
       systemAudioReason: wantsSystemAudio
         ? null
         : "system audio was not requested",
     };
+    meetingStartedAt = new Date();
     meetingStatus = {
       ...meetingStatus,
       state: "recording",
       provider: arg<string>(a, "provider") ?? "meeting:deepgram",
+      plan: {
+        title: fixtureMeetingTitle(arg<string | null>(a, "title")),
+        folderId: arg<number | null>(a, "folderId") ?? null,
+        deleteRecording: meetingDeleteRecordings,
+      },
       elapsedSeconds: 0,
       sources,
     };
+    // The meters' levels, from the captures that opened, as `start_live` publishes them.
+    startFakeLevels("meeting", wantsSystemAudio ? ["microphone", "system"] : ["microphone"]);
     return sources;
   },
+  // `fixtureStop` saves the note (a folder deleted while the meeting ran has
+  // no `kw` hand-hold: delete it in Notes, or through `folder_delete`). The
+  // outcome is announced as well as returned, as Rust's `stop` announces it:
+  // that is what makes the page read Recent again. Not the `idle` state, for
+  // the reason `meeting_cancel` gives.
   meeting_stop: () => {
-    const provider = meetingStatus.provider;
-    meetingStatus = {
-      ...meetingStatus,
-      state: "idle",
-      provider: null,
-      elapsedSeconds: 0,
-      sources: null,
-      offer: null,
-    };
-    // OpenAI is the provider whose capped sessions reconnect. Its fixture uses
-    // the quiet outcome so the second public shape carrying `reconnects` can be
-    // inspected in the browser; every other provider keeps the saved-note path.
-    if (provider === "meeting:openai-realtime") {
-      return {
-        outcome: "nothing-transcribed",
-        recordingPath:
-          "C:\\Users\\dev\\AppData\\Roaming\\KnegisWhisper\\recordings\\2026-08-26T09-00.wav",
-        mic: "silence",
-        system: "nothing",
-        reconnects: 1,
-      } satisfies MeetingOutcome;
-    }
-    return {
-      outcome: "saved",
-      noteId: 101,
-      durationSeconds: 1847,
-      recordingPath:
-        "C:\\Users\\dev\\AppData\\Roaming\\KnegisWhisper\\recordings\\2026-08-26T09-00.wav",
-      gaps: 0,
-      reconnects: 1,
-      transcriptIsPartials: false,
-      recordingAttached: true,
-    } satisfies MeetingOutcome;
+    stopFakeLevels("meeting");
+    const outcome = fixtureStop();
+    void emit("meeting-outcome", outcome);
+    return outcome;
   },
   meeting_cancel: () => {
+    stopFakeLevels("meeting");
+    meetingStartedAt = null;
     meetingStatus = {
       ...meetingStatus,
       state: "idle",
       provider: null,
+      plan: null,
       elapsedSeconds: 0,
       sources: null,
       offer: null,
     };
+    // How Rust's `cancel` says a meeting was discarded (`meeting.rs`), so the
+    // page can say "Discarded." here too. Rust keeps typed notes as a note and
+    // names it; this tab has no meeting window to have typed them in, so
+    // there is none. Not the `idle` state event Rust sends first: no other
+    // meeting command here announces a state, and an `idle` heard once would
+    // outrank every later status read, so the next Start would never show.
+    void emit("meeting-outcome", { outcome: "cancelled", noteId: null } satisfies MeetingOutcome);
     return null;
   },
   meeting_dismiss: () => {
@@ -2003,6 +2537,11 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
       ...meetingStatus,
       promptOnDetect: arg<boolean>(a, "enabled") ?? false,
     };
+    return null;
+  },
+  meeting_delete_recordings: () => meetingDeleteRecordings,
+  meeting_set_delete_recordings: (a) => {
+    meetingDeleteRecordings = arg<boolean>(a, "enabled") ?? false;
     return null;
   },
   summary_settings_get: () => summarySettings,
@@ -2185,6 +2724,27 @@ A fixture summary of "${note.title}", written without a model.
   // load and covered the page in the "no stub" toast before anyone got to
   // look at anything else.
   "plugin:window|is_maximized": () => false,
+
+  /* events sent to one window */
+  /*
+   * Stop and Discard ask the meeting window to save what was typed in it
+   * (`flushMeetingPanelNotes`, `lib/ipc.ts`): `meeting-notes-flush` sent to
+   * the `meeting` window, then up to 5 s for `meeting-notes-flushed` with the
+   * same request id. This answers for that window, as `MeetingPanel` does once
+   * its autosave has flushed, so both can finish here (KNEG-418) -- before
+   * this, every Stop and Discard in the fixtures ran out the 5 s and stopped
+   * there. Silent after `kw.meetingWindowSilent()`, so that wait can be seen
+   * running out. Any other event is sent nowhere: there is no other window
+   * here. `mockIPC` never calls this itself -- see `routeEmitTo`.
+   */
+  "plugin:event|emit_to": (a) => {
+    const target = arg<{ kind: string; label?: string }>(a, "target");
+    const payload = arg<{ requestId?: string }>(a, "payload");
+    if (target?.label === "meeting" && arg<string>(a, "event") === "meeting-notes-flush" && !meetingWindowSilent) {
+      void emit("meeting-notes-flushed", { requestId: payload?.requestId ?? "", error: null });
+    }
+    return null;
+  },
 };
 
 /* ------------------------------------------------------------ dev console */
@@ -2199,6 +2759,7 @@ A fixture summary of "${note.title}", written without a model.
  */
 const devConsole = {
   dictationState(state: SessionState) {
+    fixtureDictating = state === "recording";
     void emit("dictation-state", state);
   },
   /**
@@ -2255,10 +2816,11 @@ const devConsole = {
   /**
    * An interrupted recording, as an earlier session would leave one. Read
    * when the Meetings page next loads, so open it (or leave and come back)
-   * after calling this.
+   * after calling this. `title` is the name it was given before Start, as
+   * its plan sidecar would carry it (KNEG-365).
    */
-  interrupted(storageKey = "20260901-101500-3f2a9c1e.wav", hasNotes = true) {
-    recoverable = [...recoverable.filter((r) => r.storageKey !== storageKey), { storageKey, hasNotes }];
+  interrupted(storageKey = "20260901-101500-3f2a9c1e.wav", hasNotes = true, title: string | null = null) {
+    recoverable = [...recoverable.filter((r) => r.storageKey !== storageKey), { storageKey, hasNotes, title }];
   },
   offer(name = "Zoom") {
     const next: Offer = {
@@ -2286,10 +2848,34 @@ const devConsole = {
     meetingStatus = { ...meetingStatus, offer: null };
     void emit("meeting-offer", null);
   },
-  modelProgress(written: number, total: number | null = 574_000_000) {
+  /**
+   * The meeting window stops answering when Stop or Discard asks it to save
+   * its notes, as a window that hung would: the page waits its 5 s, then
+   * offers "Stop recording anyway" and "Discard anyway" (KNEG-418). Start a
+   * meeting first; `kw.meetingWindowSilent(false)` answers again.
+   */
+  meetingWindowSilent(silent = true) {
+    meetingWindowSilent = silent;
+  },
+  /**
+   * Fake levels for `session`'s microphone, ten a second, as a running
+   * capture's publisher sends them; `false` stops them with the last 0 Rust
+   * sends. For dictation and the overlay (with `kw.dictationState`), whose
+   * recording the fixtures never start; a meeting's run from its Start.
+   */
+  levels(session: LevelSession = "dictation", running = true) {
+    if (running) startFakeLevels(session, ["microphone"]);
+    else stopFakeLevels(session);
+  },
+  /** One reading, e.g. `kw.level(0.75)`, for a meter to be seen at a known value. */
+  level(level: number, session: LevelSession = "dictation", source: LevelSource = "microphone") {
+    void emit("audio-level", { session, source, level } satisfies AudioLevel);
+  },
+  /** A model download's progress, for `id` (Whisper Large v3 Turbo unless named). */
+  modelProgress(written: number, total: number | null = 574_000_000, id = "whisper-large-v3-turbo-q5") {
     void emit("local-model-progress", {
       stage: "model",
-      id: "whisper-large-v3-turbo-q5",
+      id,
       written,
       total,
     } satisfies InstallProgress);
@@ -2361,10 +2947,67 @@ function markThePageAsInvented(): void {
   }
 }
 
+/**
+ * The one URL every fixture recording plays from: `toneWav`'s two minutes,
+ * built the first time a note with a recording asks for it and then kept.
+ * Kept because `recordingSrc` runs on every render: a new blob URL each time
+ * would hand the `<audio>` a new `src` and reload it mid-playback.
+ */
+let fixtureRecordingUrl: string | null = null;
+function fixtureRecording(): string {
+  fixtureRecordingUrl ??= URL.createObjectURL(
+    new Blob([toneWav({ seconds: FIXTURE_RECORDING_SECONDS })], { type: "audio/wav" }),
+  );
+  return fixtureRecordingUrl;
+}
+
+/**
+ * Answers the player's `recording` URL (`lib/ipc.ts`' `recordingSrc`) for
+ * every fixture note that has a recording, as Rust's scheme answers it in the
+ * app, so the player plays in browser dev and a headless check can measure
+ * playback (KNEG-412, `tools/visual-check/note-playback.mjs`). Before this the
+ * fixtures had nothing behind that URL and the player could only show its
+ * error. Every other URL still goes to Tauri's mock, which nothing answers,
+ * so an id with no recording fails as Rust's 404 would.
+ */
+function servePlayableRecordings(): void {
+  const internals = (window as unknown as {
+    __TAURI_INTERNALS__: { convertFileSrc: (filePath: string, protocol?: string) => string };
+  }).__TAURI_INTERNALS__;
+  const mocked = internals.convertFileSrc.bind(internals);
+  internals.convertFileSrc = (filePath, protocol = "asset") =>
+    protocol === "recording" && noteRecordings.has(Number(filePath))
+      ? fixtureRecording()
+      : mocked(filePath, protocol);
+}
+
+/**
+ * Sends `plugin:event|emit_to` to its handler. With `shouldMockEvents`,
+ * `mockIPC` answers every `plugin:event|` command itself, before the handler
+ * table is asked, and has no case for `emit_to`: it resolves to nothing and
+ * nothing hears the event. So this wraps the invoke `mockIPC` installed and
+ * takes that one command out from under it; every other command still goes
+ * to the mock. Measured: with the handler in the table and no wrapper, Stop
+ * still ran out its 5 s (`tools/visual-check/meeting-discard.mjs`, KNEG-418).
+ */
+function routeEmitTo(): void {
+  const internals = (window as unknown as {
+    __TAURI_INTERNALS__: { invoke: (cmd: string, args?: unknown, options?: unknown) => Promise<unknown> };
+  }).__TAURI_INTERNALS__;
+  const mocked = internals.invoke;
+  const handler = HANDLERS["plugin:event|emit_to"];
+  if (handler === undefined) throw new Error("dev fixtures: no stub for \"plugin:event|emit_to\"");
+  internals.invoke = (cmd, args, options) =>
+    cmd === "plugin:event|emit_to"
+      ? Promise.resolve().then(() => handler((args ?? {}) as Record<string, unknown>))
+      : mocked(cmd, args, options);
+}
+
 export function installDevFixtures(): void {
   markThePageAsInvented();
   mockWindows("main");
   mockConvertFileSrc("windows");
+  servePlayableRecordings();
   mockIPC(
     (cmd, payload) => {
       const handler = HANDLERS[cmd];
@@ -2380,6 +3023,7 @@ export function installDevFixtures(): void {
     },
     { shouldMockEvents: true },
   );
+  routeEmitTo();
 
   globalThis.kw = devConsole;
   console.info(
@@ -2392,8 +3036,10 @@ export function installDevFixtures(): void {
       "Try:      kw.dictationState('recording')",
       "          kw.offer()",
       "          kw.meetingState('recording')",
+      "          kw.meetingWindowSilent()",
       "          kw.overlayFloating()",
       "          kw.dictationFailed()",
+      "          kw.levels()  ·  kw.level(0.75)",
     ].join("\n  "),
   );
 }

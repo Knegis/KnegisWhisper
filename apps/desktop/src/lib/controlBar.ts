@@ -35,12 +35,13 @@
  */
 
 import type { MenuOption } from "./chipMenu.js";
-import type { CleanupRoute, InputDevice } from "./ipc.js";
+import type { CleanupRoute, InputDevice, RouteReport } from "./ipc.js";
 
 /**
- * Whisper's dictation languages, by code, in the order the picker lists them.
+ * Dictation's languages, by code, in the order the picker lists them: the
+ * eight `validated_local_languages` accepts (src-tauri/src/dictation.rs).
  * Moved here from `components/LocalLanguagePicker.tsx`, which imports it back,
- * so the chip and the picker cannot name a language two ways.
+ * so the chip, the picker and its note cannot name a language two ways.
  */
 export const LANGUAGES = [
   ["sv", "Swedish"],
@@ -122,16 +123,80 @@ export function privacyLines(
 }
 
 /**
- * The language chip: the chosen languages by name, or "Detect language" when
- * none is chosen and Whisper detects it. A code with no name here is shown as
- * itself rather than dropped, so the chip never claims fewer languages than
+ * A language by name, or by its code where this build has no name for it:
+ * shown as itself rather than dropped, so nothing claims fewer languages than
  * are set.
+ */
+function languageName(code: string): string {
+  return LANGUAGES.find(([known]) => known === code)?.[1] ?? code;
+}
+
+/**
+ * The language chip: the chosen languages by name, or "Detect language" when
+ * none is chosen. A route that is told a language all the same (Corti) says
+ * so in the picker's note (`languageNote`).
  */
 export function languageLabel(codes: readonly string[]): string {
   if (codes.length === 0) return "Detect language";
-  return codes
-    .map((code) => LANGUAGES.find(([known]) => known === code)?.[1] ?? code)
-    .join(", ");
+  return codes.map(languageName).join(", ");
+}
+
+/** How every language note begins; what follows depends on the route. */
+export const LANGUAGE_NOTE_LEAD = "Choose up to two.";
+
+/**
+ * A destination's name to begin a sentence with. The two endpoint phrases
+ * ("your self-hosted server") take a capital; a provider's own name never
+ * does, since "xAI" is spelt that way.
+ */
+function sentenceStart(destination: string): string {
+  const endpoint = ENDPOINT_NAMES[destination];
+  return endpoint === undefined ? destinationName(destination) : endpoint.charAt(0).toUpperCase() + endpoint.slice(1);
+}
+
+/**
+ * The line under Dictation's language picker: what the route in use does
+ * with the languages chosen (KNEG-370). Always "Choose up to two.", then:
+ *
+ *   - **local Whisper** checks each dictation for which of two was spoken;
+ *   - **a cloud route** says what it is sent, from `route.cloudLanguage`,
+ *     which Rust settles (`route::resolve`) -- so xAI and Mistral dropping a
+ *     language they do not list, and Corti being told English when not
+ *     exactly one is chosen, are read here rather than repeated. With
+ *     nothing sent, it says the provider detects the language, and why when
+ *     one was chosen;
+ *   - **a route with a problem**, which sends nothing, and a **Parakeet**
+ *     model, which uses its own languages, add nothing.
+ */
+export function languageNote(
+  engine: "whisper" | "parakeet" | null,
+  route: RouteReport,
+  chosen: readonly string[],
+): string {
+  const more = languageNoteMore(engine, route, chosen);
+  return more === null ? LANGUAGE_NOTE_LEAD : `${LANGUAGE_NOTE_LEAD} ${more}`;
+}
+
+function languageNoteMore(
+  engine: "whisper" | "parakeet" | null,
+  route: RouteReport,
+  chosen: readonly string[],
+): string | null {
+  if (route.problem !== null) return null;
+  if (engine === "whisper") return "With two, each dictation is checked for which one you spoke.";
+  if (route.isLocal) return null;
+  const provider = sentenceStart(route.destination);
+  if (route.cloudLanguage !== null) {
+    const language = languageName(route.cloudLanguage);
+    return chosen.length === 1
+      ? `${provider} is told to expect ${language}.`
+      : `${provider} needs one language, so it is told to expect ${language}.`;
+  }
+  if (chosen.length === 2) return `With two, ${destinationName(route.destination)} detects the language itself.`;
+  const [only] = chosen;
+  return only === undefined
+    ? `${provider} detects the language itself.`
+    : `${provider} can't be told ${languageName(only)}, so it detects the language itself.`;
 }
 
 /**
@@ -148,16 +213,21 @@ export function languageLabel(codes: readonly string[]): string {
  * The chip's label is the current row's own words, so the full name is the
  * chip's `title` once the chip has cut it short. "System default" is id `""`,
  * which the page turns back into `null` when it is chosen.
+ *
+ * `group` puts every row under one heading -- the Meetings page's "Used by
+ * meetings and dictation", which says beside the rows that the choice is
+ * shared (KNEG-364). Dictation's menu has none.
  */
 export function microphoneMenu(
   devices: readonly InputDevice[],
   device: string | null,
+  group: string | null = null,
 ): { label: string; missing: string | null; options: MenuOption[] } {
   const missing = device !== null && !devices.some((d) => d.name === device) ? device : null;
   const row = (id: string, label: string, current: boolean): MenuOption => ({
     id,
     label,
-    group: null,
+    group,
     current,
     disabled: false,
     reason: null,

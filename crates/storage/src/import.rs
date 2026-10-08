@@ -441,8 +441,26 @@ async fn ensure_target_is_empty(pool: &SqlitePool) -> Result<(), StorageError> {
         let sql = format!("SELECT count(*) FROM {table}");
         let n: i64 = sqlx::query_scalar(&sql).fetch_one(pool).await?;
         if n > 0 {
+            // A note in Trash is still a row whose id an import would collide
+            // with (KNEG-401), so it counts, and the refusal says where it is.
+            let in_trash = if *table == "notes" {
+                let trashed: i64 =
+                    sqlx::query_scalar("SELECT count(*) FROM notes WHERE trashed_at IS NOT NULL")
+                        .fetch_one(pool)
+                        .await?;
+                if trashed > 0 {
+                    format!(
+                        ", {trashed} of them in Trash, where notes count until the Trash is \
+                         emptied"
+                    )
+                } else {
+                    String::new()
+                }
+            } else {
+                String::new()
+            };
             return Err(StorageError::Import(format!(
-                "the target database already has {n} row(s) in {table}. \
+                "the target database already has {n} row(s) in {table}{in_trash}. \
                  An import preserves row ids so foreign keys survive, which is only \
                  safe into a fresh database. Import before adding your own data."
             )));
@@ -1164,6 +1182,18 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn an_imported_note_says_nothing_about_where_it_was_transcribed() {
+        // KNEG-368. OpenWhispr never recorded it, and `COPY_PLAN` names the
+        // columns copied, so an imported note is one from before the record.
+        let (_report, target, _, _dir) = run_import().await;
+        let recorded: Vec<Option<String>> = sqlx::query_scalar("SELECT transcribed_by FROM notes")
+            .fetch_all(target.pool())
+            .await
+            .unwrap();
+        assert_eq!(recorded, vec![None], "the one live note, unattributed");
+    }
+
+    #[tokio::test]
     async fn blobs_survive_the_copy() {
         let (_report, target, _, _dir) = run_import().await;
         let embedding: Vec<u8> = sqlx::query_scalar("SELECT embedding FROM speaker_profiles")
@@ -1189,6 +1219,31 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.to_string().contains("already has"), "got {err}");
+    }
+
+    /// KNEG-401. A note in Trash is still a row whose id an import would
+    /// collide with, so it counts, and the refusal says where those notes are.
+    #[tokio::test]
+    async fn notes_in_trash_count_and_the_refusal_says_so() {
+        let dir = tempfile::tempdir().unwrap();
+        let src_path = dir.path().join("transcriptions.db");
+        openwhispr_fixture(&src_path).await.close().await;
+
+        let target = Db::open(&dir.path().join("kw.db")).await.unwrap();
+        sqlx::query("INSERT INTO notes (title, trashed_at) VALUES ('Deleted', CURRENT_TIMESTAMP)")
+            .execute(target.pool())
+            .await
+            .unwrap();
+
+        let err = from_openwhispr(&target, &src_path, &MemoryCredentialStore::new())
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("already has 1 row(s) in notes, 1 of them in Trash"),
+            "got {err}"
+        );
+        assert!(err.contains("until the Trash is emptied"), "got {err}");
     }
 
     #[tokio::test]

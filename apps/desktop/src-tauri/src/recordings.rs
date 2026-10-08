@@ -418,9 +418,13 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("remove.wav");
 
-        kw_notes_core::recordings::remove_file(directory.path(), "remove.wav").await;
+        kw_notes_core::recordings::remove_file(directory.path(), "remove.wav")
+            .await
+            .unwrap();
         std::fs::write(&path, wav()).unwrap();
-        kw_notes_core::recordings::remove_file(directory.path(), "remove.wav").await;
+        kw_notes_core::recordings::remove_file(directory.path(), "remove.wav")
+            .await
+            .unwrap();
         assert!(!path.exists());
     }
 }
