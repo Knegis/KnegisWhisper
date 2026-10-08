@@ -14,6 +14,7 @@ function scrollBehavior(): ScrollBehavior {
 }
 
 type TranscriptPanelProps = {
+  readOnly?: boolean;
   sourceRequest?: { index: number; nonce: number } | null;
   /**
    * Called once `sourceRequest` has been shown (its row selected and scrolled
@@ -86,7 +87,7 @@ function RenameForm({ target, suggestions, onRename, onClose }: {
   </form>;
 }
 
-export function TranscriptPanel({ sourceRequest, onSourceShown, rows, recording, currentTime, playing, visible, playInterval, time, seek, suggestions, onRename }: TranscriptPanelProps) {
+export function TranscriptPanel({ readOnly = false, sourceRequest, onSourceShown, rows, recording, currentTime, playing, visible, playInterval, time, seek, suggestions, onRename }: TranscriptPanelProps) {
   const rowRefs = useRef(new Map<number, HTMLLIElement>());
   // The playing row's words, when it is drawn word by word.
   const wordsRef = useRef<HTMLSpanElement>(null);
@@ -197,7 +198,7 @@ export function TranscriptPanel({ sourceRequest, onSourceShown, rows, recording,
           Play selection ({formatClock(selectionStart)}–{formatClock(shownEnd)})
         </button>
       ) : null}
-      {renaming && (
+      {!readOnly && renaming && (
         // Changing the target must re-seed the field and clear any error from the previous speaker.
         <RenameForm key={renaming.speakerId} target={renaming} suggestions={suggestions} onRename={onRename} onClose={closeRename} />
       )}
@@ -236,7 +237,7 @@ export function TranscriptPanel({ sourceRequest, onSourceShown, rows, recording,
                   first line, so a row's text starts at the same x whether it can be played or not. */}
               <span className="transcript-row-head">
                 {speakerId !== null ? (
-                  <button type="button" className="transcript-speaker" aria-label={`Rename ${row.speaker ?? speakerId}`}
+                  <button type="button" className="transcript-speaker" disabled={readOnly} aria-label={`Rename ${row.speaker ?? speakerId}`}
                     onClick={event => {
                       // The label sits inside a selectable option; its click must not toggle the row.
                       event.stopPropagation();
@@ -266,14 +267,24 @@ export function TranscriptPanel({ sourceRequest, onSourceShown, rows, recording,
                   </button>
                 ) : null}
               </span>
-              {isActive && activeWords !== null ? (
+              {recording && wordsMatchText(row.words, row.text) && row.words.length > 0 ? (
                 // Word by word while it plays. A click on a word goes there, and only there: the
                 // row's own click would select or deselect it.
-                <span className="transcript-text" ref={wordsRef}>
-                  {activeWords.map((word, at) => (
+                <span className="transcript-text" ref={isActive ? wordsRef : undefined}>
+                  {row.words.map((word, at) => (
                     <Fragment key={at}>
                       {at > 0 ? " " : null}
-                      <span className="transcript-word" onClick={(event) => { event.stopPropagation(); seek(word.start); }}>{word.text}</span>
+                      <span className="transcript-word" role="button" aria-label={`Seek to ${word.text}`} tabIndex={at === 0 ? 0 : -1}
+                        onFocus={event => { const siblings = event.currentTarget.closest(".transcript-text")?.querySelectorAll<HTMLElement>(".transcript-word"); siblings?.forEach(element => { element.tabIndex = element === event.currentTarget ? 0 : -1; }); }}
+                        onKeyDown={event => {
+                          if (event.key === "Enter" || event.key === " ") { event.preventDefault(); event.stopPropagation(); seek(word.start); }
+                          else if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
+                            event.preventDefault(); event.stopPropagation();
+                            const siblings = [...(event.currentTarget.closest(".transcript-text")?.querySelectorAll<HTMLElement>(".transcript-word") ?? [])];
+                            const next = event.key === "Home" ? 0 : event.key === "End" ? siblings.length - 1 : Math.max(0, Math.min(siblings.length - 1, at + (event.key === "ArrowRight" ? 1 : -1)));
+                            siblings[next]?.focus();
+                          }
+                        }} onClick={(event) => { event.stopPropagation(); seek(word.start); }}>{word.text}</span>
                     </Fragment>
                   ))}
                 </span>

@@ -8,8 +8,8 @@ import { getLocalDictationLanguages, setLocalDictationLanguages, onLocalDictatio
  * rather than disabled until its own read answers -- in the Dictation chip's
  * panel that put focus on the panel instead of the first control.
  *
- * While a choice is saved, further choices are ignored rather than the
- * fieldset disabled: disabling the box that has focus drops focus to the page,
+ * Choices are saved in order while the controls keep focus. Disabling the
+ * fieldset that has focus drops focus to the page,
  * which left the Dictation panel with nothing for Escape to close (KNEG-385).
  *
  * In plain words (KNEG-343): its legend names no engine, and a failure is a
@@ -29,31 +29,39 @@ export function LocalLanguagePicker({
 }) {
   const [selected, setSelected] = useState<string[] | null>(initial ? [...initial] : null);
   const [busy, setBusy] = useState(false);
+  const writes = useRef(Promise.resolve());
+  const saveGeneration = useRef(0);
   const saving = useRef(false);
+  const wanted = useRef(selected);
+  const alive = useRef(true);
   const [error, setError] = useState<{ text: string; detail: string } | null>(null);
   useEffect(() => {
     let disposed = false;
+    alive.current = true;
     let stop: (() => void) | undefined;
     let revision = 0;
     void onLocalDictationLanguages(value => {
       revision++;
-      if (!disposed) setSelected(value);
+      if (!disposed && !saving.current) { wanted.current = value; setSelected(value); }
     }).then(async unlisten => {
       if (disposed) { unlisten(); return; }
       stop = unlisten;
       const before = revision;
       const value = await getLocalDictationLanguages();
-      if (!disposed && before === revision) setSelected(value);
+      if (!disposed && before === revision && !saving.current) { wanted.current = value; setSelected(value); }
     }).catch(e => { if (!disposed) setError({ text: "Couldn't read the dictation languages.", detail: String(e) }); });
-    return () => { disposed = true; stop?.(); };
+    return () => { disposed = true; alive.current = false; stop?.(); };
   }, []);
   const save = async (languages: string[]) => {
-    if (saving.current) return;
+    const generation = ++saveGeneration.current;
     saving.current = true;
+    wanted.current = languages; setSelected(languages);
     setBusy(true); setError(null);
-    try { await setLocalDictationLanguages(languages); setSelected(languages); }
-    catch (e) { setError({ text: "Couldn't save the dictation languages.", detail: String(e) }); }
-    finally { saving.current = false; setBusy(false); }
+    const write = writes.current.then(() => setLocalDictationLanguages(languages));
+    writes.current = write.catch(() => undefined);
+    try { await write; const committed = await getLocalDictationLanguages(); if (alive.current && generation === saveGeneration.current) { wanted.current = committed; setSelected(committed); } }
+    catch (e) { if (alive.current && generation === saveGeneration.current) setError({ text: "Couldn't save the dictation languages.", detail: String(e) }); }
+    finally { if (alive.current && generation === saveGeneration.current) { setBusy(false); saving.current = false; } }
   };
   return <fieldset className="local-language-picker" disabled={disabled || selected === null} aria-busy={busy || undefined}>
     <legend>Dictation languages</legend>
@@ -62,7 +70,7 @@ export function LocalLanguagePicker({
       {LANGUAGES.map(([code, label]) => <label key={code}>
         <input type="checkbox" checked={selected?.includes(code) ?? false}
           disabled={!selected?.includes(code) && selected?.length === 2}
-          onChange={e => void save(e.target.checked ? [...(selected ?? []), code] : (selected ?? []).filter(value => value !== code))} />{label}
+          onChange={e => void save(e.target.checked ? [...(wanted.current ?? []), code] : (wanted.current ?? []).filter(value => value !== code))} />{label}
       </label>)}
     </div>
     <p className="muted">{note}</p>

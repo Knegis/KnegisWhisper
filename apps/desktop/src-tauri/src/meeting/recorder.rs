@@ -275,6 +275,13 @@ fn record(
     // does. Every `return` below and every unwind goes through it.
     let _exit = RecorderExit(Arc::clone(ended));
 
+    let _microphone_use = match crate::capture_interlock::CaptureInterlock::shared().recording() {
+        Ok(lease) => lease,
+        Err(error) => {
+            let _ = ready.send(Err(error));
+            return;
+        }
+    };
     let mic = match Capture::start(microphone.as_deref()) {
         Ok(capture) => capture,
         Err(err) => {

@@ -1,6 +1,6 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { attachNoteRecording, getNoteRecording, getNoteSpeakerSuggestions, getNoteTranscriptRows, renameNoteSpeaker, updateNote, type Note, type NoteUpdate } from "../lib/ipc";
+import { attachNoteRecording, getNoteRecording, getNoteRecordingState, getNoteMetadataForPeople, restoreNote, retryNoteRecordingDeletion, type NoteRecordingState, getNoteSpeakerSuggestions, getNoteTranscriptRows, renameNoteSpeaker, updateNote, type Note, type NoteUpdate } from "../lib/ipc";
 import { useAutosave, type AutosaveStatus } from "../lib/useAutosave";
 import { workspaceSaveText } from "../lib/saveStatus";
 import { transcriptToMarkdown } from "../lib/noteBody";
@@ -151,11 +151,35 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
    */
   revealRow?: { index: number } | null;
   reload: () => Promise<void>;
+  onSaved: (id: number, patch: { title?: string; content?: string }) => Promise<void>;
   onExport: () => void;
   onMore: (anchor: HTMLButtonElement) => void;
   /** Whether the menu More opens is open, for its `aria-expanded`. */
   moreOpen: boolean;
-}>(function NoteWorkspace({ note, revealRow = null, reload, onExport, onMore, moreOpen }, ref) {
+}>(function NoteWorkspace({ note, revealRow = null, reload, onSaved, onExport, onMore, moreOpen }, ref) {
+  const [blocked, setBlocked] = useState<"trashed" | "deleted" | "restored" | null>(null);
+  const blockedRef = useRef(blocked); blockedRef.current = blocked;
+  const [draftNotice, setDraftNotice] = useState<string | null>(null);
+  useEffect(() => {
+    let disposed = false; let inFlight = false;
+    const read = async () => {
+      if (disposed || inFlight || document.visibilityState === "hidden") return;
+      inFlight = true;
+      try {
+        const metadata = await getNoteMetadataForPeople(note.id);
+        if (disposed) return;
+        if (!metadata || metadata.trashedAt !== null) {
+          const next = metadata ? "trashed" : "deleted";
+          blockedRef.current = next; setBlocked(next);
+        } else if (blockedRef.current === "trashed") { blockedRef.current = "restored"; setBlocked("restored"); }
+      } catch { /* A failed read is not proof of deletion; writes retain backend checks. */ }
+      finally { inFlight = false; }
+    };
+    const timer = setInterval(() => { void read(); }, 2000);
+    const focused = () => { void read(); };
+    window.addEventListener("focus", focused); document.addEventListener("visibilitychange", focused);
+    return () => { disposed = true; clearInterval(timer); window.removeEventListener("focus", focused); document.removeEventListener("visibilitychange", focused); };
+  }, [note.id]);
   const saved = useRef({ title: note.title, content: note.content });
   const draft = useRef({ title: note.title, content: note.content });
   const [title, setTitle] = useState(note.title);
@@ -336,6 +360,7 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
   const shown: readonly Tab[] = wide ? TABS.filter(value => value !== "transcript") : TABS;
 
   const save = useCallback(async (patch: Partial<Patch>) => {
+    if (blockedRef.current) throw new Error("This note is read-only. Restore it before saving.");
     const request: NoteUpdate = {};
     if (patch.content !== undefined && patch.content !== saved.current.content) request.content = patch.content;
     if (patch.title !== undefined && patch.title !== saved.current.title) request.title = patch.title;
@@ -343,10 +368,11 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
     if (!await updateNote(note.id, request)) throw new Error("This note no longer exists.");
     if (typeof request.content === "string") saved.current.content = request.content;
     if (typeof request.title === "string") saved.current.title = request.title;
-    await reload();
-  }, [note.id, reload]);
-  const autosave = useAutosave<Patch>({ save });
+    await onSaved(note.id, { ...(typeof request.title === "string" ? { title: request.title } : {}), ...(typeof request.content === "string" ? { content: request.content } : {}) });
+  }, [note.id, onSaved]);
+  const autosave = useAutosave<Patch>({ save, paused: blocked !== null });
   const normalizeTitle = useCallback(() => {
+    if (blockedRef.current) return;
     const normalized = draft.current.title.trim() || "Untitled note";
     if (normalized !== draft.current.title) {
       draft.current.title = normalized; setTitle(normalized);
@@ -368,11 +394,28 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
     });
     return () => { void registered.then(stop => stop()); };
   }, [flush]);
+  const [recordingState, setRecordingState] = useState<NoteRecordingState | null>(null);
+  const [retryingDeletion, setRetryingDeletion] = useState(false);
+  const deletionPending = useRef(false);
+  const retryDeletion = async () => {
+    if (deletionPending.current) return;
+    deletionPending.current = true; setRetryingDeletion(true); setAttachmentError(null);
+    playerRef.current?.pause(); handoff.current = null;
+    try {
+      await flush();
+      const next = await retryNoteRecordingDeletion(note.id);
+      if (!alive.current) return;
+      setRecordingState(next);
+      const recording = await getNoteRecording(note.id);
+      if (alive.current) setTranscript(previous => previous ? { ...previous, recording: next.status === "deleted" || next.status === "deleted-update-failed" ? null : recording } : previous);
+    } catch (cause) { if (alive.current) setAttachmentError(message(cause)); }
+    finally { deletionPending.current = false; if (alive.current) setRetryingDeletion(false); }
+  };
   const loadTranscript = useCallback(async (rethrow = false) => {
     setTranscriptError(null);
     try {
-      const [rows, recording, suggestions] = await Promise.all([getNoteTranscriptRows(note.id), getNoteRecording(note.id), getNoteSpeakerSuggestions(note.id)]);
-      if (alive.current) setTranscript({ rows, recording, suggestions });
+      const [rows, recording, suggestions, disposition] = await Promise.all([getNoteTranscriptRows(note.id), getNoteRecording(note.id), getNoteSpeakerSuggestions(note.id), getNoteRecordingState(note.id)]);
+      if (alive.current) { setRecordingState(disposition); setTranscript({ rows, recording: disposition?.status === "deleted-update-failed" ? null : recording, suggestions }); }
     } catch (cause) {
       // A rename failure belongs in its open form; the initial load uses the tab error.
       if (rethrow) throw cause;
@@ -385,7 +428,7 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
     attachmentPending.current = true; setAttaching(true); setAttachmentError(null);
     try {
       const recording = await attachNoteRecording(note.id);
-      if (alive.current && recording) setTranscript(previous => previous ? { ...previous, recording } : previous);
+      if (alive.current && recording) { setRecordingState(null); setTranscript(previous => previous ? { ...previous, recording } : previous); }
     } catch (cause) { if (alive.current) setAttachmentError(message(cause)); }
     finally { if (alive.current) { attachmentPending.current = false; setAttaching(false); } }
   };
@@ -449,9 +492,11 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
   };
 
   const { date, minutes, transcribed } = noteMeta(note, []);
+  const dispositionLine = recordingState?.status === "deleted" ? "The recording was deleted after transcribing, as chosen for this meeting." : recordingState?.status === "deleted-update-failed" ? "The recording file is gone, but its attachment still needs cleanup." : recordingState?.status === "kept-incomplete" ? "This meeting was set to delete its recording after transcribing. It was kept because the saved transcript may be incomplete." : recordingState?.status === "kept-untranscribed" ? "This meeting was set to delete its recording after transcribing. It was kept because nothing was transcribed from it." : recordingState?.canRetry ? "The recording is still attached. Its requested deletion has not completed." : null;
+  const disposition = dispositionLine && <div className="recording-disposition" role="status"><p>{dispositionLine}</p>{recordingState?.error && <p>{recordingState.error}</p>}{recordingState?.canRetry && <button type="button" disabled={blocked !== null || retryingDeletion} onClick={() => { void retryDeletion(); }}>{retryingDeletion ? "Retrying deletion…" : "Retry deletion"}</button>}</div>;
   const recordingDetails = note.recordingDetails && <details className="recording-details" open><summary>Recording details</summary><p>{note.recordingDetails}</p></details>;
   const transcriptBody = transcriptError ? <p className="error" role="alert">{transcriptError} <button type="button" onClick={() => { void loadTranscript(); }}>Retry</button></p> : !transcript ? <p role="status">Loading transcript and recording…</p> : transcript.rows.length ?
-    <TranscriptPanel sourceRequest={sourceRequest} onSourceShown={clearSource} rows={transcript.rows}
+    <TranscriptPanel readOnly={blocked !== null} sourceRequest={sourceRequest} onSourceShown={clearSource} rows={transcript.rows}
       recording={transcript.recording} currentTime={currentTime} playing={playing} visible={wide || tab === "transcript"} playInterval={playInterval}
       time={playerTime} seek={seek}
       suggestions={transcript.suggestions} onRename={async (speakerId, name) => {
@@ -468,9 +513,9 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
   return <article ref={articleRef} id={`note-detail-${note.id}`} className={wide ? "note-detail note-detail-wide" : "note-detail"} aria-label={title}>
     <div className="note-body" ref={bodyRef}>
       <div className="note-page">
-        {autosave.status === "failed" && <p className="save-status error" role="alert">Couldn't save: {autosave.error} <button type="button" onClick={() => { void autosave.retry().catch(() => undefined); }}>Retry save</button></p>}
+        {autosave.status === "failed" && <p className="save-status error" role="alert">Couldn't save: {autosave.error} <button type="button" disabled={blocked !== null} onClick={() => { void autosave.retry().catch(() => undefined); }}>Retry save</button></p>}
         <header className="note-detail-header">
-          <input className="note-title" aria-label="Title" value={title} disabled={!ready} onChange={event => {
+          <input className="note-title" aria-label="Title" value={title} disabled={!ready || blocked !== null} onChange={event => {
             const value = event.target.value; draft.current.title = value; setTitle(value);
             autosave.schedule({ title: value.trim() || "Untitled note", content: draft.current.content });
           }} onBlur={normalizeTitle} />
@@ -479,7 +524,7 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
             {date === null ? null : <li><Icon name="calendar" size={15} />{date.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}, {timeOfDay(date)}</li>}
             {/* At least a minute, as the Meetings list rounds it: a 20-second recording is not "0 min". */}
             {minutes === null ? null : <li><Icon name="clock" size={15} />{Math.max(1, minutes)} min</li>}
-            <NotePeople noteId={note.id} participants={note.participants} onSaved={reload} />
+            <NotePeople disabled={blocked !== null} noteId={note.id} participants={note.participants} onSaved={reload} />
             {/* Where the transcript was made (KNEG-368). Notes saved before it was recorded say nothing. */}
             {transcribed === null ? null : <li><Icon name="computer" size={15} />{transcribed}</li>}
           </ul>
@@ -501,40 +546,48 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
             {/* Keep the live region mounted so save changes are announced reliably. */}
             <p className="save-status" role="status" aria-live="polite">{workspaceSaveText(autosave.status, summarySave)}</p>
             <button type="button" className="note-action-button" aria-label="Export…" title="Export…" onClick={onExport}><Icon name="export" /></button>
-            <button type="button" className="note-action-button" aria-label="More" title="More" aria-haspopup="dialog" aria-expanded={moreOpen} onClick={event => onMore(event.currentTarget)}><Icon name="more" /></button>
+            <button type="button" className="note-action-button" disabled={blocked !== null} aria-label="More" title="More" aria-haspopup="dialog" aria-expanded={moreOpen} onClick={event => onMore(event.currentTarget)}><Icon name="more" /></button>
             {/* Only where there is a column to hide. `aria-controls` only while it is on screen, so it never names nothing. */}
             {windowWide && hasTranscript ? <button type="button" className="note-action-button" aria-label={columnHidden ? "Show transcript" : "Hide transcript"}
               title={columnHidden ? "Show transcript" : "Hide transcript"} aria-expanded={!columnHidden}
               aria-controls={wide ? `note-${note.id}-side` : undefined} onClick={toggleColumn}><Icon name="panelRight" /></button> : null}
           </div>
         </div>
+        {blocked && <div className="caveat" role="status">
+          <p>{blocked === "trashed" ? "This note was moved to Trash elsewhere. Your unsaved draft is retained here." : blocked === "deleted" ? "This note was deleted elsewhere. Your unsaved draft is retained here." : "The note was restored. Save the retained draft explicitly before continuing to edit."}</p>
+          <button type="button" onClick={() => { void navigator.clipboard.writeText(`# ${draft.current.title}\n\n${draft.current.content}\n\n${summaryRef.current?.draft() ?? ""}`).then(() => setDraftNotice("Draft copied")).catch(cause => setError(message(cause))); }}>Copy draft</button>
+          {blocked === "trashed" && <button type="button" onClick={() => { void restoreNote(note.id).then(restored => { if (!restored) throw new Error("The note could not be restored."); blockedRef.current = "restored"; setBlocked("restored"); }).catch(cause => setError(message(cause))); }}>Restore note</button>}
+          {blocked === "restored" && <button type="button" onClick={() => { blockedRef.current = null; setBlocked(null); autosave.schedule({ ...draft.current }); setTimeout(() => { void flush().catch(cause => setError(message(cause))); }, 0); }}>Save retained draft</button>}
+          <button type="button" onClick={() => { if (window.confirm("Discard the unsaved draft? Copy it first if you want to keep it.")) { autosave.discard(); summaryRef.current?.discardDraft(); setDraftNotice("Unsaved draft discarded. You can open another note."); } }}>Discard unsaved draft</button>
+          {draftNotice && <p>{draftNotice}</p>}
+        </div>}
         {error && <p className="error" role="alert">{error}</p>}
         <div className="note-workspace">
           <section id={`note-${note.id}-panel-notes`} role="tabpanel" aria-labelledby={`note-${note.id}-tab-notes`} hidden={tab !== "notes"}>
             <div className="note-prose">
               <h2 className="note-section-heading">Your notes</h2>
-              {ready && empty && transcript?.rows.some(row => row.text.trim()) && <button type="button" className="start-from-transcript" onClick={startFromTranscript}>Start from transcript</button>}
-              <NoteEditor key={seed.generation} noteId={note.id} initialContent={seed.content}
+              {ready && empty && transcript?.rows.some(row => row.text.trim()) && <button type="button" className="start-from-transcript" disabled={blocked !== null} onClick={startFromTranscript}>Start from transcript</button>}
+              <NoteEditor readOnly={blocked !== null} key={seed.generation} noteId={note.id} initialContent={seed.content}
                 {...(seed.generation === 0 ? { legacyTitle: note.title } : {})}
                 onReady={content => { draft.current.content = content; setEmpty(!content.trim()); setReady(true); }}
                 onChange={content => { draft.current.content = content; setEmpty(!content.trim()); autosave.schedule({ content }); }} />
             </div>
             <h2 className="note-section-heading">AI summary</h2>
-            <SummaryPane ref={summaryRef} noteId={note.id} visible={tab === "notes"} onSource={index => { void showSource(index); }} onSaveStatus={setSummarySave} />
+            <SummaryPane readOnly={blocked !== null} ref={summaryRef} noteId={note.id} visible={tab === "notes"} onSource={index => { void showSource(index); }} onSaveStatus={setSummarySave} />
           </section>
           {player && playerSlot === "note" ? <div className={tab === "replay" ? "note-full-player" : "note-mini-player"} hidden={tab !== "replay" && !playbackStarted}>
             {player}
           </div> : null}
           <section id={`note-${note.id}-panel-transcript`} role="tabpanel"
             aria-labelledby={`note-${note.id}-tab-transcript`} hidden={tab !== "transcript"}>
-            {wide ? null : <>{recordingDetails}{transcriptBody}</>}
+            {wide ? null : <>{recordingDetails}{disposition}{transcriptBody}</>}
           </section>
           <section id={`note-${note.id}-panel-replay`} role="tabpanel"
             aria-labelledby={`note-${note.id}-tab-replay`} hidden={tab !== "replay"}>
-            {recordingDetails}
+            {recordingDetails}{disposition}
             {transcriptError ? <p className="error" role="alert">{transcriptError} <button type="button" onClick={() => { void loadTranscript(); }}>Retry</button></p> : !transcript ? <p role="status">Loading recording…</p> : !transcript.recording && <div className="recording-empty">
-              <p>This note has no recording attached. Select its original recording to replay it. A copy is saved; your original stays in place.</p>
-              <button type="button" disabled={attaching} onClick={() => { void attachRecording(); }}>{attaching ? "Attaching…" : "Attach recording…"}</button>
+              <p>{recordingState?.status === "deleted" || recordingState?.status === "deleted-update-failed" ? "If you have another copy, you can attach it to replay this note." : "This note has no recording attached. Select its original recording to replay it. A copy is saved; your original stays in place."}</p>
+              <button type="button" disabled={blocked !== null || attaching || retryingDeletion} onClick={() => { void attachRecording(); }}>{attaching ? "Attaching…" : recordingState?.status === "deleted" || recordingState?.status === "deleted-update-failed" ? "Attach another recording…" : "Attach recording…"}</button>
               <p className="muted">16-bit PCM WAV, mono or stereo.</p>
               {attachmentError && <p className="error" role="alert">{attachmentError}</p>}
             </div>}

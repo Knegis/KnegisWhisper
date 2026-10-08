@@ -673,6 +673,7 @@ export function noteRecordingState() {
       rowPlays: note ? note.querySelectorAll('.transcript-play').length : null,
       rows: note ? [...note.querySelectorAll('.transcript-rows .transcript-text')].map(text) : [],
       details: note ? [...note.querySelectorAll('.recording-details p')].filter((item) => !item.closest('[hidden]')).map(text) : [],
+      disposition: note ? [...note.querySelectorAll('.recording-disposition p')].filter(item => !item.closest('[hidden]')).map(text) : [],
       noRecording: note ? [...note.querySelectorAll('.recording-empty')].filter((item) => !item.closest('[hidden]')).map((item) => text(item.querySelector('p'))) : [],
     };
   `);

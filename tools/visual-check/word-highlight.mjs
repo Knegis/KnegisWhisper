@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { waitFor, reload, pressText as press } from "./interactions.mjs";
 /**
  * Measures, against dev fixtures, that a transcript row local Whisper timed
  * word by word highlights the word being said as its recording plays, and
@@ -47,47 +48,12 @@ const playButton = (row) => `.note-side button[aria-label="Play transcript row $
 const playingFrom = (seconds) => `(() => { const audio = document.querySelector('audio'); return Boolean(audio) && !audio.paused && audio.readyState >= 3 && audio.currentTime >= ${seconds}; })()`;
 const rowIsCurrent = (row) => `(document.querySelectorAll('.note-detail .transcript .transcript-rows li')[${row}]?.getAttribute('aria-current') === 'true')`;
 
-async function waitFor(cdp, expression, description, timeout = 10_000) {
-  const deadline = Date.now() + timeout;
-  while (Date.now() < deadline) {
-    try {
-      if (await cdp.evaluate(expression)) return;
-    } catch {
-      // Between two documents during a reload there is no context to evaluate in.
-    }
-    await delay(40);
-  }
-  throw new Error(`Timed out waiting for ${description}`);
-}
 
-async function reload(cdp, timeout = 15_000) {
-  let off = () => {};
-  let timer;
-  const loaded = new Promise((resolveLoad, reject) => {
-    timer = setTimeout(() => reject(new Error("Timed out waiting for the reload")), timeout);
-    off = cdp.on("Page.loadEventFired", () => resolveLoad());
-  });
-  try {
-    await cdp.send("Page.reload", { ignoreCache: true });
-    await loaded;
-  } finally {
-    clearTimeout(timer);
-    off();
-  }
-}
+
+
 
 /** A real pointer press at the centre of the first `selector` reading `text` (any text for `null`). */
-async function press(cdp, selector, text) {
-  const point = await cdp.evaluate(snippets.centerOfText(selector, text));
-  const size = await cdp.evaluate("({ width: innerWidth, height: innerHeight })");
-  if (point.x < 0 || point.y < 0 || point.x > size.width || point.y > size.height) {
-    throw new Error(`${selector} "${text}" is off screen at ${JSON.stringify(point)}`);
-  }
-  const { x, y } = point;
-  await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
-  await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 });
-  await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
-}
+
 
 /** The last word that has started by `seconds`, as `lib/wordTiming.ts`'s `wordAt` answers it. */
 function wordAt(words, seconds) {
@@ -238,7 +204,7 @@ export async function runWordHighlight(options) {
     await check({
       id: "3",
       claim: "A row with no word timings plays as a row: its text is drawn whole, with no word spans and nothing lit, and so is every row that is not playing.",
-      expectation: "row 3 playing (aria-current) for 1s: its drawn text is the row's text, it draws no word spans and no row lights a word; rows 1 and 2, not playing, draw no word spans either",
+      expectation: "row 3 playing (aria-current) for 1s: its drawn text is the row's text, it draws no word spans and no row lights a word; rows 1 and 2 keep their seek controls without lighting a word",
     }, async () => {
       const rows = await openNote(cdp);
       await playRow(cdp, rows, 2, 0.3);
@@ -249,7 +215,7 @@ export async function runWordHighlight(options) {
       return {
         measured: { fixtureWords: rows[2].words.length, rows: state.rows, time: state.time, paused: state.paused },
         matches: rows[2].words.length === 0 && state.rows[2].current && !state.paused
-          && state.rows[2].text === rows[2].text && state.rows.every((row) => row.words === 0 && row.lit.length === 0),
+          && state.rows[2].text === rows[2].text && state.rows.every((row) => row.lit.length === 0) && state.rows[2].words === 0,
         screenshots: [shot],
       };
     });
@@ -281,6 +247,24 @@ export async function runWordHighlight(options) {
       };
     });
 
+
+    await check({id:"5",claim:"Keyboard words seek with a roving tab stop; pausing clears the animation highlight.",expectation:"ArrowRight advances focus, Enter seeks, and a paused player has no highlighted word."},async () => {
+      await openNote(cdp);
+      await cdp.evaluate("document.querySelector('.note-side .transcript-word').focus()");
+      for (const key of ["ArrowRight","Enter"]) {
+        await cdp.send("Input.dispatchKeyEvent",{type:"keyDown",key,code:key,windowsVirtualKeyCode:key==="Enter"?13:39});
+        await cdp.send("Input.dispatchKeyEvent",{type:"keyUp",key,code:key,windowsVirtualKeyCode:key==="Enter"?13:39});
+      }
+      await delay(100);
+      const keyboard = await cdp.evaluate("({time:document.querySelector('audio').currentTime, focused:document.activeElement?.textContent, stops:document.querySelector('.note-side .transcript-text').querySelectorAll('[tabindex=\"0\"]').length})");
+      await press(cdp,playButton(0),null);
+      await waitFor(cdp,"document.querySelectorAll('.transcript-word-current').length===1","a playing word");
+      await cdp.evaluate("document.querySelector('audio').pause()");
+      await waitFor(cdp,"document.querySelectorAll('.transcript-word-current').length===0","pause cleanup");
+      await delay(250);
+      const clean = await cdp.evaluate("document.querySelectorAll('.transcript-word-current').length===0");
+      return {measured:{keyboard,clean},matches:Math.abs(keyboard.time-1.15)<0.05 && keyboard.stops===1 && clean};
+    });
     const markdown = renderMarkdown(report);
     await writeFile(resolve(out, "report.json"), `${JSON.stringify(report, null, 2)}\n`);
     await writeFile(resolve(out, "report.md"), markdown);

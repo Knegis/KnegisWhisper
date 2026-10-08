@@ -13,7 +13,7 @@
  * that silently does nothing is the defect this shape exists to prevent.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, useRef } from "react";
 
 /** Turn anything thrown into something showable. */
 export function message(e: unknown): string {
@@ -44,26 +44,34 @@ export function useRefresh<T>(load: () => Promise<T>): Refreshed<T> {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const readGeneration = useRef(0);
+  const mutationGeneration = useRef(0);
   const reload = useCallback(async () => {
+    const generation = ++readGeneration.current;
+    const mutation = mutationGeneration.current;
     try {
-      setData(await load());
+      const next = await load();
+      if (generation === readGeneration.current && mutation === mutationGeneration.current) setData(next);
     } catch (e) {
-      setError(message(e));
+      if (generation === readGeneration.current && mutation === mutationGeneration.current) setError(message(e));
     }
   }, [load]);
 
   useEffect(() => {
     void reload();
+    return () => { readGeneration.current++; mutationGeneration.current++; };
   }, [reload]);
 
   const guard = useCallback(
     async (work: () => Promise<unknown>) => {
+      const generation = ++mutationGeneration.current;
+      readGeneration.current++;
       setError(null);
       try {
         await work();
-        await reload();
+        if (generation === mutationGeneration.current) await reload();
       } catch (e) {
-        setError(message(e));
+        if (generation === mutationGeneration.current) setError(message(e));
       }
     },
     [reload],

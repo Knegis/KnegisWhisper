@@ -108,3 +108,19 @@ test("a discarded or failed meeting has nothing to fold", () => {
     more: null,
   });
 });
+
+
+test("A typed-only kept recording names the absence of transcription", () => {
+  const label = meetingOutcomeLabel({ ...saved, recordingRemoval: "kept-untranscribed" });
+  assert.match(label.text, /nothing was transcribed/);
+  assert.doesNotMatch(label.text, /incomplete/);
+});
+
+test("A file-gone database failure offers cleanup and keeps the error without a replay path", () => {
+  const label = meetingOutcomeLabel({ ...saved, recordingRemoval: "deleted-update-failed", recordingRemovalError: "database commit refused" });
+  assert.match(label.text, /recording was deleted/);
+  assert.match(label.text, /cleanup/);
+  assert.doesNotMatch(label.text, /still attached/);
+  assert.match(label.more ?? "", /database commit refused/);
+  assert.doesNotMatch(label.more ?? "", /recording is at/);
+});

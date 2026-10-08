@@ -10,10 +10,9 @@
 use kw_storage::StorageError;
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, SqliteConnection, SqlitePool};
-use std::collections::BTreeMap;
 use ts_rs::TS;
 
-use crate::transcript::{self, NoteMeta, SpeakerLabels};
+use crate::transcript::{self, NoteMeta};
 
 /// A note, as listed.
 #[derive(Debug, Clone, FromRow, Serialize, PartialEq, TS)]
@@ -42,6 +41,60 @@ pub struct Note {
     /// search and count leaves it out until it is restored. Only [`get`]
     /// returns it, so the screen can say it is in Trash.
     pub trashed_at: Option<String>,
+}
+
+/// Lightweight desktop library entry. Large note bodies stay in `get`.
+#[derive(Debug, Clone, FromRow, Serialize, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct NoteListItem {
+    pub id: i64,
+    pub title: String,
+    pub note_type: String,
+    pub folder_id: Option<i64>,
+    pub participants: Option<String>,
+    pub audio_duration_seconds: Option<f64>,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+    pub trashed_at: Option<String>,
+    /// A stored nonblank transcript; the full reader validates its contents.
+    pub has_transcript: bool,
+}
+
+pub(crate) const LIST_COLUMNS: &str = "id, title, note_type, folder_id, participants, audio_duration_seconds, created_at, updated_at, trashed_at, (transcript IS NOT NULL AND length(trim(transcript, char(9,10,11,12,13,32))) > 0) AS has_transcript";
+
+/// One metadata entry, including Trash so the editor can stop writing to it.
+pub async fn get_summary(pool: &SqlitePool, id: i64) -> Result<Option<NoteListItem>, StorageError> {
+    Ok(
+        sqlx::query_as(&format!("SELECT {LIST_COLUMNS} FROM notes WHERE id = ?"))
+            .bind(id)
+            .fetch_optional(pool)
+            .await?,
+    )
+}
+
+/// Desktop library projection, with the full list's ordering and filters.
+pub async fn list_summaries(
+    pool: &SqlitePool,
+    note_type: Option<&str>,
+    folder_id: Option<i64>,
+    limit: i64,
+) -> Result<Vec<NoteListItem>, StorageError> {
+    let mut sql = format!("SELECT {LIST_COLUMNS} FROM notes WHERE trashed_at IS NULL");
+    if note_type.is_some() {
+        sql.push_str(" AND note_type = ?");
+    }
+    if folder_id.is_some() {
+        sql.push_str(" AND folder_id = ?");
+    }
+    sql.push_str(" ORDER BY updated_at DESC, id DESC LIMIT ?");
+    let mut query = sqlx::query_as(&sql);
+    if let Some(kind) = note_type {
+        query = query.bind(kind);
+    }
+    if let Some(folder) = folder_id {
+        query = query.bind(folder);
+    }
+    Ok(query.bind(limit.clamp(1, 500)).fetch_all(pool).await?)
 }
 
 /// Where a note's transcript was made, as `Note::transcribed_by` stores it.
@@ -474,6 +527,25 @@ pub async fn search(
     Ok(hits)
 }
 
+/// Only timestamps cross SQLite for search. Validate the fields `Segment`
+/// reads so an unplayable imported transcript still falls back to a note hit.
+fn search_timing_projection() -> String {
+    let mut invalid = vec!["(json_type(segment.value, '$.text') IS NOT NULL AND json_type(segment.value, '$.text') != 'text')".to_owned()];
+    for field in ["timestamp", "endTimestamp"] {
+        invalid.push(format!("(json_type(segment.value, '$.{field}') IS NOT NULL AND json_type(segment.value, '$.{field}') NOT IN ('null','integer','real'))"));
+    }
+    for field in ["speaker", "speakerName", "source"] {
+        invalid.push(format!("(json_type(segment.value, '$.{field}') IS NOT NULL AND json_type(segment.value, '$.{field}') NOT IN ('null','text'))"));
+    }
+    invalid.push("EXISTS (SELECT 1 FROM json_each(segment.value) AS field WHERE field.key IN ('text','timestamp','endTimestamp','speaker','speakerName','speakerIsPlaceholder','source','words') GROUP BY field.key HAVING count(*) > 1)".to_owned());
+    invalid.push("(json_type(segment.value, '$.speakerIsPlaceholder') IS NOT NULL AND json_type(segment.value, '$.speakerIsPlaceholder') NOT IN ('true','false'))".to_owned());
+    format!("CASE WHEN json_valid(transcript) THEN CASE WHEN json_type(transcript) = 'array' THEN CASE
+        WHEN NOT EXISTS (SELECT 1 FROM json_each(transcript) AS segment WHERE segment.type != 'object') THEN CASE
+        WHEN NOT EXISTS (SELECT 1 FROM json_each(transcript) AS segment WHERE {}) THEN
+        (SELECT json_group_array(json_object('timestamp', json_extract(segment.value, '$.timestamp'))) FROM json_each(transcript) AS segment)
+        END END END END", invalid.join(" OR "))
+}
+
 /// The row of note `id`'s transcript that holds every word of `escaped`, and
 /// that row's snippet: the best match among its rows, the earlier on a tie.
 /// `None` when no one row holds them all, and when the transcript can't be
@@ -507,15 +579,20 @@ async fn transcript_row(
 
     // The time as the Transcript tab computes it, from the same parse and
     // the same rows, so the hit and the tab can't disagree about it.
-    let note: Option<TranscriptSource> = sqlx::query_as(
-        "SELECT title, created_at, participants, transcript FROM notes WHERE id = ?",
-    )
-    .bind(id)
-    .fetch_optional(&mut *connection)
-    .await?;
+    let timing_sql = format!(
+        "SELECT title, created_at, participants, {} AS transcript FROM notes WHERE id = ?",
+        search_timing_projection()
+    );
+    let note: Option<TranscriptSource> = sqlx::query_as(&timing_sql)
+        .bind(id)
+        .fetch_optional(&mut *connection)
+        .await?;
     let Some(note) = note else {
         return Ok(None);
     };
+    if note.transcript.is_none() {
+        return Ok(None);
+    }
     let Ok(segments) = transcript::parse_stored(note.transcript.as_deref()) else {
         return Ok(None);
     };
@@ -524,20 +601,15 @@ async fn transcript_row(
         created_at: note.created_at,
         participants: note.participants,
     };
-    let rows = transcript::rows(
-        &segments,
-        &meta,
-        &BTreeMap::new(),
-        &SpeakerLabels::default(),
-    );
-    let Some(row) = rows.get(index) else {
+    if index >= segments.len() {
         return Ok(None);
-    };
+    }
+    let start_seconds = transcript::row_start_seconds(&segments, &meta, index);
 
     Ok(Some((
         SearchHitRow {
             index,
-            start_seconds: row.start_seconds,
+            start_seconds,
         },
         snippet,
     )))
@@ -640,6 +712,180 @@ mod tests {
         .unwrap()
     }
 
+    #[tokio::test]
+    async fn metadata_payload_does_not_grow_with_note_bodies_and_preserves_filters() {
+        let db = db().await;
+        let p = db.pool();
+        let folder = create_folder(p, "Project").await.unwrap();
+        let id = create(
+            p,
+            &NewNote {
+                title: "Large meeting".into(),
+                note_type: Some("meeting".into()),
+                folder_id: Some(folder),
+                participants: Some(r#"[{"email":" Anna@Example.com "}]"#.into()),
+                transcript: Some(r#"[{"text":"hello","timestamp":1}]"#.into()),
+                ..NewNote::default()
+            },
+        )
+        .await
+        .unwrap();
+        let before = serde_json::to_string(&get_summary(p, id).await.unwrap()).unwrap();
+        let massive = "x".repeat(1_000_000);
+        let transcript = serde_json::json!([{"text":"hello", "timestamp":1, "words":[{"text":massive,"start":0,"end":1}]}]).to_string();
+        sqlx::query("UPDATE notes SET content=?, enhanced_content=?, transcript=? WHERE id=?")
+            .bind(&massive)
+            .bind(&massive)
+            .bind(&transcript)
+            .bind(id)
+            .execute(p)
+            .await
+            .unwrap();
+        let after = serde_json::to_string(&get_summary(p, id).await.unwrap()).unwrap();
+        assert_eq!(before, after);
+        let json: serde_json::Value = serde_json::from_str(&after).unwrap();
+        for excluded in [
+            "transcript",
+            "content",
+            "enhancedContent",
+            "recordingDetails",
+            "transcribedBy",
+        ] {
+            assert!(json.get(excluded).is_none());
+        }
+        assert_eq!(json["hasTranscript"], true);
+        assert_eq!(
+            list_summaries(p, Some("meeting"), Some(folder), 1)
+                .await
+                .unwrap()[0]
+                .id,
+            id
+        );
+        assert!(list_summaries(p, Some("personal"), None, 10)
+            .await
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            crate::people::list_summaries_by_person(p, "anna@example.com", 10)
+                .await
+                .unwrap()[0]
+                .id,
+            id
+        );
+        assert_eq!(
+            get(p, id).await.unwrap().unwrap().transcript.as_deref(),
+            Some(transcript.as_str())
+        );
+        crate::trash::trash(p, id).await.unwrap();
+        assert!(list_summaries(p, None, None, 10).await.unwrap().is_empty());
+        assert!(
+            crate::people::list_summaries_by_person(p, "anna@example.com", 10)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(get_summary(p, id)
+            .await
+            .unwrap()
+            .unwrap()
+            .trashed_at
+            .is_some());
+        assert!(get_summary(p, id + 1).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn search_timing_projection_matches_rows_and_excludes_word_and_text_payloads() {
+        let db = db().await;
+        let p = db.pool();
+        for timestamps in [
+            [Some(5.0), None, Some(10.0)],
+            [Some(1_700_000_000_000.0), None, Some(1_700_000_007_000.0)],
+        ] {
+            let segments: Vec<_> = timestamps
+                .into_iter()
+                .enumerate()
+                .map(|(index, timestamp)| transcript::Segment {
+                    text: if index == 2 {
+                        "needle".into()
+                    } else {
+                        "other".into()
+                    },
+                    timestamp,
+                    words: vec![transcript::Word {
+                        text: "x".repeat(10000),
+                        start: 0.0,
+                        end: 1.0,
+                    }],
+                    ..Default::default()
+                })
+                .collect();
+            let id = create(
+                p,
+                &NewNote {
+                    title: "Timing".into(),
+                    transcript: Some(serde_json::to_string(&segments).unwrap()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+            let note = get(p, id).await.unwrap().unwrap();
+            let meta = NoteMeta {
+                title: note.title,
+                created_at: note.created_at,
+                participants: note.participants,
+            };
+            let rows = transcript::rows(&segments, &meta, &Default::default(), &Default::default());
+            let hits = search(p, "needle", 10).await.unwrap();
+            let hit = hits
+                .iter()
+                .find(|hit| hit.id == id)
+                .unwrap()
+                .transcript_row
+                .as_ref()
+                .unwrap();
+            assert_eq!(hit.index, 2);
+            assert_eq!(hit.start_seconds, rows[2].start_seconds);
+            let projection: String = sqlx::query_scalar(&format!(
+                "SELECT {} FROM notes WHERE id = ?",
+                search_timing_projection()
+            ))
+            .bind(id)
+            .fetch_one(p)
+            .await
+            .unwrap();
+            assert!(projection.len() < 150);
+            assert!(!projection.contains("words") && !projection.contains("needle"));
+        }
+        for invalid in [
+            r#"[{"text":"needle","timestamp":"bad"}]"#,
+            r#"[{"text":"needle","speaker":3}]"#,
+            r#"[{"text":"needle","speakerIsPlaceholder":null}]"#,
+            r#"[{"text":"needle","timestamp":1},null]"#,
+            r#"[{"text":"needle","text":"other","timestamp":1}]"#,
+            r#"[{"text":"needle","words":[],"words":null,"timestamp":1}]"#,
+        ] {
+            let id = create(
+                p,
+                &NewNote {
+                    title: "Bad import".into(),
+                    transcript: Some(invalid.into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+            assert!(search(p, "needle", 100)
+                .await
+                .unwrap()
+                .iter()
+                .find(|hit| hit.id == id)
+                .unwrap()
+                .transcript_row
+                .is_none());
+        }
+    }
+
     /* --------------------------------------------------------------- crud */
 
     #[tokio::test]
@@ -722,7 +968,7 @@ mod tests {
     }
 
     #[test]
-    fn live_captions_are_named_only_when_there_were_some_to_name() {
+    fn optional_live_caption_name_is_omitted_from_json_when_absent() {
         let local = TranscribedBy {
             provider: "local".to_owned(),
             name: "this computer".to_owned(),

@@ -81,6 +81,8 @@ import type {
   ImportReport,
   InputDevice,
   InstallProgress,
+  SpeechInstall,
+  SpeechInstallSnapshot,
   KeytermSupport,
   LevelSession,
   LevelSource,
@@ -110,7 +112,9 @@ import type {
   NewNoteRequest,
   NonActivating,
   Note,
+  NoteListItem,
   NoteRecording,
+  NoteRecordingState,
   NoteUpdateRequest,
   Offer,
   Outcome,
@@ -209,6 +213,8 @@ export type {
   ImportReport,
   InputDevice,
   InstallProgress,
+  SpeechInstall,
+  SpeechInstallSnapshot,
   KeytermSupport,
   LevelSession,
   LevelSource,
@@ -237,7 +243,9 @@ export type {
   ModelStatus,
   NonActivating,
   Note,
+  NoteListItem,
   NoteRecording,
+  NoteRecordingState,
   Offer,
   OverlayStatus,
   ParticipantRequest,
@@ -396,7 +404,7 @@ export async function resetMeetingNotificationPlacement(): Promise<void> { retur
 export async function startMeeting(
   provider: string,
   systemAudio: boolean,
-  plan: Omit<MeetingPlan, "deleteRecording"> = { title: null, folderId: null },
+  plan: Omit<MeetingPlan, "deleteRecording" | "liveProviderId"> = { title: null, folderId: null },
 ): Promise<Sources> {
   return invoke<Sources>("meeting_start", { provider, systemAudio, title: plan.title, folderId: plan.folderId });
 }
@@ -792,10 +800,23 @@ export async function getNotes(options?: {
   });
 }
 
+/** Lightweight desktop lists; full `getNotes` remains available to existing callers. */
+export async function getNoteSummaries(options?: { noteType?: string; folderId?: number; person?: string; limit?: number }): Promise<NoteListItem[]> {
+  return invoke<NoteListItem[]>("notes_list_summaries", {
+    noteType: options?.noteType ?? null, folderId: options?.folderId ?? null,
+    person: options?.person ?? null, limit: options?.limit ?? null,
+  });
+}
+export const getNoteSummaryMetadata = (id: number) => invoke<NoteListItem | null>("notes_get_summary", { id });
+
 /**
  * Everyone named by email on a note, the most notes first (KNEG-362). People
  * with a name and no email are not listed: the email is who they are.
  */
+export async function getPeoplePage(limit = 51, offset = 0): Promise<Person[]> {
+  return invoke<Person[]>("people_page", { limit, offset });
+}
+
 export async function getPeople(): Promise<Person[]> {
   return invoke<Person[]>("people_list");
 }
@@ -908,6 +929,13 @@ export async function deleteFolder(id: number): Promise<boolean> {
  * `recordingSrc`, so the renderer never names a file to Rust in either
  * direction.
  */
+export async function getNoteRecordingState(id: number): Promise<NoteRecordingState | null> {
+  return invoke<NoteRecordingState | null>("note_recording_state", { id });
+}
+export async function retryNoteRecordingDeletion(id: number): Promise<NoteRecordingState> {
+  return invoke<NoteRecordingState>("note_recording_retry_deletion", { id });
+}
+
 export async function getNoteRecording(
   id: number,
 ): Promise<NoteRecording | null> {
@@ -1542,3 +1570,11 @@ export const cancelNoteSummary = (id: number) => invoke<void>("note_summary_canc
 export const updateNoteSummary = (id: number, revision: number, content: string) => invoke<SummaryState>("note_summary_update", { id, revision, content });
 export const exportNoteSummary = (id: number, format: "md" | "txt") => invoke<string | null>("note_summary_export", { id, format });
 export const onNoteSummaryChanged = (handler: (id: number) => void) => listen<number>("note-summary-changed", event => handler(event.payload));
+
+/** Lightweight participant acknowledgement; never fetch the note body. */
+export async function getNoteMetadataForPeople(id: number): Promise<NoteListItem | null> {
+  return invoke<NoteListItem | null>("notes_get_summary", { id });
+}
+
+export async function getSpeechInstallations(): Promise<SpeechInstallSnapshot> { return invoke<SpeechInstallSnapshot>("speech_installations"); }
+export function onSpeechInstallations(handler: (jobs: SpeechInstallSnapshot) => void): Promise<UnlistenFn> { return listen<SpeechInstallSnapshot>("speech-installations", event => handler(event.payload)); }

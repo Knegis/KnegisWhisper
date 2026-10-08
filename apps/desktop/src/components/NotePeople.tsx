@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-import { getNote, setNoteParticipants } from "../lib/ipc";
+import { getNoteMetadataForPeople, setNoteParticipants } from "../lib/ipc";
 import { addParticipant, participantLabel, readParticipants, removeParticipant, type Participant } from "../lib/people";
 import { message } from "../lib/useRefresh";
 import { Icon } from "./Icon";
@@ -19,11 +19,12 @@ import { Icon } from "./Icon";
  * email dropped) even for a note the library's list doesn't hold, and
  * `onSaved` reloads the library, whose People list counts the change.
  */
-export function NotePeople({ noteId, participants, onSaved }: {
+export function NotePeople({ noteId, participants, onSaved, disabled = false }: {
   noteId: number;
   /** `Note.participants`, as stored. */
   participants: string | null;
   onSaved: () => Promise<void>;
+  disabled?: boolean;
 }) {
   const [list, setList] = useState(() => readParticipants(participants));
   useEffect(() => { setList(readParticipants(participants)); }, [participants]);
@@ -31,6 +32,7 @@ export function NotePeople({ noteId, participants, onSaved }: {
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const addButton = useRef<HTMLButtonElement>(null);
   const emailField = useRef<HTMLInputElement>(null);
@@ -41,9 +43,13 @@ export function NotePeople({ noteId, participants, onSaved }: {
     setBusy(true); setError(null);
     try {
       if (!await setNoteParticipants(noteId, next)) throw new Error("This note no longer exists.");
-      const stored = await getNote(noteId);
-      setList(readParticipants(stored?.participants ?? null));
-      await onSaved();
+      // The write committed. A failed read cannot turn it into a failed save.
+      setList(next);
+      try {
+        const stored = await getNoteMetadataForPeople(noteId);
+        if (stored) setList(readParticipants(stored.participants));
+        await onSaved(); setRefreshError(null);
+      } catch (cause) { setRefreshError(`Saved, but the people could not be refreshed: ${message(cause)}`); }
       return true;
     } catch (cause) {
       setError(message(cause));
@@ -66,7 +72,7 @@ export function NotePeople({ noteId, participants, onSaved }: {
                 // The address behind a name, for telling two people of one name apart.
                 title={participant.displayName !== null && participant.email !== null ? participant.email : undefined}>
                 <span className="note-person-name">{label}</span>
-                <button type="button" className="note-person-remove" aria-label={`Remove ${label}`} title={`Remove ${label}`} disabled={busy}
+                <button type="button" className="note-person-remove" aria-label={`Remove ${label}`} title={`Remove ${label}`} disabled={disabled || busy}
                   // The chip goes with its button, so focus moves to Add person rather than to the page.
                   onClick={() => { void save(removeParticipant(list, index)).then(saved => { if (saved) addButton.current?.focus(); }); }}>
                   <Icon name="close" size={12} />
@@ -76,7 +82,7 @@ export function NotePeople({ noteId, participants, onSaved }: {
           })}
         </ul>
       )}
-      <button ref={addButton} type="button" className="note-people-add" aria-expanded={adding} aria-controls={adding ? formId : undefined}
+      <button disabled={disabled} ref={addButton} type="button" className="note-people-add" aria-expanded={adding} aria-controls={adding ? formId : undefined}
         onClick={() => { if (adding) close(); else { setError(null); setAdding(true); } }}>
         <Icon name="plus" size={14} />Add person
       </button>
@@ -93,11 +99,13 @@ export function NotePeople({ noteId, participants, onSaved }: {
           <label>Email<input ref={emailField} type="email" autoComplete="off" value={email} onChange={event => setEmail(event.target.value)} /></label>
           <label>Name (optional)<input type="text" autoComplete="off" value={name} onChange={event => setName(event.target.value)} /></label>
           <span className="note-people-form-actions">
-            <button type="submit" className="secondary" disabled={busy || !email.trim()}>Add</button>
+            <button type="submit" className="secondary" disabled={disabled || busy || !email.trim() || list.length >= 200}>Add</button>
             <button type="button" onClick={close}>Cancel</button>
           </span>
         </form>
       ) : null}
+      {list.length > 200 && <p role="status">This imported note has more than 200 people. Remove people before adding more.</p>}
+      {refreshError && <p role="status">{refreshError} <button type="button" onClick={() => { void getNoteMetadataForPeople(noteId).then(async stored => { if (stored) setList(readParticipants(stored.participants)); await onSaved(); setRefreshError(null); }).catch(cause => setRefreshError(`Saved, but the people could not be refreshed: ${message(cause)}`)); }}>Retry refresh</button></p>}
       {error === null ? null : <p className="note-people-error error" role="alert">{error}</p>}
     </li>
   );

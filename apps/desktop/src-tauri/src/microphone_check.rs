@@ -85,19 +85,32 @@ const DICTATION_REFUSAL: &str =
 const ALREADY_REFUSAL: &str = "Not now: the microphone is already being tested.";
 
 /// Whether a check is running: one at a time. Managed state.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct MicrophoneChecks {
     running: Arc<AtomicBool>,
+    gate: Arc<crate::capture_interlock::CaptureInterlock>,
 }
 
 /// A check in progress. Dropping it, however the check ended, lets the next
 /// one begin.
 #[derive(Debug)]
-pub struct Checking(Arc<AtomicBool>);
+pub struct Checking {
+    running: Arc<AtomicBool>,
+    _lease: crate::capture_interlock::CaptureUse,
+}
 
 impl Drop for Checking {
     fn drop(&mut self) {
-        self.0.store(false, Ordering::Release);
+        self.running.store(false, Ordering::Release);
+    }
+}
+
+impl Default for MicrophoneChecks {
+    fn default() -> Self {
+        Self {
+            running: Arc::default(),
+            gate: crate::capture_interlock::CaptureInterlock::shared(),
+        }
     }
 }
 
@@ -116,7 +129,16 @@ impl MicrophoneChecks {
         self.running
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .map_err(|_| ALREADY_REFUSAL.to_owned())?;
-        Ok(Checking(Arc::clone(&self.running)))
+        match self.gate.check() {
+            Ok(lease) => Ok(Checking {
+                running: Arc::clone(&self.running),
+                _lease: lease,
+            }),
+            Err(error) => {
+                self.running.store(false, Ordering::Release);
+                Err(error)
+            }
+        }
     }
 }
 
@@ -150,39 +172,69 @@ fn fell_back(chosen: Option<&str>, opened: Option<&str>) -> Option<String> {
 /// `length` is up. The levels are read here, through `audio_level::run`,
 /// which ends when the dropped capture's reader answers `None` and sends a
 /// last 0 so the meter empties.
-async fn listen(
+struct CancelOnDrop(Arc<AtomicBool>);
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Release);
+    }
+}
+
+fn spawn_owned_worker<T: Send + 'static>(
+    checking: Checking,
+    work: impl FnOnce(tokio::sync::oneshot::Sender<Result<T, String>>, Arc<AtomicBool>) + Send + 'static,
+) -> Result<
+    (
+        tokio::sync::oneshot::Receiver<Result<T, String>>,
+        CancelOnDrop,
+    ),
+    String,
+> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let cancellation = CancelOnDrop(Arc::clone(&cancelled));
+    std::thread::Builder::new()
+        .name("kw-microphone-check".to_owned())
+        .spawn(move || {
+            let _checking = checking;
+            work(tx, cancelled);
+        })
+        .map_err(|error| format!("could not start the microphone check: {error}"))?;
+    Ok((rx, cancellation))
+}
+
+async fn listen_owned(
+    checking: Checking,
     chosen: Option<String>,
     length: Duration,
     every: Duration,
     send: impl FnMut(f32),
 ) -> Result<MicrophoneCheck, String> {
-    let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
     let asked = chosen.clone();
-    std::thread::Builder::new()
-        .name("kw-microphone-check".to_owned())
-        .spawn(move || {
-            let capture = match kw_audio_core::Capture::start(asked.as_deref()) {
-                Ok(capture) => capture,
-                Err(err) => {
-                    let _ = ready_tx.send(Err(err.to_string()));
-                    return;
-                }
-            };
-            let _ = ready_tx.send(Ok((
-                capture.device_name().map(str::to_owned),
-                capture.level(),
-            )));
-            let until = std::time::Instant::now() + length;
-            while std::time::Instant::now() < until {
-                std::thread::sleep(DRAIN_EVERY);
-                // Dropped: nothing is recorded.
-                let _ = capture.drain();
+    let (ready_rx, _cancel) = spawn_owned_worker(checking, move |ready_tx, cancelled| {
+        let capture = match kw_audio_core::Capture::start(asked.as_deref()) {
+            Ok(capture) => capture,
+            Err(err) => {
+                let _ = ready_tx.send(Err(err.to_string()));
+                return;
             }
-            // Dropping the capture closes the microphone, and the system's
-            // indicator with it.
-            drop(capture);
-        })
-        .map_err(|err| format!("could not start the microphone check: {err}"))?;
+        };
+        if cancelled.load(Ordering::Acquire) {
+            return;
+        }
+        let _ = ready_tx.send(Ok((
+            capture.device_name().map(str::to_owned),
+            capture.level(),
+        )));
+        let until = std::time::Instant::now() + length;
+        while std::time::Instant::now() < until && !cancelled.load(Ordering::Acquire) {
+            std::thread::sleep(DRAIN_EVERY);
+            // Dropped: nothing is recorded.
+            let _ = capture.drain();
+        }
+        // Dropping the capture closes the microphone, and the system's
+        // indicator with it.
+        drop(capture);
+    })?;
 
     let (device, reader) = ready_rx
         .await
@@ -221,18 +273,35 @@ pub async fn microphone_check(
     dictation: State<'_, Arc<crate::dictation::DictationRuntime>>,
     meetings: State<'_, Arc<crate::meeting::MeetingRuntime>>,
 ) -> Result<MicrophoneCheck, String> {
-    let _checking = checks.begin(InUse {
+    let checking = checks.begin(InUse {
         meeting: meetings.is_under_way().await,
         dictation: dictation.state() == kw_app_core::dictation::SessionState::Recording,
     })?;
     // The saved choice, as a meeting reads it at Start, so the check opens
     // what a meeting would.
     let chosen = crate::dictation::load_device(state.db()).await;
-    listen(
+    tokio::time::timeout(Duration::from_secs(10), listen_owned(
+        checking,
         chosen,
         CHECK_LENGTH,
         crate::audio_level::TICK,
         crate::audio_level::sender(&app, LevelSession::MicrophoneCheck, LevelSource::Microphone),
+    )).await.map_err(|_| "The microphone test timed out. It is closing; if the device remains in use, restart the app.".to_owned())?
+}
+
+#[cfg(test)]
+async fn listen(
+    chosen: Option<String>,
+    length: Duration,
+    every: Duration,
+    send: impl FnMut(f32),
+) -> Result<MicrophoneCheck, String> {
+    listen_owned(
+        MicrophoneChecks::default().begin(InUse::default())?,
+        chosen,
+        length,
+        every,
+        send,
     )
     .await
 }
@@ -257,7 +326,10 @@ mod tests {
     /// a refusal the page shows in view, and it leaves nothing running.
     #[test]
     fn a_check_is_refused_while_a_meeting_is_under_way() {
-        let checks = MicrophoneChecks::default();
+        let checks = MicrophoneChecks {
+            running: Arc::default(),
+            gate: Arc::default(),
+        };
         let refusal = checks
             .begin(InUse {
                 meeting: true,
@@ -274,7 +346,10 @@ mod tests {
 
     #[test]
     fn a_check_is_refused_while_a_dictation_records() {
-        let checks = MicrophoneChecks::default();
+        let checks = MicrophoneChecks {
+            running: Arc::default(),
+            gate: Arc::default(),
+        };
         let refusal = checks
             .begin(InUse {
                 meeting: false,
@@ -290,7 +365,10 @@ mod tests {
     /// command.
     #[test]
     fn one_check_at_a_time() {
-        let checks = MicrophoneChecks::default();
+        let checks = MicrophoneChecks {
+            running: Arc::default(),
+            gate: Arc::default(),
+        };
         let first = checks.begin(NOTHING).expect("the first check begins");
         let refusal = checks.begin(NOTHING).expect_err("a second is refused");
         assert_eq!(refusal, ALREADY_REFUSAL);
@@ -392,5 +470,92 @@ mod tests {
             Some("No such microphone (KNEG-364)")
         );
         assert_eq!(missing.device, check.device, "the default was tested");
+    }
+
+    #[tokio::test]
+    async fn cancellation_keeps_the_interlock_until_the_worker_exits() {
+        let checks = MicrophoneChecks {
+            running: Arc::default(),
+            gate: Arc::default(),
+        };
+        let checking = checks.begin(NOTHING).unwrap();
+        let (release, finish) = std::sync::mpsc::channel();
+        let (ready, cancel) = spawn_owned_worker(checking, move |ready, cancelled| {
+            ready.send(Ok(())).unwrap();
+            finish.recv().unwrap();
+            assert!(cancelled.load(Ordering::Acquire));
+        })
+        .unwrap();
+        assert_eq!(ready.await.unwrap(), Ok(()));
+        drop(cancel); // The same cancellation that a command timeout/drop performs.
+        assert!(checks.gate.recording().is_err());
+        assert!(checks.begin(NOTHING).is_err());
+        release.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while checks.running.load(Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        // Checking drops its gate after clearing running, so wait for that too.
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while checks.gate.recording().is_err() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(checks.begin(NOTHING).is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_worker_open_failure_answers_and_releases_without_a_device() {
+        let checks = MicrophoneChecks {
+            running: Arc::default(),
+            gate: Arc::default(),
+        };
+        let (answer, _cancel) = spawn_owned_worker(checks.begin(NOTHING).unwrap(), |answer, _| {
+            let _ = answer.send(Err::<(), _>("invented open error".into()));
+        })
+        .unwrap();
+        assert_eq!(answer.await.unwrap(), Err("invented open error".into()));
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while checks.begin(NOTHING).is_err() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+    #[tokio::test]
+    async fn an_open_deadline_cancels_without_releasing_a_still_blocked_worker() {
+        let checks = MicrophoneChecks {
+            running: Arc::default(),
+            gate: Arc::default(),
+        };
+        let (release, finish) = std::sync::mpsc::channel();
+        let checking = checks.begin(NOTHING).unwrap();
+        let (answer, cancel) = spawn_owned_worker(checking, move |answer, cancelled| {
+            finish.recv().unwrap();
+            assert!(cancelled.load(Ordering::Acquire));
+            let _ = answer.send(Ok(()));
+        })
+        .unwrap();
+        assert!(tokio::time::timeout(Duration::from_millis(20), async move {
+            let _cancel = cancel;
+            answer.await
+        })
+        .await
+        .is_err());
+        assert!(checks.gate.recording().is_err());
+        release.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while checks.begin(NOTHING).is_err() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
     }
 }

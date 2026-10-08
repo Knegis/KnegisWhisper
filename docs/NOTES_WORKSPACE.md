@@ -73,10 +73,9 @@ people and where its transcript was made (KNEG-368): "Transcribed on this
 computer", or "Transcribed by" the provider or server that made it. A meeting
 whose saved transcript is the whole-recording pass was transcribed on this
 computer; when its live captions came from a provider off this computer, the line
-adds "· live captions by" that provider. A recovered meeting doesn't: it says only
-"Transcribed on this computer", wherever its live captions came from, because the
-`.meeting.json` kept beside the recording for recovery doesn't record the live
-provider. A meeting saved from its live captions --
+adds "· live captions by" that provider. A recovered meeting uses the same disclosure: its `.meeting.json` sidecar
+keeps the actual live provider selected at Start. Older sidecars without that
+field retain the local transcription attribution without guessing the live provider. A meeting saved from its live captions --
 a finished local stream, or the captions kept because the whole-recording pass
 failed -- names the live provider. Typed notes alone, notes saved before this was
 recorded, and OpenWhispr and shared-folder imports say nothing.
@@ -85,11 +84,13 @@ A note's people (KNEG-362) are chips in its meta row, each with a button that re
 them, and **Add person** takes an email and, if wanted, a name. A person is their email:
 a new one is trimmed and lower-cased, a second entry for one address is dropped, one that
 isn't an address is refused in plain words under the row with the form still open, and a
-note keeps at most 200. An address an import already put on the note passes as it is, so
+new edits keep at most 200. An oversized imported list can shrink while it remains
+over the cap, preserving unchanged imported entries; additions or renames above the cap are refused. An address an import already put on the note passes as it is, so
 one that was never checked can't block changes to the note's people. Imported notes come
 with theirs; nothing else fills them in yet (the calendar doing so is a follow-up). Saving
 people isn't editing the note, so it doesn't move it up the library. The library's
-**People** section, under the folders and the notes in no folder, lists everyone
+**People** section, under the folders and the notes in no folder, lists 50 people at a time
+with **Show more people** loading another bounded page. It counts everyone
 named by email on a note and how many notes they're on, by the name on the newest note
 that gives one; someone with a name and no email isn't listed. Pressing a person shows
 **Notes with** them in place of the folders, with **Show all notes** to come back. They are
@@ -163,33 +164,38 @@ notification window's Record and the local API start an unnamed meeting in no
 folder.
 
 Settings › Meetings can delete each recording once its transcript is saved
-(KNEG-409), off by default. A meeting reads the switch when it starts and keeps
-that choice in the session and the `.meeting.json`, so changing it mid-meeting
-affects the next meeting. The recording is deleted only when its note was saved
-with a whole transcript: a note of typed notes alone, or of the running
-transcript saved because the whole-recording pass failed, keeps its recording,
-and the outcome says why. A finished local stream counts as a whole transcript:
-for that route it is the final transcript, not a fallback. The WAV is attached
-exactly as with the switch off, then the attachment and the file are removed in
-one transaction (`recordings::delete_attached`), which also adds "The recording
-was deleted after transcribing (Settings › Meetings)." to the note's recording
-details; a file that can't be removed stays attached, and the outcome says so.
-Nothing is removed until the note is on disk: commits are not synced (WAL,
-`synchronous = NORMAL`), so a full WAL checkpoint first writes them into the
-database file and syncs it, and if it can't finish -- a reader holding it back
-past the busy timeout -- the recording stays attached and the outcome says so.
-The outcome is seen only on the Meetings page while it is open, so the note's
-recording details say the same: a kept recording ends them with "The recording
-was kept because the transcript may be incomplete" -- or "because nothing was
-transcribed from it" -- "(Settings › Meetings asks for recordings to be deleted
-after transcribing).", written as the note is saved; a failed deletion adds
-"The recording couldn't be deleted after transcribing, so it's still attached
-(Settings › Meetings).", or, when the file went and only the note's update
-failed, the line a deleted one gets, though the note still lists the recording.
-A recording whose deletion failed is never tried again. The note
-keeps its transcript and typed notes, and Replay has no player. While the switch
-is on the Meetings page says so beside Start, at the foot of its list and in the
-live view of a meeting started that way. Discard always deletes the recording.
+(KNEG-409/422), off by default. The choice is captured at Start in the meeting's
+plan; changing the switch affects the next meeting. A whole-file transcript or
+settled local stream qualifies for deletion. A partial transcript keeps the
+recording because it may be incomplete; a typed-only note keeps it because
+nothing was transcribed. Those are separate outcomes.
+
+A local `note_recording_state` marker is established only after the WAV is
+attached to a live note. The marker refers to that exact attachment and records
+its planned deletion or kept reason. It is separate from authored content,
+recording details and shared-folder exports; older/imported notes have no marker,
+and no text matching or backfill guesses their history. Replay explains an
+intentional deletion and offers **Attach another recording** if another copy
+exists. Kept wording describes this meeting's choice, regardless of the current
+setting. A failed attachment leaves no kept claim on the first note; its recording
+and plan remain eligible for Interrupted recovery.
+
+Deletion first establishes durable intent and performs a full WAL checkpoint,
+then removes the attachment, sets the marker to deleted, removes the file and
+commits within one writer transaction. A failed removal rolls back the attachment
+change. A missing file with pending intent is read as **deleted-update-failed**:
+the file is gone and attachment cleanup still needs an explicit **Retry deletion**.
+The marker survives app restart. Retry checks the same key and live-note status
+again inside the transaction, refuses notes in Trash, and is idempotent after
+success. Replacing an attachment clears the old marker atomically. There is no
+automatic deletion retry when opening a note or starting the app.
+
+Filesystem removal cannot be rolled back. An app crash, force-quit, power loss,
+or failed database commit after removal can leave an attachment referring to a
+missing file. Reading the marker never repairs or deletes anything; it reports
+the discrepancy and lets the person retry cleanup. Empty trash can likewise
+leave notes in Trash with some recordings already removed when a later removal
+fails, and its failure message now says so. Discard always deletes the recording.
 
 ## Data compatibility
 
@@ -257,7 +263,7 @@ live view of a meeting started that way. Discard always deletes the recording.
   the deletion back with a plain-words error; then the commit. A file is never removed after
   the commit, where a crash would leave a WAV no note owns for recovery to offer back; the
   worst left is notes still in Trash without their recordings -- after an error the person
-  saw (a later file that wouldn't go, a failed commit), or after a power loss before the
+  saw (a later file that wouldn't go, a failed commit), or after an app crash or force-quit between removal and commit, or a power loss before the
   commit reached the disk, with no error at all -- and pressing again finishes. The OpenWhispr
   importer still needs an empty `notes` table, and notes in Trash count; its refusal says
   how many are there.
@@ -330,3 +336,36 @@ Native file-dialog attachment/cancellation was not exercised in this pass. macOS
 Linux, hosted CI and release validation remain unverified. Synthetic audio/provider
 checks do not establish real-meeting transcription or summary quality; KNEG-278's
 model-quality limitations still apply. Remaining checks are tracked on KNEG-297.
+
+
+## Lightweight desktop library (KNEG-420)
+
+Desktop Notes and recent Meetings read `notes_list_summaries`: title, dates,
+folder, type, people, duration, Trash state and a stored-transcript flag. Bodies,
+summaries and transcript/word JSON are read through `notes_get` only for the
+selected note. Existing `notes_list`, HTTP and MCP full-note contracts remain
+unchanged. Lightweight lists break equal update-time ties by descending id.
+
+Title/body autosave acknowledges the committed write through `notes_get_summary`
+and updates the library entry without rereading folders or scanning Trash files.
+A note with email participants also refreshes People because updating it may
+change the newest display name chosen for an email. Person-filter entries are
+patched from the same metadata, with delayed reads guarded against older results.
+Structural changes and participant edits still refresh authoritative backend data.
+A metadata-refresh failure is reported separately from a failed save.
+
+Search projects timestamps from SQLite without returning transcript text or word
+arrays, validates playable segment field shapes, and computes the selected start
+on the same clock as Transcript rows. It still uses the existing FTS ranking and
+read transaction. No migration or new index is required.
+
+## External Trash changes (KNEG-424)
+
+The selected note checks its metadata every two seconds while the window is
+visible, and on focus. It does not reload the editor, full bodies or library.
+If the note is moved to Trash or permanently deleted elsewhere, its mounted
+draft stays here and editing stops. **Copy draft** includes typed notes and the
+current summary draft. Restore keeps editing paused until **Save retained draft**
+is chosen. **Discard unsaved draft** permits navigation without silently replacing
+retained text. Read failures are not treated as proof that the note was deleted.
+Trash duration falls back to the saved meeting duration when audio was removed.

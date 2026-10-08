@@ -18,6 +18,7 @@ members = [
     "crates/security",
     "crates/sidecar",
     "crates/transcription-core",
+    "crates/transcript-text",
     "tools/knegiswhisper",
     "tools/knegiswhisper-mcp",
     "crates/storage",
@@ -40,6 +41,7 @@ repository = "https://github.com/axelalbertkarlsson/KnegisWhisper"
 # Package names carry a `kw-` prefix so cargo output is unambiguous, while
 # directory names stay as documented in docs/ARCHITECTURE.md.
 [workspace.dependencies]
+kw-transcript-text = { path = "crates/transcript-text" }
 kw-app-core = { path = "crates/app-core" }
 kw-audio-core = { path = "crates/audio-core" }
 kw-calendar-core = { path = "crates/calendar-core" }

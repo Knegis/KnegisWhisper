@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { waitFor, reload, press, pressText } from "./interactions.mjs";
 /**
  * Measures, against dev fixtures, choosing the microphone on the Meetings page
  * and testing it (KNEG-364): the chip is a listbox menu under a heading that
@@ -63,34 +64,9 @@ const checkState = (cdp) => cdp.evaluate(snippets.microphoneCheckState());
 const chipText = (prefix) => field(snippets.chipState(prefix), "text");
 const firstLine = field(snippets.microphoneCheckState(), "lines[0]?.text");
 
-async function waitFor(cdp, expression, description, timeout = 10_000) {
-  const deadline = Date.now() + timeout;
-  while (Date.now() < deadline) {
-    try {
-      if (await cdp.evaluate(expression)) return;
-    } catch {
-      // Between two documents during a reload there is no context to evaluate in.
-    }
-    await delay(60);
-  }
-  throw new Error(`Timed out waiting for ${description}`);
-}
 
-async function reload(cdp, timeout = 15_000) {
-  let off = () => {};
-  let timer;
-  const loaded = new Promise((resolveLoad, reject) => {
-    timer = setTimeout(() => reject(new Error("Timed out waiting for the reload")), timeout);
-    off = cdp.on("Page.loadEventFired", () => resolveLoad());
-  });
-  try {
-    await cdp.send("Page.reload", { ignoreCache: true });
-    await loaded;
-  } finally {
-    clearTimeout(timer);
-    off();
-  }
-}
+
+
 
 async function viewport(cdp, width, height) {
   await cdp.send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: false });
@@ -98,12 +74,7 @@ async function viewport(cdp, width, height) {
 }
 
 /** A real pointer press at a measured point, as a person's click is. */
-async function press(cdp, { x, y }) {
-  await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
-  await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 });
-  await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
-  await delay(150);
-}
+
 
 async function escape(cdp) {
   const base = { key: "Escape", code: "Escape", windowsVirtualKeyCode: 27, modifiers: 0 };
@@ -113,14 +84,7 @@ async function escape(cdp) {
 }
 
 /** Presses the element's centre, which must be on screen for the press to reach it. */
-async function pressText(cdp, selector, text) {
-  const point = await cdp.evaluate(snippets.centerOfText(selector, text));
-  const size = await cdp.evaluate("({ width: innerWidth, height: innerHeight })");
-  if (point.x < 0 || point.y < 0 || point.x > size.width || point.y > size.height) {
-    throw new Error(`${selector} "${text}" is off screen at ${JSON.stringify(point)}`);
-  }
-  await press(cdp, point);
-}
+
 
 /** Opens the microphone menu by pressing its chip, and reads it once placed. */
 async function openMenu(cdp) {

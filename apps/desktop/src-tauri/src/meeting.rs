@@ -100,9 +100,13 @@
 mod config;
 pub mod draft;
 mod notes;
+mod plan;
 mod recorder;
 pub mod recovery;
 pub mod removal;
+mod save;
+use plan::*;
+use save::*;
 mod watcher;
 
 use config::{
@@ -323,6 +327,9 @@ pub struct MeetingPlan {
     /// ([`plan_at_start`]), never a caller's. A plan written before this
     /// existed reads `false`, and keeps its recording.
     pub delete_recording: bool,
+    /// The actual live provider selected at Start, never a caller's claim.
+    /// Older sidecars have no provider to disclose.
+    pub live_provider_id: Option<String>,
 }
 
 /// What can be said about the meeting session.
@@ -543,6 +550,10 @@ enum SessionPhase {
 /// A pure decision over the lifecycle phase and outstanding-offer flag rather
 /// than over `AppHandle`, so a test can exercise the visibility invariant
 /// without touching Tauri -- the same reason as `updater::is_configured`.
+const fn microphone_under_way(phase: SessionPhase) -> bool {
+    matches!(phase, SessionPhase::Starting | SessionPhase::Recording)
+}
+
 const fn window_has_something_to_say(phase: SessionPhase, offer_outstanding: bool) -> bool {
     !matches!(phase, SessionPhase::Idle) || offer_outstanding
 }
@@ -1000,13 +1011,14 @@ impl MeetingRuntime {
         system_audio: bool,
         plan: MeetingPlan,
     ) -> Result<Sources, String> {
+        let _microphone_use = crate::capture_interlock::CaptureInterlock::shared().recording()?;
         // Kept for the entire start, including provider connection. Polling and
         // stop therefore see `Starting`, never a transient idle slot between
         // reserving the session and publishing `Live`.
         let mut lifecycle = self.lifecycle.lock().await;
         let generation = lifecycle.begin_start().map_err(str::to_owned)?;
 
-        let plan = plan_at_start(&self.db, plan).await;
+        let plan = plan_at_start(&self.db, plan, provider_id).await;
         match self.start_live(provider_id, system_audio, plan).await {
             Ok(sources) => {
                 if !lifecycle.started(generation) {
@@ -1556,10 +1568,7 @@ impl MeetingRuntime {
     /// answers for how it ended. Finishing is not under way: the microphone
     /// is closed by then.
     pub async fn is_under_way(&self) -> bool {
-        matches!(
-            self.lifecycle.lock().await.phase,
-            SessionPhase::Starting | SessionPhase::Recording
-        )
+        microphone_under_way(self.lifecycle.lock().await.phase)
     }
 
     /// What is happening, for the screen.
@@ -1974,76 +1983,6 @@ impl MeetingRuntime {
     }
 }
 
-/// How long a meeting's name may be, in characters.
-const TITLE_LIMIT: usize = 200;
-
-/// A name typed before Start, tidied into a title: one line, trimmed, at most
-/// [`TITLE_LIMIT`] characters. `None` when nothing is left of it.
-fn clean_title(given: &str) -> Option<String> {
-    let line = given
-        .split(['\r', '\n'])
-        .map(str::trim)
-        .filter(|part| !part.is_empty())
-        .collect::<Vec<_>>()
-        .join(" ");
-    let capped: String = line.chars().take(TITLE_LIMIT).collect();
-    let title = capped.trim_end();
-    (!title.is_empty()).then(|| title.to_owned())
-}
-
-/// A meeting note's title: the name it was given, or when it **started**
-/// (KNEG-365). It used to be the time it was saved, so a meeting stopped
-/// after midnight, or recovered a day later, was named for the wrong day.
-fn note_title(given: Option<&str>, started: chrono::DateTime<chrono::Local>) -> String {
-    given
-        .and_then(clean_title)
-        .unwrap_or_else(|| format!("Meeting — {}", started.format("%Y-%m-%d %H:%M")))
-}
-
-/// The title of the notes a discarded meeting keeps: its name, or the wording
-/// that says only notes are inside.
-fn notes_only_title(given: Option<&str>, started: chrono::DateTime<chrono::Local>) -> String {
-    given
-        .and_then(clean_title)
-        .unwrap_or_else(|| format!("Meeting notes — {}", started.format("%Y-%m-%d %H:%M")))
-}
-
-/// When a recording started, from the name `start_live` gave it:
-/// `%Y%m%d-%H%M%S` in UTC, then a UUID (none before the UUID was added).
-/// `None` for any other name.
-fn recording_started_at(storage_key: &str) -> Option<chrono::DateTime<chrono::Local>> {
-    let stamp = storage_key.get(..15)?;
-    chrono::NaiveDateTime::parse_from_str(stamp, "%Y%m%d-%H%M%S")
-        .ok()
-        .map(|utc| utc.and_utc().with_timezone(&chrono::Local))
-}
-
-/// Where a meeting starting `now` is recorded, in `directory`, and when it
-/// started on the clock: both from the one instant, so the start a Stop note
-/// is named for and the one recovery reads back from the file name
-/// ([`recording_started_at`]) are the same minute.
-fn recording_start(
-    directory: &std::path::Path,
-    now: chrono::DateTime<chrono::Utc>,
-    id: uuid::Uuid,
-) -> (std::path::PathBuf, chrono::DateTime<chrono::Local>) {
-    let name = format!("{}-{id}.wav", now.format("%Y%m%d-%H%M%S"));
-    (directory.join(name), now.with_timezone(&chrono::Local))
-}
-
-/// The plan a meeting starts with. The name is tidied once, here, so the live
-/// title, the plan beside the recording and the saved note all say the same
-/// name. Whether the recording is deleted once saved is read from the setting
-/// now (KNEG-409), never taken from the caller, and a change to the setting
-/// after this is the next meeting's.
-async fn plan_at_start(db: &Db, plan: MeetingPlan) -> MeetingPlan {
-    MeetingPlan {
-        title: plan.title.as_deref().and_then(clean_title),
-        folder_id: plan.folder_id,
-        delete_recording: delete_recordings(db).await,
-    }
-}
-
 /// Whether a meeting starting now deletes its recording once saved. A
 /// setting that cannot be read keeps the recording.
 async fn delete_recordings(db: &Db) -> bool {
@@ -2060,358 +1999,6 @@ async fn delete_recordings(db: &Db) -> bool {
             DELETE_RECORDINGS_BY_DEFAULT
         }
     }
-}
-
-/// What a finished meeting's note takes from its session, besides the
-/// transcript: the title, the plan it was started with, and what was typed.
-#[derive(Debug)]
-struct SaveAs {
-    title: String,
-    plan: MeetingPlan,
-    notes: String,
-}
-
-/// Save a meeting's note in the folder its plan chose: the one place every
-/// way a meeting is saved creates its note (KNEG-365). The second value is
-/// whether the chosen folder was left out because it no longer exists.
-///
-/// **The save never fails because of the folder.** `notes.folder_id`
-/// references `folders`, and the foreign key is enforced, so a folder deleted
-/// since Start would refuse the note outright. The folder is looked up first,
-/// and one deleted between that lookup and the insert is the same refusal a
-/// step later, so the insert is tried once more with no folder.
-///
-/// `recording` saves the note and attaches its WAV in one transaction, as
-/// recovery needs (`create_meeting_with_recording`). Stop attaches after the
-/// note is saved instead, so a failed attachment never costs the note.
-async fn create_meeting_note(
-    db: &Db,
-    mut note: kw_notes_core::notes::NewNote,
-    plan: &MeetingPlan,
-    recording: Option<(&str, f64)>,
-) -> Result<(i64, bool), kw_storage::StorageError> {
-    note.folder_id = match kw_notes_core::notes::existing_folder(db.pool(), plan.folder_id).await {
-        Ok(found) => found,
-        // Unknown rather than gone: the insert below says which.
-        Err(error) => {
-            tracing::warn!(%error, "could not look up the meeting's folder");
-            plan.folder_id
-        }
-    };
-    let id = match insert_meeting_note(db, &note, recording).await {
-        Err(error) if note.folder_id.is_some() && error.is_foreign_key_violation() => {
-            tracing::warn!(%error, "the meeting's folder was deleted as its note was saved");
-            note.folder_id = None;
-            insert_meeting_note(db, &note, recording).await?
-        }
-        result => result?,
-    };
-    Ok((id, plan.folder_id.is_some() && note.folder_id.is_none()))
-}
-
-async fn insert_meeting_note(
-    db: &Db,
-    note: &kw_notes_core::notes::NewNote,
-    recording: Option<(&str, f64)>,
-) -> Result<i64, kw_storage::StorageError> {
-    match recording {
-        Some((key, duration)) => {
-            kw_notes_core::notes::create_meeting_with_recording(db.pool(), note, key, duration)
-                .await
-                .map(|(id, _)| id)
-        }
-        None => kw_notes_core::notes::create(db.pool(), note).await,
-    }
-}
-
-/// A stopped meeting's note, and what is to become of its recording: what
-/// `keep` saves once its transcript is chosen, apart so it can be tested
-/// without a running meeting. `gaps` is the live transcript's
-/// ([`MeetingTranscript::gaps`]), `live_failure` why the live transcription
-/// stopped, when it did, and `made_by` where `saved` was transcribed. `None`
-/// when there is nothing to keep.
-fn compose_stopped(
-    save: &SaveAs,
-    finished: &Finished,
-    saved: &SavedTranscript,
-    gaps: u32,
-    live_failure: Option<&str>,
-    made_by: Option<&kw_notes_core::TranscribedBy>,
-) -> Option<(kw_notes_core::notes::NewNote, Option<RecordingRemoval>)> {
-    let segments = &saved.segments;
-    let from_partials = saved.from_partials;
-    let mut recording_details = String::new();
-    if from_partials && !segments.is_empty() {
-        recording_details.push_str(
-            "\n\n(The whole-recording pass did not complete, so this is the running \
-             transcript from during the meeting rather than a single pass over the \
-             finished audio.)",
-        );
-    }
-    if let Some(reason) = live_failure.filter(|_| !segments.is_empty()) {
-        // Said in the note rather than only in a log, for the same reason
-        // `from_partials` is: a transcript that came about differently from
-        // how the reader expects should say so. This one is the good case --
-        // the whole-recording pass ran afterwards over the complete audio,
-        // so nothing is missing from what follows.
-        let recovery = if from_partials {
-            "The whole-recording recovery also failed; the saved live transcript may be incomplete."
-        } else {
-            "This note is the whole-recording pass, which ran afterwards over the complete audio."
-        };
-        recording_details.push_str(&format!(
-            "\n\n(The live transcription stopped early: {reason} {recovery})"
-        ));
-    }
-    if let Some(note) = &saved.speaker_note {
-        // Only ever says something went differently from what the setting
-        // asked for. A run that produced labels adds nothing here -- the
-        // labels are visible in the note itself, and a sentence announcing
-        // that a feature worked is noise.
-        recording_details.push_str(&format!("\n\n({note})"));
-    }
-    if gaps > 0 && from_partials {
-        // Two causes, and `MeetingTranscript::gaps` is one number that does
-        // not distinguish them: the local model falling behind the meeting,
-        // or a session past the limit on how much transcript is retained.
-        // Naming both is honest where naming one was accurate until
-        // KNEG-109 gave the count a second source.
-        recording_details.push_str(&format!(
-            "\n\n({gaps} stretch(es) of audio were never transcribed: either the transcriber \
-             could not keep up with the meeting, or the meeting ran past the limit on how \
-             much transcript one session keeps.)"
-        ));
-    }
-    append_delivery_facts(
-        &mut recording_details,
-        finished.mic_delivered,
-        finished.system_delivered,
-    );
-
-    if segments.is_empty() {
-        recording_details.push_str("\n\nNothing was transcribed from the recording; this note holds only what was typed during the meeting.");
-    }
-
-    let removal = removal::recording_removal(
-        save.plan.delete_recording,
-        !segments.is_empty(),
-        from_partials,
-    );
-    if let Some(kept) = removal::kept_details(removal, !segments.is_empty()) {
-        recording_details.push_str("\n\n");
-        recording_details.push_str(kept);
-    }
-
-    let note = compose_note(
-        save.title.clone(),
-        save.notes.as_str(),
-        segments,
-        recording_details.trim(),
-        finished.duration_seconds,
-        made_by,
-    )?;
-    Some((note, removal))
-}
-
-/// What a stopped meeting's save made of its note and its recording.
-#[derive(Debug)]
-struct Stopped {
-    note_id: i64,
-    folder_missing: bool,
-    recording_attached: bool,
-    recording_removal: Option<RecordingRemoval>,
-    recording_removal_error: Option<String>,
-}
-
-/// Save a stopped meeting's note, attach its recording, then tidy beside it:
-/// the tail of `keep`, apart so it can be tested over a temporary directory.
-///
-/// In that order, and each step only after the one before it worked. The
-/// typed notes' sidecar goes once the note holds them. The plan goes only
-/// once the recording is attached: a recording left with no note is offered
-/// under Interrupted, and its plan names, files and deletes the note
-/// recovered from it. Deletion (`removal`) comes last, after the attachment,
-/// so a crash before it leaves a recording a note owns rather than one
-/// offered for recovery a second time.
-async fn save_stopped(
-    db: &Db,
-    note: kw_notes_core::notes::NewNote,
-    plan: &MeetingPlan,
-    recording: &std::path::Path,
-    duration_seconds: f64,
-    removal: Option<RecordingRemoval>,
-) -> Result<Stopped, kw_storage::StorageError> {
-    let (note_id, folder_missing) = create_meeting_note(db, note, plan, None).await?;
-    let recording_attached =
-        attach_meeting_recording(db, note_id, recording, duration_seconds).await;
-    let (recording_removal, recording_removal_error) = if recording_attached {
-        draft::remove_sidecars(recording);
-        removal::remove_recording(db, note_id, recording, removal).await
-    } else {
-        draft::remove_sidecar(recording);
-        (None, None)
-    };
-    Ok(Stopped {
-        note_id,
-        folder_missing,
-        recording_attached,
-        recording_removal,
-        recording_removal_error,
-    })
-}
-
-/// Keep what was typed in a discarded meeting as a note of its own, named as
-/// the meeting was or as its notes, and say which note, if one was saved. The
-/// recorder has already deleted the recording, so the plan describes nothing
-/// once this is done; the typed notes' sidecar goes only once the note holds
-/// them. A folder deleted since Start is left out without a word: only Stop's
-/// and Recover's outcomes say so (docs/NOTES_WORKSPACE.md).
-async fn save_discarded(
-    db: &Db,
-    recording: &std::path::Path,
-    notes: &str,
-    plan: &MeetingPlan,
-    started_at: chrono::DateTime<chrono::Local>,
-) -> Option<i64> {
-    if notes.trim().is_empty() {
-        draft::remove_sidecars(recording);
-        return None;
-    }
-    let note = kw_notes_core::notes::NewNote {
-        title: notes_only_title(plan.title.as_deref(), started_at),
-        content: notes.trim_end().to_owned(),
-        recording_details: Some("The recording was discarded before it was transcribed.".into()),
-        note_type: Some("meeting".into()),
-        folder_id: None,
-        transcript: None,
-        participants: None,
-        audio_duration_seconds: None,
-        transcribed_by: None,
-    };
-    match create_meeting_note(db, note, plan, None).await {
-        Ok((id, _)) => {
-            draft::remove_sidecars(recording);
-            Some(id)
-        }
-        Err(error) => {
-            tracing::error!(%error, "could not save typed notes from cancelled meeting");
-            // The notes stay on disk, deliberately.
-            draft::remove_plan(recording);
-            None
-        }
-    }
-}
-
-/// Save a recovered meeting, named, filed and kept or deleted by the plan
-/// beside its recording, then remove both sidecars. With no plan, the
-/// recording is kept or deleted by today's setting. Its title falls back to
-/// when the recording started, read from its name, and to now when the name
-/// says nothing.
-async fn save_recovered(
-    db: &Db,
-    recording: &std::path::Path,
-    storage_key: &str,
-    notes: &str,
-    segments: &[kw_notes_core::transcript::Segment],
-    details: &str,
-    duration: f64,
-) -> Result<MeetingOutcome, String> {
-    let plan = match draft::read_plan(recording) {
-        Some(plan) => plan,
-        None => MeetingPlan {
-            delete_recording: delete_recordings(db).await,
-            ..MeetingPlan::default()
-        },
-    };
-    let started = recording_started_at(storage_key).unwrap_or_else(chrono::Local::now);
-    // Recovery's transcript is always the whole-recording pass, over all the
-    // audio there is: never the running one.
-    let removal = removal::recording_removal(plan.delete_recording, !segments.is_empty(), false);
-    let details = match removal::kept_details(removal, !segments.is_empty()) {
-        Some(kept) => format!("{details}\n\n{kept}"),
-        None => details.to_owned(),
-    };
-    // That pass is this computer's.
-    let note = compose_note(
-        note_title(plan.title.as_deref(), started),
-        notes,
-        segments,
-        &details,
-        duration,
-        crate::transcribed_by::route("local").as_ref(),
-    )
-    .ok_or("The recovered meeting had no content")?;
-    let (note_id, folder_missing) =
-        create_meeting_note(db, note, &plan, Some((storage_key, duration)))
-            .await
-            .map_err(|error| {
-                format!(
-                    "Could not save the recovered meeting: {error}. The recording remains at {} and typed notes remain at {}",
-                    recording.display(),
-                    draft::sidecar_path(recording).display()
-                )
-            })?;
-    draft::remove_sidecars(recording);
-    let (recording_removal, recording_removal_error) =
-        removal::remove_recording(db, note_id, recording, removal).await;
-    Ok(MeetingOutcome::Saved {
-        note_id,
-        duration_seconds: duration,
-        recording_path: recording.display().to_string(),
-        recording_attached: true,
-        gaps: 0,
-        reconnects: 0,
-        transcript_is_partials: false,
-        folder_missing,
-        recording_removal,
-        recording_removal_error,
-    })
-}
-
-/// A meeting's note, or `None` when there is nothing to keep. `transcribed_by`
-/// is where `segments` were made (KNEG-368), and is kept only with them: a
-/// note of typed notes alone has no transcript to say it of.
-fn compose_note(
-    title: String,
-    notes: &str,
-    segments: &[kw_notes_core::transcript::Segment],
-    recording_details: &str,
-    duration_seconds: f64,
-    transcribed_by: Option<&kw_notes_core::TranscribedBy>,
-) -> Option<kw_notes_core::notes::NewNote> {
-    if notes.trim().is_empty() && segments.is_empty() {
-        return None;
-    }
-    let transcribed = !segments.is_empty();
-    Some(kw_notes_core::notes::NewNote {
-        title,
-        content: notes.trim_end().to_owned(),
-        recording_details: Some(recording_details.to_owned()),
-        note_type: Some("meeting".into()),
-        folder_id: None,
-        transcript: transcribed
-            .then(|| serde_json::to_string(segments).ok())
-            .flatten(),
-        participants: None,
-        audio_duration_seconds: Some(duration_seconds),
-        transcribed_by: transcribed_by
-            .filter(|_| transcribed)
-            .and_then(kw_notes_core::TranscribedBy::to_json),
-    })
-}
-
-/// Preserve what each capture delivered in the note that outlives the session.
-///
-/// The whole-recording pass reads a mixed WAV, so its segments cannot recover
-/// which source contributed. The recorder has already measured the two facts;
-/// dropping them only on the successful path made a complete-looking note out
-/// of a meeting where one source may have contributed nothing.
-fn append_delivery_facts(content: &mut String, mic: Delivered, system: Delivered) {
-    content.push_str("\n\nRecording sources:\n- Microphone: ");
-    content.push_str(mic.note_fact());
-    content.push_str(".\n- System audio: ");
-    content.push_str(system.note_fact());
-    content.push('.');
 }
 
 /// Ask the recorder to stop, and wait for what it wrote.
@@ -3157,9 +2744,10 @@ mod tests {
                 title: Some("Board review".into()),
                 folder_id: Some(3),
                 delete_recording: true,
+                live_provider_id: Some("openai-realtime".into()),
             })
             .unwrap(),
-            serde_json::json!({"title": "Board review", "folderId": 3, "deleteRecording": true})
+            serde_json::json!({"title": "Board review", "folderId": 3, "deleteRecording": true, "liveProviderId": "openai-realtime"})
         );
         let cancelled =
             serde_json::to_value(MeetingOutcome::Cancelled { note_id: Some(9) }).unwrap();
@@ -3604,18 +3192,20 @@ mod tests {
             title: Some("  Board review \n".into()),
             folder_id: Some(3),
             delete_recording: true,
+            live_provider_id: Some("fake-provider".into()),
         };
         assert_eq!(
-            plan_at_start(&db, asked).await,
+            plan_at_start(&db, asked, "openai-realtime").await,
             MeetingPlan {
                 title: Some("Board review".into()),
                 folder_id: Some(3),
                 delete_recording: false,
+                live_provider_id: Some("openai-realtime".into()),
             }
         );
 
         deleting(&db, true).await;
-        let plan = plan_at_start(&db, MeetingPlan::default()).await;
+        let plan = plan_at_start(&db, MeetingPlan::default(), "local-streaming").await;
         assert!(plan.delete_recording);
         // Turned off while the meeting runs: the session's plan and the one
         // beside its recording are what Stop and recovery read, not the
@@ -3628,7 +3218,7 @@ mod tests {
             Some(true)
         );
         assert!(
-            !plan_at_start(&db, MeetingPlan::default())
+            !plan_at_start(&db, MeetingPlan::default(), "local-streaming")
                 .await
                 .delete_recording
         );
@@ -3677,10 +3267,15 @@ mod tests {
             .is_none());
         assert_eq!(
             note_details(&db, saved.note_id).await.as_deref(),
-            Some(
-                "Recording sources: microphone.\n\nThe recording was deleted after transcribing \
-                 (Settings › Meetings)."
-            )
+            Some("Recording sources: microphone.")
+        );
+        assert_eq!(
+            kw_notes_core::recording_state::get(db.pool(), saved.note_id, dir.path())
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            "deleted"
         );
         // Nothing is left to offer under Interrupted.
         assert!(recovery::scan(&db, dir.path()).await.unwrap().is_empty());
@@ -3712,7 +3307,11 @@ mod tests {
 
             assert_eq!(
                 saved.recording_removal,
-                Some(RecordingRemoval::KeptIncomplete)
+                Some(if transcribed_whole {
+                    RecordingRemoval::KeptIncomplete
+                } else {
+                    RecordingRemoval::KeptUntranscribed
+                })
             );
             assert!(wav.exists());
             let attached = kw_notes_core::recordings::get(db.pool(), saved.note_id)
@@ -3829,10 +3428,15 @@ mod tests {
         // page shows, and only while it is open.
         assert_eq!(
             note_details(&db, saved.note_id).await.as_deref(),
-            Some(
-                "Recording sources: microphone.\n\nThe recording couldn't be deleted after \
-                 transcribing, so it's still attached (Settings › Meetings)."
-            )
+            Some("Recording sources: microphone.")
+        );
+        assert_eq!(
+            kw_notes_core::recording_state::get(db.pool(), saved.note_id, dir.path())
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            "delete-failed"
         );
     }
 
@@ -3867,18 +3471,29 @@ mod tests {
 
             assert_eq!(
                 saved.recording_removal,
-                Some(RecordingRemoval::DeleteFailed)
+                Some(if gone {
+                    RecordingRemoval::DeletedUpdateFailed
+                } else {
+                    RecordingRemoval::DeleteFailed
+                })
             );
-            let said = if gone {
-                "The recording was deleted after transcribing (Settings › Meetings)."
-            } else {
-                "The recording couldn't be deleted after transcribing, so it's still attached \
-                 (Settings › Meetings)."
-            };
+            let disposition =
+                kw_notes_core::recording_state::get(db.pool(), saved.note_id, dir.path())
+                    .await
+                    .unwrap()
+                    .unwrap();
             assert_eq!(
-                note_details(&db, saved.note_id).await,
-                Some(format!("Recording sources: microphone.\n\n{said}")),
-                "file gone: {gone}"
+                disposition.status,
+                if gone {
+                    "deleted-update-failed"
+                } else {
+                    "delete-failed"
+                }
+            );
+            assert!(disposition.can_retry);
+            assert_eq!(
+                note_details(&db, saved.note_id).await.as_deref(),
+                Some("Recording sources: microphone.")
             );
         }
     }
@@ -3929,57 +3544,26 @@ mod tests {
     /// moment it is saved, since the outcome that says so is seen only on the
     /// Meetings page.
     #[test]
-    fn a_stopped_meeting_says_in_its_note_when_a_recording_it_was_asked_to_delete_is_kept() {
-        use RecordingRemoval::{Deleted, KeptIncomplete};
-        const INCOMPLETE: &str = "The recording was kept because the transcript may be \
-                                  incomplete (Settings › Meetings asks for recordings to be \
-                                  deleted after transcribing).";
-        const UNTRANSCRIBED: &str = "The recording was kept because nothing was transcribed \
-                                     from it (Settings › Meetings asks for recordings to be \
-                                     deleted after transcribing).";
-        // (asked to delete, the transcript chosen) -> (what becomes of the
-        // recording, the line the recording details end with)
-        let cases = [
-            // The whole-recording pass: deleted once saved, and the note
-            // says so then (`delete_attached`).
-            (true, chosen(true, false, false), Some(Deleted), None),
-            // A finished local stream is that route's whole transcript: the
-            // ruling on KNEG-409.
-            (true, chosen(true, false, true), Some(Deleted), None),
-            // The running transcript, saved because the pass failed.
-            (
-                true,
-                chosen(true, true, false),
-                Some(KeptIncomplete),
-                Some(INCOMPLETE),
-            ),
-            // Typed notes alone.
-            (
-                true,
-                chosen(false, false, false),
-                Some(KeptIncomplete),
-                Some(UNTRANSCRIBED),
-            ),
-            // Not asked: nothing to say either way.
-            (false, chosen(true, true, false), None, None),
-            (false, chosen(false, false, false), None, None),
-        ];
-        for (delete, saved, removal, said) in cases {
+    fn composing_a_note_does_not_claim_ownership_before_attachment() {
+        for (whole, partials, expected) in [
+            (true, false, RecordingRemoval::Deleted),
+            (true, true, RecordingRemoval::KeptIncomplete),
+            (false, false, RecordingRemoval::KeptUntranscribed),
+        ] {
             let (note, planned) = compose_stopped(
-                &save_as(delete, "typed"),
+                &save_as(true, "typed"),
                 &finished(),
-                &saved,
+                &chosen(whole, partials, false),
                 0,
                 None,
                 None,
             )
             .unwrap();
-            let details = note.recording_details.unwrap();
-            assert_eq!(planned, removal, "delete {delete}, {saved:?}");
-            match said {
-                Some(line) => assert!(details.ends_with(&format!("\n\n{line}")), "{details}"),
-                None => assert!(!details.contains("The recording was kept"), "{details}"),
-            }
+            assert_eq!(planned, Some(expected));
+            assert!(!note
+                .recording_details
+                .unwrap()
+                .contains("The recording was kept"));
         }
     }
 
@@ -4009,10 +3593,14 @@ mod tests {
         assert_eq!(recording_removal, Some(RecordingRemoval::Deleted));
         assert!(!wav.exists());
         assert!(recovery::scan(&db, dir.path()).await.unwrap().is_empty());
-        assert!(note_details(&db, note_id)
-            .await
-            .unwrap()
-            .ends_with("The recording was deleted after transcribing (Settings › Meetings)."));
+        assert_eq!(
+            kw_notes_core::recording_state::get(db.pool(), note_id, dir.path())
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            "deleted"
+        );
     }
 
     #[tokio::test]
@@ -4042,6 +3630,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn recovery_preserves_cloud_caption_disclosure_without_guessing_old_sidecars() {
+        for provider in [
+            Some("openai-realtime"),
+            Some("local-streaming"),
+            Some("unknown-provider"),
+            None,
+        ] {
+            for has_transcript in [true, false] {
+                let db = kw_storage::Db::open_in_memory().await.unwrap();
+                let dir = tempfile::tempdir().unwrap();
+                let (wav, key) = interrupted(dir.path());
+                draft::write_plan(
+                    &wav,
+                    &MeetingPlan {
+                        live_provider_id: provider.map(str::to_owned),
+                        ..MeetingPlan::default()
+                    },
+                )
+                .unwrap();
+                let segments = if has_transcript {
+                    vec![segment("hello", 0.0, None)]
+                } else {
+                    Vec::new()
+                };
+                let outcome =
+                    save_recovered(&db, &wav, key, "typed", &segments, "Recovered.", 12.0)
+                        .await
+                        .unwrap();
+                let MeetingOutcome::Saved { note_id, .. } = outcome else {
+                    panic!("not saved");
+                };
+                let note = kw_notes_core::notes::get(db.pool(), note_id)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                let expected = has_transcript.then(|| {
+                    crate::transcribed_by::with_live_provider("local", provider)
+                        .unwrap()
+                        .to_json()
+                        .unwrap()
+                });
+                assert_eq!(note.transcribed_by, expected);
+                if provider == Some("openai-realtime") && has_transcript {
+                    assert!(note.transcribed_by.unwrap().contains("OpenAI Realtime"));
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn a_recovered_meeting_with_only_typed_notes_keeps_its_recording() {
         let db = kw_storage::Db::open_in_memory().await.unwrap();
         let dir = tempfile::tempdir().unwrap();
@@ -4059,14 +3697,19 @@ mod tests {
         else {
             panic!("expected a saved note, got {outcome:?}");
         };
-        assert_eq!(recording_removal, Some(RecordingRemoval::KeptIncomplete));
+        assert_eq!(recording_removal, Some(RecordingRemoval::KeptUntranscribed));
         assert!(wav.exists());
         assert_eq!(
             note_details(&db, note_id).await.as_deref(),
-            Some(
-                "Recovered.\n\nThe recording was kept because nothing was transcribed from it \
-                 (Settings › Meetings asks for recordings to be deleted after transcribing)."
-            )
+            Some("Recovered.")
+        );
+        assert_eq!(
+            kw_notes_core::recording_state::get(db.pool(), note_id, dir.path())
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            "kept-untranscribed"
         );
     }
 
@@ -4406,4 +4049,54 @@ mod provider_setting_tests {
             );
         }
     }
+
+    #[test]
+    fn microphone_ownership_includes_starting_but_not_finishing() {
+        assert!(!microphone_under_way(SessionPhase::Idle));
+        assert!(microphone_under_way(SessionPhase::Starting));
+        assert!(microphone_under_way(SessionPhase::Recording));
+        assert!(!microphone_under_way(SessionPhase::Finishing));
+    }
+
+    #[tokio::test]
+    async fn a_missing_folder_retry_keeps_the_recording_attached_to_one_note() {
+        let db = Db::open_in_memory().await.unwrap();
+        let folder = kw_notes_core::notes::create_folder(db.pool(), "Racing")
+            .await
+            .unwrap();
+        sqlx::query("CREATE TRIGGER folder_goes BEFORE INSERT ON notes WHEN NEW.folder_id IS NOT NULL BEGIN DELETE FROM folders WHERE id = NEW.folder_id; END").execute(db.pool()).await.unwrap();
+        let plan = MeetingPlan {
+            folder_id: Some(folder),
+            ..Default::default()
+        };
+        let (id, missing) = create_meeting_note(
+            &db,
+            kw_notes_core::notes::NewNote {
+                content: "retained".into(),
+                ..Default::default()
+            },
+            &plan,
+            Some(("recovered.wav", 90.0)),
+        )
+        .await
+        .unwrap();
+        assert!(missing);
+        assert_eq!(
+            kw_notes_core::notes::list(db.pool(), None, None, 10)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        let attachment = kw_notes_core::recordings::get(db.pool(), id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(attachment.storage_key, "recovered.wav");
+        assert_eq!(attachment.duration_seconds, Some(90.0));
+    }
 }
+
+#[cfg(all(test, windows, feature = "tauri-test"))]
+#[path = "meeting/native_recovery_test.rs"]
+mod native_recovery_test;

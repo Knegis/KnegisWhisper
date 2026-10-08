@@ -43,6 +43,9 @@ import {
   installLocalModel,
   installSherpaModel,
   onInstallProgress,
+  getSpeechInstallations,
+  onSpeechInstallations,
+  type SpeechInstall,
   onLocalDictationLanguages,
   refreshLocalServer,
   setCloudProvider,
@@ -142,6 +145,21 @@ export function SettingsTranscription({
   }, []);
 
   const { data, error, reload, guard } = useRefresh(load);
+  const [jobs, setJobs] = useState<SpeechInstall[]>([]);
+  useEffect(() => {
+    let disposed = false;
+    let revision = -1;
+    let stop: (() => void) | undefined;
+    const accept = (next: Awaited<ReturnType<typeof getSpeechInstallations>>) => {
+      if (!disposed && next.revision >= revision) { revision = next.revision; setJobs(next.jobs); }
+    };
+    void onSpeechInstallations(accept).then(async unlisten => {
+      if (disposed) { unlisten(); return; }
+      stop = unlisten;
+      accept(await getSpeechInstallations());
+    }).catch(() => {});
+    return () => { disposed = true; stop?.(); };
+  }, []);
   const [installing, setInstalling] = useState<string | null>(null);
   /**
    * Which model's Install button started the run in progress.
@@ -287,21 +305,23 @@ export function SettingsTranscription({
   latest.current = data;
 
   useEffect(() => {
+    let disposed = false;
     let unlisten: (() => void) | undefined;
     const nameOf = (id: string) =>
       latest.current?.local.models.find((m) => m.id === id)?.name ??
       latest.current?.sherpa.models.find((m) => m.id === id)?.name ??
       id;
     void onInstallProgress((progress) => {
+      if (disposed) return;
       setInstalling(progressLabel(progress, nameOf));
       if (progress.stage === "done") {
         setInstallingId(null);
         void reload();
       }
     }).then((fn) => {
-      unlisten = fn;
+      if (disposed) fn(); else unlisten = fn;
     });
-    return () => unlisten?.();
+    return () => { disposed = true; unlisten?.(); };
   }, [reload]);
 
   // The languages are chosen on Dictation and from the floating microphone
@@ -339,6 +359,7 @@ export function SettingsTranscription({
 
   return (
     <div className="view">
+      {jobs.length > 0 && <section aria-label="Speech model installation progress" role="status">{jobs.map(job => <p key={job.id}>{data.local.models.find(model => model.id === job.id)?.name ?? data.sherpa.models.find(model => model.id === job.id)?.name ?? (job.id === "speech-server" ? "Speech processing tools" : job.id)}: {job.progress ? progressLabel(job.progress, id => data.local.models.find(model => model.id === id)?.name ?? data.sherpa.models.find(model => model.id === id)?.name ?? id) : "Starting…"}</p>)}</section>}
       {error ? <FailureLine text="That didn't work." detail={error} /> : null}
 
       <MicrophoneSettings />
@@ -506,7 +527,7 @@ export function SettingsTranscription({
             ))}
           </ul>
         ) : language !== null ? (
-          <p className="muted">No model here is listed for {modelLanguageLabel([language])}.</p>
+          <p className="muted">{localModelRows(local, sherpa, route).length === 0 ? "No local speech models are available on this platform." : `No available model here is listed for ${modelLanguageLabel([language])}.`}</p>
         ) : null}
         <p className="muted">
           Dictation uses one model at a time, so choosing one for dictation

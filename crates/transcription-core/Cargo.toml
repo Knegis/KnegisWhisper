@@ -12,6 +12,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+kw-transcript-text.workspace = true
 ts-rs.workspace = true
 async-trait.workspace = true
 serde.workspace = true

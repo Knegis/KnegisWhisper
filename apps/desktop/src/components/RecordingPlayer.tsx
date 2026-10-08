@@ -40,6 +40,7 @@ export type RecordingPlayerHandle = {
    * end when `seconds` is inside it, and plays on when it is past it.
    */
   seek: (seconds: number) => void;
+  pause: () => void;
 };
 
 type RecordingPlayerProps = {
@@ -167,6 +168,7 @@ export const RecordingPlayer = forwardRef<RecordingPlayerHandle, RecordingPlayer
           });
         },
         time: () => audioRef.current?.currentTime ?? null,
+        pause: () => { audioRef.current?.pause(); clearIntervalPlayback(); },
         seek: (seconds) => {
           const audio = audioRef.current;
           if (audio === null) return;

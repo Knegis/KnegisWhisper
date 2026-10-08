@@ -979,7 +979,9 @@ pub async fn local_model_install(
     let sidecars = paths::sidecar_dir();
     let models_dir = paths::model_cache_dir();
 
+    let installing = crate::speech_install::Installing::begin(&app, &model_id)?;
     let emit = |progress: InstallProgress| {
+        installing.update(&progress);
         if let Err(err) = app.emit(PROGRESS_EVENT, progress) {
             tracing::debug!(error = %err, "could not report install progress");
         }
@@ -1181,7 +1183,9 @@ pub async fn local_server_refresh(
         .map_err(|err| err.to_string())?;
     let sidecars = paths::sidecar_dir();
 
+    let installing = crate::speech_install::Installing::begin(&app, "speech-server")?;
     let emit = |progress: InstallProgress| {
+        installing.update(&progress);
         if let Err(err) = app.emit(PROGRESS_EVENT, progress) {
             tracing::debug!(error = %err, "could not report refresh progress");
         }

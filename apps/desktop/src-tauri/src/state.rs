@@ -59,6 +59,13 @@ impl AppState {
         })
     }
 
+    /// Reopen a disposable native-test database without using the user's profile.
+    #[cfg(all(test, feature = "tauri-test"))]
+    pub(crate) fn with_test_db(mut self, db: Db) -> Self {
+        self.db = db;
+        self
+    }
+
     #[must_use]
     pub const fn db(&self) -> &Db {
         &self.db

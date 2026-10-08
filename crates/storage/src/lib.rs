@@ -295,8 +295,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            applied, 11,
-            "initial, note recordings, automation, desktop origin, summary, note workspace, search tokenizer, transcript row, folder sharing, transcribed-by, and note trash migrations recorded exactly once"
+            applied, 12,
+            "initial, note recordings, automation, desktop origin, summary, note workspace, search tokenizer, transcript row, folder sharing, transcribed-by, note trash, and recording disposition migrations recorded exactly once"
         );
         second.close().await;
     }
@@ -330,6 +330,7 @@ mod tests {
             "speaker_mappings",
             "note_speaker_embeddings",
             "note_recordings",
+            "note_recording_state",
             "folder_share_operations",
             "settings",
         ] {

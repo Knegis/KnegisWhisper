@@ -5,6 +5,7 @@ export type AutosaveStatus = "idle" | "dirty" | "saving" | "saved" | "failed";
 type AutosaveOptions<T extends object> = {
   save: (patch: Partial<T>) => Promise<void>;
   delayMs?: number | undefined;
+  paused?: boolean;
 };
 
 type Autosave<T extends object> = {
@@ -13,6 +14,7 @@ type Autosave<T extends object> = {
   schedule: (patch: Partial<T>) => void;
   flush: () => Promise<void>;
   retry: () => Promise<void>;
+  discard: () => void;
 };
 
 function message(error: unknown): string {
@@ -27,8 +29,11 @@ function message(error: unknown): string {
 export function useAutosave<T extends object>({
   save,
   delayMs = 800,
+  paused = false,
 }: AutosaveOptions<T>): Autosave<T> {
   const saveRef = useRef(save);
+  const pausedRef = useRef(paused);
+  pausedRef.current = paused;
   const delayRef = useRef(delayMs);
   const pendingRef = useRef<Partial<T> | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -51,6 +56,7 @@ export function useAutosave<T extends object>({
 
   const run = useCallback((): Promise<void> => {
     clearTimer();
+    if (pausedRef.current) return Promise.resolve();
     if (inFlightRef.current) {
       rerunRef.current = true;
       return activeSaveRef.current ?? Promise.resolve();
@@ -103,6 +109,7 @@ export function useAutosave<T extends object>({
   const flush = useCallback(async () => {
     clearTimer();
     await run();
+    if (pausedRef.current && pendingRef.current !== null) throw new Error("This note is read-only. Copy or discard your unsaved draft, or restore the note and save it explicitly.");
     if (failureRef.current !== null) throw new Error(failureRef.current);
   }, [clearTimer, run]);
 
@@ -118,5 +125,6 @@ export function useAutosave<T extends object>({
     };
   }, [flush]);
 
-  return { status, error, schedule, flush, retry };
+  const discard = useCallback(() => { clearTimer(); pendingRef.current = null; failureRef.current = null; setError(null); setStatus("idle"); }, [clearTimer]);
+  return { status, error, schedule, flush, retry, discard };
 }

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { waitFor, reload, pressText } from "./interactions.mjs";
 /**
  * Measures, against dev fixtures, people in Notes (KNEG-362): adding a person
  * to a note on its meta row, the library's People list counting them, pressing
@@ -9,7 +10,7 @@
  * Emails and names are typed with CDP's `Input.insertText` into the focused
  * field, and every button pressed with a real pointer press. The page's
  * `invoke` is wrapped (`installInvokeStub`) to log what reached
- * `notes_set_participants` and `notes_list`. The fixtures answer as Rust's
+ * `notes_set_participants` and `notes_list_summaries`. The fixtures answer as Rust's
  * `notes_core::people` does -- checked, tidied, refused in the same words --
  * but which emails Rust accepts, how it counts and names people, and that it
  * filters by email in any case are pinned by `cargo test` (`people.rs`,
@@ -46,52 +47,16 @@ const field = (snippet, path) => `(${snippet})?.${path}`;
 const noteOpen = (title) => `(() => { const input = document.querySelector('.note-detail input[aria-label="Title"]'); return Boolean(input) && !input.disabled && input.value === ${JSON.stringify(title)}; })()`;
 const FOCUS = "document.activeElement?.className ?? null";
 
-async function waitFor(cdp, expression, description, timeout = 10_000) {
-  const deadline = Date.now() + timeout;
-  while (Date.now() < deadline) {
-    try {
-      if (await cdp.evaluate(expression)) return;
-    } catch {
-      // Between two documents during a reload there is no context to evaluate in.
-    }
-    await delay(60);
-  }
-  throw new Error(`Timed out waiting for ${description}`);
-}
 
-async function reload(cdp, timeout = 15_000) {
-  let off = () => {};
-  let timer;
-  const loaded = new Promise((resolveLoad, reject) => {
-    timer = setTimeout(() => reject(new Error("Timed out waiting for the reload")), timeout);
-    off = cdp.on("Page.loadEventFired", () => resolveLoad());
-  });
-  try {
-    await cdp.send("Page.reload", { ignoreCache: true });
-    await loaded;
-  } finally {
-    clearTimeout(timer);
-    off();
-  }
-}
+
+
 
 async function viewport(cdp, { width, height }) {
   await cdp.send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: false });
 }
 
 /** A real pointer press at the centre of the element matching `selector` and reading `text` (any, when null), which must be on screen. */
-async function pressText(cdp, selector, text) {
-  const point = await cdp.evaluate(snippets.centerOfText(selector, text));
-  const size = await cdp.evaluate("({ width: innerWidth, height: innerHeight })");
-  if (point.x < 0 || point.y < 0 || point.x > size.width || point.y > size.height) {
-    throw new Error(`${selector} "${text}" is off screen at ${JSON.stringify(point)}`);
-  }
-  const { x, y } = point;
-  await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
-  await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 });
-  await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
-  await delay(150);
-}
+
 
 const state = (cdp) => cdp.evaluate(snippets.peopleState());
 const names = (people) => people.map((person) => person.name);
@@ -130,7 +95,7 @@ async function addPerson(cdp, email, name) {
 const lastCall = async (cdp, command) => (await cdp.evaluate(snippets.stubCalls(command))).at(-1) ?? null;
 const storedParticipants = async (cdp, id) => (await cdp.evaluate(snippets.invoke("notes_get", { id })))?.participants ?? null;
 
-const SETUP_NOTE = "1000x720 unless stated. Checks 1-4 run in sequence from one fresh load; 5 and 6 each start from a fresh load. Text is typed with CDP Input.insertText into the focused field; buttons are pressed with real CDP pointer presses, a People row after scrolling it into view as a person scrolls the panel. invoke is wrapped to log notes_set_participants and notes_list.";
+const SETUP_NOTE = "1000x720 unless stated. Checks 1-4 run in sequence from one fresh load; 5 and 6 each start from a fresh load. Text is typed with CDP Input.insertText into the focused field; buttons are pressed with real CDP pointer presses, a People row after scrolling it into view as a person scrolls the panel. invoke is wrapped to log notes_set_participants and notes_list_summaries.";
 
 export async function runPeople(options) {
   const out = resolve(options.out);
@@ -204,7 +169,7 @@ export async function runPeople(options) {
       id: "2",
       claim: "Pressing a person in People shows only their notes, fetched by their email, in place of the folders.",
       expectation: [
-        `press "${MAJA.name}" in People: notes_list sent with person "${MAJA.email}";`,
+        `press "${MAJA.name}" in People: notes_list_summaries sent with person "${MAJA.email}";`,
         `a section "Notes with ${MAJA.name}" holding exactly ["${SCRATCH.title}"] and the action "Show all notes";`,
         "no folder groups and no Folders or Not in a folder heading; the person shown pressed"
       ].join(" "),
@@ -217,7 +182,7 @@ export async function runPeople(options) {
       await pressText(cdp, ".list-panel button.notes-person .notes-person-name", MAJA.name);
       await waitFor(cdp, `${field(snippets.peopleState(), "filtered")}?.titles.length > 0`, "the person's notes");
       const after = await state(cdp);
-      const asked = await cdp.evaluate(snippets.stubCalls("notes_list"));
+      const asked = await cdp.evaluate(snippets.stubCalls("notes_list_summaries"));
       const shot = "02-notes-with-person-1000x720.png";
       await cdp.screenshot(resolve(out, shot));
       return {

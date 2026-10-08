@@ -32,8 +32,8 @@ pub struct TrashedNote {
     pub trashed_at: String,
     /// Whether a recording is attached: it is deleted with the note.
     pub has_recording: bool,
-    /// The attached recording's length. `None` with no recording, or one
-    /// whose length was never measured.
+    /// Recording duration, falling back to the note's meeting duration after
+    /// intentional recording deletion. `None` when neither was measured.
     pub recording_seconds: Option<f64>,
     /// What the recording's file takes on disk, read from the file itself. 0
     /// with no recording, or one whose file is missing.
@@ -123,7 +123,7 @@ struct TrashedRow {
 /// reach outside takes nothing.
 pub async fn list(pool: &SqlitePool, recordings: &Path) -> Result<TrashSummary, StorageError> {
     let rows = sqlx::query_as::<_, TrashedRow>(
-        "SELECT n.id, n.title, n.trashed_at, r.storage_key, r.duration_seconds, r.original_filename
+        "SELECT n.id, n.title, n.trashed_at, r.storage_key, coalesce(r.duration_seconds,n.audio_duration_seconds) AS duration_seconds, r.original_filename
          FROM notes n LEFT JOIN note_recordings r ON r.note_id = n.id
          WHERE n.trashed_at IS NOT NULL
          ORDER BY n.trashed_at DESC, n.id DESC",
@@ -551,5 +551,25 @@ mod tests {
         let summary = list(p, &root).await.unwrap();
         assert_eq!(summary.notes[0].recording_bytes, 0);
         assert_eq!(summary.recording_bytes, 0);
+    }
+
+    #[tokio::test]
+    async fn a_deleted_recording_keeps_the_meetings_duration_in_trash() {
+        let db = db().await;
+        let root = tempfile::tempdir().unwrap();
+        let id = notes::create(
+            db.pool(),
+            &NewNote {
+                audio_duration_seconds: Some(1850.0),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        trash(db.pool(), id).await.unwrap();
+        let listed = list(db.pool(), root.path()).await.unwrap();
+        assert_eq!(listed.notes[0].recording_seconds, Some(1850.0));
+        assert!(!listed.notes[0].has_recording);
+        assert_eq!(listed.recording_bytes, 0);
     }
 }

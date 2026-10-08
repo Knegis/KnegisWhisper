@@ -169,6 +169,8 @@ pub enum Transport {
 /// Every variant is a refusal to send audio somewhere it should not go.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum RouteError {
+    #[error("Mistral cannot be explicitly told to transcribe {language}. Choose automatic detection or a supported language. Nothing was sent.")]
+    UnsupportedLanguage { language: String },
     #[error("the self-hosted transcription URL is not configured")]
     SelfHostedNotConfigured,
 
@@ -504,6 +506,18 @@ pub fn resolve(
                 "mistral" => ProviderClientKind::Mistral,
                 _ => ProviderClientKind::Xai,
             };
+
+            if kind == ProviderClientKind::Mistral
+                && request.effective_language.as_deref().is_some_and(|lang| {
+                    !lang.trim().is_empty()
+                        && lang.trim() != "auto"
+                        && !MISTRAL_STT_LANGUAGES.contains(&lang.trim())
+                })
+            {
+                return Err(RouteError::UnsupportedLanguage {
+                    language: request.effective_language.clone().unwrap_or_default(),
+                });
+            }
 
             Ok(Transport::ProviderClient {
                 provider: kind,
@@ -1428,5 +1442,30 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn mistral_refuses_unsupported_explicit_languages_but_keeps_stored_detection_fallback() {
+        let settings = RouteSettings {
+            local_languages: vec!["sv".into()],
+            ..providers("mistral")
+        };
+        assert_eq!(sent(&resolve_with(&settings).unwrap()), None);
+        let request = RouteRequest {
+            effective_language: Some("sv".into()),
+            ..Default::default()
+        };
+        assert!(matches!(
+            resolve(registry(), &settings, &request),
+            Err(RouteError::UnsupportedLanguage { .. })
+        ));
+        let supported = RouteRequest {
+            effective_language: Some("en".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            sent(&resolve(registry(), &settings, &supported).unwrap()),
+            Some("en")
+        );
     }
 }

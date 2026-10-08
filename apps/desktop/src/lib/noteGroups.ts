@@ -10,14 +10,14 @@
  * unfiled rather than lost; the database sets the reference to null when a
  * folder is deleted, so this is the same answer one reload later.
  */
-import type { Folder, Note } from "../generated/ipc-types.js";
+import type { Folder, NoteListItem } from "../generated/ipc-types.js";
 
-export type FolderGroup = { folder: Folder; notes: Note[] };
-export type NoteGroups = { unfiled: Note[]; folders: FolderGroup[] };
+export type FolderGroup<T = NoteListItem> = { folder: Folder; notes: T[] };
+export type NoteGroups<T = NoteListItem> = { unfiled: T[]; folders: FolderGroup<T>[] };
 
-export function groupNotesByFolder(notes: readonly Note[], folders: readonly Folder[]): NoteGroups {
-  const byFolder = new Map<number, Note[]>(folders.map((folder) => [folder.id, []]));
-  const unfiled: Note[] = [];
+export function groupNotesByFolder<T extends Pick<NoteListItem, "id" | "folderId">>(notes: readonly T[], folders: readonly Folder[]): NoteGroups<T> {
+  const byFolder = new Map<number, T[]>(folders.map((folder) => [folder.id, []]));
+  const unfiled: T[] = [];
   for (const note of notes) {
     const group = note.folderId === null ? undefined : byFolder.get(note.folderId);
     if (group) group.push(note);

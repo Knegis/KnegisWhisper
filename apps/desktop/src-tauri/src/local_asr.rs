@@ -441,7 +441,9 @@ pub async fn sherpa_install_model(
     // read.
     let model = model_named(&model_id)?;
 
+    let installing = crate::speech_install::Installing::begin(&app, &model_id)?;
     let emit = |progress: InstallProgress| {
+        installing.update(&progress);
         if let Err(err) = app.emit(PROGRESS_EVENT, progress) {
             tracing::warn!(error = %err, "could not report install progress");
         }

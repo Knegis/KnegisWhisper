@@ -755,14 +755,19 @@ folderId: number | null,
  * ([`plan_at_start`]), never a caller's. A plan written before this
  * existed reads `false`, and keeps its recording.
  */
-deleteRecording: boolean, };
+deleteRecording: boolean,
+/**
+ * The actual live provider selected at Start, never a caller's claim.
+ * Older sidecars have no provider to disclose.
+ */
+liveProviderId: string | null, };
 
 /**
  * What became of a saved meeting's recording, when it was to be deleted.
  *
  * `None` in the outcome where it was not asked to be.
  */
-export type RecordingRemoval = "deleted" | "kept-incomplete" | "delete-failed";
+export type RecordingRemoval = "deleted" | "kept-incomplete" | "kept-untranscribed" | "deleted-update-failed" | "delete-failed";
 
 /**
  * What can be said about the meeting session.
@@ -1055,6 +1060,15 @@ transcribedBy: string | null, createdAt: string | null, updatedAt: string | null
 trashedAt: string | null, };
 
 /**
+ * Lightweight desktop library entry. Large note bodies stay in `get`.
+ */
+export type NoteListItem = { id: number, title: string, noteType: string, folderId: number | null, participants: string | null, audioDurationSeconds: number | null, createdAt: string | null, updatedAt: string | null, trashedAt: string | null,
+/**
+ * A stored nonblank transcript; the full reader validates its contents.
+ */
+hasTranscript: boolean, };
+
+/**
  * A folder.
  */
 export type Folder = { id: number, name: string, isDefault: boolean, sortOrder: number, };
@@ -1157,8 +1171,8 @@ trashedAt: string,
  */
 hasRecording: boolean,
 /**
- * The attached recording's length. `None` with no recording, or one
- * whose length was never measured.
+ * Recording duration, falling back to the note's meeting duration after
+ * intentional recording deletion. `None` when neither was measured.
  */
 recordingSeconds: number | null,
 /**
@@ -1264,6 +1278,12 @@ storageKey: string, durationSeconds: number | null,
  * there was such a name. A meeting recording has none.
  */
 originalFilename: string | null, createdAt: string | null, };
+
+export type NoteRecordingState = {
+/**
+ * Unknown for older/imported notes. No text-based backfill.
+ */
+status: string, error: string | null, canRetry: boolean, };
 
 /* ----------------------------------------------------------------- import */
 /**
@@ -1598,6 +1618,10 @@ export type InstallProgress = { "stage": "server", written: number, total: numbe
  * What the model on disk was actually checked against.
  */
 verifiedBy: VerifiedBy, };
+
+export type SpeechInstall = { id: string, progress: InstallProgress | null, };
+
+export type SpeechInstallSnapshot = { revision: number, jobs: Array<SpeechInstall>, };
 
 /**
  * What a model can be used for.

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { waitFor, reload, press, pressText } from "./interactions.mjs";
 /**
  * Measures, against dev fixtures, what Meetings does when the meeting window
  * doesn't answer Stop's or Discard's request to save its notes (KNEG-418):
@@ -55,51 +56,15 @@ const IDLE = "Boolean(document.querySelector('.control-start')) && !document.que
 const START_ENABLED = "(() => { const start = document.querySelector('.control-start'); return Boolean(start) && !start.disabled; })()";
 const ANYWAY_SHOWN = `${field(snippets.meetingPageState(), "actions")}.includes('Stop recording anyway')`;
 
-async function waitFor(cdp, expression, description, timeout = 10_000) {
-  const deadline = Date.now() + timeout;
-  while (Date.now() < deadline) {
-    try {
-      if (await cdp.evaluate(expression)) return;
-    } catch {
-      // Between two documents during a reload there is no context to evaluate in.
-    }
-    await delay(60);
-  }
-  throw new Error(`Timed out waiting for ${description}`);
-}
 
-async function reload(cdp, timeout = 15_000) {
-  let off = () => {};
-  let timer;
-  const loaded = new Promise((resolveLoad, reject) => {
-    timer = setTimeout(() => reject(new Error("Timed out waiting for the reload")), timeout);
-    off = cdp.on("Page.loadEventFired", () => resolveLoad());
-  });
-  try {
-    await cdp.send("Page.reload", { ignoreCache: true });
-    await loaded;
-  } finally {
-    clearTimeout(timer);
-    off();
-  }
-}
+
+
 
 /** A real pointer press at a measured point, as a person's click is. */
-async function press(cdp, { x, y }) {
-  await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
-  await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 });
-  await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
-}
+
 
 /** Presses the element's centre, which must be on screen for the press to reach it. */
-async function pressText(cdp, selector, text) {
-  const point = await cdp.evaluate(snippets.centerOfText(selector, text));
-  const size = await cdp.evaluate("({ width: innerWidth, height: innerHeight })");
-  if (point.x < 0 || point.y < 0 || point.x > size.width || point.y > size.height) {
-    throw new Error(`${selector} "${text}" is off screen at ${JSON.stringify(point)}`);
-  }
-  await press(cdp, point);
-}
+
 
 const pageState = (cdp) => cdp.evaluate(snippets.meetingPageState());
 const sequence = (cdp) => cdp.evaluate(snippets.stubSequence(WATCHED));
@@ -303,7 +268,7 @@ export async function runMeetingDiscard(options) {
       return {
         measured: { questions, calls, mergedAfter, page },
         matches: questions.length === 1
-          && JSON.stringify(calls.slice(0, 3)) === JSON.stringify(GUARD)
+          && calls.some((call, at) => call === "window.confirm" && calls[at - 1] === "meeting_status" && calls[at + 1] === "meeting_status")
           && mergedAfter?.elapsedSeconds === 1
           && count(calls, "meeting_cancel") === 0
           && page.live && page.actions.includes("Discard anyway"),

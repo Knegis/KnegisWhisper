@@ -12,6 +12,31 @@ maintained in place rather than appended to, because its purpose is to be curren
 
 ---
 
+## 2026-10-08 — KNEG-422/424: durable recording intent and review follow-ups
+
+- Deletion intent belongs to the exact attached recording and is written only after
+  attachment. No prose-based backfill; exports do not copy local retention intent.
+  Retry is explicit, refuses Trash and replacement attachments, and survives restart.
+  Missing audio after a failed commit is cleanup needed, not a claim that audio was kept.
+- A microphone check owns a Rust capture interlock across every meeting/dictation
+  entry point. Its five-second listen has a ten-second command deadline and cooperative
+  cancellation. A timeout does not release ownership before the capture thread exits;
+  a driver stuck permanently inside open cannot be killed safely in-process.
+- Settings reads use generations, language writes are serialized, and active speech
+  installation snapshots use backend revisions so late events cannot revive completed jobs.
+- Oversized imported people lists may shrink without adding/changing readable entries
+  above 200. Unreadable imported entries remain preserved. Desktop People loads 50 at a
+  time; existing full-list APIs retain their contract. Participant save success and
+  subsequent refresh failure are separate states.
+- An externally trashed/deleted selected note retains its mounted dirty draft and becomes
+  read-only. Restore requires an explicit retained-draft save. Lightweight metadata polling
+  leaves full-note loading and editor state intact.
+- Unnamed offer/API starts, unreadable imported participants, and queued-summary invalidation
+  are accepted existing limits. KNEG-421 lock contention is separate. Real hardware, ASR
+  quality, macOS/Linux and hosted CI remain distinct from local fixture/native IPC evidence.
+- The item-by-item disposition, commands and results are committed in
+  [KNEG_422_424_VALIDATION.md](KNEG_422_424_VALIDATION.md).
+
 ## 2026-10-08 — twelve issues on one branch, two migrations, and the builds that will refuse the profile
 
 Branch `twelve-issues`, from local `dev` at fd025b3: twelve issues, each reviewed as it landed,
@@ -134,7 +159,7 @@ what each costs if it is wrong.
   the files inside the deleting transaction, then commit), overriding the plan's commit-first
   order, so a recording deleted forever can never come back as an Interrupted meeting. If wrong:
   notes can be left in Trash without their recordings, after a failed removal or commit (an error
-  is shown) or a power loss before the commit reached the disk (none is), and pressing again
+  is shown) or an app crash/force-quit between removal and commit, or a power loss before the commit reached the disk (none is), and pressing again
   finishes.
 - Process: Task 3's minors 1-6 went to Task 4, and Task 5's minors 1-3 to Task 6, since those
   tasks edited the same paths. If wrong: those diffs were larger than their briefs.
