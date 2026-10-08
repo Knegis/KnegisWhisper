@@ -29,9 +29,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { FailureLine } from "../components/FailureLine";
 import { LearnMore } from "../components/LearnMore";
+import { LocalModelRow } from "../components/LocalModelRow";
 import { MicrophoneSettings } from "../components/MicrophoneSettings";
 import { Row } from "../components/Row";
-import { destinationName, languageNote, privacyLines } from "../lib/controlBar";
+import { destinationName, LANGUAGES, languageNote, privacyLines } from "../lib/controlBar";
 import { languagesApply, localEngine } from "../lib/dictationRoute";
 import {
   getDictationRoute,
@@ -55,15 +56,16 @@ import {
 } from "../lib/ipc";
 import {
   freshnessLabel,
-  modelLanguage,
   progressLabel,
   refreshOutcomeLabel,
-  useForDetail,
-  useForLabel,
-  verificationLabel,
-  whisperModelHint,
   type Plain,
 } from "../lib/labels";
+import {
+  filterByLanguage,
+  localModelRows,
+  modelLanguageLabel,
+  type LocalModelRow as ModelRow,
+} from "../lib/localModels";
 import { chooseParakeetRoute, chooseWhisperRoute } from "../lib/routeChoice";
 import { useRefresh } from "../lib/useRefresh";
 
@@ -178,6 +180,8 @@ export function SettingsTranscription({
    */
   const [cortiEnvironment, setCortiEnvironment] = useState<string | null>(null);
   const [cortiTenant, setCortiTenant] = useState<string | null>(null);
+  /** The local list's language filter: a dictation language's code, or `null` for any (KNEG-330). */
+  const [language, setLanguage] = useState<string | null>(null);
 
   const choose = (p: ProviderSummary) => {
     const model = selected[p.id] ?? p.models[0];
@@ -244,6 +248,38 @@ export function SettingsTranscription({
     });
   };
 
+  /**
+   * A local model row's button, once the model is installed.
+   *
+   * The wrappers are named here rather than in `LocalModelRow`: the settings
+   * gate's rule F looks for the writers of `transcription.localModel`,
+   * `transcription.sherpaModel` and `meetings.streamModel` in this file and
+   * nowhere else (`tools/settings-audit/scan.mjs`, `usesWrapper`).
+   */
+  const chooseModel = (row: ModelRow) => {
+    void guard(async () => {
+      if (row.engine === "whisper") {
+        // Two steps under one label, and the label says both: a server that
+        // is up is not the same as a route pointing at it. The steps are the
+        // Dictation route menu's too (`lib/routeChoice.ts`).
+        await chooseWhisperRoute(row.id, startLocalServer);
+      } else if (row.usedFor === "meetings") {
+        // No `useLocalModel` beside it: choosing a meeting model says nothing
+        // about where dictation goes, and flipping the dictation route here
+        // would be the silent cross-setting this split exists to prevent.
+        await useSherpaStreamModel(row.id);
+      } else {
+        await chooseParakeetRoute(row.id, useSherpaModel);
+      }
+    });
+  };
+
+  const installModel = (row: ModelRow) => {
+    runInstall(row.id, () =>
+      row.engine === "whisper" ? installLocalModel(row.id) : installSherpaModel(row.id),
+    );
+  };
+
   // The progress event carries a model's id; the line names it, from the model
   // lists as they were last read. A ref, so a reload does not resubscribe the
   // listener and drop an event in between.
@@ -299,6 +335,7 @@ export function SettingsTranscription({
   const withKeys = providers.filter((p) => p.configured);
   const serverFreshness = freshnessLabel(local.serverFreshness);
   const sherpaFreshness = freshnessLabel(sherpa.cliFreshness);
+  const shown = filterByLanguage(localModelRows(local, sherpa, route), language);
 
   return (
     <div className="view">
@@ -427,12 +464,73 @@ export function SettingsTranscription({
 
       <section data-surface="settings.transcription.local">
         <h2>Local transcription</h2>
+        <p className="muted">
+          Speech models that run on this computer. Nothing downloads until you
+          press Install.
+        </p>
+        <div className="row">
+          <span className="row-label">Show models for</span>
+          <span className="row-value controls">
+            <select
+              aria-label="Show models for"
+              value={language ?? ""}
+              onChange={(e) => setLanguage(e.target.value === "" ? null : e.target.value)}
+            >
+              <option value="">Any language</option>
+              {LANGUAGES.map(([code, name]) => (
+                <option key={code} value={code}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          </span>
+        </div>
+        {/*
+          One list, Whisper and Parakeet together (KNEG-330): dictation models
+          first, then the meetings models, each smallest first. Which engine a
+          model runs on is under its Details; the in-use rules are
+          `lib/localModels.ts`'s. `list`, not `purposes`: these rows carry a
+          button each, and `purposes` is a wrapping row of pills that cannot
+          hold one.
+        */}
+        {shown.length > 0 ? (
+          <ul className="list">
+            {shown.map((row) => (
+              <LocalModelRow
+                key={row.id}
+                row={row}
+                progress={installingId === row.id ? installing : null}
+                onUse={() => chooseModel(row)}
+                onInstall={() => installModel(row)}
+              />
+            ))}
+          </ul>
+        ) : language !== null ? (
+          <p className="muted">No model here is listed for {modelLanguageLabel([language])}.</p>
+        ) : null}
+        <p className="muted">
+          Dictation uses one model at a time, so choosing one for dictation
+          stops it using the one before. Choosing a model for meetings doesn't
+          change dictation.
+        </p>
+        {/* The catch in a big model, said once (KNEG-407): one Whisper
+            model at a time serves dictation as well as meetings and
+            imports, so choosing a slow one for long recordings slows
+            dictation too. "Usually": believed from how Whisper sizes
+            behave, not measured here. */}
+        {local.availability.state !== "not-published" ? (
+          <p className="muted">
+            Only one Whisper model runs at a time. Meetings and imports
+            transcribed on this computer use it, and so does dictation when
+            it uses Whisper, so a bigger one is usually more accurate and
+            slower for all of them.
+          </p>
+        ) : null}
+
+        <h3>Engines</h3>
         {local.availability.state === "not-published" ? (
           <>
-            <Row
-              label="Availability"
-              value="Not available on this computer yet"
-            />
+            <Row label="Speech engine" value="Not available on this computer yet" />
             <LearnMore summary="Why">
               <p>{local.availability.reason}</p>
               <p>{local.availability.tracking}</p>
@@ -472,6 +570,7 @@ export function SettingsTranscription({
                   : "Update the speech engine"}
               </button>
             ) : null}
+            {installingId === SERVER_ROW && installing ? <Row label="Progress" value={installing} /> : null}
             {/*
               Always rendered, so a press fills a slot rather than growing the
               section under the pointer -- the same reason the providers block
@@ -502,277 +601,107 @@ export function SettingsTranscription({
                 </p>
               ) : null}
             </LearnMore>
-            {installing ? <Row label="Progress" value={installing} /> : null}
-            {/* `list`, not `purposes`: these rows carry a button each, and
-                `purposes` is a wrapping row of pills that cannot hold one. */}
-            <ul className="list">
-              {local.models.map((m) => {
-                /*
-                  Two facts, kept apart on purpose. `loaded` is which model the
-                  running server has; `inUse` also requires the dictation route
-                  to resolve to it. A server that is up is not the same as a
-                  route pointing at it -- the sentence this file has carried
-                  since the button was written -- so only the second earns the
-                  marked state, and the first gets said out loud when they
-                  disagree rather than left to look like the same thing.
-                */
-                const loaded = local.runningModel === m.id;
-                // A selected sherpa model outranks a running whisper server --
-                // see `local_asr`'s module doc -- so the whisper row must not
-                // claim to be in use while one is selected, even though its
-                // server is up and the route is local.
-                const inUse = loaded && route.isLocal && sherpa.selected === null;
-                const parakeet = sherpa.models.find((s) => s.id === sherpa.selected)?.name ?? sherpa.selected;
-                return (
-                <li key={m.id}>
-                  {m.name}
-                  {m.sizeMb ? ` · ${m.sizeMb} MB` : ""}
-                  {m.recommended ? " · recommended" : ""}
-                  {whisperModelHint(m.sizeMb) ? ` · ${whisperModelHint(m.sizeMb)}` : ""}
-                  <em className="row-detail">
-                    {m.installed ? "Installed" : "Not installed"}
-                  </em>
-                  {loaded && !inUse ? (
-                    <em className="row-detail warn">
-                      Loaded, but dictation goes to{" "}
-                      {sherpa.selected !== null && route.isLocal
-                        ? parakeet
-                        : route.problem
-                          ? "nowhere yet"
-                          : destinationName(route.destination)}
-                    </em>
-                  ) : null}
-                  <LearnMore summary="Details">
-                    <p>
-                      Model id <code>{m.id}</code>.{" "}
-                      {m.installed
-                        ? `When it was downloaded: ${verificationLabel(m.verifiedBy)}.`
-                        : `When it is downloaded: ${verificationLabel(m.verifiedBy)}.`}
-                    </p>
-                  </LearnMore>
-                  {m.installed ? (
-                    <button
-                      type="button"
-                      className={inUse ? "marked" : undefined}
-                      aria-pressed={inUse}
-                      onClick={() => {
-                        // Two steps under one label, and the label says both:
-                        // a server that is up is not the same as a route
-                        // pointing at it. The steps are the Dictation route
-                        // menu's too (`lib/routeChoice.ts`); `startLocalServer`
-                        // is named here because rule F of the settings gate
-                        // reads only this file.
-                        void guard(() => chooseWhisperRoute(m.id, startLocalServer));
-                      }}
-                    >
-                      {inUse ? "In use for dictation" : "Use for dictation"}
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        runInstall(m.id, () => installLocalModel(m.id));
-                      }}
-                    >
-                      Install
-                    </button>
-                  )}
-                  {installingId === m.id && installing ? (
-                    <em className="row-detail">{installing}</em>
-                  ) : null}
-                </li>
-                );
-              })}
-            </ul>
-            {/* The catch in a big model, said once (KNEG-407): one Whisper
-                model at a time serves dictation as well as meetings and
-                imports, so choosing a slow one for long recordings slows
-                dictation too. "Usually": believed from how Whisper sizes
-                behave, not measured here. */}
-            <p className="muted">
-              Only one Whisper model runs at a time. Meetings and imports
-              transcribed on this computer use it, and so does dictation when
-              it uses Whisper, so a bigger one is usually more accurate and
-              slower for all of them.
-            </p>
-            <h3>Parakeet models</h3>
-            <p className="muted">
-              Nothing downloads until you press Install. Dictation uses one local
-              model at a time, so choosing a Parakeet model stops dictation using
-              the Whisper model above, and the other way round.
-            </p>
-            <LearnMore summary="About Parakeet">
-              <p>
-                Parakeet models run on a second engine, sherpa-onnx, beside the
-                Whisper models' whisper.cpp. Choosing a model on one releases the
-                other.
-              </p>
+          </>
+        )}
+        {sherpa.availability.state === "not-published" ? (
+          <>
+            <Row label="Parakeet engine" value="Not available on this computer yet" />
+            <LearnMore summary="Why">
+              <p>{sherpa.availability.reason}</p>
+              <p>{sherpa.availability.tracking}</p>
             </LearnMore>
-            {sherpa.availability.state === "not-published" ? (
+          </>
+        ) : (
+          <>
+            <Row
+              label="Parakeet engine"
+              value={sherpa.cliInstalled ? "Installed" : "Not installed"}
+              detail={
+                sherpa.cliInstalled
+                  ? undefined
+                  : "installed with the first model"
+              }
+            />
+            {/*
+              Which build is installed, said out loud — and, unlike the
+              speech engine above, with no button beside it. That is a
+              deliberate limit and the sentence says so rather than leaving
+              a reader hunting for a control that is not there.
+
+              The reason is this runtime's lifecycle, not the archive.
+              `sherpa_stream` starts its meeting server out of this same
+              directory and nothing ever stops it, so a running server means
+              "a meeting happened this session", not "a meeting is happening
+              now". A refresh replaces the directory, which on Windows fails
+              against a running .exe — and an unconditional stop would end
+              the live transcript of a meeting in progress, from a dictation
+              screen that never mentions meetings. Reporting the staleness
+              honestly beats a button that is wrong at the worst moment.
+            */}
+            {sherpaFreshness ? (
+              <Freshness line={sherpaFreshness} current={sherpa.cliFreshness.state === "current"} />
+            ) : null}
+            {sherpa.cliFreshness.state !== "not-installed" &&
+            sherpa.cliFreshness.state !== "current" ? (
               <>
-                <Row
-                  label="Availability"
-                  value="Not available on this computer yet"
-                />
-                <LearnMore summary="Why">
-                  <p>{sherpa.availability.reason}</p>
-                  <p>{sherpa.availability.tracking}</p>
+                <p className="caveat">
+                  This engine can't be updated from here yet. To reinstall
+                  it, close the app and delete its folder by hand.
+                </p>
+                {/*
+                  The engine is in the sidecar folder, `local.installDir`
+                  (`local_asr.rs`, `cli_root`), not with the models. The
+                  branch review caught the fold naming the models folder,
+                  where deleting removes the models and keeps the engine.
+                */}
+                <LearnMore summary="Why, and which folder">
+                  <p>
+                    One archive serves three things — dictation with a
+                    Parakeet model, the live transcript in meetings, and
+                    speaker separation — so replacing it affects all three,
+                    and the meeting server runs out of its folder for as long
+                    as the app is open.
+                  </p>
+                  <p>
+                    The engine is the <code>sherpa</code> folder inside{" "}
+                    <code>{local.installDir}</code>. The models are kept
+                    separately, in <code>{sherpa.modelsDir}</code>, and
+                    don't need deleting.
+                  </p>
                 </LearnMore>
               </>
             ) : (
-              <>
-                <Row
-                  label="Parakeet engine"
-                  value={sherpa.cliInstalled ? "Installed" : "Not installed"}
-                  detail={
-                    sherpa.cliInstalled
-                      ? undefined
-                      : "installed with the first model"
-                  }
-                />
-                {/*
-                  Which build is installed, said out loud — and, unlike the
-                  whisper block above, with no button beside it. That is a
-                  deliberate limit and the sentence says so rather than leaving
-                  a reader hunting for a control that is not there.
-
-                  The reason is this runtime's lifecycle, not the archive.
-                  `sherpa_stream` starts its meeting server out of this same
-                  directory and nothing ever stops it, so a running server means
-                  "a meeting happened this session", not "a meeting is happening
-                  now". A refresh replaces the directory, which on Windows fails
-                  against a running .exe — and an unconditional stop would end
-                  the live transcript of a meeting in progress, from a dictation
-                  screen that never mentions meetings. Reporting the staleness
-                  honestly beats a button that is wrong at the worst moment.
-                */}
-                {sherpaFreshness ? (
-                  <Freshness line={sherpaFreshness} current={sherpa.cliFreshness.state === "current"} />
-                ) : null}
-                {sherpa.cliFreshness.state !== "not-installed" &&
-                sherpa.cliFreshness.state !== "current" ? (
-                  <>
-                    <p className="caveat">
-                      This engine can't be updated from here yet. To reinstall
-                      it, close the app and delete its folder by hand.
-                    </p>
-                    {/*
-                      The engine is in the sidecar folder, `local.installDir`
-                      (`local_asr.rs`, `cli_root`), not with the models. The
-                      branch review caught the fold naming the models folder,
-                      where deleting removes the models and keeps the engine.
-                    */}
-                    <LearnMore summary="Why, and which folder">
-                      <p>
-                        One archive serves three things — dictation with a
-                        Parakeet model, the live transcript in meetings, and
-                        speaker separation — so replacing it affects all three,
-                        and the meeting server runs out of its folder for as long
-                        as the app is open.
-                      </p>
-                      <p>
-                        The engine is the <code>sherpa</code> folder inside{" "}
-                        <code>{local.installDir}</code>. The models are kept
-                        separately, in <code>{sherpa.modelsDir}</code>, and
-                        don't need deleting.
-                      </p>
-                    </LearnMore>
-                  </>
-                ) : (
-                  <LearnMore summary="Technical details">
-                    <p>
-                      Models are kept in <code>{sherpa.modelsDir}</code>.
-                    </p>
-                  </LearnMore>
-                )}
-                <ul className="list">
-                  {sherpa.models.map((m) => {
-                    // Which selection this row's button reads is decided by the
-                    // engine the model runs on, not by which one the screen
-                    // happens to be showing. A streaming model is "in use" when
-                    // meetings are set to it, and dictation's route has nothing
-                    // to say about that.
-                    const inUse =
-                      m.usedFor === "meetings"
-                        ? sherpa.selectedStream === m.id
-                        : sherpa.selected === m.id && route.isLocal;
-                    return (
-                      <li key={m.id}>
-                        {m.name}
-                        {m.sizeMb ? ` · ${m.sizeMb} MB` : ""}
-                        {m.language ? ` · ${modelLanguage(m.language)}` : ""}
-                        <em className="row-detail">
-                          {useForDetail(m.usedFor)} ·{" "}
-                          {m.installed ? "installed" : "not installed"}
-                        </em>
-                        <LearnMore summary="Details">
-                          <p>
-                            Model id <code>{m.id}</code>.
-                          </p>
-                        </LearnMore>
-                        {m.installed ? (
-                          <button
-                            type="button"
-                            className={inUse ? "marked" : undefined}
-                            aria-pressed={inUse}
-                            onClick={() => {
-                              void guard(async () => {
-                                if (m.usedFor === "meetings") {
-                                  // No `useLocalModel` beside it: choosing a
-                                  // meeting model says nothing about where
-                                  // dictation goes, and flipping the dictation
-                                  // route here would be the silent
-                                  // cross-setting this split exists to prevent.
-                                  await useSherpaStreamModel(m.id);
-                                } else {
-                                  // `lib/routeChoice.ts`, as the whisper
-                                  // rows above, with the wrapper named for
-                                  // the same reason.
-                                  await chooseParakeetRoute(m.id, useSherpaModel);
-                                }
-                              });
-                            }}
-                          >
-                            {useForLabel(m.usedFor, inUse)}
-                          </button>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              runInstall(m.id, () => installSherpaModel(m.id));
-                            }}
-                          >
-                            Install
-                          </button>
-                        )}
-                        {installingId === m.id && installing ? (
-                          <em className="row-detail">{installing}</em>
-                        ) : null}
-                      </li>
-                    );
-                  })}
-                </ul>
-              </>
+              <LearnMore summary="Technical details">
+                <p>
+                  Models are kept in <code>{sherpa.modelsDir}</code>.
+                </p>
+              </LearnMore>
             )}
-            {local.port ? (
-              <button
-                type="button"
-                onClick={() => {
-                  void guard(async () => {
-                    // The stop first: it is refused while something is
-                    // using the server (KNEG-414), and a refusal must mean
-                    // nothing changed. In the other order the route had
-                    // already moved to a provider beside a "Not now".
-                    await stopLocalServer();
-                    await useLocalModel(false);
-                  });
-                }}
-              >
-                Stop and use a provider instead
-              </button>
-            ) : null}
           </>
         )}
+        <LearnMore summary="About the two engines">
+          <p>
+            Whisper models run on whisper.cpp; Parakeet and Nemotron models run
+            on sherpa-onnx. Choosing one for dictation releases the other.
+          </p>
+        </LearnMore>
+        {local.port ? (
+          <button
+            type="button"
+            onClick={() => {
+              void guard(async () => {
+                // The stop first: it is refused while something is
+                // using the server (KNEG-414), and a refusal must mean
+                // nothing changed. In the other order the route had
+                // already moved to a provider beside a "Not now".
+                await stopLocalServer();
+                await useLocalModel(false);
+              });
+            }}
+          >
+            Stop and use a provider instead
+          </button>
+        ) : null}
       </section>
     </div>
   );

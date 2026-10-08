@@ -18,7 +18,7 @@
       "surfaceId": "settings.transcription.local",
       "component": "apps/desktop/src/views/SettingsTranscription.tsx",
       "built": true,
-      "note": "Offers the six whisper models and, since 121dc4c, the two Parakeet models through the sherpa-onnx sidecar -- sherpa_install_model installs the CLI too if it is missing, and sherpa_use_model resolves a selection before remembering it, so a model that cannot run is refused now rather than at the next dictation. One local engine, not two: a selected sherpa model wins over a running whisper server, and local_server_start clears the sherpa selection. The two Nemotron entries stay unreachable for an unrelated reason -- they are streaming models over sherpa's own WebSocket protocol, which nobody has built a client for. Writes transcription.localModel and transcription.sherpaModel (config/settings-keys.json)."
+      "note": "Offers the registry's whisper models and, since 121dc4c, its sherpa-onnx models, in one list since KNEG-330: dictation models before the meetings models, each smallest first, with a language filter. sherpa_install_model installs the CLI too if it is missing, and sherpa_use_model resolves a selection before remembering it, so a model that cannot run is refused now rather than at the next dictation. One local engine for dictation, not two: a selected sherpa model wins over a running whisper server, and local_server_start clears the sherpa selection. The two Nemotron models are streaming models, chosen for meetings with sherpa_use_stream_model, which leaves dictation alone. Writes transcription.localModel, transcription.sherpaModel and meetings.streamModel (config/settings-keys.json)."
     },
     "Settings > Intelligence": {
       "surfaceId": "settings.intelligence",

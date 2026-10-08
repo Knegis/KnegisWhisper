@@ -1055,15 +1055,18 @@ const SHERPA: SherpaStatus = {
     state: "unknown",
     why: "it was installed before this application started recording what it installs",
   },
-  // One installed and selected, one installable, and the two streaming models
-  // carrying the reason they cannot be picked -- the three states this list has,
-  // so the screen is worked on against all of them rather than the easy one.
+  // One dictation model installed and selected, one installable, and two
+  // meetings models installed, one of them chosen -- so the screen is worked
+  // on against every state its rows have rather than the easy one. Languages
+  // as the registry lists them (KNEG-330): the list's language filter reads
+  // them, and Parakeet TDT's is the one with Swedish.
   models: [
     {
       id: "parakeet-unified-en-0.6b",
       name: "Parakeet Unified EN 0.6B",
       sizeMb: 630,
       language: "en",
+      supportedLanguages: ["en"],
       installed: true,
       usedFor: "dictation",
     },
@@ -1071,7 +1074,11 @@ const SHERPA: SherpaStatus = {
       id: "parakeet-tdt-0.6b-v3",
       name: "Parakeet TDT 0.6B v3",
       sizeMb: 660,
-      language: null,
+      language: "multilingual",
+      supportedLanguages: [
+        "bg", "hr", "cs", "da", "nl", "en", "et", "fi", "fr", "de", "el", "hu", "it",
+        "lv", "lt", "mt", "pl", "pt", "ro", "sk", "sl", "es", "sv", "ru", "uk",
+      ],
       installed: false,
       usedFor: "dictation",
     },
@@ -1084,6 +1091,18 @@ const SHERPA: SherpaStatus = {
       name: "Nemotron Speech Streaming EN 0.6B",
       sizeMb: 442,
       language: "en",
+      supportedLanguages: ["en"],
+      installed: true,
+      usedFor: "meetings",
+    },
+    {
+      // Installed and not chosen, so "Use for meetings" can be pressed: it
+      // moves meetings and leaves dictation where it was.
+      id: "nemotron-3.5-asr-streaming-0.6b",
+      name: "Nemotron 3.5 ASR Streaming 0.6B",
+      sizeMb: 650,
+      language: "multilingual",
+      supportedLanguages: ["en", "es", "fr", "it", "pt", "nl", "de", "tr", "ru", "ar", "hi", "ja", "ko", "vi", "uk"],
       installed: true,
       usedFor: "meetings",
     },
@@ -2078,6 +2097,18 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
     SHERPA.selected = model.id;
     return null;
   },
+  // Refused where Rust refuses: an offline model, or one not installed. Moves
+  // only the meetings choice, as Rust writes only `meetings.streamModel`.
+  sherpa_use_stream_model: (a) => {
+    const model = SHERPA.models.find((m) => m.id === arg<string>(a, "modelId"));
+    if (!model) throw new Error(`Unknown model: ${arg<string>(a, "modelId") ?? ""}`);
+    if (model.usedFor !== "meetings") {
+      throw new Error(`${model.name} is an offline model, so it is for dictation rather than meetings.`);
+    }
+    if (!model.installed) throw new Error(`${model.name} is not installed. Install it before choosing it for meetings.`);
+    SHERPA.selectedStream = model.id;
+    return null;
+  },
   local_model_status: () => ({ ...LOCAL_MODELS }),
   local_model_install: () => "whisper-large-v3-turbo-q5",
   // A second and a half before it answers, as a real server takes seconds to
@@ -2562,10 +2593,11 @@ const devConsole = {
   level(level: number, session: LevelSession = "dictation", source: LevelSource = "microphone") {
     void emit("audio-level", { session, source, level } satisfies AudioLevel);
   },
-  modelProgress(written: number, total: number | null = 574_000_000) {
+  /** A model download's progress, for `id` (Whisper Large v3 Turbo unless named). */
+  modelProgress(written: number, total: number | null = 574_000_000, id = "whisper-large-v3-turbo-q5") {
     void emit("local-model-progress", {
       stage: "model",
-      id: "whisper-large-v3-turbo-q5",
+      id,
       written,
       total,
     } satisfies InstallProgress);

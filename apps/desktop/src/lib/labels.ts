@@ -59,7 +59,6 @@ import type {
 } from "./ipc.js";
 
 import type { DiarizationRole } from "../generated/providers.js";
-import { LANGUAGES } from "./controlBar.js";
 import { meetingRecordingWarning } from "./meetingRecordingWarning.js";
 
 /**
@@ -1156,15 +1155,6 @@ export function useForLabel(used: UsedFor, inUse: boolean): string {
     case "meetings":
       return inUse ? "In use for meetings" : "Use for meetings";
   }
-}
-
-/**
- * A local model's language as a word: the registry stores a code, or
- * `multilingual` (KNEG-343). A code with no name here is shown as itself.
- */
-export function modelLanguage(code: string): string {
-  if (code === "multilingual") return "Many languages";
-  return LANGUAGES.find(([known]) => known === code)?.[1] ?? code;
 }
 
 /**

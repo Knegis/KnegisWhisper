@@ -776,7 +776,7 @@ and always has been. Upstream's Qdrant port range is recorded in `docs/PORTING_M
 | Item | Needs | Not blocked |
 | --- | --- | --- |
 | Anything macOS-native | A Mac | Compiles in CI, ships marked unverified |
-| ~~sherpa-onnx local ASR selector~~ | **Built on 2026-08-27.** `apps/desktop/src-tauri/src/local_asr.rs` plus a second list on `Settings > Transcription > Local`: three commands, a remembered selection, and one local engine at a time. `parakeet-unified-en-0.6b` was already proven end to end; `parakeet-tdt-0.6b-v3` is offered unrun on the same measured layout | — |
+| ~~sherpa-onnx local ASR selector~~ | **Built on 2026-08-27.** `apps/desktop/src-tauri/src/local_asr.rs` plus the Parakeet models on `Settings > Transcription > Local`, in one list with the Whisper models since KNEG-330: three commands, a remembered selection, and one local engine at a time. `parakeet-unified-en-0.6b` was already proven end to end; `parakeet-tdt-0.6b-v3` is offered unrun on the same measured layout | — |
 | sherpa-onnx streaming (Nemotron) | A client for `sherpa-onnx-online-websocket-server`'s own protocol — nobody has written or tested one | The offline CLI path the two Parakeet models use, which is unrelated |
 | macOS `whisper-server` | A macOS CI job under this project's releases; upstream ships only an xcframework | Windows and Linux install today, digest-pinned |
 | 4 meeting clients, live | Keys for AssemblyAI, Deepgram, OpenAI Realtime, Corti | Wire shapes vs fixtures; `meeting-stream:local`; detection; system audio — all built |

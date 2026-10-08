@@ -20,7 +20,7 @@ function whisper(id: string, name: string, installed: boolean): ModelStatus {
 }
 
 function parakeet(id: string, name: string, installed: boolean, usedFor: "dictation" | "meetings"): SherpaModelStatus {
-  return { id, name, sizeMb: null, language: null, installed, usedFor };
+  return { id, name, sizeMb: null, language: null, supportedLanguages: null, installed, usedFor };
 }
 
 function local(runningModel: string | null, models: ModelStatus[] = WHISPER): LocalStatus {

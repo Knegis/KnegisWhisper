@@ -1096,3 +1096,131 @@ export function liveChips() {
     }));
   `);
 }
+
+/* ------------------------------------------------------------ local models */
+
+const LOCAL_SECTION = `document.querySelector('[data-surface="settings.transcription.local"]')`;
+
+/**
+ * Settings > Transcription's local models (KNEG-330): the section's headings
+ * and lists, each row (its own line, detail lines, button and Details), the
+ * language filter, the caveats and Learn more summaries, which of `ids` show
+ * outside a closed Details, and whether every Details is closed. "Shown" is
+ * every text node not inside a closed `details`' body.
+ */
+export function localModelsState(ids = []) {
+  return source(`
+    const section = ${LOCAL_SECTION};
+    if (!section) return null;
+    const text = (item) => item.textContent.trim();
+    const own = (item) => [...item.childNodes].filter((node) => node.nodeType === 3).map((node) => node.textContent).join('').trim();
+    const shown = [];
+    const walker = document.createTreeWalker(section, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const closed = node.parentElement?.closest('details:not([open])');
+      if (closed && !node.parentElement.closest('summary')) continue;
+      shown.push(node.textContent);
+    }
+    const shownText = shown.join(' ');
+    const select = section.querySelector('select[aria-label="Show models for"]');
+    const row = (label) => [...section.querySelectorAll(':scope > .row')]
+      .find((item) => item.querySelector('.row-label')?.textContent.trim() === label);
+    return {
+      headings: [...section.querySelectorAll('h2, h3, h4')].map((item) => item.tagName.toLowerCase() + ':' + text(item)),
+      lists: section.querySelectorAll('ul').length,
+      rows: [...section.querySelectorAll('ul.list > li')].map((li) => ({
+        line: own(li),
+        details: [...li.querySelectorAll(':scope > em.row-detail')].map((item) => ({ text: text(item), warn: item.classList.contains('warn') })),
+        button: li.querySelector(':scope > button') ? {
+          text: text(li.querySelector(':scope > button')),
+          pressed: li.querySelector(':scope > button').getAttribute('aria-pressed'),
+          marked: li.querySelector(':scope > button').classList.contains('marked'),
+        } : null,
+        more: [...li.querySelectorAll('.learn-more-body p')].map(text),
+      })),
+      filter: select ? {
+        value: select.value,
+        shown: select.selectedOptions[0]?.textContent.trim() ?? null,
+        options: [...select.options].map((option) => option.textContent.trim()),
+      } : null,
+      empty: [...section.querySelectorAll(':scope > p.muted')].map(text).filter((line) => line.startsWith('No model here')),
+      caveats: [...section.querySelectorAll('.caveat')].map(text),
+      summaries: [...section.querySelectorAll('details > summary')].map(text),
+      openDetails: section.querySelectorAll('details[open]').length,
+      idsShown: ${JSON.stringify(ids)}.filter((id) => shownText.includes(id)),
+      idsAnywhere: ${JSON.stringify(ids)}.filter((id) => section.textContent.includes(id)),
+      engines: ['Speech engine', 'Parakeet engine'].map((label) => row(label) ? label + ': ' + text(row(label).querySelector('.row-value')) : null),
+    };
+  `);
+}
+
+/** The value of Settings > Transcription's "Dictation goes to" row. */
+export function dictationGoesTo() {
+  return source(`
+    const row = [...document.querySelectorAll('.row')]
+      .find((item) => item.querySelector('.row-label')?.textContent.trim() === 'Dictation goes to');
+    return row ? row.querySelector('.row-value').firstChild?.textContent.trim() ?? null : null;
+  `);
+}
+
+/**
+ * Scrolls the button of the local model row whose line starts with `name` into
+ * the middle of the window, and gives its centre to press with a real pointer.
+ */
+export function localModelButton(name) {
+  return source(`
+    const wanted = ${JSON.stringify(name)};
+    const li = [...${LOCAL_SECTION}.querySelectorAll('ul.list > li')].find((item) => {
+      const line = [...item.childNodes].filter((node) => node.nodeType === 3).map((node) => node.textContent).join('').trim();
+      return line === wanted || line.startsWith(wanted + ' · ');
+    });
+    const button = li?.querySelector(':scope > button');
+    if (!button) throw new Error('No local model row has a button for ' + wanted);
+    button.scrollIntoView({ block: 'center' });
+    const rect = button.getBoundingClientRect();
+    return { x: (rect.left + rect.right) / 2, y: (rect.top + rect.bottom) / 2, text: button.textContent.trim() };
+  `);
+}
+
+/**
+ * Chooses `value` in the select named `label` as a person's choice reaches
+ * React: through the element's own value setter, then a bubbling change.
+ */
+export function chooseSelect(label, value) {
+  return source(`
+    const select = document.querySelector('select[aria-label=' + JSON.stringify(${JSON.stringify(label)}) + ']');
+    if (!select) throw new Error('No select is named ' + ${JSON.stringify(label)});
+    Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(select, ${JSON.stringify(value)});
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    return select.value;
+  `);
+}
+
+/** Opens (or closes) every Details in the local models section, for a measure that includes what they hold. */
+export function openLocalDetails(open) {
+  return source(`
+    const all = [...${LOCAL_SECTION}.querySelectorAll('details')];
+    for (const details of all) details.open = ${JSON.stringify(open)};
+    return all.length;
+  `);
+}
+
+/** How far the document, the card's `.split-main` and the local models section scroll sideways. */
+export function localModelsOverflow() {
+  return source(`
+    const main = document.querySelector('.card .split-main');
+    const section = ${LOCAL_SECTION};
+    const wide = section ? [...section.querySelectorAll('*')]
+      .filter((item) => item.getBoundingClientRect().right > (main?.getBoundingClientRect().right ?? innerWidth) + 0.5)
+      .map((item) => item.tagName.toLowerCase() + '.' + item.className + ':' + item.textContent.trim().slice(0, 40)) : [];
+    return {
+      innerWidth,
+      scrollWidth: document.scrollingElement.scrollWidth,
+      mainClientWidth: main?.clientWidth ?? null,
+      mainScrollWidth: main?.scrollWidth ?? null,
+      sectionClientWidth: section?.clientWidth ?? null,
+      sectionScrollWidth: section?.scrollWidth ?? null,
+      pastTheCard: wide.slice(0, 5),
+    };
+  `);
+}

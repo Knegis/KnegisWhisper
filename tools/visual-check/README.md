@@ -428,6 +428,61 @@ test, run by hand. Not measured: real devices, whether opening a Bluetooth
 headset switches it to its call profile, and the system's microphone
 indicator during the five seconds.
 
+## Local models
+
+```
+node tools/visual-check/local-models.mjs --url http://127.0.0.1:5191/
+```
+
+Same options as the chip menus (the banner is always removed). It measures
+KNEG-330: Settings > Transcription lists the Whisper and Parakeet models as
+one list. Row buttons are pressed with real pointer presses; the page's
+`invoke` is wrapped (`installInvokeStub`) to log what the buttons call and,
+once, to hold `local_model_install` for 4 s. The fixtures keep the dictation
+choice (`sherpa_use_model`, `local_server_start`) and the meetings choice
+(`sherpa_use_stream_model`) in memory as Rust keeps them in settings, and
+list five Whisper models and four sherpa models with the registry's
+languages. Each check starts from a fresh load on Settings > Transcription at
+1000x720. Eight checks:
+
+1. One list in the local section, a row for each of the nine models, headed
+   only "Local transcription" and "Engines". Every Details is closed and no
+   model id is in the text shown; each id is under a row's Details.
+2. The rows in this order: Whisper Small, Whisper Large v3 Turbo, Parakeet
+   Unified EN, Parakeet TDT, KB Whisper Large, Whisper Medium, Whisper Base
+   (English, size unknown), then Nemotron Speech Streaming EN and Nemotron
+   3.5: dictation before meetings, each smallest first.
+3. Use for meetings on Nemotron 3.5 sends exactly one
+   `sherpa_use_stream_model` and no `sherpa_use_model`, `dictation_use_local`
+   or `local_server_start`. Nemotron 3.5 reads "In use for meetings", Nemotron
+   EN "Use for meetings", and "Dictation goes to" is unchanged.
+4. Use for dictation on Parakeet Unified sends `sherpa_use_model` then
+   `dictation_use_local`; it reads "In use for dictation", Whisper Small (the
+   model the server has loaded) says "Loaded, but dictation goes to Parakeet
+   Unified EN 0.6B", and "Dictation goes to" reads "This computer". Then on
+   Whisper Large v3 Turbo: `local_server_start` then `dictation_use_local`,
+   Turbo in use, Parakeet Unified not, Whisper Small's warning gone. Nemotron
+   EN stays "In use for meetings" throughout.
+5. No install call on load. Install on Whisper Medium, with the install held,
+   sends one `local_model_install` and no `sherpa_install_model`; "Starting…"
+   is on Whisper Medium's row and no other, and a progress event for it
+   (`kw.modelProgress`) reads "Downloading Whisper Medium (Q5) — …" there.
+6. "Show models for" offers "Any language" (chosen) and the eight dictation
+   languages; Swedish keeps Whisper Small, Turbo, Parakeet TDT, KB Whisper
+   Large and Whisper Medium.
+7. Under Engines: the Parakeet engine's caveat "This engine can't be updated
+   from here yet. …" with "Why, and which folder", both engine rows, and
+   "About the two engines".
+8. Loaded at 720x520, nothing scrolls sideways (the document, `.split-main`
+   and the section), with every Details in the section closed and then open.
+
+Measured in headless Edge against dev fixtures, not in the Tauri window; a
+false check makes it exit 1. Which model a row reads as in use is
+`lib/localModels.ts`'s rule, pinned by `tests/localModels.test.ts`, and each
+Whisper model's languages are derived from its id, held to the registry
+there. Not measured: a real install, and Rust's refusals of a model that
+can't be chosen.
+
 ## Running application windows
 
 Launch the running development application with its WebView2 debugger exposed:

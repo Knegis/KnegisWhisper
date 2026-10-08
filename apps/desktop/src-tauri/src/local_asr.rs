@@ -94,6 +94,10 @@ pub struct SherpaModelStatus {
     pub name: String,
     pub size_mb: Option<f64>,
     pub language: Option<String>,
+    /// The registry's language codes, which the settings list filters by
+    /// (KNEG-330). `language` says only "multilingual" for two models that do
+    /// not share a language list: one has Swedish, the other does not.
+    pub supported_languages: Option<Vec<String>>,
     /// Whether the extracted directory has the measured transducer layout.
     ///
     /// Checked by running the same discovery `transcribe` will use, so a
@@ -359,6 +363,20 @@ fn resolve_id(id: &str) -> Result<SherpaOffline, String> {
     ))
 }
 
+/// One registry model as the settings screen lists it, installed or not
+/// according to the models under `root`.
+fn model_status(root: &std::path::Path, m: &SherpaModel) -> SherpaModelStatus {
+    SherpaModelStatus {
+        id: m.id.clone(),
+        name: m.name.clone(),
+        size_mb: m.size_mb,
+        language: m.language.clone(),
+        supported_languages: m.supported_languages.clone(),
+        installed: sherpa_models::is_installed(root, m),
+        used_for: use_for(m.streaming),
+    }
+}
+
 /* ------------------------------------------------------------------ commands */
 
 /// The sherpa models, what is installed, and which one is selected.
@@ -374,14 +392,7 @@ pub async fn sherpa_status(
         .local_asr
         .sherpa
         .iter()
-        .map(|m| SherpaModelStatus {
-            id: m.id.clone(),
-            name: m.name.clone(),
-            size_mb: m.size_mb,
-            language: m.language.clone(),
-            installed: sherpa_models::is_installed(&root, m),
-            used_for: use_for(m.streaming),
-        })
+        .map(|m| model_status(&root, m))
         .collect();
 
     // One call for both, so they cannot disagree: `Freshness::NotInstalled` is
@@ -589,6 +600,33 @@ mod tests {
         // the screen is that the two are not the same value.
         assert_ne!(use_for(false), use_for(true));
         assert_eq!(use_for(true), UsedFor::Meetings);
+    }
+
+    #[test]
+    fn every_status_carries_the_registry_languages() {
+        // The screen's language filter reads these (KNEG-330). `language`
+        // alone says "multilingual" for Parakeet TDT v3 and Nemotron 3.5, which
+        // cannot tell the one that has Swedish from the one that has not.
+        let registry = kw_provider_registry::registry().unwrap();
+        let root = std::env::temp_dir().join("kw-no-sherpa-models-here");
+        for model in &registry.local_asr.sherpa {
+            let status = model_status(&root, model);
+            assert_eq!(status.id, model.id);
+            assert_eq!(status.language, model.language, "{}", model.id);
+            assert_eq!(
+                status.supported_languages, model.supported_languages,
+                "{}",
+                model.id
+            );
+        }
+        let tdt = registry
+            .local_asr
+            .sherpa
+            .iter()
+            .find(|m| m.id == "parakeet-tdt-0.6b-v3")
+            .unwrap();
+        let languages = model_status(&root, tdt).supported_languages.unwrap();
+        assert!(languages.iter().any(|code| code == "sv"), "{languages:?}");
     }
 
     #[test]

@@ -13,7 +13,6 @@ import {
   freshnessLabel,
   ggufIntegrityLabel,
   llmProgressLabel,
-  modelLanguage,
   progressLabel,
   recheckOutcomeLabel,
   refreshOutcomeLabel,
@@ -87,14 +86,6 @@ test("before an install, how the download will be checked reads as a phrase", ()
   assert.equal(downloadCheckPlain("stated-digest"), "verified on download");
   assert.equal(downloadCheckPlain("size"), "only its size is checked on download");
   assert.equal(downloadCheckPlain("nothing"), "not checked on download");
-});
-
-test("a local model's language is a word, not a code", () => {
-  assert.equal(modelLanguage("en"), "English");
-  assert.equal(modelLanguage("sv"), "Swedish");
-  assert.equal(modelLanguage("multilingual"), "Many languages");
-  // A code with no name here is shown as itself rather than dropped.
-  assert.equal(modelLanguage("xx"), "xx");
 });
 
 test("a local model says what it is for, not what it runs on", () => {

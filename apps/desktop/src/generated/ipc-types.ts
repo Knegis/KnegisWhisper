@@ -1528,6 +1528,12 @@ export type UsedFor = "dictation" | "meetings";
  */
 export type SherpaModelStatus = { id: string, name: string, sizeMb: number | null, language: string | null,
 /**
+ * The registry's language codes, which the settings list filters by
+ * (KNEG-330). `language` says only "multilingual" for two models that do
+ * not share a language list: one has Swedish, the other does not.
+ */
+supportedLanguages: Array<string> | null,
+/**
  * Whether the extracted directory has the measured transducer layout.
  *
  * Checked by running the same discovery `transcribe` will use, so a

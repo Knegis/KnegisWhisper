@@ -73,6 +73,13 @@ test("every renderer snippet is syntactically valid JavaScript", () => {
     snippets.levelChanges(),
     snippets.microphoneCheckState(),
     snippets.liveChips(),
+    snippets.localModelsState(["whisper-small-q5", "kb-whisper-large"]),
+    snippets.localModelsState(),
+    snippets.dictationGoesTo(),
+    snippets.localModelButton("Whisper \"Small\" (Q5)"),
+    snippets.chooseSelect("Show models for", "sv"),
+    snippets.openLocalDetails(true),
+    snippets.localModelsOverflow(),
   ];
   for (const value of values) {
     assert.doesNotThrow(() => new Function(value), value);
