@@ -254,8 +254,26 @@ pub async fn recover(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     sqlx::query("UPDATE note_summary_jobs SET status='interrupted',error='Summary generation was interrupted. Retry to continue.' WHERE status='processing'").execute(pool).await?;
     Ok(())
 }
+/// Start the oldest queued job.
+///
+/// It takes the note's people as they are now, not as they were when it was
+/// queued (KNEG-362): people are added to a meeting's note just after it is
+/// saved, which is when its automatic summary is queued, and a job still
+/// waiting has nothing to lose by starting from them. Its saved progress is
+/// kept only when they are the ones it was made with. `SET` expressions read
+/// the row as it was, so the `CASE` compares the old copy, and `RETURNING`
+/// gives the new one to `finish` and `source_hash`.
 pub async fn claim(pool: &SqlitePool) -> Result<Option<Job>, sqlx::Error> {
-    sqlx::query_as("UPDATE note_summary_jobs SET status='processing',error=NULL WHERE note_id=(SELECT note_id FROM note_summary_jobs WHERE status='queued' ORDER BY created_at,note_id LIMIT 1) RETURNING note_id,generation,settings_json,source_transcript,source_participants,expected_revision,chunks_json").fetch_optional(pool).await
+    sqlx::query_as(
+        "UPDATE note_summary_jobs
+         SET status='processing', error=NULL,
+             source_participants=(SELECT participants FROM notes WHERE id=note_summary_jobs.note_id),
+             chunks_json=CASE WHEN source_participants IS (SELECT participants FROM notes WHERE id=note_summary_jobs.note_id) THEN chunks_json ELSE '{}' END
+         WHERE note_id=(SELECT note_id FROM note_summary_jobs WHERE status='queued' ORDER BY created_at,note_id LIMIT 1)
+         RETURNING note_id,generation,settings_json,source_transcript,source_participants,expected_revision,chunks_json",
+    )
+    .fetch_optional(pool)
+    .await
 }
 pub async fn active(pool: &SqlitePool, job: &Job) -> Result<bool, sqlx::Error> {
     sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM note_summary_jobs j JOIN notes n ON n.id=j.note_id LEFT JOIN note_summary_meta m ON m.note_id=n.id WHERE j.note_id=? AND j.generation=? AND j.status='processing' AND n.transcript=j.source_transcript AND n.participants IS j.source_participants AND COALESCE(m.revision,0)=j.expected_revision)").bind(job.note_id).bind(job.generation).fetch_one(pool).await
@@ -496,32 +514,54 @@ mod tests {
             .await
             .is_err());
     }
-    /// KNEG-362. A note's people are part of what its summary is made from,
-    /// and since they became editable they can change after it: a job queued
-    /// or running when they change is stopped rather than finished from the
-    /// old people, and a finished summary is marked out of date.
-    #[tokio::test]
-    async fn changing_a_note_s_people_stops_its_summary_and_outdates_a_finished_one() {
-        let (db, settings, id) = fixture(true).await;
-        let anna = [crate::people::Participant {
+    fn anna() -> [crate::people::Participant; 1] {
+        [crate::people::Participant {
             display_name: Some("Anna".into()),
             email: Some("anna@example.com".into()),
-        }];
-        crate::people::set_participants(db.pool(), id, &anna)
+        }]
+    }
+
+    /// KNEG-362. A note's people are part of what its summary is made from,
+    /// and since they became editable they can change after it. A summary
+    /// still queued -- the automatic one queued when a meeting is saved, the
+    /// moment people get added -- starts from the note as it is when it
+    /// starts. One already being made is stopped rather than finished from
+    /// the old people, and a finished one is marked out of date.
+    #[tokio::test]
+    async fn a_queued_summary_starts_from_the_people_on_the_note_when_it_starts() {
+        let (db, _, id) = fixture(true).await;
+        crate::people::set_participants(db.pool(), id, &anna())
             .await
             .unwrap();
-        let queued_before = claim(db.pool()).await.unwrap().unwrap();
-        assert!(!active(db.pool(), &queued_before).await.unwrap());
-        assert!(finish(db.pool(), &queued_before, "Late", &[], "en")
+        let job = claim(db.pool()).await.unwrap().unwrap();
+        assert_eq!(
+            job.source_participants.as_deref(),
+            Some(r#"[{"displayName":"Anna","email":"anna@example.com"}]"#)
+        );
+        assert!(active(db.pool(), &job).await.unwrap());
+        finish(db.pool(), &job, "Generated", &[], "en")
+            .await
+            .unwrap();
+        assert!(!state(db.pool(), id).await.unwrap().outdated);
+    }
+
+    #[tokio::test]
+    async fn changing_a_note_s_people_stops_a_summary_being_made_and_outdates_a_finished_one() {
+        let (db, settings, id) = fixture(true).await;
+        let running = claim(db.pool()).await.unwrap().unwrap();
+        crate::people::set_participants(db.pool(), id, &anna())
+            .await
+            .unwrap();
+        assert!(!active(db.pool(), &running).await.unwrap());
+        assert!(finish(db.pool(), &running, "Late", &[], "en")
             .await
             .is_err());
-        fail(db.pool(), &queued_before, "stopped").await.unwrap();
+        fail(db.pool(), &running, "stopped").await.unwrap();
 
         enqueue(db.pool(), id, &settings, 0, false, true)
             .await
             .unwrap();
         let job = claim(db.pool()).await.unwrap().unwrap();
-        assert!(active(db.pool(), &job).await.unwrap());
         finish(db.pool(), &job, "Generated", &[], "en")
             .await
             .unwrap();
@@ -531,6 +571,28 @@ mod tests {
             .await
             .unwrap();
         assert!(state(db.pool(), id).await.unwrap().outdated);
+    }
+
+    /// Saved progress was made with the people the job had: kept when they
+    /// are still the note's at the start, dropped when they changed while it
+    /// waited, so a retry never mixes extracts made for two sets of people.
+    #[tokio::test]
+    async fn a_retry_s_saved_progress_is_dropped_when_the_people_changed_while_it_waited() {
+        let (db, settings, id) = fixture(true).await;
+        let job = claim(db.pool()).await.unwrap().unwrap();
+        progress(db.pool(), &job, 1, 3, r#"{"extract-0":{}}"#)
+            .await
+            .unwrap();
+        recover(db.pool()).await.unwrap();
+        enqueue(db.pool(), id, &settings, 0, false, true)
+            .await
+            .unwrap();
+        crate::people::set_participants(db.pool(), id, &anna())
+            .await
+            .unwrap();
+        let retry = claim(db.pool()).await.unwrap().unwrap();
+        assert_eq!(retry.chunks_json, "{}");
+        assert!(active(db.pool(), &retry).await.unwrap());
     }
 
     #[tokio::test]

@@ -102,7 +102,7 @@ import type {
 // this stays below the wrappers as the module doc above requires.
 import type { OverlayPreferences } from "./ipc";
 import { FIXTURE_RECORDING_SECONDS, toneWav } from "./fixtureWav";
-import { emailKey, readParticipants } from "./people";
+import { emailKey, HAS_SPACE, readParticipants, trimSpace } from "./people";
 import { summaryConfigured } from "./summaryConfigured";
 
 /* ------------------------------------------------------------- capabilities */
@@ -1481,24 +1481,53 @@ function fixtureNote(given: Pick<Note, "id" | "title" | "noteType" | "createdAt"
  */
 function fixtureEmail(input: string): string | null {
   const email = emailKey(input);
-  if ([...email].length > 254 || /\s/.test(email)) return null;
+  if ([...email].length > 254 || HAS_SPACE.test(email)) return null;
   const [local, domain, ...rest] = email.split("@");
   return local && domain && rest.length === 0 ? email : null;
 }
 
-/** As `people::tidy`, throwing its plain-word refusals. */
-function fixtureTidyParticipants(list: readonly ParticipantRequest[]): string | null {
-  const kept: { displayName?: string; email?: string }[] = [];
+/**
+ * As `people::tidy`, throwing its plain-word refusals: an entry sent back as it was read is
+ * written back as stored, an address already on the note passes unchecked, a new one is checked,
+ * and stored entries the screen can't show stay, after the people.
+ */
+function fixtureTidyParticipants(current: string | null, list: readonly ParticipantRequest[]): string | null {
+  let stored: unknown[] = [];
+  try {
+    const parsed: unknown = current === null ? [] : JSON.parse(current);
+    if (Array.isArray(parsed)) stored = parsed;
+  } catch { /* not a list: nothing to keep */ }
+  const field = (entry: unknown, key: string): string | null => {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return null;
+    const value = (entry as Record<string, unknown>)[key];
+    return typeof value === "string" && trimSpace(value) !== "" ? trimSpace(value) : null;
+  };
+  const readable = (entry: unknown) => field(entry, "email") !== null || field(entry, "displayName") !== null;
+  const keyOf = (entry: unknown) => { const email = field(entry, "email"); return email === null ? null : emailKey(email); };
+  const storedEmails = new Set(stored.map(keyOf).filter((key) => key !== null));
+  const unmatched = stored.filter(readable);
+  const emails = new Set<string>();
+  const kept: unknown[] = [];
   for (const entry of list) {
-    const displayName = (entry.displayName ?? "").trim();
-    const raw = (entry.email ?? "").trim();
-    const email = raw === "" ? "" : fixtureEmail(raw);
-    if (email === null) throw new Error(`'${raw}' isn't an email address.`);
-    if (displayName === "" && email === "") throw new Error("Each person needs an email address or a name.");
-    if (email !== "" && kept.some((person) => person.email === email)) continue;
+    const name = trimSpace(entry.displayName ?? "") || null;
+    const raw = trimSpace(entry.email ?? "") || null;
+    if (name === null && raw === null) throw new Error("Each person needs an email address or a name.");
+    const key = raw === null ? null : emailKey(raw);
+    if (key !== null && emails.has(key)) continue;
+    const at = unmatched.findIndex((was) => keyOf(was) === key && field(was, "displayName") === name);
+    let value: unknown;
+    if (at !== -1) {
+      value = unmatched.splice(at, 1)[0];
+    } else {
+      const email = raw === null ? null : (fixtureEmail(raw) ?? (key !== null && storedEmails.has(key) ? raw : undefined));
+      if (email === undefined) throw new Error(`'${raw}' isn't an email address.`);
+      value = { ...(name === null ? {} : { displayName: name }), ...(email === null ? {} : { email }) };
+    }
     if (kept.length === 200) throw new Error("A note can have at most 200 people.");
-    kept.push({ ...(displayName === "" ? {} : { displayName }), ...(email === "" ? {} : { email }) });
+    if (key !== null) emails.add(key);
+    kept.push(value);
   }
+  kept.push(...stored.filter((entry) => !readable(entry)));
   return kept.length === 0 ? null : JSON.stringify(kept);
 }
 
@@ -2045,8 +2074,9 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
   people_list: () => fixturePeople(),
   notes_set_participants: (a) => {
     const id = arg<number>(a, "id");
-    const participants = fixtureTidyParticipants(arg<ParticipantRequest[]>(a, "participants") ?? []);
-    if (!notes.some((n) => n.id === id)) return false;
+    const note = notes.find((n) => n.id === id);
+    if (!note) return false;
+    const participants = fixtureTidyParticipants(note.participants, arg<ParticipantRequest[]>(a, "participants") ?? []);
     notes = notes.map((n) => (n.id === id ? { ...n, participants } : n));
     return true;
   },

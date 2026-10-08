@@ -280,9 +280,13 @@ Same options as the chip menus (the banner is always removed). It measures
 KNEG-362: people added to a note on its meta row, and the library's People
 list. The fixtures answer `people_list`, `notes_set_participants` and
 `notes_list`'s `person` as Rust's `notes_core::people` does, refusals worded
-the same; `invoke` is wrapped to log what reached them. Text is typed with
+the same and stored entries kept the same way (the fixture notes carry nothing
+that tests the keeping; `cargo test` does); `invoke` is wrapped to log what
+reached them. Text is typed with
 `Input.insertText` into the focused field and buttons pressed with real
-pointer presses, at 1000x720 unless stated. Checks 1-4 are one sequence from
+pointer presses -- a People row after scrolling the panel to it, since People
+sits under the whole tree, below the panel's fold at 1000x720 with the
+fixtures' notes -- at 1000x720 unless stated. Checks 1-4 are one sequence from
 one fresh load; 5 and 6 each start from their own. Six checks:
 
 1. Note 103 ("Scratch", nobody on it): Add person, an email and a name, Add.
@@ -292,9 +296,9 @@ one fresh load; 5 and 6 each start from their own. Six checks:
 2. Pressing them in People asks `notes_list` for their email alone, and shows
    "Notes with {name}" holding only "Scratch" and Show all notes, with no
    folders; the person reads pressed.
-3. Show all notes: the Folders, People and Not in a folder headings back, the
-   folders and their notes exactly as before, nobody pressed, the same note
-   open.
+3. Show all notes: the Folders, Not in a folder and People headings back in
+   that order, the folders and their notes exactly as before, nobody pressed,
+   the same note open.
 4. Remove {name}: `notes_set_participants` gets an empty list, the stored
    participants are null, the chip and the People row go, focus is on Add
    person.

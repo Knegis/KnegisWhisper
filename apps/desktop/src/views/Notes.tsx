@@ -27,12 +27,12 @@
  * searched, and `hits === []` means somebody searched and nothing matched.
  * Collapsing them would show the full note list as though it were the result.
  *
- * People, under Folders, lists everyone named by email on a note and how many
- * notes each is on (KNEG-362). Pressing one shows "Notes with" them in place
- * of the tree, fetched from Rust, as search hits replace it, with Show all
- * notes to come back -- the hundred most recently edited, as the library's own
- * list is, and a line saying so when they are on more. Like the search it is
- * the panel's state, not a place:
+ * People, under the folders and the notes in none, lists everyone named by
+ * email on a note and how many notes each is on (KNEG-362). Pressing one
+ * shows "Notes with" them in place of the tree, fetched from Rust, as search
+ * hits replace it, with Show all notes to come back -- the hundred most
+ * recently edited, as the library's own list is, and a line saying so when
+ * they are on more. Like the search it is the panel's state, not a place:
  * opening a note from the list keeps it, and back and forward never return to
  * it. A search typed meanwhile shows its hits over it.
  */
@@ -496,8 +496,9 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
                 </div>
               )}
             </div>
-            {peopleSection}
             {groups.unfiled.length > 0 && <PanelSection label="Not in a folder">{groups.unfiled.map(renderEntry)}</PanelSection>}
+            {/* Under the whole tree, so the folders and the notes in none stay together (ruling, KNEG-362). */}
+            {peopleSection}
           </>
         )}
       </div>

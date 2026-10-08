@@ -130,7 +130,7 @@ async function addPerson(cdp, email, name) {
 const lastCall = async (cdp, command) => (await cdp.evaluate(snippets.stubCalls(command))).at(-1) ?? null;
 const storedParticipants = async (cdp, id) => (await cdp.evaluate(snippets.invoke("notes_get", { id })))?.participants ?? null;
 
-const SETUP_NOTE = "1000x720 unless stated. Checks 1-4 run in sequence from one fresh load; 5 and 6 each start from a fresh load. Text is typed with CDP Input.insertText into the focused field; buttons are pressed with real CDP pointer presses. invoke is wrapped to log notes_set_participants and notes_list.";
+const SETUP_NOTE = "1000x720 unless stated. Checks 1-4 run in sequence from one fresh load; 5 and 6 each start from a fresh load. Text is typed with CDP Input.insertText into the focused field; buttons are pressed with real CDP pointer presses, a People row after scrolling it into view as a person scrolls the panel. invoke is wrapped to log notes_set_participants and notes_list.";
 
 export async function runPeople(options) {
   const out = resolve(options.out);
@@ -210,6 +210,10 @@ export async function runPeople(options) {
       ].join(" "),
     }, async () => {
       await cdp.evaluate(snippets.clearStubCalls());
+      // People sits under the whole tree, below the panel's fold at 1000x720 with the fixtures' notes.
+      const scrolled = await cdp.evaluate(snippets.scrollToText(".list-panel button.notes-person .notes-person-name", MAJA.name));
+      if (!scrolled) throw new Error(`No People row reads ${MAJA.name}`);
+      await delay(150);
       await pressText(cdp, ".list-panel button.notes-person .notes-person-name", MAJA.name);
       await waitFor(cdp, `${field(snippets.peopleState(), "filtered")}?.titles.length > 0`, "the person's notes");
       const after = await state(cdp);
@@ -231,8 +235,10 @@ export async function runPeople(options) {
     await check({
       id: "3",
       claim: "Show all notes brings the library's tree back as it was.",
-      expectation: "press Show all notes: no \"Notes with\" section; the Folders, People and Not in a folder headings back in that order; the folders and their notes as before check 2 (notesFolders); nobody pressed; the open note unchanged",
+      expectation: "press Show all notes: no \"Notes with\" section; the Folders, Not in a folder and People headings back in that order, People under the whole tree; the folders and their notes as before check 2 (notesFolders); nobody pressed; the open note unchanged",
     }, async () => {
+      await cdp.evaluate(snippets.scrollToText(".list-panel .panel-action", "Show all notes"));
+      await delay(150);
       await pressText(cdp, ".list-panel .panel-action", "Show all notes");
       await waitFor(cdp, `${field(snippets.peopleState(), "folders")} > 0`, "the folders to come back");
       const after = await state(cdp);
@@ -241,7 +247,7 @@ export async function runPeople(options) {
       return {
         measured: { after, restored, before: tree, title },
         matches: after.filtered === null
-          && JSON.stringify(after.sections.filter((label) => label !== null)) === JSON.stringify(["Folders", "People", "Not in a folder"])
+          && JSON.stringify(after.sections.filter((label) => label !== null)) === JSON.stringify(["Folders", "Not in a folder", "People"])
           && JSON.stringify(restored) === JSON.stringify(tree)
           && after.people.every((person) => !person.pressed)
           && title === SCRATCH.title,

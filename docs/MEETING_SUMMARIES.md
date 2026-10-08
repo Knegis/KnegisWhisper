@@ -21,10 +21,12 @@ Summary edits autosave independently. Regeneration asks before replacing edited 
 imported summaries and keeps the old content until successful. Copy, Export Markdown
 and Export text apply to the summary. Transcript changes mark a summary outdated and
 disable its old source links, and so do changes to the note's people, which can be
-edited since KNEG-362. A summary queued or being made when the people change is
-stopped, with "Generation stopped because the note, summary or job changed." under
-Retry summary; the retry starts over, since its saved progress was for the old people.
-Imported legacy summaries remain editable.
+edited since KNEG-362. Only a summary being made when the people change is stopped,
+with "Generation stopped because the note, summary or job changed." under Retry
+summary; the retry starts over, since its saved progress was for the old people. A
+summary still queued -- the automatic one queued when a meeting is saved, which is when
+people get added -- takes the note's people as they are when it starts, keeping its
+saved progress only if they are unchanged. Imported legacy summaries remain editable.
 
 The model is told the note's people as spelling help: their display names,
 comma-separated and at most 256 characters, and never an email address (KNEG-362). A

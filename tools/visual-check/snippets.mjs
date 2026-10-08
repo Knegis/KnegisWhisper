@@ -825,6 +825,21 @@ export function chipCenter(prefix) {
   `);
 }
 
+/**
+ * Scrolls the first element matching `selector` whose text is `text` into
+ * view, as a person scrolls a panel to reach a row below its fold, and says
+ * whether there was one.
+ */
+export function scrollToText(selector, text) {
+  return source(`
+    const wanted = ${JSON.stringify(text)};
+    const element = [...document.querySelectorAll(${JSON.stringify(selector)})]
+      .find((item) => item.textContent.trim() === wanted);
+    element?.scrollIntoView({ block: 'nearest' });
+    return Boolean(element);
+  `);
+}
+
 /** The centre of the first element matching `selector` whose text is `text` (any, when `text` is null). */
 export function centerOfText(selector, text) {
   return source(`

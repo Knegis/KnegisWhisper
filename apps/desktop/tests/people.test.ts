@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { addParticipant, noteCount, participantLabel, personLabel, readParticipants, removeParticipant } from "../src/lib/people.js";
+import { addParticipant, emailKey, noteCount, participantLabel, personLabel, readParticipants, removeParticipant } from "../src/lib/people.js";
 
 // Fixture 101's participants, exactly as `lib/devFixtures.ts` stores them.
 const FIXTURE_101 = JSON.stringify([
@@ -74,6 +74,16 @@ test("removing a person leaves the rest in order", () => {
   assert.deepEqual(removeParticipant(list, 0), [{ displayName: "Ravi Menon", email: "ravi@example.com" }]);
   assert.deepEqual(removeParticipant(list, 5), list);
   assert.equal(list.length, 2);
+});
+
+test("an email is trimmed of what Rust's trim strips, and of nothing else", () => {
+  // `people.rs` trims the same set in SQL, so a person listed is a person whose notes are found.
+  assert.equal(emailKey("Anna@Example.com\t"), "anna@example.com");
+  assert.equal(emailKey(" anna@example.com\n"), "anna@example.com");
+  assert.equal(emailKey("\u0085anna@example.com　"), "anna@example.com");
+  // JavaScript's own trim strips U+FEFF, which `char::is_whitespace` does not.
+  assert.equal(emailKey("﻿anna@example.com"), "﻿anna@example.com");
+  assert.deepEqual(readParticipants(JSON.stringify([{ email: "anna@example.com\u0085" }])), [{ displayName: null, email: "anna@example.com" }]);
 });
 
 test("a count is read out with its noun", () => {

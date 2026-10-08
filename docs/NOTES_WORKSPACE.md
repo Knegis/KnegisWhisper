@@ -80,11 +80,13 @@ recorded, and OpenWhispr and shared-folder imports say nothing.
 
 A note's people (KNEG-362) are chips in its meta row, each with a button that removes
 them, and **Add person** takes an email and, if wanted, a name. A person is their email:
-it is trimmed and lower-cased, a second entry for one address is dropped, one that isn't
-an address is refused in plain words under the row with the form still open, and a note
-keeps at most 200. Imported notes come with theirs; nothing else fills them in yet (the
-calendar doing so is a follow-up). Saving people isn't editing the note, so it doesn't
-move it up the library. The library's **People** section, under Folders, lists everyone
+a new one is trimmed and lower-cased, a second entry for one address is dropped, one that
+isn't an address is refused in plain words under the row with the form still open, and a
+note keeps at most 200. An address an import already put on the note passes as it is, so
+one that was never checked can't block changes to the note's people. Imported notes come
+with theirs; nothing else fills them in yet (the calendar doing so is a follow-up). Saving
+people isn't editing the note, so it doesn't move it up the library. The library's
+**People** section, under the folders and the notes in no folder, lists everyone
 named by email on a note and how many notes they're on, by the name on the newest note
 that gives one; someone with a name and no email isn't listed. Pressing a person shows
 **Notes with** them in place of the folders, with **Show all notes** to come back. They are
@@ -93,7 +95,8 @@ library is, at most a hundred and the most recently edited first; past that, a l
 how many of their notes are shown. Like the search, that is the panel's
 state: a note opened from it keeps it, and back and forward don't return to it. A note's
 people are part of what its summary was made from, so changing them marks a finished
-summary out of date and stops one being made ([meeting summaries](MEETING_SUMMARIES.md)).
+summary out of date and stops one being made; a summary still waiting to start uses the
+people on the note when it starts ([meeting summaries](MEETING_SUMMARIES.md)).
 
 Title, personal notes and summaries flush before tab changes, note changes and
 native window closure. A failed save retains the draft and prevents those transitions;
@@ -192,11 +195,17 @@ live view of a meeting started that way. Discard always deletes the recording.
   the screen (`MediaImportResult.segments`) carries no words.
 - `notes.participants` keeps its shape, a JSON array of `{displayName, email}` read
   leniently, and needed no migration (KNEG-362). `notes_set_participants` writes it
-  whole, each entry as `{displayName?, email?}` alone, so any other key an import put
-  on an entry is dropped the first time that note's people are edited, and a value that
-  isn't a JSON array -- shown as no people -- is replaced. `people_list` and
-  `notes_list`'s `person` (an email) read it; the local API, CLI and MCP return it as
-  before and have no people filter.
+  whole, and keeps what it didn't make: an entry sent back as the screen read it is
+  written back as stored, with every key and value an import put on it (its keys in
+  alphabetical order); an address already on the note passes unchecked; and entries the
+  screen can't show -- not objects, or with no text email or name -- stay, after the
+  people. Only new entries are written as `{displayName?, email?}`. What is lost: the
+  order of keys within a kept entry, the place of those unshown entries in the list, and
+  a value that isn't a JSON array at all (malformed JSON, an object, a string), which
+  shows as no people and is replaced by the first edit. An entry the person removes goes
+  whole. Emails and names are trimmed of what Rust's `str::trim` strips, in SQL and on
+  the screen alike. `people_list` and `notes_list`'s `person` (an email) read it; the
+  local API, CLI and MCP return it as before and have no people filter.
 - No user-editable transcript API was added. Existing note exports and separate summary
   exports retain their behavior.
 

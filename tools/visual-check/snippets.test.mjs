@@ -53,6 +53,7 @@ test("every renderer snippet is syntactically valid JavaScript", () => {
     snippets.noteMetaState(),
     snippets.notesFolders(),
     snippets.peopleState(),
+    snippets.scrollToText(".list-panel .notes-person-name", "A name with \"quotes\""),
     snippets.chipState("Transcription: "),
     snippets.chipCenter("Tidy up"),
     snippets.centerOfText(".task-hero button.primary", "Choose a provider"),

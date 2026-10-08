@@ -18,9 +18,19 @@
 //! `participants` that is not a JSON array is no people, never an error, since
 //! `json_each` raises on malformed JSON and one bad note would otherwise fail
 //! the whole list.
+//!
+//! **Writing keeps what it didn't make.** The screen sends a note's people
+//! back whole, as it read them, on every add and remove. What it sends back
+//! unchanged is written back as it was stored, with keys the app doesn't read;
+//! an address already on the note passes unchecked; and entries the screen
+//! can't show at all stay, after the people it can. Only what is new is
+//! checked and tidied.
+
+use std::collections::HashSet;
 
 use kw_storage::StorageError;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sqlx::{FromRow, SqlitePool};
 use ts_rs::TS;
 
@@ -32,6 +42,13 @@ pub const MAX_PARTICIPANTS: usize = 200;
 /// The longest email address kept, in characters: RFC 5321's limit on a
 /// path, less its two angle brackets.
 const MAX_EMAIL_CHARS: usize = 254;
+
+/// The characters SQL `trim` is told to strip from emails and names: what
+/// `str::trim` strips (`char::is_whitespace`), code point by code point. Bare
+/// `trim()` strips only U+0020, so an imported address ending in a tab was
+/// listed as a person whose notes couldn't then be found. `lib/people.ts`
+/// trims the same set.
+const SPACE: &str = "char(9, 10, 11, 12, 13, 32, 133, 160, 5760, 8192, 8193, 8194, 8195, 8196, 8197, 8198, 8199, 8200, 8201, 8202, 8232, 8233, 8239, 8287, 12288)";
 
 /// One of a note's people, as `notes.participants` stores them: an email, a
 /// name, or both. An absent field is left out of the JSON rather than written
@@ -97,38 +114,74 @@ pub fn normalise_email(input: &str) -> Option<String> {
     Some(email)
 }
 
-/// `list` as it is stored: names and emails trimmed, emails normalised, and a
-/// second entry for an email already listed dropped. Refused when an email
-/// isn't one, when an entry has neither an email nor a name, or as soon as
-/// more than [`MAX_PARTICIPANTS`] people are kept -- so however long a list
-/// is sent, each entry is compared with at most that many.
-fn tidy(list: &[Participant]) -> Result<Vec<Participant>, PeopleError> {
-    let mut kept: Vec<Participant> = Vec::with_capacity(list.len().min(MAX_PARTICIPANTS));
+/// `list` as it is to be stored, given the entries already `stored` on the
+/// note.
+///
+/// - An entry with the same email as a stored one -- trimmed and ASCII
+///   lower-case, or both with none -- and the same name, trimmed, is that
+///   stored entry, written back as it was: every key and value it had, keys in
+///   `serde_json`'s order.
+/// - Any other entry is new, and is checked: its name and email trimmed, its
+///   email normalised, or, when it won't normalise but an entry stored on this
+///   note has that address, kept as it was typed, trimmed. An import's address
+///   was never checked, and refusing it would block every change to the
+///   note's people.
+/// - A second entry for an email already kept is dropped.
+/// - Stored entries the screen can't show (`readable`) follow the people,
+///   as they were.
+///
+/// Refused when a new email isn't one and isn't on the note, when an entry
+/// has neither an email nor a name, or as soon as more than
+/// [`MAX_PARTICIPANTS`] people are kept -- so however long a list is sent,
+/// each entry is compared with at most that many kept.
+fn tidy(list: &[Participant], stored: &[Value]) -> Result<Vec<Value>, PeopleError> {
+    let stored_emails: HashSet<String> = stored
+        .iter()
+        .filter_map(|entry| text(entry.get("email")))
+        .map(email_key)
+        .collect();
+    let mut unmatched: Vec<&Value> = stored.iter().filter(|entry| readable(entry)).collect();
+    let mut emails: HashSet<String> = HashSet::new();
+    let mut kept: Vec<Value> = Vec::with_capacity(list.len().min(MAX_PARTICIPANTS));
     for entry in list {
-        let display_name = present(entry.display_name.as_deref()).map(str::to_owned);
-        let email = match present(entry.email.as_deref()) {
-            None => None,
-            Some(raw) => {
-                Some(normalise_email(raw).ok_or_else(|| PeopleError::NotAnEmail(raw.to_owned()))?)
-            }
-        };
-        if display_name.is_none() && email.is_none() {
+        let name = present(entry.display_name.as_deref());
+        let raw = present(entry.email.as_deref());
+        if name.is_none() && raw.is_none() {
             return Err(PeopleError::Unnamed);
         }
-        let listed = email
-            .as_ref()
-            .is_some_and(|email| kept.iter().any(|p| p.email.as_ref() == Some(email)));
-        if listed {
+        let key = raw.map(email_key);
+        if key.as_ref().is_some_and(|key| emails.contains(key)) {
             continue;
         }
+        let same = unmatched.iter().position(|stored| {
+            text(stored.get("email")).map(email_key) == key
+                && text(stored.get("displayName")) == name
+        });
+        let value = if let Some(at) = same {
+            unmatched.remove(at).clone()
+        } else {
+            let email = match raw {
+                None => None,
+                Some(raw) => Some(match normalise_email(raw) {
+                    Some(email) => email,
+                    None if stored_emails.contains(&email_key(raw)) => raw.to_owned(),
+                    None => return Err(PeopleError::NotAnEmail(raw.to_owned())),
+                }),
+            };
+            serde_json::to_value(Participant {
+                display_name: name.map(str::to_owned),
+                email,
+            })?
+        };
         if kept.len() == MAX_PARTICIPANTS {
             return Err(PeopleError::TooMany);
         }
-        kept.push(Participant {
-            display_name,
-            email,
-        });
+        if let Some(key) = key {
+            emails.insert(key);
+        }
+        kept.push(value);
     }
+    kept.extend(stored.iter().filter(|entry| !readable(entry)).cloned());
     Ok(kept)
 }
 
@@ -137,10 +190,39 @@ fn present(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|value| !value.is_empty())
 }
 
-/// Replace note `id`'s people with `list`, tidied as `tidy` tidies it, and
-/// say whether the note exists. An empty list stores NULL, as a note that
-/// never had any.
+/// A stored field as the screen reads it: text, trimmed, not blank.
+fn text(value: Option<&Value>) -> Option<&str> {
+    present(value.and_then(Value::as_str))
+}
+
+/// How an email is told apart: trimmed and ASCII lower-case, as the SQL here
+/// groups and matches it.
+fn email_key(email: &str) -> String {
+    email.trim().to_ascii_lowercase()
+}
+
+/// Whether the screen shows a stored entry: an object with a text email or
+/// name that isn't blank, as `lib/people.ts`' `readParticipants` reads one.
+/// The screen never sends the others back, so `tidy` keeps them itself.
+fn readable(entry: &Value) -> bool {
+    entry.is_object()
+        && (text(entry.get("email")).is_some() || text(entry.get("displayName")).is_some())
+}
+
+/// A stored `participants` as entries, or none when it isn't a JSON array --
+/// there is then nothing to keep, and the first edit replaces it.
+fn stored_entries(participants: Option<&str>) -> Vec<Value> {
+    participants
+        .and_then(|raw| serde_json::from_str::<Vec<Value>>(raw).ok())
+        .unwrap_or_default()
+}
+
+/// Replace note `id`'s people with `list`, as `tidy` keeps it, and say whether
+/// the note exists. Nothing left stores NULL, as a note that never had any.
 ///
+/// The stored list is read and replaced in one transaction that holds the
+/// writer lock from its start (`BEGIN IMMEDIATE`): an autosave of the same
+/// note in between could otherwise fail the write instead of waiting.
 /// `updated_at` is not touched, as `notes::set_folder` leaves it: saying who
 /// was there is not working on the note, and the library orders by it.
 pub async fn set_participants(
@@ -148,19 +230,33 @@ pub async fn set_participants(
     id: i64,
     list: &[Participant],
 ) -> Result<bool, PeopleError> {
-    let kept = tidy(list)?;
+    let mut tx = pool
+        .begin_with("BEGIN IMMEDIATE")
+        .await
+        .map_err(StorageError::from)?;
+    let current: Option<Option<String>> =
+        sqlx::query_scalar("SELECT participants FROM notes WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(StorageError::from)?;
+    let Some(current) = current else {
+        return Ok(false);
+    };
+    let kept = tidy(list, &stored_entries(current.as_deref()))?;
     let stored = if kept.is_empty() {
         None
     } else {
         Some(serde_json::to_string(&kept)?)
     };
-    let result = sqlx::query("UPDATE notes SET participants = ? WHERE id = ?")
+    sqlx::query("UPDATE notes SET participants = ? WHERE id = ?")
         .bind(stored)
         .bind(id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await
         .map_err(StorageError::from)?;
-    Ok(result.rows_affected() > 0)
+    tx.commit().await.map_err(StorageError::from)?;
+    Ok(true)
 }
 
 /// Everyone named by email on a note, the most notes first, then by the name
@@ -170,13 +266,13 @@ pub async fn set_participants(
 /// trimmed and lower-cased, its name the first non-blank one in the order
 /// newest note first.
 pub async fn people(pool: &SqlitePool) -> Result<Vec<Person>, StorageError> {
-    Ok(sqlx::query_as::<_, Person>(
+    let sql = format!(
         "WITH entries AS (
              SELECT notes.id AS note_id,
                     notes.updated_at AS updated_at,
-                    lower(trim(json_extract(p.value, '$.email'))) AS email,
+                    lower(trim(json_extract(p.value, '$.email'), {SPACE})) AS email,
                     CASE WHEN json_type(p.value, '$.displayName') = 'text'
-                         THEN nullif(trim(json_extract(p.value, '$.displayName')), '') END AS name
+                         THEN nullif(trim(json_extract(p.value, '$.displayName'), {SPACE}), '') END AS name
              FROM notes,
                   json_each(CASE WHEN json_valid(notes.participants) THEN CASE WHEN json_type(notes.participants) = 'array' THEN notes.participants END END) AS p
              WHERE p.type = 'object' AND json_type(p.value, '$.email') = 'text'
@@ -190,10 +286,9 @@ pub async fn people(pool: &SqlitePool) -> Result<Vec<Person>, StorageError> {
          SELECT email, max(name) AS name, count(DISTINCT note_id) AS note_count
          FROM named
          GROUP BY email
-         ORDER BY note_count DESC, lower(coalesce(max(name), email)), email",
-    )
-    .fetch_all(pool)
-    .await?)
+         ORDER BY note_count DESC, lower(coalesce(max(name), email)), email"
+    );
+    Ok(sqlx::query_as::<_, Person>(&sql).fetch_all(pool).await?)
 }
 
 /// The notes `email` is on, newest first, as `notes::list` orders them.
@@ -212,7 +307,7 @@ pub async fn list_by_person(
              SELECT 1
              FROM json_each(CASE WHEN json_valid(notes.participants) THEN CASE WHEN json_type(notes.participants) = 'array' THEN notes.participants END END) AS p
              WHERE p.type = 'object' AND json_type(p.value, '$.email') = 'text'
-               AND lower(trim(json_extract(p.value, '$.email'))) = ?
+               AND lower(trim(json_extract(p.value, '$.email'), {SPACE})) = ?
          )
          ORDER BY updated_at DESC LIMIT ?"
     );
@@ -465,6 +560,115 @@ mod tests {
         );
     }
 
+    /// An address already on the note -- an import's, which nothing checked
+    /// -- passes as it was stored, so it can't block every change to the
+    /// note's people. Only an address that isn't on the note yet is checked.
+    #[tokio::test]
+    async fn an_address_already_on_the_note_passes_as_stored() {
+        let db = db().await;
+        let p = db.pool();
+        let id = note_with(p, "Imported", Some(r#"[{"email":"Anna Lindqvist"}]"#)).await;
+
+        let refused = set_participants(
+            p,
+            id,
+            &[
+                person(None, Some("Anna Lindqvist")),
+                person(None, Some("maja@")),
+            ],
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(refused.to_string(), "'maja@' isn't an email address.");
+
+        assert!(set_participants(
+            p,
+            id,
+            &[
+                person(None, Some("Anna Lindqvist")),
+                person(Some("Maja Holm"), Some("maja@example.com")),
+            ],
+        )
+        .await
+        .unwrap());
+        assert_eq!(
+            stored(p, id).await.as_deref(),
+            Some(
+                r#"[{"email":"Anna Lindqvist"},{"displayName":"Maja Holm","email":"maja@example.com"}]"#
+            )
+        );
+
+        // Given a name, it is a changed entry, written anew -- its address
+        // still passes, trimmed and otherwise as it was.
+        set_participants(p, id, &[person(Some("Anna"), Some(" Anna Lindqvist "))])
+            .await
+            .unwrap();
+        assert_eq!(
+            stored(p, id).await.as_deref(),
+            Some(r#"[{"displayName":"Anna","email":"Anna Lindqvist"}]"#)
+        );
+    }
+
+    /// An entry sent back as the screen read it is written back as it was
+    /// stored, keys the app doesn't read and all, and entries the screen
+    /// can't show at all stay, after the people it can.
+    #[tokio::test]
+    async fn what_an_import_stored_survives_an_edit() {
+        let db = db().await;
+        let p = db.pool();
+        let id = note_with(
+            p,
+            "Imported",
+            Some(r#"[{"displayName":" Anna ","email":"ANNA@example.com","responseStatus":"accepted"},{"displayName":"Jonas Berg","title":"CFO"},"Axel",{"email":42}]"#),
+        )
+        .await;
+        // What `lib/people.ts` reads from it, with one person added.
+        let anna = person(Some("Anna"), Some("ANNA@example.com"));
+        let jonas = person(Some("Jonas Berg"), None);
+        let maja = person(Some("Maja Holm"), Some("maja@example.com"));
+
+        set_participants(p, id, &[anna, jonas.clone(), maja.clone()])
+            .await
+            .unwrap();
+        assert_eq!(
+            stored(p, id).await.as_deref(),
+            Some(
+                r#"[{"displayName":" Anna ","email":"ANNA@example.com","responseStatus":"accepted"},{"displayName":"Jonas Berg","title":"CFO"},{"displayName":"Maja Holm","email":"maja@example.com"},"Axel",{"email":42}]"#
+            )
+        );
+
+        set_participants(p, id, &[jonas, maja]).await.unwrap();
+        assert_eq!(
+            stored(p, id).await.as_deref(),
+            Some(
+                r#"[{"displayName":"Jonas Berg","title":"CFO"},{"displayName":"Maja Holm","email":"maja@example.com"},"Axel",{"email":42}]"#
+            )
+        );
+
+        // Nobody the screen shows is left; what it can't show still is.
+        set_participants(p, id, &[]).await.unwrap();
+        assert_eq!(
+            stored(p, id).await.as_deref(),
+            Some(r#"["Axel",{"email":42}]"#)
+        );
+    }
+
+    /// A value that isn't a JSON array has no entries to keep: the first
+    /// edit replaces it.
+    #[tokio::test]
+    async fn a_value_that_is_not_a_list_is_replaced_by_the_first_edit() {
+        let db = db().await;
+        let p = db.pool();
+        let id = note_with(p, "Broken", Some("not json")).await;
+        set_participants(p, id, &[person(None, Some("maja@example.com"))])
+            .await
+            .unwrap();
+        assert_eq!(
+            stored(p, id).await.as_deref(),
+            Some(r#"[{"email":"maja@example.com"}]"#)
+        );
+    }
+
     #[tokio::test]
     async fn a_missing_note_is_reported_not_created() {
         let db = db().await;
@@ -665,6 +869,58 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    /// An imported address ending in a tab, a newline or a no-break space is
+    /// the same person as without: the SQL trims what Rust's `trim` trims, so
+    /// a person listed is a person whose notes are found.
+    #[tokio::test]
+    async fn an_address_is_trimmed_of_the_same_spaces_in_sql_as_in_rust() {
+        let db = db().await;
+        let p = db.pool();
+        for raw in [
+            "anna@example.com",
+            "anna@example.com\t",
+            "anna@example.com\n",
+            "\u{a0}Anna@example.com",
+        ] {
+            let stored = serde_json::to_string(&[person(None, Some(raw))]).unwrap();
+            note_with(p, "Imported", Some(&stored)).await;
+        }
+        assert_eq!(
+            people(p).await.unwrap(),
+            [Person {
+                email: "anna@example.com".into(),
+                name: None,
+                note_count: 4,
+            }]
+        );
+        for asked in ["anna@example.com", "anna@example.com\t"] {
+            assert_eq!(
+                list_by_person(p, asked, 10).await.unwrap().len(),
+                4,
+                "{asked:?}"
+            );
+        }
+    }
+
+    /// `SPACE` is written out code point by code point for SQLite's `trim`,
+    /// so it is held to exactly what `char::is_whitespace` -- `str::trim` --
+    /// strips.
+    #[test]
+    fn the_sql_space_is_rust_s_whitespace() {
+        let listed: Vec<u32> = SPACE
+            .trim_start_matches("char(")
+            .trim_end_matches(')')
+            .split(',')
+            .map(|code| code.trim().parse().unwrap())
+            .collect();
+        let whitespace: Vec<u32> = (0..=u32::from(char::MAX))
+            .filter_map(char::from_u32)
+            .filter(|c| c.is_whitespace())
+            .map(u32::from)
+            .collect();
+        assert_eq!(listed, whitespace);
     }
 
     /* ------------------------------------------------- the summary's hint */
