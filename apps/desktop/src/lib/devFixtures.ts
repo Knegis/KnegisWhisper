@@ -79,6 +79,8 @@ import type {
   NoteUpdateRequest,
   Offer,
   Outcome,
+  ParticipantRequest,
+  Person,
   ProbeReport,
   ProviderSummary,
   ReasoningStatus,
@@ -100,6 +102,7 @@ import type {
 // this stays below the wrappers as the module doc above requires.
 import type { OverlayPreferences } from "./ipc";
 import { FIXTURE_RECORDING_SECONDS, toneWav } from "./fixtureWav";
+import { emailKey, readParticipants } from "./people";
 import { summaryConfigured } from "./summaryConfigured";
 
 /* ------------------------------------------------------------- capabilities */
@@ -1471,6 +1474,61 @@ function fixtureNote(given: Pick<Note, "id" | "title" | "noteType" | "createdAt"
   };
 }
 
+/**
+ * People on the fixture notes (KNEG-362), answered as Rust's `notes_core::people` answers. An email
+ * is kept as `normalise_email` keeps it -- trimmed, ASCII lower-case, one `@` with something on
+ * both sides, no whitespace, at most 254 characters -- or `null` when it isn't one.
+ */
+function fixtureEmail(input: string): string | null {
+  const email = emailKey(input);
+  if ([...email].length > 254 || /\s/.test(email)) return null;
+  const [local, domain, ...rest] = email.split("@");
+  return local && domain && rest.length === 0 ? email : null;
+}
+
+/** As `people::tidy`, throwing its plain-word refusals. */
+function fixtureTidyParticipants(list: readonly ParticipantRequest[]): string | null {
+  const kept: { displayName?: string; email?: string }[] = [];
+  for (const entry of list) {
+    const displayName = (entry.displayName ?? "").trim();
+    const raw = (entry.email ?? "").trim();
+    const email = raw === "" ? "" : fixtureEmail(raw);
+    if (email === null) throw new Error(`'${raw}' isn't an email address.`);
+    if (displayName === "" && email === "") throw new Error("Each person needs an email address or a name.");
+    if (email !== "" && kept.some((person) => person.email === email)) continue;
+    if (kept.length === 200) throw new Error("A note can have at most 200 people.");
+    kept.push({ ...(displayName === "" ? {} : { displayName }), ...(email === "" ? {} : { email }) });
+  }
+  return kept.length === 0 ? null : JSON.stringify(kept);
+}
+
+/** As `people::people`: by email, the name from the newest note that has one, most notes first. */
+function fixturePeople(): Person[] {
+  const found = new Map<string, { name: string | null; notes: Set<number> }>();
+  const newestFirst = [...notes].sort((x, y) => (y.updatedAt ?? "").localeCompare(x.updatedAt ?? "") || y.id - x.id);
+  for (const note of newestFirst) {
+    for (const participant of readParticipants(note.participants)) {
+      if (participant.email === null) continue;
+      const email = emailKey(participant.email);
+      const person = found.get(email) ?? { name: null, notes: new Set<number>() };
+      person.name ??= participant.displayName;
+      person.notes.add(note.id);
+      found.set(email, person);
+    }
+  }
+  const people = [...found].map(([email, { name, notes: on }]) => ({ email, name, noteCount: on.size }));
+  // SQLite's order: `lower()` folds ASCII alone, and text compares code point by code point.
+  const order = (x: string, y: string) => (x < y ? -1 : x > y ? 1 : 0);
+  const label = (person: Person) => emailKey(person.name ?? person.email);
+  return people.sort((x, y) => y.noteCount - x.noteCount || order(label(x), label(y)) || order(x.email, y.email));
+}
+
+/** As `people::list_by_person`: the notes whose people include `email`, in any case. */
+function fixtureOnNote(note: Note, email: string): boolean {
+  const wanted = emailKey(email);
+  return readParticipants(note.participants).some((participant) => participant.email !== null && emailKey(participant.email) === wanted);
+}
+
 /** A stored segment as an import local Whisper timed word by word saves it (KNEG-408). */
 type StoredSegment = { text: string; timestamp: number; endTimestamp: number; words?: Word[] };
 
@@ -1846,8 +1904,17 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
   notes_list: (a) => {
     const noteType = arg<string | null>(a, "noteType");
     const folderId = arg<number | null>(a, "folderId");
+    const person = arg<string | null>(a, "person");
     const limit = arg<number | null>(a, "limit");
     let out = notes;
+    // As Rust's `list_notes`: a filter of its own, refused beside the others (KNEG-362).
+    if (typeof person === "string") {
+      if (!person.trim()) throw new Error("a person filter needs an email");
+      if (noteType || typeof folderId === "number") {
+        throw new Error("'person' is a filter of its own: send it without 'noteType' or 'folderId'");
+      }
+      out = out.filter((n) => fixtureOnNote(n, person));
+    }
     if (noteType) out = out.filter((n) => n.noteType === noteType);
     if (typeof folderId === "number") {
       out = out.filter((n) => n.folderId === folderId);
@@ -1974,6 +2041,15 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
     }).slice(0, 20);
   },
   folders_list: () => folders,
+  // KNEG-362. As Rust: checked and tidied, refused in plain words, and `updatedAt` left alone.
+  people_list: () => fixturePeople(),
+  notes_set_participants: (a) => {
+    const id = arg<number>(a, "id");
+    const participants = fixtureTidyParticipants(arg<ParticipantRequest[]>(a, "participants") ?? []);
+    if (!notes.some((n) => n.id === id)) return false;
+    notes = notes.map((n) => (n.id === id ? { ...n, participants } : n));
+    return true;
+  },
   notes_set_folder: (a) => {
     const id = arg<number>(a, "id");
     const folderId = arg<number | null>(a, "folderId") ?? null;

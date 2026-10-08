@@ -1111,6 +1111,32 @@ participants?: string | null, audioDurationSeconds?: number | null, };
 export type NoteUpdateRequest = { title?: string | null, content?: string | null, folderId?: number | null, };
 
 /**
+ * One of a note's people, as the renderer sends them: an email, a name, or
+ * both (KNEG-362). Checked and tidied by `people::set_participants`.
+ */
+export type ParticipantRequest = { email?: string | null, displayName?: string | null, };
+
+/**
+ * Someone named by email on at least one note: a row of the Notes panel's
+ * People list.
+ */
+export type Person = {
+/**
+ * Trimmed and lower-case, which is how a person is told apart, and what
+ * [`list_by_person`] is given to find their notes.
+ */
+email: string,
+/**
+ * The display name on the most recently updated note that gives one.
+ * `None` when no note names them.
+ */
+name: string | null,
+/**
+ * How many notes they are on.
+ */
+noteCount: number, };
+
+/**
  * Which format to emit.
  */
 export type Format = "txt" | "md" | "json" | "srt" | "vtt";

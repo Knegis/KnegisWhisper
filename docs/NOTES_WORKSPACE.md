@@ -69,7 +69,7 @@ Swedish recording has not been judged by ear yet (see Data compatibility for wha
 was measured).
 
 Under the title, the meta row gives the note's date, the recording's length, its
-participants and where its transcript was made (KNEG-368): "Transcribed on this
+people and where its transcript was made (KNEG-368): "Transcribed on this
 computer", or "Transcribed by" the provider or server that made it. A meeting
 whose saved transcript is the whole-recording pass was transcribed on this
 computer; when its live captions came from a provider off this computer, the line
@@ -77,6 +77,23 @@ adds "· live captions by" that provider. A meeting saved from its live captions
 a finished local stream, or the captions kept because the whole-recording pass
 failed -- names the live provider. Typed notes alone, notes saved before this was
 recorded, and OpenWhispr and shared-folder imports say nothing.
+
+A note's people (KNEG-362) are chips in its meta row, each with a button that removes
+them, and **Add person** takes an email and, if wanted, a name. A person is their email:
+it is trimmed and lower-cased, a second entry for one address is dropped, one that isn't
+an address is refused in plain words under the row with the form still open, and a note
+keeps at most 200. Imported notes come with theirs; nothing else fills them in yet (the
+calendar doing so is a follow-up). Saving people isn't editing the note, so it doesn't
+move it up the library. The library's **People** section, under Folders, lists everyone
+named by email on a note and how many notes they're on, by the name on the newest note
+that gives one; someone with a name and no email isn't listed. Pressing a person shows
+**Notes with** them in place of the folders, with **Show all notes** to come back. They are
+found among every note, not picked from the library's newest hundred, and listed as the
+library is, at most a hundred and the most recently edited first; past that, a line says
+how many of their notes are shown. Like the search, that is the panel's
+state: a note opened from it keeps it, and back and forward don't return to it. A note's
+people are part of what its summary was made from, so changing them marks a finished
+summary out of date and stops one being made ([meeting summaries](MEETING_SUMMARIES.md)).
 
 Title, personal notes and summaries flush before tab changes, note changes and
 native window closure. A failed save retains the draft and prevents those transitions;
@@ -173,8 +190,15 @@ live view of a meeting started that way. Discard always deletes the recording.
   word: a synthetic hour of 9,000 words is 169 KB without them and 589 KB with
   (`an_hour_of_words_is_measured` in `transcript.rs`). Media import's own answer to
   the screen (`MediaImportResult.segments`) carries no words.
-- No new renderer command or user-editable transcript API was added. Existing note
-  exports and separate summary exports retain their behavior.
+- `notes.participants` keeps its shape, a JSON array of `{displayName, email}` read
+  leniently, and needed no migration (KNEG-362). `notes_set_participants` writes it
+  whole, each entry as `{displayName?, email?}` alone, so any other key an import put
+  on an entry is dropped the first time that note's people are edited, and a value that
+  isn't a JSON array -- shown as no people -- is replaced. `people_list` and
+  `notes_list`'s `person` (an email) read it; the local API, CLI and MCP return it as
+  before and have no people filter.
+- No user-editable transcript API was added. Existing note exports and separate summary
+  exports retain their behavior.
 
 ## Verification
 

@@ -9,6 +9,7 @@ import { hasStoredTranscript, noteMeta } from "../lib/noteMeta";
 import { message } from "../lib/useRefresh";
 import { Icon } from "./Icon";
 import { NoteEditor } from "./NoteEditor";
+import { NotePeople } from "./NotePeople";
 import { SummaryPane, type SummaryPaneHandle } from "./SummaryPane";
 import { RecordingPlayer, type PlayerPosition, type RecordingPlayerHandle } from "./RecordingPlayer";
 import { TranscriptPanel } from "./TranscriptPanel";
@@ -445,7 +446,7 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
     autosave.schedule({ content });
   };
 
-  const { date, minutes, participants, transcribed } = noteMeta(note, []);
+  const { date, minutes, transcribed } = noteMeta(note, []);
   const recordingDetails = note.recordingDetails && <details className="recording-details" open><summary>Recording details</summary><p>{note.recordingDetails}</p></details>;
   const transcriptBody = transcriptError ? <p className="error" role="alert">{transcriptError} <button type="button" onClick={() => { void loadTranscript(); }}>Retry</button></p> : !transcript ? <p role="status">Loading transcript and recording…</p> : transcript.rows.length ?
     <TranscriptPanel sourceRequest={sourceRequest} onSourceShown={clearSource} rows={transcript.rows}
@@ -471,14 +472,15 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
             const value = event.target.value; draft.current.title = value; setTitle(value);
             autosave.schedule({ title: value.trim() || "Untitled note", content: draft.current.content });
           }} onBlur={normalizeTitle} />
-          {date !== null || minutes !== null || participants.length > 0 || transcribed !== null ? <ul className="note-meta">
+          {/* Always drawn: the people item is always there, so a note with nobody on it can be given someone (KNEG-362). */}
+          <ul className="note-meta">
             {date === null ? null : <li><Icon name="calendar" size={15} />{date.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}, {timeOfDay(date)}</li>}
             {/* At least a minute, as the Meetings list rounds it: a 20-second recording is not "0 min". */}
             {minutes === null ? null : <li><Icon name="clock" size={15} />{Math.max(1, minutes)} min</li>}
-            {participants.length === 0 ? null : <li><Icon name="meetings" size={15} /><span className="sr-only">Participants: </span>{participants.join(", ")}</li>}
+            <NotePeople noteId={note.id} participants={note.participants} onSaved={reload} />
             {/* Where the transcript was made (KNEG-368). Notes saved before it was recorded say nothing. */}
             {transcribed === null ? null : <li><Icon name="computer" size={15} />{transcribed}</li>}
-          </ul> : null}
+          </ul>
         </header>
         <div className="note-controls">
           <div className="summary-tabs note-tabs" role="tablist" aria-label="Note view">

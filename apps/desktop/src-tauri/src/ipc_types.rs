@@ -205,6 +205,8 @@ fn render() -> String {
             kw_notes_core::notes::SearchHitRow,
             crate::commands::NewNoteRequest,
             crate::commands::NoteUpdateRequest,
+            crate::commands::ParticipantRequest,
+            kw_notes_core::people::Person,
             kw_notes_core::transcript::Format,
             crate::commands::ExportedTranscript,
             kw_notes_core::transcript::Word,

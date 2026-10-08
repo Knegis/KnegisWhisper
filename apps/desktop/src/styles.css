@@ -2501,6 +2501,13 @@ button.notes-folder-toggle:hover:not(:disabled) { background: var(--panel-hover)
 .notes-folder-notes > .panel-item { padding-left: 45px; }
 .notes-folder-empty { margin: 0; padding: 5px 10px 5px 45px; font-size: 12.5px; line-height: 18px; color: var(--muted); }
 .notes-hit .panel-item-meta { overflow-wrap: anywhere; }
+/* A person in the library's People list (KNEG-362): a folder's row -- icon, name, count -- that
+ * narrows the library while pressed, filled as a current row is. */
+button.notes-person { display: flex; align-items: center; gap: 7px; width: 100%; height: 32px; margin: 0; padding: 0 10px 0 12px; border-radius: 2px; text-align: left; font-size: 14px; line-height: 20px; }
+button.notes-person:hover:not(:disabled) { background: var(--panel-hover); }
+button.notes-person[aria-pressed="true"], button.notes-person[aria-pressed="true"]:hover:not(:disabled) { background: var(--selected); }
+.notes-person > .icon:first-child { color: var(--muted); }
+.notes-person-name { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 /* Filing by drag: the note in the air fades, the group under the pointer gets the site blue as
  * an outline, and a "No folder" strip appears below the folders while a filed note is being
  * dragged, so taking a note out of a folder has somewhere to land even when nothing is unfiled.
@@ -2576,6 +2583,28 @@ button.note-action-button { flex: none; display: flex; align-items: center; just
 .note-page > .save-status.error { margin: 0 0 12px; }
 .note-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 18px; margin: 12px 0 0; padding: 0; list-style: none; font-size: 13.5px; line-height: 20px; color: var(--muted); }
 .note-meta li { display: flex; align-items: center; gap: 6px; min-width: 0; }
+/*
+ * A note's people (`components/NotePeople.tsx`, KNEG-362): one item of the
+ * meta row, each person a chip in `--text` with a small remove button, then
+ * Add person. The chips wrap within the item, and while the form or a refusal
+ * is showing the item takes the row's whole width, so they sit on lines of
+ * their own under the chips rather than squeezed beside them.
+ */
+.note-meta li.note-people { flex-wrap: wrap; row-gap: 6px; }
+.note-meta li.note-people[data-open], .note-meta li.note-people[data-error] { flex-basis: 100%; }
+.note-people-list { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; margin: 0; padding: 0; list-style: none; }
+.note-meta li.note-person { gap: 0; height: 24px; padding: 0 0 0 8px; border: 1px solid var(--rule); border-radius: 2px; color: var(--text); }
+.note-person-name { min-width: 0; max-width: 240px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+button.note-person-remove { display: flex; align-items: center; justify-content: center; width: 22px; height: 22px; margin: 0; padding: 0; color: var(--muted); }
+button.note-person-remove:hover:not(:disabled) { color: var(--text); }
+button.note-people-add { display: inline-flex; align-items: center; gap: 4px; height: 24px; margin: 0; padding: 0 6px; color: var(--muted); font-size: 13px; }
+button.note-people-add:hover:not(:disabled), button.note-people-add[aria-expanded="true"] { color: var(--text); }
+.note-people-form { flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; }
+.note-people-form label { display: flex; flex-direction: column; gap: 2px; flex: 1 1 12rem; min-width: 0; max-width: 18rem; font-size: 12.5px; }
+.note-people-form input { width: 100%; min-width: 0; height: 32px; }
+.note-people-form-actions { display: flex; gap: 4px; }
+.note-people-form button { height: 32px; margin: 0; padding: 0 12px; }
+.note-people-error { flex-basis: 100%; margin: 0; overflow-wrap: anywhere; }
 /*
  * The note's tabs: the open one underlined in `--band` over a rule the width
  * of the page. The underline is a rule, so it is square. Scoped to

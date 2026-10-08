@@ -88,6 +88,51 @@ mod speaker_tests {
     }
 }
 
+/// The participants the prompt names as spelling help: their display names,
+/// comma-separated, and never an email address (KNEG-362's ruling; this was
+/// the first 256 characters of the stored JSON, addresses and all). Bounded at
+/// 256 characters, as before, so supplementary context never truncates
+/// transcript evidence.
+fn participant_hint(participants: Option<&str>) -> String {
+    kw_notes_core::people::display_names(participants)
+        .join(", ")
+        .chars()
+        .take(256)
+        .collect()
+}
+
+#[cfg(test)]
+mod hint_tests {
+    use super::*;
+
+    /// KNEG-362's ruling: the summary model is told who was there by name,
+    /// and is never sent an address.
+    #[test]
+    fn the_participant_hint_names_people_and_sends_no_address() {
+        let hint = participant_hint(Some(
+            r#"[{"displayName":"Anna Lindqvist","email":"anna@example.com"},{"email":"jonas@nordbank.example"},{"displayName":"Ravi Menon","email":"ravi@example.com"}]"#,
+        ));
+        assert_eq!(hint, "Anna Lindqvist, Ravi Menon");
+        assert!(!hint.contains('@'), "{hint}");
+        assert_eq!(participant_hint(None), "");
+        assert_eq!(participant_hint(Some("not json")), "");
+    }
+
+    #[test]
+    fn the_participant_hint_is_capped_as_before() {
+        let crowd: Vec<serde_json::Value> = (0..100)
+            .map(|i| json!({ "displayName": format!("Person number {i}") }))
+            .collect();
+        let stored = serde_json::to_string(&crowd).unwrap_or_default();
+        let hint = participant_hint(Some(&stored));
+        assert_eq!(hint.chars().count(), 256);
+        assert!(
+            hint.starts_with("Person number 0, Person number 1, "),
+            "{hint}"
+        );
+    }
+}
+
 fn route(settings: &SummarySettings) -> Result<ChatRoute, String> {
     settings.validate()?;
     kw_reasoning_core::resolve_chat(
@@ -298,9 +343,7 @@ async fn generate(
     } else {
         settings.context_budget
     };
-    let participants = job.source_participants.as_deref().unwrap_or("[]");
-    // Bound supplementary spelling context without truncating transcript evidence.
-    let names: String = participants.chars().take(256).collect();
+    let names = participant_hint(job.source_participants.as_deref());
     let budget = (context as usize).saturating_sub(PROMPT.len() + names.len() + 2048 + 512);
     if budget < 1200 {
         return Err(

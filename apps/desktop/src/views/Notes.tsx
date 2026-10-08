@@ -26,6 +26,15 @@
  * Two states that look alike and are not: `hits === null` means nobody has
  * searched, and `hits === []` means somebody searched and nothing matched.
  * Collapsing them would show the full note list as though it were the result.
+ *
+ * People, under Folders, lists everyone named by email on a note and how many
+ * notes each is on (KNEG-362). Pressing one shows "Notes with" them in place
+ * of the tree, fetched from Rust, as search hits replace it, with Show all
+ * notes to come back -- the hundred most recently edited, as the library's own
+ * list is, and a line saying so when they are on more. Like the search it is
+ * the panel's state, not a place:
+ * opening a note from the list keeps it, and back and forward never return to
+ * it. A search typed meanwhile shows its hits over it.
  */
 
 import {
@@ -57,6 +66,7 @@ import {
   getFolders,
   getNotes,
   getNote,
+  getPeople,
   searchNotes,
   setNoteFolder,
   getNoteRecording,
@@ -68,6 +78,7 @@ import {
 import { parseStoredTime } from "../lib/dayGroups";
 import { recentMeta } from "../lib/meetingView";
 import { groupNotesByFolder } from "../lib/noteGroups";
+import { noteCount, personLabel } from "../lib/people";
 import { hitMeta } from "../lib/searchHit";
 import { carriesNote, draggedNoteId, folderChange, NOTE_DRAG_TYPE } from "../lib/noteDrag";
 import { useRefresh } from "../lib/useRefresh";
@@ -86,6 +97,9 @@ function noteDate(value: string | null) {
  * not found on the way back, and the most recently edited one opens instead.
  */
 let lastOpenNoteId: number | null = null;
+
+/** The most notes "Notes with" a person lists: as many as the library's own list, `notes_list`'s default. */
+const PERSON_NOTES = 100;
 
 /**
  * The right-click menu's target: a note, or a folder heading. `fromButton` when the open note's
@@ -154,11 +168,28 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
   }, []);
 
   const load = useCallback(async () => {
-    const [notes, folders] = await Promise.all([getNotes(), getFolders()]);
-    return { notes, folders };
+    const [notes, folders, people] = await Promise.all([getNotes(), getFolders(), getPeople()]);
+    return { notes, folders, people };
   }, []);
 
   const { data, error, guard, reload, fail } = useRefresh(load);
+
+  // The person the library is narrowed to (KNEG-362), by email, and their notes as Rust lists them:
+  // found among every note rather than picked from the library's newest hundred, and, as the
+  // library's own list is, at most a hundred, the most recently edited first -- each comes with its
+  // whole transcript. Panel state, as the search is: a note opened from the list keeps it, and
+  // navigation never comes back to it. Read again on every reload, so a person added to or removed
+  // from a note shows here at once.
+  const [personEmail, setPersonEmail] = useState<string | null>(null);
+  const [personNotes, setPersonNotes] = useState<{ email: string; notes: Note[] } | null>(null);
+  const personGeneration = useRef(0);
+  useEffect(() => {
+    const generation = ++personGeneration.current;
+    if (personEmail === null) { setPersonNotes(null); return; }
+    void getNotes({ person: personEmail, limit: PERSON_NOTES })
+      .then(found => { if (generation === personGeneration.current) setPersonNotes({ email: personEmail, notes: found }); })
+      .catch(fail);
+  }, [personEmail, data, fail]);
 
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<SearchHit[] | null>(null);
@@ -305,9 +336,14 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
     );
   }
 
-  const { notes, folders } = data;
+  const { notes, folders, people } = data;
   const openNote = notes.find((note) => note.id === openNoteId) ?? (requestedNote?.id === openNoteId ? requestedNote : null);
   const groups = groupNotesByFolder(notes, folders);
+  // The person the library is narrowed to, by the name the People list gives them -- their email
+  // once no note names them any more.
+  const person = personEmail === null ? null : (people.find((item) => item.email === personEmail) ?? null);
+  const personName = person !== null ? personLabel(person) : (personEmail ?? "");
+  const personList = personEmail !== null && personNotes?.email === personEmail ? personNotes.notes : null;
   const now = new Date();
   const renderEntry = (note: Note) => {
     // The Meetings list's meta line, "26 Aug · 31 min", so a meeting reads the same in both panels.
@@ -326,6 +362,47 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
         aria-haspopup="dialog" />
     );
   };
+
+  // Everyone named by email on a note, with how many notes they are on (KNEG-362). Pressing one
+  // narrows the library to their notes; pressing it again, or Show all notes, brings the tree back.
+  const peopleSection = people.length === 0 ? (
+    <div className="panel-section">
+      <h2 className="panel-label">People</h2>
+      <p className="panel-note">No people yet. Add someone to a note, under its title.</p>
+    </div>
+  ) : (
+    <PanelSection label="People">
+      {people.map((item) => {
+        const pressed = personEmail === item.email;
+        return (
+          <button key={item.email} type="button" className="notes-person" aria-pressed={pressed}
+            // The address behind a name, and the whole of either when the row cuts it off.
+            title={item.name === null ? item.email : `${item.name}\n${item.email}`}
+            onClick={() => setPersonEmail(pressed ? null : item.email)}>
+            <Icon name="meetings" size={16} />
+            <span className="notes-person-name">{personLabel(item)}</span>
+            <span className="notes-folder-count"><span aria-hidden="true">{item.noteCount}</span><span className="sr-only">, {noteCount(item.noteCount)}</span></span>
+          </button>
+        );
+      })}
+    </PanelSection>
+  );
+  // In place of the tree while a person is pressed, as search hits are: their notes, fetched from
+  // Rust, and the way back.
+  const personSection = (
+    <>
+      <PanelSection label={`Notes with ${personName}`}>
+        <PanelAction icon="back" label="Show all notes" onClick={() => setPersonEmail(null)} />
+        {personList?.map(renderEntry)}
+      </PanelSection>
+      {personList === null ? <p className="panel-note" role="status">Loading…</p>
+        : personList.length === 0 ? <p className="panel-note">{`No notes with ${personName}.`}</p>
+        // The count beside their name is every note they are on; the list stops at a hundred. Only
+        // at the cap: just after a reload the count can be a step ahead of a list being read again.
+        : personList.length >= PERSON_NOTES && person !== null && person.noteCount > personList.length ? <p className="panel-note">{`Showing the ${personList.length} most recently edited of ${person.noteCount} notes.`}</p>
+        : null}
+    </>
+  );
 
   const panel = (
     <>
@@ -359,7 +436,12 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
           </PanelSection>
         )}
 
-        {hits !== null ? null : (
+        {hits !== null ? null : personEmail !== null ? (
+          <>
+            {personSection}
+            {peopleSection}
+          </>
+        ) : (
           <>
             <div className="panel-section">
               <div className="notes-folders-head">
@@ -414,6 +496,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
                 </div>
               )}
             </div>
+            {peopleSection}
             {groups.unfiled.length > 0 && <PanelSection label="Not in a folder">{groups.unfiled.map(renderEntry)}</PanelSection>}
           </>
         )}
@@ -524,7 +607,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
           void guard(async () => { await deleteFolder(folder.id); });
         }}>Delete folder</button></>}
       </div>, document.body)}
-      <FolderSharing folder={shareFolder} trigger={shareTrigger.current} importRequest={shareImportRequest} close={() => setShareFolder(null)} flush={async () => { await workspaceRef.current?.flush(); }} imported={async folderId => { await workspaceRef.current?.flush(); await reload(); reveal(folderId); setQuery(""); setHits(null); const notes = await getNotes({ folderId, limit: 1 }); if (notes[0]) await selectNote(notes[0].id); }} />
+      <FolderSharing folder={shareFolder} trigger={shareTrigger.current} importRequest={shareImportRequest} close={() => setShareFolder(null)} flush={async () => { await workspaceRef.current?.flush(); }} imported={async folderId => { await workspaceRef.current?.flush(); await reload(); reveal(folderId); setQuery(""); setHits(null); setPersonEmail(null); const notes = await getNotes({ folderId, limit: 1 }); if (notes[0]) await selectNote(notes[0].id); }} />
     </SplitView>
   );
 }

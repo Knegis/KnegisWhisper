@@ -20,7 +20,15 @@ that a model's claim is correct. Generated Markdown is escaped before rendering.
 Summary edits autosave independently. Regeneration asks before replacing edited or
 imported summaries and keeps the old content until successful. Copy, Export Markdown
 and Export text apply to the summary. Transcript changes mark a summary outdated and
-disable its old source links. Imported legacy summaries remain editable.
+disable its old source links, and so do changes to the note's people, which can be
+edited since KNEG-362. A summary queued or being made when the people change is
+stopped, with "Generation stopped because the note, summary or job changed." under
+Retry summary; the retry starts over, since its saved progress was for the old people.
+Imported legacy summaries remain editable.
+
+The model is told the note's people as spelling help: their display names,
+comma-separated and at most 256 characters, and never an email address (KNEG-362). A
+name holding an `@` is taken for an address and left out.
 
 ## Implementation
 

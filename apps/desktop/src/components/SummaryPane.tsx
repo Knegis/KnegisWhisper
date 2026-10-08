@@ -79,7 +79,8 @@ export const SummaryPane = forwardRef<SummaryPaneHandle, { noteId: number; visib
       </>}
     </div>
     <p role="status" className="muted">{!state ? "Loading summary…" : busy ? state.status === "queued" ? "Summary queued" : `Generating summary · ${state.completed} steps completed` : state.edited ? "Edited summary · source links are navigation aids" : state.legacy ? "Imported summary · source references unavailable" : state.content ? `AI summary · ${state.language ?? "language unknown"}${state.model ? ` · by ${summaryModelName(state.model)}` : ""}` : "Summaries use your saved transcript. Configure the model in Settings > Cleanup & summaries."}</p>
-    {state?.outdated && <p className="warn">The transcript changed. Regenerate this summary to refresh its source links.</p>}
+    {/* The people are part of what a summary was made from, and since KNEG-362 they can change after it. */}
+    {state?.outdated && <p className="warn">The transcript or the people changed since this summary was made. Regenerate it to update it and its source links.</p>}
     {(error || state?.error) && <p className="error" role="alert">{error ?? state?.error}</p>}
     {notice && <p role="status">{notice}</p>}
     {autosave.status === "failed" && <p className="error" role="alert">Couldn’t save summary: {autosave.error} <button type="button" onClick={() => { void autosave.retry().catch(() => undefined); }}>Retry save</button></p>}

@@ -14,7 +14,8 @@ use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 
 use kw_notes_core::{
-    notes, recordings as note_recordings, speakers, transcript, NoteRecording, TranscriptRow,
+    notes, people, recordings as note_recordings, speakers, transcript, NoteRecording,
+    TranscriptRow,
 };
 use kw_platform::hotkey::{self, Binding, HotkeyAction, HotkeyMode};
 use kw_provider_probe::{ProbeAudio, ProbeReport};
@@ -1182,6 +1183,16 @@ impl NoteUpdateRequest {
     }
 }
 
+/// One of a note's people, as the renderer sends them: an email, a name, or
+/// both (KNEG-362). Checked and tidied by `people::set_participants`.
+#[derive(Debug, Clone, Default, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(optional_fields = nullable)]
+pub struct ParticipantRequest {
+    pub email: Option<String>,
+    pub display_name: Option<String>,
+}
+
 /// Notes, most recently updated first.
 ///
 /// There is no cursor, and that is not an omission. Notes are ordered by
@@ -1189,19 +1200,96 @@ impl NoteUpdateRequest {
 /// The local API refuses a cursor here explicitly for the same reason
 /// (`crates/local-api/src/server.rs:219`), and `notes::list` records the
 /// reasoning at `crates/notes-core/src/notes.rs:104`.
+///
+/// `person` is an email: the notes that person is on, for the Notes panel's
+/// People list (KNEG-362). It is a filter of its own, not one more clause
+/// beside the type and the folder, so it is refused alongside either rather
+/// than one of them being dropped in silence.
 #[tauri::command]
 pub async fn notes_list(
     state: State<'_, AppState>,
     note_type: Option<String>,
     folder_id: Option<i64>,
+    person: Option<String>,
+    limit: Option<i64>,
+) -> CmdResult<Vec<notes::Note>> {
+    list_notes(&state, note_type, folder_id, person, limit).await
+}
+
+/// `notes_list`'s work, apart from Tauri's `State` so a test can run it.
+async fn list_notes(
+    state: &AppState,
+    note_type: Option<String>,
+    folder_id: Option<i64>,
+    person: Option<String>,
     limit: Option<i64>,
 ) -> CmdResult<Vec<notes::Note>> {
     let folder_id = positive_id(folder_id, "folderId")?;
     let limit = notes_limit(limit)?;
 
+    if let Some(email) = person {
+        if email.trim().is_empty() {
+            return Err("a person filter needs an email".to_owned());
+        }
+        if note_type.is_some() || folder_id.is_some() {
+            return Err(
+                "'person' is a filter of its own: send it without 'noteType' or 'folderId'"
+                    .to_owned(),
+            );
+        }
+        return people::list_by_person(state.db().pool(), &email, limit)
+            .await
+            .map_err(|e| fail("could not list the person's notes", e));
+    }
+
     notes::list(state.db().pool(), note_type.as_deref(), folder_id, limit)
         .await
         .map_err(|e| fail("could not list notes", e))
+}
+
+/// Everyone named by email on a note, with how many notes each is on, for
+/// the Notes panel's People list (KNEG-362).
+#[tauri::command]
+pub async fn people_list(state: State<'_, AppState>) -> CmdResult<Vec<people::Person>> {
+    people::people(state.db().pool())
+        .await
+        .map_err(|e| fail("could not list people", e))
+}
+
+/// Replace a note's people. Returns whether the note existed. What the
+/// person typed wrong -- an email that isn't one -- comes back in plain words,
+/// to be shown as it is.
+#[tauri::command]
+pub async fn notes_set_participants(
+    state: State<'_, AppState>,
+    id: i64,
+    participants: Vec<ParticipantRequest>,
+) -> CmdResult<bool> {
+    save_participants(&state, id, participants).await
+}
+
+/// `notes_set_participants`' work, apart from Tauri's `State`.
+async fn save_participants(
+    state: &AppState,
+    id: i64,
+    participants: Vec<ParticipantRequest>,
+) -> CmdResult<bool> {
+    let list: Vec<people::Participant> = participants
+        .into_iter()
+        .map(|request| people::Participant {
+            display_name: request.display_name,
+            email: request.email,
+        })
+        .collect();
+    people::set_participants(state.db().pool(), id, &list)
+        .await
+        .map_err(|error| match error {
+            refused @ (people::PeopleError::NotAnEmail(_)
+            | people::PeopleError::Unnamed
+            | people::PeopleError::TooMany) => refused.to_string(),
+            people::PeopleError::Storage(e) => fail("could not save the note's people", e),
+            people::PeopleError::Encode(e) => fail("could not save the note's people", e),
+        })
 }
 
 /// Full-text search across notes.
@@ -2219,6 +2307,161 @@ mod tests {
 
         assert!(notes::delete(s.db().pool(), id).await.unwrap());
         assert!(notes::get(s.db().pool(), id).await.unwrap().is_none());
+    }
+
+    /* ------------------------------------------------------------- people */
+
+    fn participant(name: Option<&str>, email: Option<&str>) -> ParticipantRequest {
+        ParticipantRequest {
+            display_name: name.map(str::to_owned),
+            email: email.map(str::to_owned),
+        }
+    }
+
+    /// KNEG-362. What a person typed wrong comes back as a sentence the
+    /// screen can show as it is, and nothing is saved.
+    #[tokio::test]
+    async fn a_note_s_people_are_refused_in_plain_words() {
+        let s = state().await;
+        let id = notes::create(
+            s.db().pool(),
+            &notes::NewNote {
+                title: "Kickoff".to_owned(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let refused = save_participants(&s, id, vec![participant(Some("Anna"), Some("anna@"))])
+            .await
+            .unwrap_err();
+        assert_eq!(refused, "'anna@' isn't an email address.");
+
+        let refused = save_participants(&s, id, vec![participant(None, None)])
+            .await
+            .unwrap_err();
+        assert_eq!(refused, "Each person needs an email address or a name.");
+
+        let crowd = (0..=people::MAX_PARTICIPANTS)
+            .map(|i| participant(None, Some(&format!("p{i}@example.com"))))
+            .collect();
+        let refused = save_participants(&s, id, crowd).await.unwrap_err();
+        assert_eq!(refused, "A note can have at most 200 people.");
+
+        assert_eq!(
+            notes::get(s.db().pool(), id)
+                .await
+                .unwrap()
+                .unwrap()
+                .participants,
+            None,
+            "a refused list saves nothing"
+        );
+
+        assert!(save_participants(
+            &s,
+            id,
+            vec![participant(
+                Some("Anna Lindqvist"),
+                Some("Anna@Example.com")
+            )]
+        )
+        .await
+        .unwrap());
+        assert_eq!(
+            notes::get(s.db().pool(), id)
+                .await
+                .unwrap()
+                .unwrap()
+                .participants
+                .as_deref(),
+            Some(r#"[{"displayName":"Anna Lindqvist","email":"anna@example.com"}]"#)
+        );
+        assert!(!save_participants(&s, id + 100, Vec::new()).await.unwrap());
+    }
+
+    #[test]
+    fn a_participant_with_a_mistyped_field_is_refused_rather_than_ignored() {
+        // `name` is not `displayName`: without deny_unknown_fields the person
+        // would be saved with no name and the typed one dropped.
+        let err = serde_json::from_value::<ParticipantRequest>(serde_json::json!({
+            "email": "anna@example.com",
+            "name": "Anna"
+        }))
+        .unwrap_err();
+        assert!(err.to_string().contains("name"), "{err}");
+    }
+
+    #[test]
+    fn a_person_crosses_the_boundary_in_camel_case() {
+        let json = serde_json::to_value(people::Person {
+            email: "anna@example.com".to_owned(),
+            name: Some("Anna".to_owned()),
+            note_count: 2,
+        })
+        .unwrap();
+        let mut keys: Vec<&str> = json
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["email", "name", "noteCount"]);
+    }
+
+    #[tokio::test]
+    async fn the_notes_list_can_be_the_notes_one_person_is_on() {
+        let s = state().await;
+        let pool = s.db().pool();
+        let with_anna = notes::create(
+            pool,
+            &notes::NewNote {
+                title: "With Anna".to_owned(),
+                participants: Some(r#"[{"email":"anna@example.com"}]"#.to_owned()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        notes::create(
+            pool,
+            &notes::NewNote {
+                title: "Without".to_owned(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let listed = list_notes(&s, None, None, Some("Anna@Example.com".to_owned()), None)
+            .await
+            .unwrap();
+        assert_eq!(listed.iter().map(|n| n.id).collect::<Vec<_>>(), [with_anna]);
+        assert_eq!(
+            list_notes(&s, None, None, None, None).await.unwrap().len(),
+            2
+        );
+
+        // A filter of its own: never one clause silently dropped for another.
+        assert!(
+            list_notes(&s, None, Some(1), Some("anna@example.com".into()), None)
+                .await
+                .is_err()
+        );
+        assert!(list_notes(
+            &s,
+            Some("meeting".into()),
+            None,
+            Some("anna@example.com".into()),
+            None
+        )
+        .await
+        .is_err());
+        assert!(list_notes(&s, None, None, Some("  ".into()), None)
+            .await
+            .is_err());
     }
 
     #[tokio::test]

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { hasStoredTranscript, noteMeta, parseParticipants, transcribedLine } from "../src/lib/noteMeta.js";
+import { hasStoredTranscript, noteMeta, transcribedLine } from "../src/lib/noteMeta.js";
 import { parseStoredTime } from "../src/lib/dayGroups.js";
 import type { Folder, Note } from "../src/generated/ipc-types.js";
 
@@ -21,19 +21,7 @@ const folders: Folder[] = [
   { id: 3, name: "Internal", isDefault: false, sortOrder: 2 },
 ];
 
-test("participants are their display names, in stored order", () => {
-  assert.deepEqual(parseParticipants(FIXTURE_101), ["Anna Lindqvist", "Ravi Menon"]);
-});
-
-test("no participants, or participants that will not parse, are none", () => {
-  assert.deepEqual(parseParticipants(null), []);
-  assert.deepEqual(parseParticipants("not json"), []);
-});
-
-test("a participant with only an email is shown by the email", () => {
-  assert.deepEqual(parseParticipants(JSON.stringify([{ email: "jonas@nordbank.example" }])), ["jonas@nordbank.example"]);
-  assert.deepEqual(parseParticipants(JSON.stringify([{ displayName: null, email: "jonas@nordbank.example" }])), ["jonas@nordbank.example"]);
-});
+// A note's people are read by `lib/people.ts` (KNEG-362), and tested in `people.test.ts`.
 
 test("the folder is named by the note's folderId, and no folder is null", () => {
   assert.equal(noteMeta(note(), folders).folder, "Internal");
@@ -51,11 +39,6 @@ test("the duration is whole minutes, rounded", () => {
 test("the date is the stored creation time, read as parseStoredTime reads it", () => {
   assert.deepEqual(noteMeta(note(), folders).date, parseStoredTime("2026-08-26T09:00:00Z"));
   assert.equal(noteMeta(note({ createdAt: null }), folders).date, null);
-});
-
-test("participants come through noteMeta too", () => {
-  assert.deepEqual(noteMeta(note(), folders).participants, ["Anna Lindqvist", "Ravi Menon"]);
-  assert.deepEqual(noteMeta(note({ participants: null }), folders).participants, []);
 });
 
 // As Rust's `TranscribedBy` serialises it (`crates/notes-core/src/notes.rs`).

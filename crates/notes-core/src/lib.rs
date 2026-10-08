@@ -9,9 +9,12 @@
 //! [`notes`] is CRUD plus full-text search, and its one subtlety is that user
 //! search text is escaped into FTS5 query syntax rather than passed through.
 //! Users type prose; FTS5 reads expressions.
+//!
+//! [`people`] is who a note was with, told apart by email (KNEG-362).
 
 pub mod document;
 pub mod notes;
+pub mod people;
 pub mod recordings;
 pub mod sharing;
 pub mod speakers;

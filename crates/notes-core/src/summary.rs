@@ -496,6 +496,43 @@ mod tests {
             .await
             .is_err());
     }
+    /// KNEG-362. A note's people are part of what its summary is made from,
+    /// and since they became editable they can change after it: a job queued
+    /// or running when they change is stopped rather than finished from the
+    /// old people, and a finished summary is marked out of date.
+    #[tokio::test]
+    async fn changing_a_note_s_people_stops_its_summary_and_outdates_a_finished_one() {
+        let (db, settings, id) = fixture(true).await;
+        let anna = [crate::people::Participant {
+            display_name: Some("Anna".into()),
+            email: Some("anna@example.com".into()),
+        }];
+        crate::people::set_participants(db.pool(), id, &anna)
+            .await
+            .unwrap();
+        let queued_before = claim(db.pool()).await.unwrap().unwrap();
+        assert!(!active(db.pool(), &queued_before).await.unwrap());
+        assert!(finish(db.pool(), &queued_before, "Late", &[], "en")
+            .await
+            .is_err());
+        fail(db.pool(), &queued_before, "stopped").await.unwrap();
+
+        enqueue(db.pool(), id, &settings, 0, false, true)
+            .await
+            .unwrap();
+        let job = claim(db.pool()).await.unwrap().unwrap();
+        assert!(active(db.pool(), &job).await.unwrap());
+        finish(db.pool(), &job, "Generated", &[], "en")
+            .await
+            .unwrap();
+        assert!(!state(db.pool(), id).await.unwrap().outdated);
+
+        crate::people::set_participants(db.pool(), id, &[])
+            .await
+            .unwrap();
+        assert!(state(db.pool(), id).await.unwrap().outdated);
+    }
+
     #[tokio::test]
     async fn summaries_are_searchable_and_deleted_with_notes() {
         let (db, _, id) = fixture(true).await;

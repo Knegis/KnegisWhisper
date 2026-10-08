@@ -740,6 +740,52 @@ export function notesFolders() {
 }
 
 /**
+ * People (KNEG-362). The open note's people item in its meta row: each
+ * chip's name and its remove button's label, whether Add person's form is
+ * open, the refusal shown under it, and the item's right edge. The library's
+ * People list: each person's name, count and whether pressed. And the
+ * panel's section headings, the notes under a "Notes with" one with its
+ * actions, and how many folder groups are drawn.
+ */
+export function peopleState() {
+  return source(`
+    const text = (item) => item.textContent.trim();
+    const item = document.querySelector('.note-detail .note-meta > li.note-people');
+    const panel = document.querySelector('.list-panel');
+    const sections = panel ? [...panel.querySelectorAll('.panel-section')] : [];
+    const label = (section) => section.querySelector('.panel-label')?.textContent.trim() ?? null;
+    const filtered = sections.find((section) => (label(section) ?? '').startsWith('Notes with '));
+    const box = item?.getBoundingClientRect() ?? null;
+    return {
+      note: item ? {
+        chips: [...item.querySelectorAll('.note-person')].map((chip) => ({
+          name: chip.querySelector('.note-person-name')?.textContent.trim() ?? null,
+          remove: chip.querySelector('button')?.getAttribute('aria-label') ?? null,
+        })),
+        formOpen: Boolean(item.querySelector('form')),
+        email: item.querySelector('form input[type="email"]')?.value ?? null,
+        error: item.querySelector('[role="alert"]')?.textContent.trim() ?? null,
+        right: box ? Math.round(box.right) : null,
+      } : null,
+      people: [...(panel?.querySelectorAll('button.notes-person') ?? [])].map((row) => ({
+        name: row.querySelector('.notes-person-name')?.textContent.trim() ?? null,
+        count: Number(row.querySelector('.notes-folder-count [aria-hidden]')?.textContent ?? 'NaN'),
+        pressed: row.getAttribute('aria-pressed') === 'true',
+      })),
+      sections: sections.map(label),
+      filtered: filtered ? {
+        label: label(filtered),
+        titles: [...filtered.querySelectorAll('.notes-entry-title')].map(text),
+        actions: [...filtered.querySelectorAll('.panel-action')].map(text),
+      } : null,
+      folders: panel ? panel.querySelectorAll('.notes-folder').length : 0,
+      innerWidth,
+      scrollWidth: document.scrollingElement.scrollWidth,
+    };
+  `);
+}
+
+/**
  * The first chip whose name -- its aria-label, or its text where it has none --
  * starts with `prefix`, as a DOM expression for the other snippets to build on.
  */

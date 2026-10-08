@@ -115,6 +115,8 @@ import type {
   Offer,
   Outcome,
   OverlayStatus,
+  ParticipantRequest,
+  Person,
   ProbeKind,
   ProbeOutcome,
   ProbeReport,
@@ -236,6 +238,8 @@ export type {
   NoteRecording,
   Offer,
   OverlayStatus,
+  ParticipantRequest,
+  Person,
   ProbeKind,
   ProbeOutcome,
   ProbeReport,
@@ -767,13 +771,36 @@ export async function setKeepRawText(enabled: boolean): Promise<void> {
 export async function getNotes(options?: {
   noteType?: string;
   folderId?: number;
+  /**
+   * An email: the notes that person is on, for the People list (KNEG-362). A
+   * filter of its own -- Rust refuses it beside `noteType` or `folderId`.
+   */
+  person?: string;
   limit?: number;
 }): Promise<Note[]> {
   return invoke<Note[]>("notes_list", {
     noteType: options?.noteType ?? null,
     folderId: options?.folderId ?? null,
+    person: options?.person ?? null,
     limit: options?.limit ?? null,
   });
+}
+
+/**
+ * Everyone named by email on a note, the most notes first (KNEG-362). People
+ * with a name and no email are not listed: the email is who they are.
+ */
+export async function getPeople(): Promise<Person[]> {
+  return invoke<Person[]>("people_list");
+}
+
+/**
+ * Replace a note's people, returning whether the note existed. Rust checks
+ * and tidies the list, and what it refuses -- an email that isn't one --
+ * comes back in plain words, to be shown as it is.
+ */
+export async function setNoteParticipants(id: number, participants: ParticipantRequest[]): Promise<boolean> {
+  return invoke<boolean>("notes_set_participants", { id, participants });
 }
 
 /** Full-text search. The query is prose; Rust escapes it into FTS5 syntax. */

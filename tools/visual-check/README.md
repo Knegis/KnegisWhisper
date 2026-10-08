@@ -254,10 +254,10 @@ library by title. Four checks:
 
 1. Note 101: exactly one meta item starting "Transcribed", reading
    "Transcribed on this computer", drawn with the `computer` icon, inside the
-   row and the window, beside the date, length and participants.
+   row and the window, beside the date, length and people.
 2. Note 104: "Transcribed by OpenAI", the same way.
 3. Note 102: no such item, and the row still has its date, length and
-   participant.
+   people.
 4. A meeting started with the fixtures' default provider (Deepgram) and
    stopped: its note reads "Transcribed on this computer · live captions by
    Deepgram", inside the row and the window at 1000x720 and again at 720x520,
@@ -269,6 +269,46 @@ text is its live text or the whole-recording pass, and that imports, recovery
 and typed-notes-only notes record what they should, is covered by
 `cargo test` (`transcribed_by.rs`, `meeting/notes.rs`, `meeting.rs`,
 `media.rs`), not here. Not measured: a real meeting or import saving it.
+
+## People
+
+```powershell
+node tools/visual-check/people.mjs --url http://127.0.0.1:5191/
+```
+
+Same options as the chip menus (the banner is always removed). It measures
+KNEG-362: people added to a note on its meta row, and the library's People
+list. The fixtures answer `people_list`, `notes_set_participants` and
+`notes_list`'s `person` as Rust's `notes_core::people` does, refusals worded
+the same; `invoke` is wrapped to log what reached them. Text is typed with
+`Input.insertText` into the focused field and buttons pressed with real
+pointer presses, at 1000x720 unless stated. Checks 1-4 are one sequence from
+one fresh load; 5 and 6 each start from their own. Six checks:
+
+1. Note 103 ("Scratch", nobody on it): Add person, an email and a name, Add.
+   `notes_set_participants` gets that one person; the note shows one chip
+   with "Remove {name}", the form closes and focus returns to Add person; the
+   People list adds them with 1, in name order among the fixtures' three.
+2. Pressing them in People asks `notes_list` for their email alone, and shows
+   "Notes with {name}" holding only "Scratch" and Show all notes, with no
+   folders; the person reads pressed.
+3. Show all notes: the Folders, People and Not in a folder headings back, the
+   folders and their notes exactly as before, nobody pressed, the same note
+   open.
+4. Remove {name}: `notes_set_participants` gets an empty list, the stored
+   participants are null, the chip and the People row go, focus is on Add
+   person.
+5. "maja@": the row says "'maja@' isn't an email address." as an alert, the
+   form stays open with "maja@" in it, and nothing is stored.
+6. Note 101 (two people) with the form open at 720x520: two chips, every meta
+   item and the people item inside the window, nothing scrolling sideways.
+
+Measured in headless Edge against dev fixtures, not in the Tauri window; a
+false check makes it exit 1. Which addresses Rust accepts, how it counts and
+names people, that it finds a person's notes in any case, that malformed
+participants are no people, and that the summary is told names and no
+addresses are covered by `cargo test` (`people.rs`, `commands.rs`,
+`summaries.rs`), not here.
 
 ## Meeting discard
 
