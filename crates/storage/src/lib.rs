@@ -295,8 +295,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            applied, 9,
-            "initial, note recordings, automation, desktop origin, summary, note workspace, search tokenizer, transcript row, and folder sharing migrations recorded exactly once"
+            applied, 10,
+            "initial, note recordings, automation, desktop origin, summary, note workspace, search tokenizer, transcript row, folder sharing, and transcribed-by migrations recorded exactly once"
         );
         second.close().await;
     }
@@ -836,5 +836,50 @@ mod tests {
             segment_rows(pool).await,
             [(second * SPAN, "gamma".to_owned())]
         );
+    }
+
+    #[tokio::test]
+    async fn transcribed_by_migration_leaves_existing_notes_unattributed() {
+        // KNEG-368. Where a note saved before this was transcribed was never
+        // recorded, so the migration must not guess it: NULL, which the note
+        // shows as nothing.
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        for migration in [
+            include_str!("../migrations/0001_initial.sql"),
+            include_str!("../migrations/0002_note_recordings.sql"),
+            include_str!("../migrations/0003_automation.sql"),
+            include_str!("../migrations/0004_desktop_import_origin.sql"),
+            include_str!("../migrations/0005_meeting_summaries.sql"),
+            include_str!("../migrations/0006_note_workspace.sql"),
+            include_str!("../migrations/0007_search_tokenizer.sql"),
+            include_str!("../migrations/0008_transcript_rows.sql"),
+            include_str!("../migrations/0009_folder_sharing.sql"),
+        ] {
+            sqlx::raw_sql(migration).execute(&pool).await.unwrap();
+        }
+        let id: i64 = sqlx::query_scalar(
+            "INSERT INTO notes (title, content, transcript) VALUES ('Meeting', '', ?) RETURNING id",
+        )
+        .bind(r#"[{"text":"from before","timestamp":0}]"#)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        sqlx::raw_sql(include_str!("../migrations/0010_transcribed_by.sql"))
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let recorded: Option<String> =
+            sqlx::query_scalar("SELECT transcribed_by FROM notes WHERE id = ?")
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(recorded, None);
     }
 }

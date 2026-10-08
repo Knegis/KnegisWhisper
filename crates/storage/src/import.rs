@@ -1164,6 +1164,18 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn an_imported_note_says_nothing_about_where_it_was_transcribed() {
+        // KNEG-368. OpenWhispr never recorded it, and `COPY_PLAN` names the
+        // columns copied, so an imported note is one from before the record.
+        let (_report, target, _, _dir) = run_import().await;
+        let recorded: Vec<Option<String>> = sqlx::query_scalar("SELECT transcribed_by FROM notes")
+            .fetch_all(target.pool())
+            .await
+            .unwrap();
+        assert_eq!(recorded, vec![None], "the one live note, unattributed");
+    }
+
+    #[tokio::test]
     async fn blobs_survive_the_copy() {
         let (_report, target, _, _dir) = run_import().await;
         let embedding: Vec<u8> = sqlx::query_scalar("SELECT embedding FROM speaker_profiles")

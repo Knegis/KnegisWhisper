@@ -195,6 +195,40 @@ recordings Rust streams with range requests; a false check makes it exit 1.
 Not measured: the reading position across a move, and a summary source's
 interval playback (`playInterval`) across one.
 
+## Note meta
+
+```powershell
+node tools/visual-check/note-meta.mjs --url http://127.0.0.1:5191/
+```
+
+Same options as the chip menus (the banner is always removed). It measures
+KNEG-368: the line a note's meta row gives where its transcript was made. The
+fixtures store it as Rust does (`Note.transcribedBy`): note 101 is a meeting
+transcribed on this computer, 104 an import transcribed by OpenAI, and 102 has
+no record, as every note saved before KNEG-368 has none. Their `meeting_stop`
+saves the record Rust's `transcribed_by` makes: the whole-recording pass, on
+this computer, naming the live provider when its audio leaves the computer.
+Each check starts from a fresh load at 1000x720; notes are opened from the
+library by title. Four checks:
+
+1. Note 101: exactly one meta item starting "Transcribed", reading
+   "Transcribed on this computer", drawn with the `computer` icon, inside the
+   row and the window, beside the date, length and participants.
+2. Note 104: "Transcribed by OpenAI", the same way.
+3. Note 102: no such item, and the row still has its date, length and
+   participant.
+4. A meeting started with the fixtures' default provider (Deepgram) and
+   stopped: its note reads "Transcribed on this computer · live captions by
+   Deepgram", inside the row and the window at 1000x720 and again at 720x520,
+   with nothing scrolling sideways.
+
+Measured in headless Edge against dev fixtures, not in the Tauri window; a
+false check makes it exit 1. Which route Rust names, when a meeting's saved
+text is its live text or the whole-recording pass, and that imports, recovery
+and typed-notes-only notes record what they should, is covered by
+`cargo test` (`transcribed_by.rs`, `meeting/notes.rs`, `meeting.rs`,
+`media.rs`), not here. Not measured: a real meeting or import saving it.
+
 ## Meeting discard
 
 ```powershell

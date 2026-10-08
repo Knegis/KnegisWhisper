@@ -111,7 +111,7 @@ use config::{
 
 #[cfg(test)]
 use notes::segment;
-use notes::{labelled, pcm_bytes, select_transcript, whisper_for_note, WholePass};
+use notes::{labelled, pcm_bytes, select_transcript, transcribed_by, whisper_for_note, WholePass};
 pub use recorder::Delivered;
 use recorder::{spawn_recorder, Drained, Finished, Recorder, RecorderCommand, RecorderEnd};
 pub use removal::RecordingRemoval;
@@ -1446,6 +1446,7 @@ impl MeetingRuntime {
                         save.title.clone(), &save.notes, &[],
                         "The recording could not be closed; this note holds only what was typed during the meeting.",
                         0.0,
+                        None,
                     );
                     if let Some(note) = note {
                         match create_meeting_note(&self.db, note, &save.plan, None).await {
@@ -1702,6 +1703,8 @@ impl MeetingRuntime {
         )
         .await;
         let from_partials = saved.from_partials;
+        // The route of the text being saved, not of the live view (KNEG-368).
+        let made_by = transcribed_by(provider_id, &saved);
         let (segments, speaker_note) = if saved.used_streaming {
             self.with_streaming_speakers(saved.segments, &finished)
                 .await
@@ -1793,6 +1796,7 @@ impl MeetingRuntime {
             &segments,
             recording_details.trim(),
             finished.duration_seconds,
+            made_by.as_ref(),
         ) else {
             return MeetingOutcome::Failed {
                 message: "The meeting note had no content".into(),
@@ -2241,6 +2245,7 @@ async fn save_discarded(
         transcript: None,
         participants: None,
         audio_duration_seconds: None,
+        transcribed_by: None,
     };
     match create_meeting_note(db, note, plan, None).await {
         Ok((id, _)) => {
@@ -2278,12 +2283,14 @@ async fn save_recovered(
         },
     };
     let started = recording_started_at(storage_key).unwrap_or_else(chrono::Local::now);
+    // Recovery's transcript is the whole-recording pass: this computer's.
     let note = compose_note(
         note_title(plan.title.as_deref(), started),
         notes,
         segments,
         details,
         duration,
+        crate::transcribed_by::route("local").as_ref(),
     )
     .ok_or("The recovered meeting had no content")?;
     let (note_id, folder_missing) =
@@ -2320,27 +2327,35 @@ async fn save_recovered(
     })
 }
 
+/// A meeting's note, or `None` when there is nothing to keep. `transcribed_by`
+/// is where `segments` were made (KNEG-368), and is kept only with them: a
+/// note of typed notes alone has no transcript to say it of.
 fn compose_note(
     title: String,
     notes: &str,
     segments: &[kw_notes_core::transcript::Segment],
     recording_details: &str,
     duration_seconds: f64,
+    transcribed_by: Option<&kw_notes_core::TranscribedBy>,
 ) -> Option<kw_notes_core::notes::NewNote> {
     if notes.trim().is_empty() && segments.is_empty() {
         return None;
     }
+    let transcribed = !segments.is_empty();
     Some(kw_notes_core::notes::NewNote {
         title,
         content: notes.trim_end().to_owned(),
         recording_details: Some(recording_details.to_owned()),
         note_type: Some("meeting".into()),
         folder_id: None,
-        transcript: (!segments.is_empty())
+        transcript: transcribed
             .then(|| serde_json::to_string(segments).ok())
             .flatten(),
         participants: None,
         audio_duration_seconds: Some(duration_seconds),
+        transcribed_by: transcribed_by
+            .filter(|_| transcribed)
+            .and_then(kw_notes_core::TranscribedBy::to_json),
     })
 }
 
@@ -3131,22 +3146,39 @@ mod tests {
 
     #[test]
     fn typed_notes_become_the_body_even_without_a_transcript() {
-        let note = compose_note("Meeting".into(), "typed\n", &[], "No transcript", 1.0).unwrap();
+        let note =
+            compose_note("Meeting".into(), "typed\n", &[], "No transcript", 1.0, None).unwrap();
         assert_eq!(note.content, "typed");
         assert!(note.transcript.is_none());
     }
 
     #[test]
     fn an_empty_meeting_produces_no_note() {
-        assert!(compose_note("Meeting".into(), "  ", &[], "", 0.0).is_none());
+        assert!(compose_note("Meeting".into(), "  ", &[], "", 0.0, None).is_none());
     }
 
     #[test]
     fn a_transcript_only_meeting_keeps_an_empty_body_and_a_transcript() {
         let segments = [segment("hello", 0.0, None)];
-        let note = compose_note("Meeting".into(), "", &segments, "", 1.0).unwrap();
+        let note = compose_note("Meeting".into(), "", &segments, "", 1.0, None).unwrap();
         assert_eq!(note.content, "");
         assert!(note.transcript.is_some());
+    }
+
+    /// What the note says of a transcript made on this computer.
+    const ON_THIS_COMPUTER: &str =
+        r#"{"provider":"local","name":"this computer","onThisComputer":true}"#;
+
+    #[test]
+    fn a_transcript_says_where_it_was_made_and_typed_notes_alone_do_not() {
+        // KNEG-368. Where it was made belongs to the transcript: a note of
+        // typed notes alone has none, so it says nothing.
+        let by = crate::transcribed_by::route("local").unwrap();
+        let segments = [segment("hello", 0.0, None)];
+        let note = compose_note("Meeting".into(), "", &segments, "", 1.0, Some(&by)).unwrap();
+        assert_eq!(note.transcribed_by.as_deref(), Some(ON_THIS_COMPUTER));
+        let typed = compose_note("Meeting".into(), "typed", &[], "", 1.0, Some(&by)).unwrap();
+        assert_eq!(typed.transcribed_by, None);
     }
 
     /* ------------------------------------------- the name and folder (KNEG-365) */
@@ -3788,6 +3820,32 @@ mod tests {
             .await
             .unwrap()
             .ends_with("The recording was deleted after transcribing (Settings › Meetings)."));
+    }
+
+    #[tokio::test]
+    async fn a_recovered_meeting_was_transcribed_on_this_computer() {
+        // KNEG-368. Recovery's transcript is the whole-recording pass, which
+        // is always local; with nothing transcribed there is nothing to say.
+        let mut said = Vec::new();
+        for segments in [vec![segment("hello", 0.0, None)], Vec::new()] {
+            let db = kw_storage::Db::open_in_memory().await.unwrap();
+            let dir = tempfile::tempdir().unwrap();
+            let (wav, key) = interrupted(dir.path());
+            let outcome = save_recovered(&db, &wav, key, "typed", &segments, "Recovered.", 12.0)
+                .await
+                .unwrap();
+            let MeetingOutcome::Saved { note_id, .. } = outcome else {
+                panic!("expected a saved note, got {outcome:?}");
+            };
+            said.push(
+                kw_notes_core::notes::get(db.pool(), note_id)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .transcribed_by,
+            );
+        }
+        assert_eq!(said, [Some(ON_THIS_COMPUTER.to_owned()), None]);
     }
 
     #[tokio::test]

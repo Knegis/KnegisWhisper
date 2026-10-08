@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { hasStoredTranscript, noteMeta, parseParticipants } from "../src/lib/noteMeta.js";
+import { hasStoredTranscript, noteMeta, parseParticipants, transcribedLine } from "../src/lib/noteMeta.js";
 import { parseStoredTime } from "../src/lib/dayGroups.js";
 import type { Folder, Note } from "../src/generated/ipc-types.js";
 
@@ -13,7 +13,7 @@ const FIXTURE_101 = JSON.stringify([
 const note = (overrides: Partial<Note> = {}): Note => ({
   id: 101, title: "Weekly sync — platform", content: "", recordingDetails: null, noteType: "meeting",
   enhancedContent: null, folderId: 3, transcript: null, participants: FIXTURE_101,
-  audioDurationSeconds: 1847, createdAt: "2026-08-26T09:00:00Z", updatedAt: "2026-08-26T09:31:00Z",
+  audioDurationSeconds: 1847, transcribedBy: null, createdAt: "2026-08-26T09:00:00Z", updatedAt: "2026-08-26T09:31:00Z",
   ...overrides,
 });
 const folders: Folder[] = [
@@ -56,6 +56,62 @@ test("the date is the stored creation time, read as parseStoredTime reads it", (
 test("participants come through noteMeta too", () => {
   assert.deepEqual(noteMeta(note(), folders).participants, ["Anna Lindqvist", "Ravi Menon"]);
   assert.deepEqual(noteMeta(note({ participants: null }), folders).participants, []);
+});
+
+// As Rust's `TranscribedBy` serialises it (`crates/notes-core/src/notes.rs`).
+const ON_THIS_COMPUTER = JSON.stringify({ provider: "local", name: "this computer", onThisComputer: true });
+
+test("a transcript made on this computer says so", () => {
+  assert.equal(transcribedLine(ON_THIS_COMPUTER), "Transcribed on this computer");
+  assert.equal(
+    transcribedLine(JSON.stringify({ provider: "local-streaming", name: "this computer", onThisComputer: true })),
+    "Transcribed on this computer",
+  );
+});
+
+test("live captions from elsewhere are named beside it", () => {
+  // The ruling on KNEG-368: the bare line could read as "nothing left this computer".
+  assert.equal(
+    transcribedLine(JSON.stringify({ provider: "local", name: "this computer", onThisComputer: true, liveName: "Deepgram Realtime" })),
+    "Transcribed on this computer · live captions by Deepgram Realtime",
+  );
+  assert.equal(
+    transcribedLine(JSON.stringify({ provider: "local", name: "this computer", onThisComputer: true, liveName: "  " })),
+    "Transcribed on this computer",
+  );
+});
+
+test("a transcript made elsewhere names who made it", () => {
+  assert.equal(transcribedLine(JSON.stringify({ provider: "openai", name: "OpenAI", onThisComputer: false })), "Transcribed by OpenAI");
+  assert.equal(
+    transcribedLine(JSON.stringify({ provider: "self-hosted", name: "your self-hosted server", onThisComputer: false })),
+    "Transcribed by your self-hosted server",
+  );
+  assert.equal(
+    transcribedLine(JSON.stringify({ provider: "deepgram-realtime", name: "Deepgram Realtime", onThisComputer: false })),
+    "Transcribed by Deepgram Realtime",
+  );
+});
+
+test("no record, or one that will not read, says nothing", () => {
+  for (const json of [
+    null,
+    "",
+    "not json",
+    "[]",
+    "null",
+    JSON.stringify({ provider: "openai", onThisComputer: false }),
+    JSON.stringify({ provider: "openai", name: "  ", onThisComputer: false }),
+    JSON.stringify({ provider: "openai", name: "OpenAI" }),
+    JSON.stringify({ provider: "openai", name: "OpenAI", onThisComputer: "no" }),
+  ]) {
+    assert.equal(transcribedLine(json), null, String(json));
+  }
+});
+
+test("the line comes through noteMeta too", () => {
+  assert.equal(noteMeta(note({ transcribedBy: ON_THIS_COMPUTER }), folders).transcribed, "Transcribed on this computer");
+  assert.equal(noteMeta(note(), folders).transcribed, null);
 });
 
 test("a note has a transcript when its stored array has a row, and not otherwise", () => {

@@ -1,6 +1,7 @@
 /**
  * What a note's header says about it besides its title: the folder its
- * breadcrumb names, and the date, length and participants in its meta row.
+ * breadcrumb names, and the date, length, participants and where it was
+ * transcribed in its meta row.
  *
  * Pure, and with no React: `tests/noteMeta.test.ts` imports this directly.
  */
@@ -58,6 +59,33 @@ export function parseParticipants(json: string | null): string[] {
 }
 
 /**
+ * The meta row's line for where a note's transcript was made, from its
+ * stored `transcribedBy` -- Rust's `TranscribedBy` as JSON (KNEG-368): "on
+ * this computer", naming a meeting's live-caption provider beside it when the
+ * captions came from elsewhere, or "by" whoever made it.
+ *
+ * Read as `parseParticipants` reads participants: a record that is missing --
+ * every note saved before it was kept -- or that will not read says nothing,
+ * rather than a guess or an error in the header.
+ */
+export function transcribedLine(json: string | null): string | null {
+  if (json === null) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
+  const { name, onThisComputer, liveName } = parsed as { name?: unknown; onThisComputer?: unknown; liveName?: unknown };
+  if (typeof name !== "string" || name.trim() === "" || typeof onThisComputer !== "boolean") return null;
+  if (!onThisComputer) return `Transcribed by ${name}`;
+  return typeof liveName === "string" && liveName.trim() !== ""
+    ? `Transcribed on this computer · live captions by ${liveName}`
+    : "Transcribed on this computer";
+}
+
+/**
  * The header's facts about `note`. Each is `null` (or, for participants,
  * empty) when the note does not have it, and the header then leaves that part
  * out rather than printing a placeholder.
@@ -68,16 +96,18 @@ export function parseParticipants(json: string | null): string[] {
  * - `date` is the creation time, read by `parseStoredTime` as the list's
  *   tooltip reads it.
  * - `minutes` is the recording's length rounded to whole minutes.
+ * - `transcribed` is `transcribedLine`'s line for where it was transcribed.
  */
 export function noteMeta(
   note: Note,
   folders: readonly Folder[],
-): { folder: string | null; date: Date | null; minutes: number | null; participants: string[] } {
+): { folder: string | null; date: Date | null; minutes: number | null; participants: string[]; transcribed: string | null } {
   const folder = note.folderId === null ? null : (folders.find((item) => item.id === note.folderId)?.name ?? null);
   return {
     folder,
     date: parseStoredTime(note.createdAt),
     minutes: note.audioDurationSeconds === null ? null : Math.round(note.audioDurationSeconds / 60),
     participants: parseParticipants(note.participants),
+    transcribed: transcribedLine(note.transcribedBy),
   };
 }

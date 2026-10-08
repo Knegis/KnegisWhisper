@@ -673,6 +673,55 @@ export function noteRecordingState() {
 }
 
 /**
+ * Clicks the library row titled exactly `title`, as a person opens a note.
+ */
+export function openNotesEntry(title) {
+  return source(`
+    const wanted = ${JSON.stringify(title)};
+    const entry = [...document.querySelectorAll('.list-panel .notes-entry')]
+      .find((item) => item.querySelector('.notes-entry-title')?.textContent === wanted);
+    if (!entry) throw new Error('No library row is titled ' + wanted);
+    entry.click();
+    return wanted;
+  `);
+}
+
+/**
+ * The open note's meta row under its title (KNEG-368): each item's text and
+ * the path of its icon, and whether any item reaches past the row, the note
+ * or the window.
+ */
+export function noteMetaState() {
+  return source(`
+    const note = document.querySelector('.note-detail');
+    const row = note?.querySelector('.note-detail-header .note-meta') ?? null;
+    const page = note?.querySelector('.note-page') ?? note;
+    const items = row ? [...row.querySelectorAll(':scope > li')].map((item) => {
+      const box = item.getBoundingClientRect();
+      return {
+        text: item.textContent.trim(),
+        icon: item.querySelector('svg path')?.getAttribute('d') ?? null,
+        left: Math.round(box.left),
+        right: Math.round(box.right),
+        height: Math.round(box.height),
+      };
+    }) : [];
+    const rowBox = row?.getBoundingClientRect() ?? null;
+    const pageBox = page?.getBoundingClientRect() ?? null;
+    return {
+      title: note?.querySelector('input[aria-label="Title"]')?.value ?? null,
+      row: Boolean(row),
+      items,
+      innerWidth,
+      scrollWidth: document.scrollingElement.scrollWidth,
+      rowRight: rowBox ? Math.round(rowBox.right) : null,
+      pageRight: pageBox ? Math.round(pageBox.right) : null,
+      rowOverflows: row ? row.scrollWidth > row.clientWidth : null,
+    };
+  `);
+}
+
+/**
  * The Notes library's folders, each with the titles of the notes filed in
  * it, and the notes in none ("Not in a folder").
  */

@@ -45,6 +45,7 @@ mod sherpa_stream;
 mod shortcuts;
 mod state;
 mod summaries;
+mod transcribed_by;
 mod tray;
 mod update_window;
 mod updater;

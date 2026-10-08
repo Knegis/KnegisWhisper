@@ -49,6 +49,8 @@ test("every renderer snippet is syntactically valid JavaScript", () => {
     snippets.recordingsSetting("Delete each recording once its transcript is saved"),
     snippets.meetingRecordingNotes(),
     snippets.noteRecordingState(),
+    snippets.openNotesEntry("A title with \"quotes\" and a 'single' one"),
+    snippets.noteMetaState(),
     snippets.notesFolders(),
     snippets.chipState("Transcription: "),
     snippets.chipCenter("Tidy up"),

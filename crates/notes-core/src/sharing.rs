@@ -201,9 +201,19 @@ pub async fn capture(
         .ok_or("This folder no longer exists.")?;
     let mut notes = Vec::new();
     let mut document_bytes = 0;
+    // Every column `Note` decodes, so a column added to it is read here too.
+    let select_note = format!(
+        "SELECT {} FROM notes WHERE id=? AND folder_id=?",
+        crate::notes::COLUMNS
+    );
     for id in ids {
-        let note: crate::Note = sqlx::query_as("SELECT id,title,content,recording_details,note_type,enhanced_content,folder_id,transcript,participants,audio_duration_seconds,created_at,updated_at FROM notes WHERE id=? AND folder_id=?")
-            .bind(id).bind(folder_id).fetch_optional(&mut *tx).await.map_err(err)?.ok_or("A selected note was moved or deleted. Reopen Share folder and try again.")?;
+        let note: crate::Note = sqlx::query_as(&select_note)
+            .bind(id)
+            .bind(folder_id)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(err)?
+            .ok_or("A selected note was moved or deleted. Reopen Share folder and try again.")?;
         let speakers = if options.transcripts {
             sqlx::query_as::<_, (String, String)>(
                 "SELECT speaker_id,display_name FROM speaker_mappings WHERE note_id=?",
@@ -1043,6 +1053,45 @@ mod tests {
         .unwrap();
         assert_ne!(duplicate, imported);
         assert!(root.join("original.wav").exists());
+    }
+    #[tokio::test]
+    async fn a_note_that_says_where_it_was_transcribed_is_shared_without_saying_so() {
+        // KNEG-368. Capture reads the note through `notes::COLUMNS`, so a
+        // column added to `Note` is read here too rather than failing the
+        // decode; the package format is unchanged, so the shared copy is a
+        // note with no record of where it was transcribed.
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("audio");
+        let (db, folder, note) = fixture(&root).await;
+        sqlx::query("UPDATE notes SET transcribed_by=? WHERE id=?")
+            .bind(r#"{"provider":"openai","name":"OpenAI","onThisComputer":false}"#)
+            .bind(note)
+            .execute(db.pool())
+            .await
+            .unwrap();
+        let package = temp.path().join("folder.knegis");
+        export(&db, &root, folder, note, ShareOptions::default(), &package).await;
+        let receiver = kw_storage::Db::open_in_memory().await.unwrap();
+        let target = temp.path().join("target");
+        let (operation, staged) = stage(&receiver, &target, &package).await;
+        let json = serde_json::to_string(&staged.notes).unwrap();
+        assert!(json.contains("Göteborg"), "the transcript is shared");
+        assert!(!json.contains("OpenAI"), "{json}");
+        let imported = restore(
+            receiver.pool(),
+            &target,
+            &operation,
+            staged,
+            "Imported",
+            &AtomicBool::new(false),
+        )
+        .await
+        .unwrap();
+        let notes = notes::list(receiver.pool(), None, Some(imported), 10)
+            .await
+            .unwrap();
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].transcribed_by, None);
     }
     #[tokio::test]
     async fn all_content_combinations_exclude_private_data_and_restore_without_jobs() {

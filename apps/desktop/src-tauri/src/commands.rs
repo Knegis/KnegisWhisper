@@ -1249,6 +1249,9 @@ pub async fn notes_create(state: State<'_, AppState>, request: NewNoteRequest) -
             transcript: request.transcript,
             participants: request.participants,
             audio_duration_seconds: request.audio_duration_seconds,
+            // Not the caller's to say: only the app's own saves know where a
+            // transcript was made (KNEG-368).
+            transcribed_by: None,
         },
     )
     .await
@@ -1964,6 +1967,7 @@ mod tests {
             transcript: None,
             participants: None,
             audio_duration_seconds: Some(12.5),
+            transcribed_by: None,
             created_at: Some("2026-08-25 10:00:00".to_owned()),
             updated_at: Some("2026-08-25 10:05:00".to_owned()),
         };
@@ -1990,6 +1994,7 @@ mod tests {
                 "participants",
                 "recordingDetails",
                 "title",
+                "transcribedBy",
                 "transcript",
                 "updatedAt",
             ]

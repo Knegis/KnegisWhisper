@@ -8,7 +8,7 @@
 //! prose, not query expressions.
 
 use kw_storage::StorageError;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, SqliteConnection, SqlitePool};
 use std::collections::BTreeMap;
 use ts_rs::TS;
@@ -29,8 +29,37 @@ pub struct Note {
     pub transcript: Option<String>,
     pub participants: Option<String>,
     pub audio_duration_seconds: Option<f64>,
+    /// Where the transcript was made: a [`TranscribedBy`] as JSON, kept raw
+    /// and read leniently, as `participants` is (KNEG-368). `None` when it was
+    /// never recorded -- notes from before then, typed notes, and OpenWhispr
+    /// and shared-folder imports.
+    pub transcribed_by: Option<String>,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
+}
+
+/// Where a note's transcript was made, as `Note::transcribed_by` stores it.
+///
+/// `provider` is the id the route reported (`local`, a registry id, a live
+/// meeting provider's id, `self-hosted` or `custom`); `name` is what a person
+/// reads. `live_name` is a meeting's live-caption provider when the saved
+/// transcript was made on this computer and the captions were not.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscribedBy {
+    pub provider: String,
+    pub name: String,
+    pub on_this_computer: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live_name: Option<String>,
+}
+
+impl TranscribedBy {
+    /// The JSON `Note::transcribed_by` holds.
+    #[must_use]
+    pub fn to_json(&self) -> Option<String> {
+        serde_json::to_string(self).ok()
+    }
 }
 
 /// A folder.
@@ -54,6 +83,8 @@ pub struct NewNote {
     pub transcript: Option<String>,
     pub participants: Option<String>,
     pub audio_duration_seconds: Option<f64>,
+    /// [`TranscribedBy`] as JSON, for a note saved with a transcript.
+    pub transcribed_by: Option<String>,
 }
 
 /// Create a note, returning its id.
@@ -78,8 +109,8 @@ async fn create_on<'e, E: sqlx::Executor<'e, Database = sqlx::Sqlite>>(
     let id: i64 = sqlx::query_scalar(
         "INSERT INTO notes
             (title, content, note_type, folder_id, transcript, participants,
-             audio_duration_seconds, recording_details)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             audio_duration_seconds, recording_details, transcribed_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
          RETURNING id",
     )
     .bind(&title)
@@ -90,6 +121,7 @@ async fn create_on<'e, E: sqlx::Executor<'e, Database = sqlx::Sqlite>>(
     .bind(&note.participants)
     .bind(note.audio_duration_seconds)
     .bind(&note.recording_details)
+    .bind(&note.transcribed_by)
     .fetch_one(pool)
     .await?;
 
@@ -154,9 +186,12 @@ async fn create_with_recording_on(
     Ok((id, recording))
 }
 
-const COLUMNS: &str =
+/// Every column `Note` is read from. Crate-wide, so every reader of a whole
+/// note -- `sharing::capture` too -- follows a column added here instead of
+/// failing to decode it.
+pub(crate) const COLUMNS: &str =
     "id, title, content, recording_details, note_type, enhanced_content, folder_id, transcript, \
-                       participants, audio_duration_seconds, created_at, updated_at";
+                       participants, audio_duration_seconds, transcribed_by, created_at, updated_at";
 
 /// One note by id.
 pub async fn get(pool: &SqlitePool, id: i64) -> Result<Option<Note>, StorageError> {
@@ -626,6 +661,78 @@ mod tests {
         assert!(
             !delete(p, id).await.unwrap(),
             "deleting twice is not a second removal"
+        );
+    }
+
+    /* ------------------------------------------- where it was transcribed */
+
+    #[tokio::test]
+    async fn where_a_note_was_transcribed_is_saved_and_read_back() {
+        // KNEG-368. Stored as written: the reader parses it, leniently.
+        let db = db().await;
+        let by = TranscribedBy {
+            provider: "openai".to_owned(),
+            name: "OpenAI".to_owned(),
+            on_this_computer: false,
+            live_name: None,
+        };
+        let id = create(
+            db.pool(),
+            &NewNote {
+                title: "Interview".to_owned(),
+                transcribed_by: by.to_json(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let note = get(db.pool(), id).await.unwrap().unwrap();
+        assert_eq!(
+            note.transcribed_by.as_deref(),
+            Some(r#"{"provider":"openai","name":"OpenAI","onThisComputer":false}"#)
+        );
+        assert_eq!(
+            list(db.pool(), None, None, 10).await.unwrap()[0].transcribed_by,
+            note.transcribed_by,
+            "listed as it is got"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_note_says_nothing_about_where_it_was_transcribed_unless_told() {
+        assert_eq!(NewNote::default().transcribed_by, None);
+        let db = db().await;
+        let id = add(db.pool(), "Typed", "no transcript at all").await;
+        assert_eq!(
+            get(db.pool(), id).await.unwrap().unwrap().transcribed_by,
+            None
+        );
+    }
+
+    #[test]
+    fn live_captions_are_named_only_when_there_were_some_to_name() {
+        let local = TranscribedBy {
+            provider: "local".to_owned(),
+            name: "this computer".to_owned(),
+            on_this_computer: true,
+            live_name: None,
+        };
+        assert_eq!(
+            local.to_json().as_deref(),
+            Some(r#"{"provider":"local","name":"this computer","onThisComputer":true}"#)
+        );
+        let captioned = TranscribedBy {
+            live_name: Some("Deepgram Realtime".to_owned()),
+            ..local
+        };
+        let json = captioned.to_json().unwrap();
+        assert_eq!(
+            json,
+            r#"{"provider":"local","name":"this computer","onThisComputer":true,"liveName":"Deepgram Realtime"}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<TranscribedBy>(&json).unwrap(),
+            captioned
         );
     }
 

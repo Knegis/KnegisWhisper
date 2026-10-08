@@ -57,6 +57,16 @@ keys, Home and End; a hidden Transcript tab is skipped. At widths of 900px or le
 the list panel initially collapses (and collapses when entering that width); the
 title bar's list toggle reopens it. Tabs wrap when necessary.
 
+Under the title, the meta row gives the note's date, the recording's length, its
+participants and where its transcript was made (KNEG-368): "Transcribed on this
+computer", or "Transcribed by" the provider or server that made it. A meeting
+whose saved transcript is the whole-recording pass was transcribed on this
+computer; when its live captions came from a provider off this computer, the line
+adds "· live captions by" that provider. A meeting saved from its live captions --
+a finished local stream, or the captions kept because the whole-recording pass
+failed -- names the live provider. Typed notes alone, notes saved before this was
+recorded, and OpenWhispr and shared-folder imports say nothing.
+
 Title, personal notes and summaries flush before tab changes, note changes and
 native window closure. A failed save retains the draft and prevents those transitions;
 retry remains available. Blank titles become “Untitled note”.
@@ -129,6 +139,13 @@ live view of a meeting started that way. Discard always deletes the recording.
   default tokenizer folded å and ä to a and ö to o, so "for" found "för", "har" found
   "här" and "sa" found "så". Letter case still folds. Every accent now counts, so
   "cafe" no longer finds "café".
+- Migration `0010_transcribed_by.sql` adds `notes.transcribed_by`, returned as
+  nullable `Note.transcribedBy`: where the transcript was made, as JSON
+  (`provider`, `name`, `onThisComputer`, and `liveName` for a meeting's
+  live-caption provider), set by meeting saves, recovery and media imports.
+  Existing notes keep NULL and show nothing; nothing guesses where they were
+  transcribed. `notes_create` and the local API's create don't take it, and
+  shared-folder packages don't carry it.
 - No new renderer command or user-editable transcript API was added. Existing note
   exports and separate summary exports retain their behavior.
 

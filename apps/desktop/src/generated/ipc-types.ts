@@ -1037,7 +1037,14 @@ endpoints: number, } | { "state": "failed", mechanism: string, reason: string, }
 /**
  * A note, as listed.
  */
-export type Note = { id: number, title: string, content: string, recordingDetails: string | null, noteType: string, enhancedContent: string | null, folderId: number | null, transcript: string | null, participants: string | null, audioDurationSeconds: number | null, createdAt: string | null, updatedAt: string | null, };
+export type Note = { id: number, title: string, content: string, recordingDetails: string | null, noteType: string, enhancedContent: string | null, folderId: number | null, transcript: string | null, participants: string | null, audioDurationSeconds: number | null,
+/**
+ * Where the transcript was made: a [`TranscribedBy`] as JSON, kept raw
+ * and read leniently, as `participants` is (KNEG-368). `None` when it was
+ * never recorded -- notes from before then, typed notes, and OpenWhispr
+ * and shared-folder imports.
+ */
+transcribedBy: string | null, createdAt: string | null, updatedAt: string | null, };
 
 /**
  * A folder.

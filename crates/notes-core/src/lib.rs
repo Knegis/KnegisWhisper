@@ -17,7 +17,9 @@ pub mod sharing;
 pub mod speakers;
 pub mod transcript;
 
-pub use notes::{escape_query, search, Folder, NewNote, Note, NoteUpdate, SearchHit, SearchHitRow};
+pub use notes::{
+    escape_query, search, Folder, NewNote, Note, NoteUpdate, SearchHit, SearchHitRow, TranscribedBy,
+};
 pub use recordings::NoteRecording;
 pub use transcript::{export, Format, NoteMeta, Segment, SpeakerLabels, TranscriptRow};
 

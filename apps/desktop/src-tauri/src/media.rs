@@ -1462,6 +1462,10 @@ async fn save_import_job(
             }
         })?),
         audio_duration_seconds: Some(pending.duration),
+        // From the route the transcript came back from (KNEG-368).
+        transcribed_by: crate::transcribed_by::route(&transcript.provider)
+            .as_ref()
+            .and_then(kw_notes_core::TranscribedBy::to_json),
         ..Default::default()
     };
     let retained_bytes = std::fs::metadata(&pending.path)
@@ -2398,6 +2402,8 @@ mod retained_import_tests {
                 .unwrap();
             assert_eq!(note.note_type, "import");
             assert!(note.content.is_empty(), "personal notes start empty");
+            // A route nothing names is not guessed at (KNEG-368).
+            assert_eq!(note.transcribed_by, None, "provider \"fixture\"");
             let segments: serde_json::Value =
                 serde_json::from_str(note.transcript.as_deref().unwrap()).unwrap();
             assert_eq!(segments.as_array().unwrap().len(), 1);
@@ -2419,6 +2425,42 @@ mod retained_import_tests {
             .unwrap();
             assert!(!copy.exists());
             assert!(original.exists());
+        }
+    }
+    #[tokio::test]
+    async fn an_import_says_where_it_was_transcribed() {
+        // KNEG-368: from the route the transcript came back from.
+        for (provider, expected) in [
+            (
+                "local",
+                r#"{"provider":"local","name":"this computer","onThisComputer":true}"#,
+            ),
+            (
+                "openai",
+                r#"{"provider":"openai","name":"OpenAI","onThisComputer":false}"#,
+            ),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let original = fixture(dir.path());
+            let db = Db::open_in_memory().await.unwrap();
+            let result = save_import(
+                &db,
+                kw_transcription_core::Transcript {
+                    provider: provider.to_owned(),
+                    ..transcript(true)
+                },
+                MediaImportSource::Audio,
+                &original,
+                &original,
+                &dir.path().join("recordings"),
+            )
+            .await
+            .unwrap();
+            let note = kw_notes_core::notes::get(db.pool(), result.note_id)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(note.transcribed_by.as_deref(), Some(expected), "{provider}");
         }
     }
     #[tokio::test]
