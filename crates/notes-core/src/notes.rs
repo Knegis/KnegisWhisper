@@ -968,7 +968,7 @@ mod tests {
     }
 
     #[test]
-    fn live_captions_are_named_only_when_there_were_some_to_name() {
+    fn optional_live_caption_name_is_omitted_from_json_when_absent() {
         let local = TranscribedBy {
             provider: "local".to_owned(),
             name: "this computer".to_owned(),

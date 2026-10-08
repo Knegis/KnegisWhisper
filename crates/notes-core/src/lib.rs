@@ -17,6 +17,7 @@
 pub mod document;
 pub mod notes;
 pub mod people;
+pub mod recording_state;
 pub mod recordings;
 pub mod sharing;
 pub mod speakers;

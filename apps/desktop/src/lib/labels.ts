@@ -1012,24 +1012,26 @@ export function meetingOutcomeLabel(outcome: MeetingOutcome): { text: string; mo
           `${outcome.gaps} stretch(es) of audio were never transcribed — the transcriber could not keep up.`,
         );
       }
-      // Settings › Meetings asked for the recording to go once the transcript
+      // This meeting was started with deletion requested once the transcript
       // was saved (KNEG-409), and this is what became of it. A deleted one
       // has no path to give; one that couldn't be deleted says why behind
       // Learn more.
       const removal = outcome.recordingRemoval;
       if (removal === "deleted") parts.push("The recording was deleted; the transcript is in the note.");
+      if (removal === "kept-untranscribed") parts.push("The recording was kept because nothing was transcribed from it.");
+      if (removal === "deleted-update-failed") parts.push("The recording was deleted, but its attachment needs cleanup. Open the note to retry.");
       if (removal === "kept-incomplete") parts.push("The recording was kept because the transcript may be incomplete.");
       if (removal === "delete-failed") parts.push("The recording couldn't be deleted, so it's still attached to the note.");
       if (outcome.reconnects > 0) {
         parts.push(reconnectLabel(outcome.reconnects));
       }
-      const why = removal === "delete-failed" && outcome.recordingRemovalError !== null
-        ? ` Deleting it failed: ${outcome.recordingRemovalError}`
+      const why = (removal === "delete-failed" || removal === "deleted-update-failed") && outcome.recordingRemovalError !== null
+        ? removal === "deleted-update-failed" ? ` Updating the attachment failed: ${outcome.recordingRemovalError}` : ` Deleting it failed: ${outcome.recordingRemovalError}`
         : "";
       return {
         text: parts.join(" "),
-        more: removal === "deleted"
-          ? `Note ${outcome.noteId}.`
+        more: removal === "deleted" || removal === "deleted-update-failed"
+          ? `Note ${outcome.noteId}.${why}`
           : `Note ${outcome.noteId}. The recording is at ${outcome.recordingPath}.${why}`,
       };
     }

@@ -143,6 +143,8 @@ fn tidy(list: &[Participant], stored: &[Value]) -> Result<Vec<Value>, PeopleErro
     let mut unmatched: Vec<&Value> = stored.iter().filter(|entry| readable(entry)).collect();
     let mut emails: HashSet<String> = HashSet::new();
     let mut kept: Vec<Value> = Vec::with_capacity(list.len().min(MAX_PARTICIPANTS));
+    let shrinking = stored.iter().filter(|entry| readable(entry)).count() > list.len();
+    let mut changed = false;
     for entry in list {
         let name = present(entry.display_name.as_deref());
         let raw = present(entry.email.as_deref());
@@ -160,6 +162,7 @@ fn tidy(list: &[Participant], stored: &[Value]) -> Result<Vec<Value>, PeopleErro
         let value = if let Some(at) = same {
             unmatched.remove(at).clone()
         } else {
+            changed = true;
             let email = match raw {
                 None => None,
                 Some(raw) => Some(match normalise_email(raw) {
@@ -173,13 +176,16 @@ fn tidy(list: &[Participant], stored: &[Value]) -> Result<Vec<Value>, PeopleErro
                 email,
             })?
         };
-        if kept.len() == MAX_PARTICIPANTS {
+        if kept.len() == MAX_PARTICIPANTS && !shrinking {
             return Err(PeopleError::TooMany);
         }
         if let Some(key) = key {
             emails.insert(key);
         }
         kept.push(value);
+    }
+    if kept.len() > MAX_PARTICIPANTS && changed {
+        return Err(PeopleError::TooMany);
     }
     kept.extend(stored.iter().filter(|entry| !readable(entry)).cloned());
     Ok(kept)
@@ -268,8 +274,8 @@ pub async fn set_participants(
 /// One statement: every entry with a text email, grouped by that email
 /// trimmed and lower-cased, its name the first non-blank one in the order
 /// newest note first.
-pub async fn people(pool: &SqlitePool) -> Result<Vec<Person>, StorageError> {
-    let sql = format!(
+fn people_sql() -> String {
+    format!(
         "WITH entries AS (
              SELECT notes.id AS note_id,
                     notes.updated_at AS updated_at,
@@ -291,8 +297,22 @@ pub async fn people(pool: &SqlitePool) -> Result<Vec<Person>, StorageError> {
          FROM named
          GROUP BY email
          ORDER BY note_count DESC, lower(coalesce(max(name), email)), email"
-    );
-    Ok(sqlx::query_as::<_, Person>(&sql).fetch_all(pool).await?)
+    )
+}
+pub async fn people(pool: &SqlitePool) -> Result<Vec<Person>, StorageError> {
+    Ok(sqlx::query_as::<_, Person>(&people_sql())
+        .fetch_all(pool)
+        .await?)
+}
+/// Bounded desktop projection; existing full-list callers retain their contract.
+pub async fn page(pool: &SqlitePool, limit: i64, offset: i64) -> Result<Vec<Person>, StorageError> {
+    Ok(
+        sqlx::query_as::<_, Person>(&format!("{} LIMIT ? OFFSET ?", people_sql()))
+            .bind(limit.clamp(1, 501))
+            .bind(offset.max(0))
+            .fetch_all(pool)
+            .await?,
+    )
 }
 
 /// The notes `email` is on, newest first, as `notes::list` orders them.
@@ -964,5 +984,49 @@ mod tests {
         assert!(display_names(None).is_empty());
         assert!(display_names(Some("not json")).is_empty());
         assert!(display_names(Some(r#"{"displayName":"Anna"}"#)).is_empty());
+    }
+
+    #[test]
+    fn oversized_imports_can_shrink_but_cannot_add_people_above_the_limit() {
+        let stored: Vec<Value> = (0..205)
+            .map(|at| serde_json::json!({"email":format!("p{at}@example.com"),"importKey":at}))
+            .collect();
+        let mut shrinking: Vec<Participant> = stored
+            .iter()
+            .take(204)
+            .map(|value| serde_json::from_value(value.clone()).unwrap())
+            .collect();
+        let kept = tidy(&shrinking, &stored).unwrap();
+        assert_eq!(kept.len(), 204);
+        assert_eq!(kept[0], stored[0]);
+        shrinking[0].email = Some("new@example.com".into());
+        assert!(matches!(
+            tidy(&shrinking, &stored),
+            Err(PeopleError::TooMany)
+        ));
+        shrinking.truncate(200);
+        assert_eq!(tidy(&shrinking, &stored).unwrap().len(), 200);
+    }
+
+    #[tokio::test]
+    async fn people_pages_are_bounded_and_do_not_repeat_the_first_page() {
+        let db = kw_storage::Db::open_in_memory().await.unwrap();
+        let list: Vec<Participant> = (0..65)
+            .map(|at| Participant {
+                email: Some(format!("p{at:03}@example.com")),
+                display_name: None,
+            })
+            .collect();
+        let id = notes::create(db.pool(), &crate::notes::NewNote::default())
+            .await
+            .unwrap();
+        set_participants(db.pool(), id, &list).await.unwrap();
+        let first = page(db.pool(), 51, 0).await.unwrap();
+        let second = page(db.pool(), 51, 50).await.unwrap();
+        assert_eq!(first.len(), 51);
+        assert_eq!(second.len(), 15);
+        assert_eq!(first[50], second[0]);
+        assert_ne!(first[0], second[0]);
+        assert_eq!(people(db.pool()).await.unwrap().len(), 65);
     }
 }

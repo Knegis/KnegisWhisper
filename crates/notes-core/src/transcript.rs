@@ -78,11 +78,7 @@ fn lenient_words<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Ve
 
 /// Whether `words` spell `text`, whitespace aside.
 fn spells(words: &[Word], text: &str) -> bool {
-    words
-        .iter()
-        .flat_map(|word| word.text.chars())
-        .filter(|c| !c.is_whitespace())
-        .eq(text.chars().filter(|c| !c.is_whitespace()))
+    kw_transcript_text::words_match_text(words.iter().map(|word| word.text.as_str()), text)
 }
 
 /// One timed word of a [`Segment`] (KNEG-408): seconds from the start of the

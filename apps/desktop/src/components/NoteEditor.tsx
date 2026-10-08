@@ -29,6 +29,7 @@ type NoteEditorProps = {
   initialContent: string;
   onChange: (markdown: string) => void;
   summary?: boolean;
+  readOnly?: boolean;
   legacyTitle?: string;
   onReady?: (markdown: string) => void;
 };
@@ -38,9 +39,14 @@ export function NoteEditor({
   initialContent,
   onChange,
   summary = false,
+  readOnly = false,
   legacyTitle,
   onReady,
 }: NoteEditorProps) {
+  const builderRef = useRef<CrepeBuilder | null>(null);
+  const readOnlyRef = useRef(readOnly);
+  readOnlyRef.current = readOnly;
+  useEffect(() => { builderRef.current?.setReadonly(readOnly); }, [readOnly]);
   const rootRef = useRef<HTMLDivElement>(null);
   const initialRef = useRef(initialContent);
   const onChangeRef = useRef(onChange);
@@ -89,8 +95,10 @@ export function NoteEditor({
           onChangeRef.current(markdown);
         });
       });
+    builderRef.current = builder;
     const created = builder.create().then(() => {
       if (superseded) return;
+      builder.setReadonly(readOnlyRef.current);
       builder.editor.action(ctx => {
         const view = ctx.get(editorViewCtx);
         stopMarginDrop = installEditorMarginDrop(view, root.closest<HTMLElement>(".notes-main") ?? root);
@@ -107,6 +115,7 @@ export function NoteEditor({
 
     return () => {
       superseded = true;
+      if (builderRef.current === builder) builderRef.current = null;
       stopMarginDrop?.();
       stopGutter?.();
       void created

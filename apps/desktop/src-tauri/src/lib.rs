@@ -24,6 +24,7 @@ mod integrations;
 mod vocabulary;
 // Test-only: it renders `apps/desktop/src/generated/ipc-types.ts` and asserts
 // the committed copy still matches the Rust types. Nothing at runtime calls it.
+mod capture_interlock;
 #[cfg(test)]
 mod ipc_types;
 mod local_api;
@@ -43,9 +44,11 @@ mod recordings;
 mod sharing;
 mod sherpa_stream;
 mod shortcuts;
+mod speech_install;
 mod state;
 mod summaries;
 mod transcribed_by;
+mod transcript_words;
 mod tray;
 mod update_window;
 mod updater;
@@ -495,13 +498,17 @@ pub fn run() -> anyhow::Result<()> {
             commands::notes_update,
             commands::notes_set_folder,
             commands::notes_set_participants,
+            speech_install::speech_installations,
             commands::people_list,
+            commands::people_page,
             commands::notes_trash,
             commands::notes_restore,
             commands::notes_delete_forever,
             commands::notes_trash_list,
             commands::notes_empty_trash,
             commands::note_recording_get,
+            commands::note_recording_state,
+            commands::note_recording_retry_deletion,
             commands::note_recording_attach_from_dialog,
             commands::note_transcript_rows,
             commands::note_speaker_rename,
@@ -615,3 +622,6 @@ pub fn run() -> anyhow::Result<()> {
         });
     Ok(())
 }
+
+#[cfg(all(test, windows, feature = "tauri-test"))]
+mod recording_state_native_test;

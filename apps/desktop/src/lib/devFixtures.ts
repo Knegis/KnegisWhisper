@@ -61,6 +61,7 @@ import type {
   ImportReport,
   InputDevice,
   InstallProgress,
+  NoteRecordingState,
   LevelSession,
   LevelSource,
   Lists,
@@ -683,8 +684,8 @@ function fixtureNoteTitle(given: string | null, started: Date): string {
   return given ?? `Meeting — ${when}`;
 }
 
-/** What Rust's `delete_attached` adds to a note's recording details (`meeting/removal.rs`). */
-const RECORDING_DELETED_DETAILS = "The recording was deleted after transcribing (Settings › Meetings).";
+/** Local structured disposition, separate from a note's exportable prose. */
+const recordingStates = new Map<number, NoteRecordingState>();
 
 /**
  * The fixture meeting stopping: idle again, and what Rust's `keep` would
@@ -736,11 +737,11 @@ function fixtureStop(): MeetingOutcome {
       id: noteId,
       title: fixtureNoteTitle(plan.title, startedAt),
       noteType: "meeting",
-      recordingDetails: plan.deleteRecording ? RECORDING_DELETED_DETAILS : null,
+      recordingDetails: null,
       folderId,
       transcript: JSON.stringify(segments),
       audioDurationSeconds: 1847,
-      transcribedBy: fixtureTranscribedBy("local", live?.audioLeavesDevice ? live.name : null),
+      transcribedBy: fixtureTranscribedBy("local", live?.audioLeavesDevice ? (live.id === "meeting:deepgram" ? "Deepgram Realtime" : live.name) : null),
       createdAt: nowIso(),
       updatedAt: nowIso(),
     }),
@@ -749,6 +750,7 @@ function fixtureStop(): MeetingOutcome {
   noteTranscriptRows.set(noteId, segments.map((segment, index) => ({
     index, text: segment.text, speaker: null, speakerId: null, startSeconds: segment.timestamp, endSeconds: segment.endTimestamp, words: [],
   })));
+  if (plan.deleteRecording) recordingStates.set(noteId, { status: "deleted", error: null, canRetry: false });
   if (!plan.deleteRecording) {
     noteRecordings.set(noteId, { noteId, storageKey: `fixture-meeting-${noteId}.wav`, durationSeconds: FIXTURE_RECORDING_SECONDS, originalFilename: null, createdAt: nowIso() });
   }
@@ -1566,6 +1568,7 @@ function fixtureTidyParticipants(current: string | null, list: readonly Particip
   const unmatched = stored.filter(readable);
   const emails = new Set<string>();
   const kept: unknown[] = [];
+  let changed = false;
   for (const entry of list) {
     const name = trimSpace(entry.displayName ?? "") || null;
     const raw = trimSpace(entry.email ?? "") || null;
@@ -1577,14 +1580,16 @@ function fixtureTidyParticipants(current: string | null, list: readonly Particip
     if (at !== -1) {
       value = unmatched.splice(at, 1)[0];
     } else {
+      changed = true;
       const email = raw === null ? null : (fixtureEmail(raw) ?? (key !== null && storedEmails.has(key) ? raw : undefined));
       if (email === undefined) throw new Error(`'${raw}' isn't an email address.`);
       value = { ...(name === null ? {} : { displayName: name }), ...(email === null ? {} : { email }) };
     }
-    if (kept.length === 200) throw new Error("A note can have at most 200 people.");
+    if (kept.length === 200 && list.length >= stored.filter(readable).length) throw new Error("A note can have at most 200 people.");
     if (key !== null) emails.add(key);
     kept.push(value);
   }
+  if (kept.length > 200 && changed) throw new Error("A note can have at most 200 people.");
   kept.push(...stored.filter((entry) => !readable(entry)));
   return kept.length === 0 ? null : JSON.stringify(kept);
 }
@@ -2118,6 +2123,9 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
   // A note listed here gets a player, and the player's `recording` URL is
   // answered with the fixtures' two-minute WAV (`servePlayableRecordings`).
   // A note that is not has no player, as in the app.
+  speech_installations: () => ({ revision: 0, jobs: [] }),
+  note_recording_state: a => recordingStates.get(arg<number>(a, "id") ?? 0) ?? null,
+  note_recording_retry_deletion: () => { throw new Error("This note has no recording deletion request."); },
   note_recording_get: (a) => {
     const id = arg<number>(a, "id");
     return typeof id === "number" ? noteRecordings.get(id) ?? null : null;
@@ -2164,6 +2172,7 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
   folders_list: () => folders,
   // KNEG-362. As Rust: checked and tidied, refused in plain words, and `updatedAt` left alone.
   people_list: () => fixturePeople(),
+  people_page: (a) => fixturePeople().slice(Math.max(0, arg<number>(a, "offset") ?? 0), Math.max(0, arg<number>(a, "offset") ?? 0) + Math.min(501, Math.max(1, arg<number>(a, "limit") ?? 51))),
   notes_set_participants: (a) => {
     const id = arg<number>(a, "id");
     if (!editable(id)) return false;

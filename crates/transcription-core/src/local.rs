@@ -341,6 +341,11 @@ fn timed_segments(bodies: &[SegmentBody]) -> Vec<TimedSegment> {
         // longer spell it -- a token can be half a character, which the
         // server writes as U+FFFD -- are not kept.
         if !spells(&words, &text) {
+            tracing::warn!(
+                discarded_words = words.len(),
+                reason = "word-text-mismatch",
+                "discarded unusable word timings"
+            );
             words.clear();
         }
         out.push(TimedSegment {
@@ -383,6 +388,11 @@ fn merge_tokens(tokens: &[serde_json::Value]) -> Vec<TimedWord> {
         }
         let (Some(start), Some(end)) = (token_time(token, "start"), token_time(token, "end"))
         else {
+            tracing::warn!(
+                discarded_tokens = tokens.len(),
+                reason = "missing-or-invalid-word-time",
+                "discarded unusable word timings"
+            );
             return Vec::new();
         };
         let starts_word = breaks || raw.starts_with(char::is_whitespace);
@@ -429,11 +439,7 @@ pub(crate) fn hundredths(seconds: f64) -> f64 {
 /// Whether `words` spell `text`, spaces aside. True for no words.
 fn spells(words: &[TimedWord], text: &str) -> bool {
     words.is_empty()
-        || words
-            .iter()
-            .flat_map(|word| word.text.chars())
-            .filter(|c| !c.is_whitespace())
-            .eq(text.chars().filter(|c| !c.is_whitespace()))
+        || kw_transcript_text::words_match_text(words.iter().map(|word| word.text.as_str()), text)
 }
 
 fn truncate(body: &str) -> String {

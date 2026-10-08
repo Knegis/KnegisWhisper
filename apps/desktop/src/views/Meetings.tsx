@@ -306,6 +306,9 @@ export function Meetings({
   /** The clock's "now", moved on once a second while a meeting records. */
   const [clockNow, setClockNow] = useState(() => new Date());
   const liveHeading = useRef<HTMLHeadingElement>(null);
+  const checkGeneration = useRef(0);
+  useEffect(() => () => { checkGeneration.current++; }, []);
+
 
   // `disposed` because `listen` resolves after the effect returns: a page left
   // before it did would otherwise keep its listeners for the rest of the
@@ -325,10 +328,10 @@ export function Meetings({
       // "Saved as note ..." must not sit under it. Start clears it too, but a
       // meeting started from the notification window never passes through
       // this page's Start. The same for what the last microphone check heard;
-      // one still listening is left to finish.
+      // a result still in flight is invalidated.
       if (next === "recording") {
         setOutcome(null);
-        setCheck((last) => (last?.state === "listening" ? last : null));
+        checkGeneration.current++; setCheck(null);
       }
       // The state event carries the state and nothing else, and the sentence
       // explaining it lives on `MeetingStatus`. Reloading is how it gets here
@@ -590,6 +593,7 @@ export function Meetings({
   // through that read's own `guard`. Shared with dictation (KNEG-341), so
   // this changes its microphone too, as the chip's title says.
   const chooseMicrophone = (id: string) => {
+    checkGeneration.current++; setCheck(null);
     void microphoneRefresh.guard(() => setInputDevice(id || null));
   };
   // "Test microphone": Rust opens the saved microphone for five seconds and
@@ -598,10 +602,11 @@ export function Meetings({
   // start "Not now: ", and `FailureLine` shows them as the line itself.
   const testMicrophone = () => {
     if (checking) return;
+    const generation = ++checkGeneration.current;
     setCheck({ state: "listening" });
     checkMicrophone()
-      .then((result) => setCheck({ state: "done", result }))
-      .catch((cause: unknown) => setCheck({ state: "failed", error: message(cause) }));
+      .then((result) => { if (generation === checkGeneration.current) setCheck({ state: "done", result }); })
+      .catch((cause: unknown) => { if (generation === checkGeneration.current) setCheck({ state: "failed", error: message(cause) }); });
   };
 
   const start = (withSystem: boolean) => {
@@ -876,7 +881,7 @@ export function Meetings({
           </header>
           {error || stalled || transcriptEnded || notesFlushFailed || outcome ? (
             <div className="live-caveats">
-              {error ? <p className="error">{error}</p> : null}
+              {error && !notesFlushFailed ? <p className="error">{error}</p> : null}
               {caveats}
             </div>
           ) : null}

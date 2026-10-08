@@ -296,15 +296,7 @@ pub(super) fn labelled(
             // word as the recording plays (KNEG-408). The text is trimmed
             // here and the words are not; the row compares them with
             // whitespace aside, so the trim costs nothing.
-            words: timed
-                .words
-                .iter()
-                .map(|word| kw_notes_core::Word {
-                    text: word.text.clone(),
-                    start: word.start,
-                    end: word.end,
-                })
-                .collect(),
+            words: crate::transcript_words::stored_words(&timed.words),
         });
     }
 

@@ -232,15 +232,7 @@ impl From<&kw_transcription_core::local::TimedSegment> for StoredImportSegment {
             text: segment.text.clone(),
             timestamp: segment.start,
             end_timestamp: segment.end,
-            words: segment
-                .words
-                .iter()
-                .map(|word| kw_notes_core::Word {
-                    text: word.text.clone(),
-                    start: word.start,
-                    end: word.end,
-                })
-                .collect(),
+            words: crate::transcript_words::stored_words(&segment.words),
         }
     }
 }

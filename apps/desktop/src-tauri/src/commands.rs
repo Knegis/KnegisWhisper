@@ -1308,6 +1308,17 @@ async fn list_notes(
 /// Everyone named by email on a note, with how many notes each is on, for
 /// the Notes panel's People list (KNEG-362).
 #[tauri::command]
+pub async fn people_page(
+    state: State<'_, AppState>,
+    limit: i64,
+    offset: i64,
+) -> CmdResult<Vec<people::Person>> {
+    people::page(state.db().pool(), limit, offset)
+        .await
+        .map_err(|e| fail("could not read people", e))
+}
+
+#[tauri::command]
 pub async fn people_list(state: State<'_, AppState>) -> CmdResult<Vec<people::Person>> {
     people::people(state.db().pool())
         .await
@@ -1539,6 +1550,24 @@ pub async fn note_speaker_suggestions(
     speakers::suggestions(state.db().pool(), id)
         .await
         .map_err(|e| fail("could not suggest speaker names", e))
+}
+
+/// Durable local recording disposition, independent of editable note text.
+#[tauri::command]
+pub async fn note_recording_state(
+    state: State<'_, AppState>,
+    id: i64,
+) -> CmdResult<Option<kw_notes_core::recording_state::NoteRecordingState>> {
+    kw_notes_core::recording_state::get(state.db().pool(), id, state.recording_directory()).await
+}
+
+/// Explicitly retry the deletion requested for this specific recording.
+#[tauri::command]
+pub async fn note_recording_retry_deletion(
+    state: State<'_, AppState>,
+    id: i64,
+) -> CmdResult<kw_notes_core::recording_state::NoteRecordingState> {
+    kw_notes_core::recording_state::retry(state.db().pool(), id, state.recording_directory()).await
 }
 
 /// The recording attached to a note, if it has one.

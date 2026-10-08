@@ -215,6 +215,7 @@ fn render() -> String {
             kw_notes_core::transcript::Word,
             kw_notes_core::transcript::TranscriptRow,
             kw_notes_core::recordings::NoteRecording,
+            kw_notes_core::recording_state::NoteRecordingState,
         ],
         "import" => [
             kw_storage::import::TableReport,
@@ -244,6 +245,8 @@ fn render() -> String {
             crate::local_model::LocalStatus,
             crate::local_model::RefreshOutcome,
             crate::local_model::InstallProgress,
+            crate::speech_install::SpeechInstall,
+            crate::speech_install::SpeechInstallSnapshot,
             crate::local_asr::UsedFor,
             crate::local_asr::SherpaModelStatus,
             crate::local_asr::SherpaStatus,

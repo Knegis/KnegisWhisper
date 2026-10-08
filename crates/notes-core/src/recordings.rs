@@ -85,7 +85,7 @@ pub enum PurgeError {
     /// the one that wouldn't go is gone -- and trying again finishes.
     #[error(
         "A recording in Trash couldn't be deleted from this computer, so the notes are still in \
-         Trash. Close any app that may be using it and try again."
+         Trash. Some recordings may already have been removed. Close any app that may be using the remaining recording and try again."
     )]
     RecordingKept,
     /// The recordings were removed, but the notes couldn't then be: they are
@@ -140,7 +140,7 @@ pub async fn delete_forever(
 /// Meetings › Interrupted -- a recording deleted forever, offered back, with
 /// no error anyone saw. The worst this order leaves is notes still in Trash
 /// whose recordings are gone -- after a failed removal of a later file, a
-/// failed commit, or a power loss before the commit reached the disk -- and
+/// failed commit, an app crash or force-quit, or a power loss before the commit reached the disk -- and
 /// pressing again finishes, the missing files counting as removed.
 pub async fn empty_trash(
     pool: &SqlitePool,
@@ -237,6 +237,26 @@ pub async fn delete_attached(
     directory: &Path,
     details: &str,
 ) -> Result<bool, String> {
+    delete_attached_inner(pool, note_id, directory, Some(details), None).await
+}
+
+/// Delete only the recording named by a durable deletion request, on a live note.
+pub async fn delete_attached_expected(
+    pool: &SqlitePool,
+    note_id: i64,
+    directory: &Path,
+    expected_key: &str,
+) -> Result<bool, String> {
+    delete_attached_inner(pool, note_id, directory, None, Some(expected_key)).await
+}
+
+async fn delete_attached_inner(
+    pool: &SqlitePool,
+    note_id: i64,
+    directory: &Path,
+    details: Option<&str>,
+    expected_key: Option<&str>,
+) -> Result<bool, String> {
     let failed =
         |error: sqlx::Error| format!("could not delete the recording's attachment: {error}");
     let (busy, log, checkpointed): (i64, i64, i64) = sqlx::query_as("PRAGMA wal_checkpoint(FULL)")
@@ -250,10 +270,10 @@ pub async fn delete_attached(
                 .to_owned(),
         );
     }
-    let mut tx = pool.begin().await.map_err(failed)?;
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await.map_err(failed)?;
     let key: Option<String> =
-        sqlx::query_scalar("DELETE FROM note_recordings WHERE note_id = ? RETURNING storage_key")
-            .bind(note_id)
+        sqlx::query_scalar("DELETE FROM note_recordings WHERE note_id = ? AND (? IS NULL OR (storage_key = ? AND EXISTS(SELECT 1 FROM notes WHERE id=note_id AND trashed_at IS NULL) AND EXISTS(SELECT 1 FROM note_recording_state s WHERE s.note_id=note_recordings.note_id AND s.storage_key=note_recordings.storage_key AND s.status IN ('delete-pending','delete-failed')))) RETURNING storage_key")
+            .bind(note_id).bind(expected_key).bind(expected_key)
             .fetch_optional(&mut *tx)
             .await
             .map_err(failed)?;
@@ -267,12 +287,16 @@ pub async fn delete_attached(
             "refused to delete a recording with an invalid name: {key}"
         ));
     };
-    sqlx::query(ADD_DETAILS)
-        .bind(details)
-        .bind(note_id)
-        .execute(&mut *tx)
-        .await
-        .map_err(failed)?;
+    if let Some(details) = details {
+        sqlx::query(ADD_DETAILS)
+            .bind(details)
+            .bind(note_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(failed)?;
+    }
+    sqlx::query("UPDATE note_recording_state SET status='deleted',last_error=NULL WHERE note_id=? AND storage_key=? AND status IN ('delete-pending','delete-failed')")
+        .bind(note_id).bind(&key).execute(&mut *tx).await.map_err(failed)?;
     match tokio::fs::remove_file(&path).await {
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -973,7 +997,7 @@ mod tests {
         assert_eq!(
             error.to_string(),
             "A recording in Trash couldn't be deleted from this computer, so the notes are \
-             still in Trash. Close any app that may be using it and try again."
+             still in Trash. Some recordings may already have been removed. Close any app that may be using the remaining recording and try again."
         );
         for id in [plain, locked] {
             assert!(crate::trash::is_trashed(p, id).await.unwrap(), "{id}");

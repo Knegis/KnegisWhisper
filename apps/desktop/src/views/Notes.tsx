@@ -80,7 +80,7 @@ import {
   getNoteSummaries,
   getNote,
   getNoteSummaryMetadata,
-  getPeople,
+  getPeoplePage,
   getTrash,
   restoreNote,
   searchNotes,
@@ -190,13 +190,16 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
     setCollapsed(prev => { if (!prev.has(folderId)) return prev; const next = new Set(prev); next.delete(folderId); return next; });
   }, []);
 
+  const [peopleShown, setPeopleShown] = useState(50);
+  const [peopleLoading, setPeopleLoading] = useState(false);
   const selectionGeneration = useRef(0);
   const load = useCallback(async () => {
-    const [notes, folders, people, trash] = await Promise.all([getNoteSummaries(), getFolders(), getPeople(), getTrash()]);
+    const [notes, folders, people, trash] = await Promise.all([getNoteSummaries(), getFolders(), getPeoplePage(), getTrash()]);
     return { notes, folders, people, trash };
   }, []);
 
   const { data, error, guard, reload, fail, revision, beginUpdate, apply, isCurrent, clearError } = useNotesLibrary(load);
+  useEffect(() => { setPeopleShown(50); }, [revision]);
 
   // The person the library is narrowed to (KNEG-362), by email, and their notes as Rust lists them:
   // found among every note rather than picked from the library's newest hundred, and, as the
@@ -236,6 +239,12 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
   // focus twice. `from` is what had focus when the action was pressed: focus moves only while nothing
   // else has taken it since, so a person who put it somewhere while the action finished, or while the
   // title waited for its editor, keeps it there.
+  const interaction = useRef(0);
+  useEffect(() => {
+    const advance = () => { interaction.current++; };
+    document.addEventListener("pointerdown", advance, true); document.addEventListener("keydown", advance, true);
+    return () => { document.removeEventListener("pointerdown", advance, true); document.removeEventListener("keydown", advance, true); };
+  }, []);
   const [focusAfter, setFocusAfter] = useState<{ target: FocusTarget; from: Element | null; at: number } | null>(null);
 
   const [query, setQuery] = useState("");
@@ -285,6 +294,9 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
       const active = document.activeElement;
       return active === null || active === document.body || active === focusAfter.from || !active.isConnected;
     };
+    const cancel = () => { clearInterval(timer); };
+    document.addEventListener("pointerdown", cancel);
+    document.addEventListener("keydown", cancel);
     let tries = 0;
     const timer = setInterval(() => {
       if (!untouched()) { clearInterval(timer); return; }
@@ -294,7 +306,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
         element?.focus();
       }
     }, 50);
-    return () => clearInterval(timer);
+    return () => { clearInterval(timer); document.removeEventListener("pointerdown", cancel); document.removeEventListener("keydown", cancel); };
   }, [focusAfter]);
   const focusLater = (target: FocusTarget, from: Element | null) => setFocusAfter({ target, from, at: Date.now() });
   // A note opens at its top. The pane outlives the note inside it, so on its own it keeps the
@@ -365,7 +377,8 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
       } : current);
       // Timestamp changes can change the newest name chosen for an email.
       if (saved && readParticipants(saved.participants).some(person => person.email !== null)) {
-        const people = await getPeople();
+        const people = await getPeoplePage();
+        if (isCurrent(token)) setPeopleShown(50);
         apply(token, current => ({ ...current, people }));
       }
       if (!isCurrent(token)) return;
@@ -407,6 +420,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
   // place.
   const moveToTrash = (note: NoteListItem | Note) => {
     const from = document.activeElement;
+    const interactionAtStart = interaction.current;
     void finished(async () => {
       const wasOpen = note.id === openNoteId;
       if (wasOpen) await workspaceRef.current?.flush();
@@ -414,20 +428,22 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
       const shownWith = wasOpen ? await openNewest(false) : openNoteId;
       setMoved({ id: note.id, title: note.title, reopen: wasOpen, shownWith });
       return true;
-    }).then(done => { if (done) focusLater("undo", from); });
+    }).then(done => { if (done && interactionAtStart === interaction.current) focusLater("undo", from); });
   };
   const undoTrash = () => {
     if (moved === null) return;
     const from = document.activeElement;
+    const interactionAtStart = interaction.current;
     const { id, reopen } = moved;
     setMoved(null);
     void finished(async () => { if ((await restoreNote(id)) && reopen) await selectNote(id); return true; })
-      .then(done => { if (done) focusLater("title", from); });
+      .then(done => { if (done && interactionAtStart === interaction.current) focusLater("title", from); });
   };
   // Restore, from a note in Trash: it comes back to the library, open, in its folder -- or in none,
   // when its folder was deleted meanwhile -- with focus on its title.
   const restoreTrashed = (note: Note) => {
     const from = document.activeElement;
+    const interactionAtStart = interaction.current;
     void finished(async () => {
       if (!(await restoreNote(note.id))) return false;
       setMoved(current => (current?.id === note.id ? null : current));
@@ -435,7 +451,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
       const back = await getNote(note.id);
       if (back) { setRequestedNote(back); reveal(back.folderId); }
       return true;
-    }).then(done => { if (done) focusLater("title", from); });
+    }).then(done => { if (done && interactionAtStart === interaction.current) focusLater("title", from); });
   };
   // Delete forever and Empty trash ask first, from what Trash holds now, so the question names the
   // recordings that would go. Inside Trash, focus goes to its page; reached by Back, to the note that
@@ -443,6 +459,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
   const deleteForever = (id: number) => {
     const inTrash = trashOpen;
     const from = document.activeElement;
+    const interactionAtStart = interaction.current;
     void finished(async () => {
       const entry = (await getTrash()).notes.find(item => item.id === id);
       if (!entry || !window.confirm(deleteForeverQuestion(entry))) return false;
@@ -450,12 +467,13 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
       setMoved(current => (current?.id === id ? null : current));
       if (id === openNoteId) await openNewest(inTrash);
       return true;
-    }).then(done => { if (done) focusLater(inTrash ? "trash" : "title", from); });
+    }).then(done => { if (done && interactionAtStart === interaction.current) focusLater(inTrash ? "trash" : "title", from); });
   };
   // Only the notes the question counted: one moved to Trash while it was open -- through the local
   // API, say -- isn't among them, and Rust leaves it in Trash.
   const emptyAll = () => {
     const from = document.activeElement;
+    const interactionAtStart = interaction.current;
     void finished(async () => {
       const held = await getTrash();
       if (held.notes.length === 0 || !window.confirm(emptyTrashQuestion(held))) return false;
@@ -464,7 +482,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
       setMoved(current => (current !== null && gone(current.id) ? null : current));
       if (gone(openNoteId)) await openNewest(true);
       return true;
-    }).then(done => { if (done) focusLater("trash", from); });
+    }).then(done => { if (done && interactionAtStart === interaction.current) focusLater("trash", from); });
   };
   const newNote = () => guard(async () => {
     await workspaceRef.current?.flush();
@@ -552,7 +570,9 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
     );
   }
 
-  const { notes, folders, people, trash } = data;
+  const { notes, folders, people: peopleRead, trash } = data;
+  const people = peopleRead.slice(0, peopleShown);
+  const morePeople = peopleRead.length > peopleShown;
   const openNote = requestedNote?.id === openNoteId ? requestedNote : null;
   // A note in Trash, reached from Trash or by Back, opens read-only.
   const trashedView = openNote !== null && openNote.trashedAt !== null
@@ -587,6 +607,16 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
 
   // Everyone named by email on a note, with how many notes they are on (KNEG-362). Pressing one
   // narrows the library to their notes; pressing it again, or Show all notes, brings the tree back.
+  const showMorePeople = async () => {
+    if (peopleLoading) return;
+    setPeopleLoading(true);
+    const token = beginUpdate();
+    try {
+      const next = await getPeoplePage(51, peopleShown);
+      if (isCurrent(token)) { apply(token, current => ({ ...current, people: [...current.people.slice(0, peopleShown), ...next] })); setPeopleShown(count => count + 50); }
+    } catch (cause) { if (isCurrent(token)) fail(cause); }
+    finally { setPeopleLoading(false); }
+  };
   const peopleSection = people.length === 0 ? (
     <div className="panel-section">
       <h2 className="panel-label">People</h2>
@@ -607,6 +637,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
           </button>
         );
       })}
+      {morePeople && <button type="button" className="panel-inline" disabled={peopleLoading} onClick={() => { void showMorePeople(); }}>{peopleLoading ? "Loading people…" : "Show more people"}</button>}
     </PanelSection>
   );
   // In place of the tree while a person is pressed, as search hits are: their notes, fetched from

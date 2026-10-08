@@ -77,11 +77,21 @@ impl MicRecorder {
     /// Start the microphone thread. It lives as long as the application.
     #[must_use]
     pub fn spawn() -> Self {
+        Self::spawn_with(
+            crate::capture_interlock::CaptureInterlock::shared(),
+            |device| kw_audio_core::Capture::start(device).map_err(|error| error.to_string()),
+        )
+    }
+
+    fn spawn_with(
+        gate: Arc<crate::capture_interlock::CaptureInterlock>,
+        start: impl FnMut(Option<&str>) -> Result<kw_audio_core::Capture, String> + Send + 'static,
+    ) -> Self {
         let (tx, rx) = mpsc::channel::<MicCommand>();
 
         std::thread::Builder::new()
             .name("kw-microphone".to_owned())
-            .spawn(move || Self::serve(rx))
+            .spawn(move || Self::serve(rx, gate, start))
             // A thread we cannot start means dictation cannot work, but it must
             // not stop the application launching: the settings screen is how the
             // user would find out why.
@@ -122,8 +132,13 @@ impl MicRecorder {
     }
 
     /// The thread body. Owns the `cpal::Stream` for its whole life.
-    fn serve(rx: mpsc::Receiver<MicCommand>) {
+    fn serve(
+        rx: mpsc::Receiver<MicCommand>,
+        gate: Arc<crate::capture_interlock::CaptureInterlock>,
+        mut start: impl FnMut(Option<&str>) -> Result<kw_audio_core::Capture, String>,
+    ) {
         let mut active: Option<kw_audio_core::Capture> = None;
+        let mut _microphone_use = None;
 
         while let Ok(command) = rx.recv() {
             match command {
@@ -131,11 +146,20 @@ impl MicRecorder {
                     // Dropping any previous capture stops that stream first, so
                     // two starts in a row cannot leave the microphone open.
                     active = None;
-                    let started = kw_audio_core::Capture::start(device.as_deref());
+                    _microphone_use = None;
+                    let lease = match gate.recording() {
+                        Ok(lease) => lease,
+                        Err(error) => {
+                            let _ = reply.send(Err(error));
+                            continue;
+                        }
+                    };
+                    let started = start(device.as_deref());
                     let answer = match started {
                         Ok(capture) => {
                             let level = capture.level();
                             active = Some(capture);
+                            _microphone_use = Some(lease);
                             Ok(level)
                         }
                         Err(err) => Err(err.to_string()),
@@ -148,6 +172,7 @@ impl MicRecorder {
                         || Err("the microphone was not open".to_owned()),
                         |capture| Ok(capture.finish()),
                     );
+                    _microphone_use = None;
                     let _ = reply.send(answer);
                 }
 
@@ -155,6 +180,7 @@ impl MicRecorder {
                     // Drop stops the stream, which is what closes the operating
                     // system's own recording indicator.
                     active = None;
+                    _microphone_use = None;
                 }
             }
         }
@@ -1806,21 +1832,47 @@ mod tests {
         assert_eq!(cleanup.clean("um, hello there").await, "um, hello there");
     }
 
-    // Ignored so `cargo test` never opens the microphone on its own, where
-    // there is one: run it by hand with `--ignored`.
+    #[tokio::test]
+    async fn the_microphone_thread_answers_even_with_no_microphone() {
+        let gate = Arc::default();
+        let recorder = MicRecorder::spawn_with(gate, |_| Err("invented missing microphone".into()));
+        let answer = tokio::time::timeout(std::time::Duration::from_secs(2), recorder.start())
+            .await
+            .unwrap();
+        assert!(matches!(answer, Err(DictationError::Microphone(_))));
+        recorder.cancel().await;
+    }
+
+    #[tokio::test]
+    async fn microphone_check_refuses_dictation_before_the_capture_factory_runs() {
+        let gate = Arc::new(crate::capture_interlock::CaptureInterlock::default());
+        let checking = gate.check().unwrap();
+        let opened = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let recorder = MicRecorder::spawn_with(Arc::clone(&gate), {
+            let opened = Arc::clone(&opened);
+            move |_| {
+                opened.store(true, std::sync::atomic::Ordering::Release);
+                Err("invented missing microphone".into())
+            }
+        });
+        assert!(recorder.start().await.is_err());
+        assert!(!opened.load(std::sync::atomic::Ordering::Acquire));
+        drop(checking);
+        assert!(recorder.start().await.is_err());
+        assert!(opened.load(std::sync::atomic::Ordering::Acquire));
+    }
+
+    /// Explicit opt-in hardware smoke; the ordinary thread reply proof above uses a fake factory.
     #[tokio::test]
     #[ignore = "opens the real microphone"]
-    async fn the_microphone_thread_answers_even_with_no_microphone() {
-        // CI has no input device. The point is that the thread replies rather
-        // than hanging, so a dictation fails with a message instead of wedging
-        // the hotkey forever.
+    async fn a_real_microphone_thread_answers_or_reports_open_failure() {
         let recorder = MicRecorder::spawn();
-        match recorder.start().await {
-            Ok(()) => {
-                // A real device exists on this machine; close it again.
-                recorder.cancel().await;
-            }
-            Err(err) => assert!(matches!(err, DictationError::Microphone(_))),
+        let answer = tokio::time::timeout(std::time::Duration::from_secs(10), recorder.start())
+            .await
+            .expect("microphone driver answered");
+        match answer {
+            Ok(()) => recorder.cancel().await,
+            Err(error) => assert!(matches!(error, DictationError::Microphone(_))),
         }
     }
 
