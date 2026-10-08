@@ -10,6 +10,11 @@ while no meeting is running, by that name when it has one, and offers recovery
 one recording at a time. Nothing is transcribed or saved until the user presses
 **Recover** on a row.
 
+A note in Trash (KNEG-401) still owns its WAV -- Restore brings the recording back
+with it -- so that WAV is attached, not interrupted, and is never offered here; it is
+removed only when the note is deleted forever or Trash is emptied, once that deletion
+is on disk.
+
 Recovery checks that the WAV is still a regular, unattached file in the owned
 directory. A WAV left open by `WavWriter` has zero lengths in its header; the
 recovery action validates its exact 16 kHz mono PCM format and fills in those

@@ -14,7 +14,7 @@ use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 
 use kw_notes_core::{
-    notes, people, recordings as note_recordings, speakers, transcript, NoteRecording,
+    notes, people, recordings as note_recordings, speakers, transcript, trash, NoteRecording,
     TranscriptRow,
 };
 use kw_platform::hotkey::{self, Binding, HotkeyAction, HotkeyMode};
@@ -33,6 +33,24 @@ fn fail(context: &str, err: impl std::fmt::Display) -> String {
     // Deliberately not `{err:?}`: Debug on some error types is more verbose than
     // anything a user should read, and redaction is implemented on Display.
     format!("{context}: {err}")
+}
+
+/// What an edit of a note in Trash is told (KNEG-401). The screen never edits
+/// one -- a note in Trash opens read-only -- so this is for a save that was
+/// already on its way when the note went.
+pub(crate) const IN_TRASH: &str = "This note is in Trash. Restore it to edit it.";
+
+/// A write to note `id` that changed nothing: refused in plain words when the
+/// note is in Trash, and `Ok(false)` as before when it isn't there at all.
+async fn unless_in_trash(state: &AppState, id: i64, changed: bool) -> CmdResult<bool> {
+    if !changed
+        && trash::is_trashed(state.db().pool(), id)
+            .await
+            .map_err(|e| fail("could not read the note", e))?
+    {
+        return Err(IN_TRASH.to_owned());
+    }
+    Ok(changed)
 }
 
 #[cfg(all(test, feature = "tauri-test"))]
@@ -1281,7 +1299,7 @@ async fn save_participants(
             email: request.email,
         })
         .collect();
-    people::set_participants(state.db().pool(), id, &list)
+    let saved = people::set_participants(state.db().pool(), id, &list)
         .await
         .map_err(|error| match error {
             refused @ (people::PeopleError::NotAnEmail(_)
@@ -1289,7 +1307,8 @@ async fn save_participants(
             | people::PeopleError::TooMany) => refused.to_string(),
             people::PeopleError::Storage(e) => fail("could not save the note's people", e),
             people::PeopleError::Encode(e) => fail("could not save the note's people", e),
-        })
+        })?;
+    unless_in_trash(state, id, saved).await
 }
 
 /// Full-text search across notes.
@@ -1313,7 +1332,8 @@ pub async fn notes_search(
         .map_err(|e| fail("could not search notes", e))
 }
 
-/// One note, or `None` if there is no such id.
+/// One note, or `None` if there is no such id. A note in Trash is returned
+/// too, with `trashedAt`, so the screen can show it as in Trash (KNEG-401).
 #[tauri::command]
 pub async fn notes_get(state: State<'_, AppState>, id: i64) -> CmdResult<Option<notes::Note>> {
     notes::get(state.db().pool(), id)
@@ -1346,44 +1366,93 @@ pub async fn notes_create(state: State<'_, AppState>, request: NewNoteRequest) -
     .map_err(|e| fail("could not create the note", e))
 }
 
-/// Apply a partial update. Returns whether the note existed.
+/// Apply a partial update. Returns whether the note existed; a note in Trash
+/// is refused in plain words (KNEG-401).
 #[tauri::command]
 pub async fn notes_update(
     state: State<'_, AppState>,
     id: i64,
     request: NoteUpdateRequest,
 ) -> CmdResult<bool> {
-    let change = request.validate()?;
-
-    notes::update(state.db().pool(), id, &change)
-        .await
-        .map_err(|e| fail("could not save the note", e))
+    update_note(&state, id, request).await
 }
 
-/// Delete a note and its application-owned recording. Returns whether the note
-/// existed.
-///
-/// Both desktop and local HTTP API use the shared transactional deletion path.
+/// `notes_update`'s work, apart from Tauri's `State` so a test can run it.
+async fn update_note(state: &AppState, id: i64, request: NoteUpdateRequest) -> CmdResult<bool> {
+    let change = request.validate()?;
+
+    let changed = notes::update(state.db().pool(), id, &change)
+        .await
+        .map_err(|e| fail("could not save the note", e))?;
+    unless_in_trash(state, id, changed).await
+}
+
+/* -------------------------------------------------------------- trash */
+
+/// Move a note to Trash (KNEG-401). Returns whether it moved: `false` for a
+/// note that isn't there or is already in Trash. Nothing is deleted, its
+/// recording included; Restore brings it back, and only a person empties
+/// Trash. This is what Delete does, on the screen and through the local API.
 #[tauri::command]
-pub async fn notes_delete(state: State<'_, AppState>, id: i64) -> CmdResult<bool> {
-    note_recordings::delete_with_recording(state.db().pool(), id, state.recording_directory())
+pub async fn notes_trash(state: State<'_, AppState>, id: i64) -> CmdResult<bool> {
+    trash::trash(state.db().pool(), id)
+        .await
+        .map_err(|e| fail("could not move the note to Trash", e))
+}
+
+/// Bring a note back from Trash. Returns whether it came back: `false` for a
+/// note that isn't there or isn't in Trash.
+#[tauri::command]
+pub async fn notes_restore(state: State<'_, AppState>, id: i64) -> CmdResult<bool> {
+    trash::restore(state.db().pool(), id)
+        .await
+        .map_err(|e| fail("could not restore the note", e))
+}
+
+/// Delete a note in Trash forever, with its recording. Returns whether it
+/// went: `false` for a note that isn't there or isn't in Trash -- a live note
+/// is never deleted forever. The original of an imported recording is never
+/// the app's, so it is never touched.
+#[tauri::command]
+pub async fn notes_delete_forever(state: State<'_, AppState>, id: i64) -> CmdResult<bool> {
+    note_recordings::delete_forever(state.db().pool(), id, state.recording_directory())
         .await
         .map_err(|e| fail("could not delete the note", e))
+}
+
+/// Everything in Trash, most recently trashed first, with what their
+/// recordings take on this computer.
+#[tauri::command]
+pub async fn notes_trash_list(state: State<'_, AppState>) -> CmdResult<trash::TrashSummary> {
+    trash::list(state.db().pool(), state.recording_directory())
+        .await
+        .map_err(|e| fail("could not list Trash", e))
+}
+
+/// Delete every note in Trash forever, with their recordings. Returns how
+/// many notes went.
+#[tauri::command]
+pub async fn notes_empty_trash(state: State<'_, AppState>) -> CmdResult<u64> {
+    note_recordings::empty_trash(state.db().pool(), state.recording_directory())
+        .await
+        .map_err(|e| fail("could not empty Trash", e))
 }
 
 /// Move a note into a folder, or out of every folder with `folderId: null`.
 ///
 /// `notes_update` cannot express "no folder": its `folderId` is absent or
 /// set, as a partial update's should be. This is the one call that unfiles.
+/// A note in Trash is refused in plain words (KNEG-401).
 #[tauri::command]
 pub async fn notes_set_folder(
     state: State<'_, AppState>,
     id: i64,
     folder_id: Option<i64>,
 ) -> CmdResult<bool> {
-    notes::set_folder(state.db().pool(), id, folder_id)
+    let moved = notes::set_folder(state.db().pool(), id, folder_id)
         .await
-        .map_err(|e| fail("could not move the note", e))
+        .map_err(|e| fail("could not move the note", e))?;
+    unless_in_trash(&state, id, moved).await
 }
 
 /// A note's speaker name is one edit for every segment with that raw label.
@@ -1397,9 +1466,11 @@ pub async fn note_speaker_rename(
     if speaker_id.trim().is_empty() {
         return Err("a speaker id cannot be blank".to_owned());
     }
-    speakers::rename(state.db().pool(), id, &speaker_id, &name)
+    let renamed = speakers::rename(state.db().pool(), id, &speaker_id, &name)
         .await
-        .map_err(|e| fail("could not rename the speaker", e))?
+        .map_err(|e| fail("could not rename the speaker", e))?;
+    unless_in_trash(&state, id, renamed)
+        .await?
         .then_some(())
         .ok_or_else(|| "there is no note with that id".to_owned())
 }
@@ -2058,6 +2129,7 @@ mod tests {
             transcribed_by: None,
             created_at: Some("2026-08-25 10:00:00".to_owned()),
             updated_at: Some("2026-08-25 10:05:00".to_owned()),
+            trashed_at: None,
         };
 
         let json = serde_json::to_value(&note).unwrap();
@@ -2084,6 +2156,7 @@ mod tests {
                 "title",
                 "transcribedBy",
                 "transcript",
+                "trashedAt",
                 "updatedAt",
             ]
         );
@@ -2409,6 +2482,68 @@ mod tests {
             .collect();
         keys.sort_unstable();
         assert_eq!(keys, ["email", "name", "noteCount"]);
+    }
+
+    /* -------------------------------------------------------------- trash */
+
+    /// KNEG-401. An edit of a note in Trash -- a save already on its way
+    /// when the note went -- is refused in words the screen shows as they
+    /// are, and changes nothing. A note that isn't there is still `false`,
+    /// and a restored note is edited again.
+    #[tokio::test]
+    async fn an_edit_of_a_note_in_trash_says_it_is_in_trash() {
+        let s = state().await;
+        let pool = s.db().pool();
+        let id = notes::create(
+            pool,
+            &notes::NewNote {
+                title: "Kickoff".to_owned(),
+                participants: Some(r#"[{"email":"anna@example.com"}]"#.to_owned()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert!(trash::trash(pool, id).await.unwrap());
+        let retitle = || NoteUpdateRequest {
+            title: Some("Changed".to_owned()),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            update_note(&s, id, retitle()).await.unwrap_err(),
+            "This note is in Trash. Restore it to edit it."
+        );
+        assert_eq!(
+            save_participants(&s, id, vec![participant(None, Some("maja@example.com"))])
+                .await
+                .unwrap_err(),
+            IN_TRASH
+        );
+        assert_eq!(update_note(&s, 404, retitle()).await, Ok(false));
+        let kept = notes::get(pool, id).await.unwrap().unwrap();
+        assert_eq!(kept.title, "Kickoff");
+        assert_eq!(
+            kept.participants.as_deref(),
+            Some(r#"[{"email":"anna@example.com"}]"#)
+        );
+        assert!(list_notes(&s, None, None, None, None)
+            .await
+            .unwrap()
+            .is_empty());
+        assert!(
+            list_notes(&s, None, None, Some("anna@example.com".into()), None)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+
+        assert!(trash::restore(pool, id).await.unwrap());
+        assert_eq!(update_note(&s, id, retitle()).await, Ok(true));
+        assert_eq!(
+            list_notes(&s, None, None, None, None).await.unwrap()[0].title,
+            "Changed"
+        );
     }
 
     #[tokio::test]

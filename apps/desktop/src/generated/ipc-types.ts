@@ -1044,7 +1044,15 @@ export type Note = { id: number, title: string, content: string, recordingDetail
  * never recorded -- notes from before then, typed notes, and OpenWhispr
  * and shared-folder imports.
  */
-transcribedBy: string | null, createdAt: string | null, updatedAt: string | null, };
+transcribedBy: string | null, createdAt: string | null, updatedAt: string | null,
+/**
+ * When the note was moved to Trash (KNEG-401), `None` while it is not in
+ * it. A note in Trash is the same row with this set: it keeps its
+ * recording, its search index rows and its people, and every list,
+ * search and count leaves it out until it is restored. Only [`get`]
+ * returns it, so the screen can say it is in Trash.
+ */
+trashedAt: string | null, };
 
 /**
  * A folder.
@@ -1135,6 +1143,40 @@ name: string | null,
  * How many notes they are on.
  */
 noteCount: number, };
+
+/**
+ * A note in Trash, as the Trash lists it.
+ */
+export type TrashedNote = { id: number, title: string,
+/**
+ * When it was moved to Trash, as SQLite's `CURRENT_TIMESTAMP` writes it.
+ */
+trashedAt: string,
+/**
+ * Whether a recording is attached: it is deleted with the note.
+ */
+hasRecording: boolean,
+/**
+ * The attached recording's length. `None` with no recording, or one
+ * whose length was never measured.
+ */
+recordingSeconds: number | null,
+/**
+ * What the recording's file takes on disk, read from the file itself. 0
+ * with no recording, or one whose file is missing.
+ */
+recordingBytes: number,
+/**
+ * The name of the file the recording was copied from, for an import. The
+ * original was never the app's and deleting forever doesn't touch it.
+ */
+originalFilename: string | null, };
+
+/**
+ * Everything in Trash, most recently trashed first, and what their
+ * recordings take on this computer altogether.
+ */
+export type TrashSummary = { notes: Array<TrashedNote>, recordingBytes: number, };
 
 /**
  * Which format to emit.

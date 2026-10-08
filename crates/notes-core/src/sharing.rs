@@ -145,7 +145,7 @@ pub async fn preview(
         .await
         .map_err(err)?
         .ok_or("This folder no longer exists.")?;
-    let rows = sqlx::query("SELECT n.id,n.title,r.storage_key,LENGTH(CAST(n.content AS BLOB))+COALESCE(LENGTH(CAST(n.transcript AS BLOB)),0)+COALESCE(LENGTH(CAST(n.enhanced_content AS BLOB)),0)+COALESCE(LENGTH(CAST(m.source_transcript AS BLOB)),0) AS text_bytes FROM notes n LEFT JOIN note_recordings r ON r.note_id=n.id LEFT JOIN note_summary_meta m ON m.note_id=n.id WHERE n.folder_id=? ORDER BY n.created_at,n.id LIMIT 10001")
+    let rows = sqlx::query("SELECT n.id,n.title,r.storage_key,LENGTH(CAST(n.content AS BLOB))+COALESCE(LENGTH(CAST(n.transcript AS BLOB)),0)+COALESCE(LENGTH(CAST(n.enhanced_content AS BLOB)),0)+COALESCE(LENGTH(CAST(m.source_transcript AS BLOB)),0) AS text_bytes FROM notes n LEFT JOIN note_recordings r ON r.note_id=n.id LEFT JOIN note_summary_meta m ON m.note_id=n.id WHERE n.folder_id=? AND n.trashed_at IS NULL ORDER BY n.created_at,n.id LIMIT 10001")
         .bind(folder_id).fetch_all(pool).await.map_err(err)?;
     if rows.len() > MAX_NOTES {
         return Err("A shared folder can contain at most 10,000 notes.".into());
@@ -202,8 +202,9 @@ pub async fn capture(
     let mut notes = Vec::new();
     let mut document_bytes = 0;
     // Every column `Note` decodes, so a column added to it is read here too.
+    // A note moved to Trash since the preview is not packed (KNEG-401).
     let select_note = format!(
-        "SELECT {} FROM notes WHERE id=? AND folder_id=?",
+        "SELECT {} FROM notes WHERE id=? AND folder_id=? AND trashed_at IS NULL",
         crate::notes::COLUMNS
     );
     for id in ids {

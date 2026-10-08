@@ -11,6 +11,8 @@
 //! Users type prose; FTS5 reads expressions.
 //!
 //! [`people`] is who a note was with, told apart by email (KNEG-362).
+//!
+//! [`trash`] is where a deleted note waits until it is emptied (KNEG-401).
 
 pub mod document;
 pub mod notes;
@@ -19,6 +21,7 @@ pub mod recordings;
 pub mod sharing;
 pub mod speakers;
 pub mod transcript;
+pub mod trash;
 
 pub use notes::{
     escape_query, search, Folder, NewNote, Note, NoteUpdate, SearchHit, SearchHitRow, TranscribedBy,

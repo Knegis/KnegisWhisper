@@ -13,7 +13,7 @@ const FIXTURE_101 = JSON.stringify([
 const note = (overrides: Partial<Note> = {}): Note => ({
   id: 101, title: "Weekly sync — platform", content: "", recordingDetails: null, noteType: "meeting",
   enhancedContent: null, folderId: 3, transcript: null, participants: FIXTURE_101,
-  audioDurationSeconds: 1847, transcribedBy: null, createdAt: "2026-08-26T09:00:00Z", updatedAt: "2026-08-26T09:31:00Z",
+  audioDurationSeconds: 1847, transcribedBy: null, createdAt: "2026-08-26T09:00:00Z", updatedAt: "2026-08-26T09:31:00Z", trashedAt: null,
   ...overrides,
 });
 const folders: Folder[] = [

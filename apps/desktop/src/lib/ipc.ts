@@ -150,6 +150,8 @@ import type {
   TranscriptEvent,
   Transcription,
   TranscriptRow,
+  TrashedNote,
+  TrashSummary,
   UnhandledAction,
   UpdateCheckResult,
   VerifiedBy,
@@ -272,6 +274,8 @@ export type {
   TranscriptEvent,
   Transcription,
   TranscriptRow,
+  TrashedNote,
+  TrashSummary,
   UnhandledAction,
   UpdateCheckResult,
   VerifiedBy,
@@ -839,8 +843,39 @@ export async function setNoteFolder(id: number, folderId: number | null): Promis
   return invoke<boolean>("notes_set_folder", { id, folderId });
 }
 
-export async function deleteNote(id: number): Promise<boolean> {
-  return invoke<boolean>("notes_delete", { id });
+/* --------------------------------------------------------------------- trash */
+
+/**
+ * Move a note to Trash (KNEG-401): what Delete does, with nothing deleted.
+ * Returns whether it moved -- `false` for a note that isn't there or is
+ * already in Trash. `restoreNote` undoes it.
+ */
+export async function trashNote(id: number): Promise<boolean> {
+  return invoke<boolean>("notes_trash", { id });
+}
+
+/** Bring a note back from Trash. Returns whether it came back. */
+export async function restoreNote(id: number): Promise<boolean> {
+  return invoke<boolean>("notes_restore", { id });
+}
+
+/**
+ * Delete a note in Trash forever, with its recording. Returns whether it went:
+ * Rust refuses a note that isn't in Trash, so a live note can never be deleted
+ * for good from here.
+ */
+export async function deleteNoteForever(id: number): Promise<boolean> {
+  return invoke<boolean>("notes_delete_forever", { id });
+}
+
+/** Everything in Trash, most recently trashed first, with what their recordings take. */
+export async function getTrash(): Promise<TrashSummary> {
+  return invoke<TrashSummary>("notes_trash_list");
+}
+
+/** Delete every note in Trash forever, with their recordings. Returns how many went. */
+export async function emptyTrash(): Promise<number> {
+  return invoke<number>("notes_empty_trash");
 }
 
 export async function getFolders(): Promise<Folder[]> {

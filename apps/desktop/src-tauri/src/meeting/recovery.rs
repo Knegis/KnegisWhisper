@@ -111,6 +111,31 @@ mod tests {
         );
     }
 
+    /// KNEG-401. A note in Trash still owns its recording -- Restore brings
+    /// it back with it -- so its WAV is not an interrupted meeting, and
+    /// recovering it would make a second note of the same recording.
+    #[tokio::test]
+    async fn a_recording_whose_note_is_in_trash_is_not_offered() {
+        let db = Db::open_in_memory().await.unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("20261008-090000-a.wav"), b"wav").unwrap();
+        let note = kw_notes_core::notes::NewNote {
+            title: "Board review".into(),
+            ..Default::default()
+        };
+        let (id, _) = kw_notes_core::notes::create_meeting_with_recording(
+            db.pool(),
+            &note,
+            "20261008-090000-a.wav",
+            1.0,
+        )
+        .await
+        .unwrap();
+        assert!(kw_notes_core::trash::trash(db.pool(), id).await.unwrap());
+
+        assert!(scan(&db, dir.path()).await.unwrap().is_empty());
+    }
+
     #[tokio::test]
     async fn an_interrupted_recording_is_offered_under_the_name_it_was_given() {
         // KNEG-365: the name typed before Start is in the plan beside the WAV.

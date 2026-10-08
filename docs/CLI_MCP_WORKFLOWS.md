@@ -42,8 +42,10 @@ returns HTTP 202 with a job ID. Poll `GET /v1/jobs/{id}`. A job advances through
 
 UI imports and API imports share one active slot. There is no queue: a second
 import returns conflict. Jobs record timestamps, provider/model, a sanitized error
-and the saved note ID. The successful job and note are committed together. Deleting
-the note clears its reference in the job. Completed metadata survives app restarts;
+and the saved note ID. The successful job and note are committed together. A note
+moved to Trash -- `DELETE /v1/notes/{id}` does that, as Delete in the app does -- keeps
+its reference in the job, though the API answers `404` for the note itself; deleting it
+forever from Trash in the app clears the reference. Completed metadata survives app restarts;
 unfinished work becomes failed with an interruption reason and is never retried
 automatically.
 

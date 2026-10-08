@@ -74,7 +74,9 @@ needs its own format and usability decision.
 
 ## Import and export properties to verify in a prototype
 
-- Export reads a consistent snapshot of the selected notes and related data.
+- Export reads a consistent snapshot of the selected notes and related data. A note in
+  Trash (KNEG-401) is in neither the preview nor a package: one moved there after the
+  preview is refused as moved or deleted.
   Audio copying must account for deletion or missing files during export.
 - Export flushes pending edits before capture and publishes the final file only
   after completion. Missing recordings require an explicit result, not silent loss.

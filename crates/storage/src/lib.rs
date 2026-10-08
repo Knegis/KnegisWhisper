@@ -295,8 +295,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            applied, 10,
-            "initial, note recordings, automation, desktop origin, summary, note workspace, search tokenizer, transcript row, folder sharing, and transcribed-by migrations recorded exactly once"
+            applied, 11,
+            "initial, note recordings, automation, desktop origin, summary, note workspace, search tokenizer, transcript row, folder sharing, transcribed-by, and note trash migrations recorded exactly once"
         );
         second.close().await;
     }
@@ -881,5 +881,60 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(recorded, None);
+    }
+
+    #[tokio::test]
+    async fn trash_migration_leaves_every_note_live() {
+        // KNEG-401. Trash is new: no note was deleted into it before this, so
+        // every note the migration finds stays where it was, and the index
+        // holds only the notes in Trash -- none yet.
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        for migration in [
+            include_str!("../migrations/0001_initial.sql"),
+            include_str!("../migrations/0002_note_recordings.sql"),
+            include_str!("../migrations/0003_automation.sql"),
+            include_str!("../migrations/0004_desktop_import_origin.sql"),
+            include_str!("../migrations/0005_meeting_summaries.sql"),
+            include_str!("../migrations/0006_note_workspace.sql"),
+            include_str!("../migrations/0007_search_tokenizer.sql"),
+            include_str!("../migrations/0008_transcript_rows.sql"),
+            include_str!("../migrations/0009_folder_sharing.sql"),
+            include_str!("../migrations/0010_transcribed_by.sql"),
+        ] {
+            sqlx::raw_sql(migration).execute(&pool).await.unwrap();
+        }
+        for title in ["Kickoff", "Weekly", "Scratch"] {
+            sqlx::query("INSERT INTO notes (title, content) VALUES (?, 'from before')")
+                .bind(title)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+
+        sqlx::raw_sql(include_str!("../migrations/0011_note_trash.sql"))
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let trashed: Vec<Option<String>> =
+            sqlx::query_scalar("SELECT trashed_at FROM notes ORDER BY id")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(trashed, vec![None, None, None]);
+        let index: String = sqlx::query_scalar(
+            "SELECT sql FROM sqlite_schema WHERE type = 'index' AND name = 'idx_notes_trashed'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(
+            index.contains("WHERE trashed_at IS NOT NULL"),
+            "only notes in Trash are indexed: {index}"
+        );
     }
 }

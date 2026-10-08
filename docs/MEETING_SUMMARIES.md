@@ -50,8 +50,9 @@ Long transcripts are extracted in bounded sections, then combined pairwise until
 summary remains. Completed extracts are persisted. Queued work survives restart;
 processing jobs become Interrupted and require explicit Retry. Checkpoints are reused
 only with unchanged settings and source. Stale or cancelled results cannot overwrite
-newer edits, changed sources or deleted notes. A failed summary never rolls back the
-saved transcript, note or recording.
+newer edits, changed sources or deleted notes. Moving a note to Trash cancels a summary
+queued or being made for it, and a note in Trash can't be summarized until it is restored
+(KNEG-401). A failed summary never rolls back the saved transcript, note or recording.
 
 Summary requests have a separate 600-second timeout per request. Empty, refused,
 truncated, invalid-JSON and unknown-source responses fail visibly without automatic

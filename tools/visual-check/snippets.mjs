@@ -786,6 +786,73 @@ export function peopleState() {
 }
 
 /**
+ * Trash (KNEG-401). The panel's Trash row (its count and whether pressed), the
+ * panel's section headings, the library's note titles, the Trash list's rows,
+ * the "Moved to Trash" line and its Undo, Trash's page in the main area, the
+ * read-only note in Trash, and whether a workspace or an editor is open.
+ */
+export function trashState() {
+  return source(`
+    const text = (item) => item.textContent.trim();
+    const panel = document.querySelector('.list-panel');
+    const entry = panel?.querySelector('button.notes-trash') ?? null;
+    const moved = document.querySelector('.notes-notices .notes-moved');
+    const space = document.querySelector('.notes-main .trash-space');
+    const view = document.querySelector('.notes-main .trashed-note');
+    return {
+      entry: entry ? {
+        count: Number(entry.querySelector('.notes-folder-count [aria-hidden]')?.textContent ?? 'NaN'),
+        pressed: entry.getAttribute('aria-pressed') === 'true',
+      } : null,
+      sections: panel ? [...panel.querySelectorAll('.panel-section .panel-label')].map(text) : [],
+      library: panel ? [...panel.querySelectorAll('.notes-entry .notes-entry-title')].map(text) : [],
+      trashed: panel ? [...panel.querySelectorAll('.notes-trashed')].map((row) => ({
+        title: row.querySelector('.notes-entry-title')?.textContent.trim() ?? null,
+        meta: row.querySelector('.panel-item-meta')?.textContent.trim() ?? null,
+        current: row.getAttribute('aria-current') === 'page',
+      })) : [],
+      panelNotes: panel ? [...panel.querySelectorAll('.panel-note')].map(text) : [],
+      moved: moved ? {
+        text: moved.firstChild?.textContent.trim() ?? null,
+        undo: [...moved.querySelectorAll('button')].map(text),
+      } : null,
+      space: space ? {
+        lines: [...space.querySelectorAll('p')].map(text),
+        emptyTrash: space.querySelector('button') ? { text: text(space.querySelector('button')), disabled: space.querySelector('button').disabled } : null,
+      } : null,
+      view: view ? {
+        banner: view.querySelector('.trashed-note-banner p')?.textContent.trim() ?? null,
+        buttons: [...view.querySelectorAll('.trashed-note-banner button')].map(text),
+        title: view.querySelector('.trashed-note-title')?.textContent.trim() ?? null,
+        meta: view.querySelector('.trashed-note-header .note-meta')?.textContent.trim() ?? null,
+        inputs: view.querySelectorAll('input, textarea, [contenteditable="true"]').length,
+      } : null,
+      workspace: Boolean(document.querySelector('.notes-main .note-detail')),
+      title: document.querySelector('.note-detail input[aria-label="Title"]')?.value ?? null,
+      error: document.querySelector('.notes-notices .error')?.textContent.trim() ?? null,
+      innerWidth,
+      scrollWidth: document.scrollingElement.scrollWidth,
+    };
+  `);
+}
+
+/**
+ * Opens a library row's menu as a right-click does: a `contextmenu` event on
+ * the row titled exactly `title`, at its centre.
+ */
+export function openRowMenu(title) {
+  return source(`
+    const wanted = ${JSON.stringify(title)};
+    const row = [...document.querySelectorAll('.list-panel .notes-entry')]
+      .find((item) => item.querySelector('.notes-entry-title')?.textContent === wanted);
+    if (!row) throw new Error('No library row is titled ' + wanted);
+    const rect = row.getBoundingClientRect();
+    row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: rect.left + 10, clientY: rect.top + 10, button: 2 }));
+    return wanted;
+  `);
+}
+
+/**
  * The first chip whose name -- its aria-label, or its text where it has none --
  * starts with `prefix`, as a DOM expression for the other snippets to build on.
  */

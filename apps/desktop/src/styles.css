@@ -2503,11 +2503,13 @@ button.notes-folder-toggle:hover:not(:disabled) { background: var(--panel-hover)
 .notes-hit .panel-item-meta { overflow-wrap: anywhere; }
 /* A person in the library's People list (KNEG-362): a folder's row -- icon, name, count -- that
  * narrows the library while pressed, filled as a current row is. */
-button.notes-person { display: flex; align-items: center; gap: 7px; width: 100%; height: 32px; margin: 0; padding: 0 10px 0 12px; border-radius: 2px; text-align: left; font-size: 14px; line-height: 20px; }
-button.notes-person:hover:not(:disabled) { background: var(--panel-hover); }
-button.notes-person[aria-pressed="true"], button.notes-person[aria-pressed="true"]:hover:not(:disabled) { background: var(--selected); }
-.notes-person > .icon:first-child { color: var(--muted); }
-.notes-person-name { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+/* Trash, at the foot of the panel (KNEG-401), is the same row: icon, name, count, filled while
+ * its notes replace the tree. Its own classes, so nothing counting people counts it. */
+button:is(.notes-person, .notes-trash) { display: flex; align-items: center; gap: 7px; width: 100%; height: 32px; margin: 0; padding: 0 10px 0 12px; border-radius: 2px; text-align: left; font-size: 14px; line-height: 20px; }
+button:is(.notes-person, .notes-trash):hover:not(:disabled) { background: var(--panel-hover); }
+button:is(.notes-person, .notes-trash)[aria-pressed="true"], button:is(.notes-person, .notes-trash)[aria-pressed="true"]:hover:not(:disabled) { background: var(--selected); }
+:is(.notes-person, .notes-trash) > .icon:first-child { color: var(--muted); }
+:is(.notes-person-name, .notes-trash-label) { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 /* Filing by drag: the note in the air fades, the group under the pointer gets the site blue as
  * an outline, and a "No folder" strip appears below the folders while a filed note is being
  * dragged, so taking a note out of a folder has somewhere to land even when nothing is unfiled.
@@ -2578,7 +2580,27 @@ button.notes-person[aria-pressed="true"], button.notes-person[aria-pressed="true
 .note-actions { display: flex; align-items: center; gap: 4px; margin-left: auto; }
 .note-actions .save-status { flex: none; margin: 0 8px 0 0; font-size: 12.5px; }
 button.note-action-button { flex: none; display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; margin: 0; padding: 0; border-radius: 2px; }
-.note-page, .notes-notices > * { max-width: 760px; margin-inline: auto; padding-right: 40px; padding-left: clamp(40px, calc(468px - 50%), 88px); }
+.note-page, .notes-notices > *, .trash-space, .trash-choose { max-width: 760px; margin-inline: auto; padding-right: 40px; padding-left: clamp(40px, calc(468px - 50%), 88px); }
+/*
+ * Trash's page (KNEG-401): what its recordings take and Empty trash, in the note's measure, above
+ * the note in Trash that is open, which reads as a note does but can't be edited: a banner saying
+ * where it is, with Restore and Delete forever, its title as the title field draws one, and its
+ * typed notes as plain text.
+ */
+.trash-space { width: 100%; padding-top: 24px; padding-bottom: 4px; }
+.trash-space > p { margin: 0 0 6px; }
+.trash-space > button { margin: 8px 0 0; }
+.trash-choose { width: 100%; margin-block: 24px 0; }
+.trashed-note { flex: none; }
+.trashed-note-banner { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 10px 14px; border: 1px solid var(--rule); border-radius: 2px; }
+.trashed-note-banner > p { flex: 1 1 12rem; margin: 0; }
+.trashed-note-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.trashed-note-actions > button { margin: 0; }
+.trashed-note-header .note-meta { margin-top: 12px; }
+.trashed-note-title { margin: 22px 0 0; color: var(--text); font-family: inherit; font-size: 32px; line-height: 40px; letter-spacing: -0.4px; text-transform: none; overflow-wrap: anywhere; }
+.trashed-note-text { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.6; }
+/* "Your notes" in the machine voice the workspace's `h2` gives it; an `h3` here, under the title's `h2`. */
+.trashed-note .note-section-heading { margin-top: 24px; font-family: var(--font-mono); line-height: 16px; letter-spacing: 0.5px; text-transform: uppercase; }
 .note-page { padding-top: 14px; padding-bottom: 32px; }
 .note-page > .save-status.error { margin: 0 0 12px; }
 .note-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 18px; margin: 12px 0 0; padding: 0; list-style: none; font-size: 13.5px; line-height: 20px; color: var(--muted); }

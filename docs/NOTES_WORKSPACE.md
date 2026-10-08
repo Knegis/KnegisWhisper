@@ -30,8 +30,8 @@ format limits, recovery behavior and validation commands.
 
 The library — folders, notes and search — is the list panel on the left, beside the
 open note. Coming back to Notes from another page reopens the note that was open, until the
-app closes; the first visit, or one after that note was deleted, opens the most recently
-edited note. The title is a separate autosaved text field above **Notes / Transcript /
+app closes; the first visit, or one after that note was deleted or moved to Trash, opens the
+most recently edited note. The title is a separate autosaved text field above **Notes / Transcript /
 Replay**.
 Notes opens by default, with personal Markdown notes first and an independently
 editable AI summary below. An empty personal note offers **Start from transcript**;
@@ -97,6 +97,28 @@ state: a note opened from it keeps it, and back and forward don't return to it. 
 people are part of what its summary was made from, so changing them marks a finished
 summary out of date and stops one being made; a summary still waiting to start uses the
 people on the note when it starts ([meeting summaries](MEETING_SUMMARIES.md)).
+
+**Trash** (KNEG-401). Delete, in a note's menu, moves the note to Trash without asking:
+"Moved “{title}” to Trash." shows above the note that opens in its place, the newest one,
+with **Undo**. Nothing is deleted: the note keeps its transcript, its recording and the file
+behind it, its people and its speaker names, and nothing empties Trash on its own -- it
+holds a note until a person restores it or empties it. A note in Trash is in no list,
+search, folder count, People count or shared folder, and the title bar's search and the
+Meetings list leave it out too. **Trash**, at the foot of the library under People, says
+how many notes it holds; pressed, its notes replace the tree, most recently deleted first,
+each with when it went and how long its recording runs ("Deleted 3 Oct · 31 min"), and the
+main area says what their recordings take on this computer ("Recordings in Trash take 412
+MB on this computer."), with **Empty trash**. A note in Trash opens read-only, never in the
+editor, so nothing saves into it: "This note is in Trash." with **Restore** and **Delete
+forever**, its title and its typed notes as plain text. The same view shows when Back
+returns to a note moved to Trash since. Restore brings it back as it was, in its folder --
+or in none, when the folder was deleted meanwhile. Delete forever and Empty trash ask first,
+naming the note and its recording's length, or how many notes and what their recordings
+take, and say "Your original file isn't touched." when a recording was copied from an
+imported file; no file name is shown. Discarding a meeting is unchanged: its recording is
+deleted at once, not moved to Trash. The local API's `DELETE /v1/notes/{id}`, the CLI's
+`notes delete` and the MCP `notes_delete` move a note to Trash too, and from then on treat
+it as gone; only the app restores a note or deletes one forever.
 
 Title, personal notes and summaries flush before tab changes, note changes and
 native window closure. A failed save retains the draft and prevents those transitions;
@@ -193,6 +215,22 @@ live view of a meeting started that way. Discard always deletes the recording.
   word: a synthetic hour of 9,000 words is 169 KB without them and 589 KB with
   (`an_hour_of_words_is_measured` in `transcript.rs`). Media import's own answer to
   the screen (`MediaImportResult.segments`) carries no words.
+- Migration `0011_note_trash.sql` adds `notes.trashed_at`, returned as nullable
+  `Note.trashedAt`: when the note was moved to Trash, as `CURRENT_TIMESTAMP` writes it, and
+  NULL for every note the migration finds. Not `deleted_at`, which is OpenWhispr's sync
+  tombstone, refused by the schema checks and filtered out by the importer. A partial index
+  holds only the notes in Trash. Every query that lists, searches or counts notes asks for
+  `trashed_at IS NULL`. Its title, notes, folder, people and speaker names are refused for
+  one in Trash ("This note is in Trash. Restore it to edit it."), as are attaching a
+  recording and asking for a summary, and the local API answers `404` for one; `notes_get`
+  alone still returns it. Its search index rows are kept, so Restore needs no re-indexing.
+  `recordings::storage_keys` is deliberately not filtered: a note in Trash still owns its
+  WAV, so crash recovery never offers it as an interrupted meeting. Moving a note to Trash
+  cancels a summary queued or being made for it. Delete forever and Empty trash delete the
+  rows in one transaction, put that deletion on disk with a full WAL checkpoint, and only
+  then remove the files (`recordings::empty_trash` says why in that order). The OpenWhispr
+  importer still needs an empty `notes` table, and notes in Trash count; its refusal says
+  how many are there.
 - `notes.participants` keeps its shape, a JSON array of `{displayName, email}` read
   leniently, and needed no migration (KNEG-362). `notes_set_participants` writes it
   whole, and keeps what it didn't make: an entry sent back as the screen read it is

@@ -302,11 +302,18 @@ async fn notes_are_listed_read_changed_and_deleted_through_the_binary() {
     let found = harness.run(&["notes", "search", "warehouse"]);
     assert!(stdout(&found).contains("Kickoff II"));
 
+    // KNEG-401: a delete moves the note to Trash in the app, and says so.
     let deleted = harness.run(&["notes", "delete", &id.to_string()]);
     assert_eq!(code(&deleted), 0);
-    assert!(stdout(&deleted).contains("deleted note"));
+    assert!(
+        stdout(&deleted).contains(&format!("moved note {id} to Trash")),
+        "stdout: {}",
+        stdout(&deleted)
+    );
 
+    // From then on the API treats it as gone.
     assert_eq!(code(&harness.run(&["notes", "get", &id.to_string()])), 3);
+    assert!(!stdout(&harness.run(&["notes", "list"])).contains("Kickoff"));
 
     harness.stop().await;
 }

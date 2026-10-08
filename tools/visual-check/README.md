@@ -314,6 +314,65 @@ participants are no people, and that the summary is told names and no
 addresses are covered by `cargo test` (`people.rs`, `commands.rs`,
 `summaries.rs`), not here.
 
+## Trash
+
+```powershell
+node tools/visual-check/trash.mjs --url http://127.0.0.1:5199/
+```
+
+Same options as the chip menus (the banner is always removed). It measures
+KNEG-401: Delete moving a note to Trash, Trash and its page, a note in Trash
+read-only, Restore, Delete forever and Empty trash. The fixtures answer
+`notes_trash`, `notes_restore`, `notes_delete_forever`, `notes_trash_list` and
+`notes_empty_trash` as Rust's `trash` module and `recordings` do, a note in
+Trash left out of every list and search, and a fixture recording measured as a
+16 kHz mono 16-bit file of its length (120 s, 3.8 MB). Buttons are pressed with
+real pointer presses -- the Trash row after scrolling the panel to it, since it
+sits under People, below the panel's fold at 1000x720 -- a library row's menu
+is opened with a `contextmenu` event, `window.confirm` is scripted
+(`scriptConfirm`) and keeps each question, and `invoke` is wrapped to log what
+reached the commands. Checks 1-6 are one sequence from one fresh load; 7 and 8
+each start from their own. Eight checks:
+
+1. "Scratch" open, Delete in its menu: no question; `notes_trash` gets its id;
+   "Moved “Scratch” to Trash." with Undo above "Weekly sync — platform", the
+   newest note, open in its place; Scratch gone from the library, Trash at 1,
+   and the library's search for a word only Scratch has finds nothing.
+2. Undo on that line: `notes_restore`, Scratch open and listed again, the line
+   gone, Trash at 0.
+3. "Weekly sync — platform" deleted and Trash pressed: Trash lists it as
+   "Deleted {today} · 2 min", the main area says "Recordings in Trash take 3.8
+   MB on this computer." with Empty trash enabled; opened from there, it reads
+   "This note is in Trash." with Restore and Delete forever, its title, nothing
+   to type in and no workspace, and nothing is saved in the next second.
+4. Restore: `notes_restore`, Trash closed and at 0, the note back in its folder
+   and open in a workspace.
+5. Deleted again and opened from Trash, Delete forever answered No then Yes:
+   both times the question is exactly "Delete “Weekly sync — platform” forever?
+   Its recording (2 min) is deleted with it. This can't be undone.", with no file
+   name; No sends nothing, Yes sends `notes_delete_forever` and `notes_get` gives
+   null; Trash says "Trash is empty." with Empty trash disabled.
+6. "Word timings" (a recording copied from an import) and the long-titled note
+   deleted a second apart, Trash listing them newest first, Empty trash answered
+   Yes: the question is exactly "Delete 2 notes forever? Its recording (3.8 MB)
+   is deleted with it. Your original file isn't touched. This can't be undone.";
+   `notes_empty_trash` once, both notes gone, Trash at 0.
+7. Fresh load: "Customer call — Nordbank" opened, then "Scratch", Nordbank
+   deleted from its library row, then Go back: Nordbank shows "This note is in
+   Trash." with Restore and Delete forever, nothing to type in, no workspace,
+   Trash not pressed, nothing saved in the next second.
+8. Fresh load: "Scratch" deleted and opened from Trash at 720x520: the banner's
+   buttons, the title and Empty trash inside the window, nothing scrolling
+   sideways.
+
+Measured in headless Edge against dev fixtures, not in the Tauri window; a
+false check makes it exit 1. That Rust leaves a note in Trash out of every
+list, search, count and shared folder, refuses edits to it, keeps its WAV from
+crash recovery, answers 404 for it through the local API and empties Trash with
+the deletion on disk before any file goes is covered by `cargo test`
+(`trash.rs`, `recordings.rs`, `commands.rs`, `recovery.rs`, `server.rs`), not
+here.
+
 ## Meeting discard
 
 ```powershell

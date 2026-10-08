@@ -75,7 +75,7 @@ back as `{"data": …}`, a collection as a list under the same key.
 | `GET` | `/v1/notes/search` | Full-text search over notes |
 | `GET` | `/v1/notes/{id}` | One note in full |
 | `PATCH` | `/v1/notes/{id}` | Change a note's title, content or folder |
-| `DELETE` | `/v1/notes/{id}` | Delete a note |
+| `DELETE` | `/v1/notes/{id}` | Move a note to Trash |
 | `GET` | `/v1/folders/list` | Note folders |
 | `GET` | `/v1/dictionary/list` | The custom dictionary that biases recognition |
 | `POST` | `/v1/dictionary/update` | Add or remove dictionary words |
@@ -138,9 +138,15 @@ contain file bytes, never a path for the server to open. Recording controls the
 existing meeting recorder; `models` reports configuration without testing cloud
 connectivity.
 
-- **Deletions are real and immediate.** `DELETE /v1/notes/{id}` and
-  `DELETE /v1/transcriptions/{id}` remove the user's own dictated content. Ask
-  before calling either unless the user asked for exactly that. The
+- **A note delete goes to Trash; a dictation delete is real and
+  immediate.** `DELETE /v1/notes/{id}` moves the note to Trash in the app, as
+  Delete does there: its text and recording are kept until the user restores it
+  or empties Trash, and nothing empties Trash on its own. From then on the API
+  treats the note as gone -- `GET`, `PATCH` and export answer `404`, list and
+  search leave it out, and a second `DELETE` is `404` too -- and there is no
+  endpoint to restore it or delete it for good: both are the user's, in the
+  app. `DELETE /v1/transcriptions/{id}` removes the user's own dictated text at
+  once. Ask before calling either unless the user asked for exactly that. The
   `…/audio` variant is the gentler one: it drops the recording and keeps the
   text.
 - **The port is not stable.** Re-read the discovery file rather than

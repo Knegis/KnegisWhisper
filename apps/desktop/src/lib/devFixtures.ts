@@ -94,6 +94,7 @@ import type {
   TranscriptEvent,
   TranscriptRow,
   Transcription,
+  TrashSummary,
   UpdateCheckResult,
   Word,
 } from "../generated/ipc-types";
@@ -1470,8 +1471,60 @@ function fixtureNote(given: Pick<Note, "id" | "title" | "noteType" | "createdAt"
     participants: null,
     audioDurationSeconds: null,
     transcribedBy: null,
+    trashedAt: null,
     ...given,
   };
+}
+
+/**
+ * The notes not in Trash (KNEG-401): every list, search and count reads these, as Rust's queries
+ * ask for `trashed_at IS NULL`. Only `notes_get` and the Trash read the rest.
+ */
+function liveNotes(): Note[] {
+  return notes.filter((note) => note.trashedAt === null);
+}
+
+/**
+ * As Rust's commands: a note in Trash refuses an edit in plain words (`commands::IN_TRASH`), and a
+ * note that isn't there is `false`. Returns whether the note is there to edit.
+ */
+function editable(id: number | undefined): boolean {
+  const note = notes.find((n) => n.id === id);
+  if (note?.trashedAt != null) throw new Error("This note is in Trash. Restore it to edit it.");
+  return note !== undefined;
+}
+
+/** A fixture recording's size on disk: 16 kHz mono 16-bit PCM and its 44-byte header, as `fixtureImport` counts it. */
+function fixtureRecordingBytes(recording: NoteRecording): number {
+  return recording.durationSeconds === null ? 0 : Math.round(recording.durationSeconds * 32000) + 44;
+}
+
+/** As `trash::list`: the notes in Trash, most recently trashed first, with what their recordings take. */
+function fixtureTrash(): TrashSummary {
+  const trashed = notes
+    .filter((note) => note.trashedAt !== null)
+    .sort((x, y) => (y.trashedAt ?? "").localeCompare(x.trashedAt ?? "") || y.id - x.id)
+    .map((note) => {
+      const recording = noteRecordings.get(note.id) ?? null;
+      return {
+        id: note.id,
+        title: note.title,
+        trashedAt: note.trashedAt ?? "",
+        hasRecording: recording !== null,
+        recordingSeconds: recording?.durationSeconds ?? null,
+        recordingBytes: recording === null ? 0 : fixtureRecordingBytes(recording),
+        originalFilename: recording?.originalFilename ?? null,
+      };
+    });
+  return { notes: trashed, recordingBytes: trashed.reduce((sum, note) => sum + note.recordingBytes, 0) };
+}
+
+/** As `recordings::empty_trash` and `delete_forever`: the note, its recording and its rows go. */
+function deleteFixtureNote(id: number): void {
+  notes = notes.filter((n) => n.id !== id);
+  noteRecordings.delete(id);
+  noteTranscriptRows.delete(id);
+  speakerNames.delete(id);
 }
 
 /**
@@ -1534,7 +1587,7 @@ function fixtureTidyParticipants(current: string | null, list: readonly Particip
 /** As `people::people`: by email, the name from the newest note that has one, most notes first. */
 function fixturePeople(): Person[] {
   const found = new Map<string, { name: string | null; notes: Set<number> }>();
-  const newestFirst = [...notes].sort((x, y) => (y.updatedAt ?? "").localeCompare(x.updatedAt ?? "") || y.id - x.id);
+  const newestFirst = [...liveNotes()].sort((x, y) => (y.updatedAt ?? "").localeCompare(x.updatedAt ?? "") || y.id - x.id);
   for (const note of newestFirst) {
     for (const participant of readParticipants(note.participants)) {
       if (participant.email === null) continue;
@@ -1762,6 +1815,8 @@ function arg<T>(args: Record<string, unknown>, key: string): T | undefined {
 }
 
 const nowIso = (): string => new Date().toISOString();
+/** Now as SQLite's `CURRENT_TIMESTAMP` writes it, UTC with no zone: how Rust stamps `trashed_at`. */
+const sqliteNow = (): string => new Date().toISOString().replace("T", " ").slice(0, 19);
 
 /* ---------------------------------------------------------------- handlers */
 
@@ -1935,7 +1990,7 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
     const folderId = arg<number | null>(a, "folderId");
     const person = arg<string | null>(a, "person");
     const limit = arg<number | null>(a, "limit");
-    let out = notes;
+    let out = liveNotes();
     // As Rust's `list_notes`: a filter of its own, refused beside the others (KNEG-362).
     if (typeof person === "string") {
       if (!person.trim()) throw new Error("a person filter needs an email");
@@ -1960,8 +2015,9 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
       `${text.slice(Math.max(0, at - 35), at)}[${text.slice(at, at + query.length)}]${text.slice(at + query.length, at + query.length + 35)}`;
     // As Rust answers it: the title or the notes first, with no row; otherwise
     // the transcript row the words are in, with its time and its own snippet
-    // (KNEG-406). A plain substring here, where Rust asks FTS5 for every word.
-    return notes.flatMap((n): SearchHit[] => {
+    // (KNEG-406). A plain substring here, where Rust asks FTS5 for every word. Never a note in
+    // Trash (KNEG-401).
+    return liveNotes().flatMap((n): SearchHit[] => {
       const at = n.content.toLowerCase().indexOf(query);
       if (at !== -1) return [{ id: n.id, title: n.title, snippet: marked(n.content, at), transcriptRow: null }];
       if (n.title.toLowerCase().includes(query)) {
@@ -2002,7 +2058,7 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
   notes_update: (a) => {
     const id = arg<number>(a, "id");
     const r = arg<NoteUpdateRequest>(a, "request");
-    if (!notes.some((n) => n.id === id)) return false;
+    if (!editable(id)) return false;
     notes = notes.map((n) =>
       n.id === id
         ? {
@@ -2016,14 +2072,30 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
     );
     return true;
   },
-  notes_delete: (a) => {
+  // KNEG-401, as Rust's `trash` module and `recordings::delete_forever` / `empty_trash` answer.
+  notes_trash: (a) => {
     const id = arg<number>(a, "id");
-    if (typeof id !== "number") return false;
-    const before = notes.length;
-    notes = notes.filter((n) => n.id !== id);
-    noteRecordings.delete(id);
-    noteTranscriptRows.delete(id);
-    return notes.length !== before;
+    if (!notes.some((n) => n.id === id && n.trashedAt === null)) return false;
+    notes = notes.map((n) => (n.id === id ? { ...n, trashedAt: sqliteNow() } : n));
+    return true;
+  },
+  notes_restore: (a) => {
+    const id = arg<number>(a, "id");
+    if (!notes.some((n) => n.id === id && n.trashedAt !== null)) return false;
+    notes = notes.map((n) => (n.id === id ? { ...n, trashedAt: null } : n));
+    return true;
+  },
+  notes_delete_forever: (a) => {
+    const id = arg<number>(a, "id");
+    if (typeof id !== "number" || !notes.some((n) => n.id === id && n.trashedAt !== null)) return false;
+    deleteFixtureNote(id);
+    return true;
+  },
+  notes_trash_list: () => fixtureTrash(),
+  notes_empty_trash: () => {
+    const trashed = notes.filter((n) => n.trashedAt !== null).map((n) => n.id);
+    for (const id of trashed) deleteFixtureNote(id);
+    return trashed.length;
   },
   // A note listed here gets a player, and the player's `recording` URL is
   // answered with the fixtures' two-minute WAV (`servePlayableRecordings`).
@@ -2040,7 +2112,7 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
     const id = arg<number>(a, "id");
     const speakerId = arg<string>(a, "speakerId");
     const rawName = arg<string>(a, "name");
-    if (typeof id !== "number" || !notes.some(note => note.id === id)) throw new Error("there is no note with that id");
+    if (typeof id !== "number" || !editable(id)) throw new Error("there is no note with that id");
     if (typeof speakerId !== "string" || !speakerId.trim()) throw new Error("a speaker id cannot be blank");
     const name = (rawName ?? "").trim().replace(/\s+/g, " ");
     const names = speakerNames.get(id) ?? new Map<string, string>();
@@ -2057,9 +2129,11 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
     const id = arg<number>(a, "id");
     if (typeof id !== "number") return [];
     const used = new Set((noteTranscriptRows.get(id) ?? []).map(row => row.speaker?.toLocaleLowerCase()).filter(name => name !== undefined));
+    // Other notes' names, never a note's in Trash (KNEG-401).
+    const live = new Set(liveNotes().map((note) => note.id));
     const candidates = [
       ...(id === 101 ? ["Anna Lind", "Erik Berg"] : []),
-      ...[...speakerNames].filter(([noteId]) => noteId !== id).flatMap(([, names]) => [...names.values()]),
+      ...[...speakerNames].filter(([noteId]) => noteId !== id && live.has(noteId)).flatMap(([, names]) => [...names.values()]),
     ];
     const seen = new Set<string>();
     return candidates.filter(name => {
@@ -2074,6 +2148,7 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
   people_list: () => fixturePeople(),
   notes_set_participants: (a) => {
     const id = arg<number>(a, "id");
+    if (!editable(id)) return false;
     const note = notes.find((n) => n.id === id);
     if (!note) return false;
     const participants = fixtureTidyParticipants(note.participants, arg<ParticipantRequest[]>(a, "participants") ?? []);
@@ -2083,7 +2158,7 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
   notes_set_folder: (a) => {
     const id = arg<number>(a, "id");
     const folderId = arg<number | null>(a, "folderId") ?? null;
-    if (!notes.some((n) => n.id === id)) return false;
+    if (!editable(id)) return false;
     notes = notes.map((n) => (n.id === id ? { ...n, folderId } : n));
     return true;
   },

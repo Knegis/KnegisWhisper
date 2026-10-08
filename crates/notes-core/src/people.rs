@@ -218,7 +218,9 @@ fn stored_entries(participants: Option<&str>) -> Vec<Value> {
 }
 
 /// Replace note `id`'s people with `list`, as `tidy` keeps it, and say whether
-/// the note exists. Nothing left stores NULL, as a note that never had any.
+/// the note exists. Nothing left stores NULL, as a note that never had any. A
+/// note in Trash keeps its people as they are, and answers `false` as one
+/// that isn't there (KNEG-401).
 ///
 /// The stored list is read and replaced in one transaction that holds the
 /// writer lock from its start (`BEGIN IMMEDIATE`): an autosave of the same
@@ -235,7 +237,7 @@ pub async fn set_participants(
         .await
         .map_err(StorageError::from)?;
     let current: Option<Option<String>> =
-        sqlx::query_scalar("SELECT participants FROM notes WHERE id = ?")
+        sqlx::query_scalar("SELECT participants FROM notes WHERE id = ? AND trashed_at IS NULL")
             .bind(id)
             .fetch_optional(&mut *tx)
             .await
@@ -260,7 +262,8 @@ pub async fn set_participants(
 }
 
 /// Everyone named by email on a note, the most notes first, then by the name
-/// they are listed by (their email where no note names them).
+/// they are listed by (their email where no note names them). Notes in Trash
+/// are not counted, and someone only on those is not listed (KNEG-401).
 ///
 /// One statement: every entry with a text email, grouped by that email
 /// trimmed and lower-cased, its name the first non-blank one in the order
@@ -275,7 +278,8 @@ pub async fn people(pool: &SqlitePool) -> Result<Vec<Person>, StorageError> {
                          THEN nullif(trim(json_extract(p.value, '$.displayName'), {SPACE}), '') END AS name
              FROM notes,
                   json_each(CASE WHEN json_valid(notes.participants) THEN CASE WHEN json_type(notes.participants) = 'array' THEN notes.participants END END) AS p
-             WHERE p.type = 'object' AND json_type(p.value, '$.email') = 'text'
+             WHERE notes.trashed_at IS NULL
+               AND p.type = 'object' AND json_type(p.value, '$.email') = 'text'
          ),
          named AS (
              SELECT email, note_id,
@@ -294,7 +298,8 @@ pub async fn people(pool: &SqlitePool) -> Result<Vec<Person>, StorageError> {
 /// The notes `email` is on, newest first, as `notes::list` orders them.
 /// Matched as the People list groups them: trimmed and ASCII lower-case, so
 /// any spelling of a listed email finds the same notes. `limit` is clamped as
-/// `notes::list` clamps it.
+/// `notes::list` clamps it, and notes in Trash are left out as it leaves them
+/// out (KNEG-401).
 pub async fn list_by_person(
     pool: &SqlitePool,
     email: &str,
@@ -303,7 +308,7 @@ pub async fn list_by_person(
     let limit = limit.clamp(1, 500);
     let sql = format!(
         "SELECT {COLUMNS} FROM notes
-         WHERE EXISTS (
+         WHERE trashed_at IS NULL AND EXISTS (
              SELECT 1
              FROM json_each(CASE WHEN json_valid(notes.participants) THEN CASE WHEN json_type(notes.participants) = 'array' THEN notes.participants END END) AS p
              WHERE p.type = 'object' AND json_type(p.value, '$.email') = 'text'

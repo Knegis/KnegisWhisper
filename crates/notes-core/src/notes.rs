@@ -36,6 +36,12 @@ pub struct Note {
     pub transcribed_by: Option<String>,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
+    /// When the note was moved to Trash (KNEG-401), `None` while it is not in
+    /// it. A note in Trash is the same row with this set: it keeps its
+    /// recording, its search index rows and its people, and every list,
+    /// search and count leaves it out until it is restored. Only [`get`]
+    /// returns it, so the screen can say it is in Trash.
+    pub trashed_at: Option<String>,
 }
 
 /// Where a note's transcript was made, as `Note::transcribed_by` stores it.
@@ -191,7 +197,8 @@ async fn create_with_recording_on(
 /// failing to decode it.
 pub(crate) const COLUMNS: &str =
     "id, title, content, recording_details, note_type, enhanced_content, folder_id, transcript, \
-                       participants, audio_duration_seconds, transcribed_by, created_at, updated_at";
+                       participants, audio_duration_seconds, transcribed_by, created_at, updated_at, \
+                       trashed_at";
 
 /// One note by id.
 pub async fn get(pool: &SqlitePool, id: i64) -> Result<Option<Note>, StorageError> {
@@ -220,19 +227,18 @@ pub async fn list(
     // get an honest `has_more` and no cursor rather than a broken one.
     //
     // The WHERE clause is assembled from fixed fragments and every value is
-    // bound, so nothing a caller sends reaches the SQL text.
+    // bound, so nothing a caller sends reaches the SQL text. A note in Trash
+    // is never listed (KNEG-401).
     let mut sql = format!("SELECT {COLUMNS} FROM notes");
-    let mut clauses: Vec<&str> = Vec::new();
+    let mut clauses: Vec<&str> = vec!["trashed_at IS NULL"];
     if note_type.is_some() {
         clauses.push("note_type = ?");
     }
     if folder_id.is_some() {
         clauses.push("folder_id = ?");
     }
-    if !clauses.is_empty() {
-        sql.push_str(" WHERE ");
-        sql.push_str(&clauses.join(" AND "));
-    }
+    sql.push_str(" WHERE ");
+    sql.push_str(&clauses.join(" AND "));
     sql.push_str(" ORDER BY updated_at DESC LIMIT ?");
 
     let mut query = sqlx::query_as::<_, Note>(&sql);
@@ -262,7 +268,8 @@ impl NoteUpdate {
     }
 }
 
-/// Apply a partial update, returning whether the note existed.
+/// Apply a partial update, returning whether the note existed. A note in
+/// Trash is not edited, and answers as one that isn't there (KNEG-401).
 ///
 /// Partial rather than whole-record, because a caller that only wants to move a
 /// note to a folder should not have to send the content back — and a caller that
@@ -278,7 +285,7 @@ pub async fn update(pool: &SqlitePool, id: i64, change: &NoteUpdate) -> Result<b
     if change.is_empty() {
         // Nothing asked for, so nothing done -- but the caller still wants to
         // know whether the note is there.
-        let exists = sqlx::query("SELECT 1 FROM notes WHERE id = ?")
+        let exists = sqlx::query("SELECT 1 FROM notes WHERE id = ? AND trashed_at IS NULL")
             .bind(id)
             .fetch_optional(pool)
             .await?;
@@ -297,7 +304,10 @@ pub async fn update(pool: &SqlitePool, id: i64, change: &NoteUpdate) -> Result<b
     }
     sets.push("updated_at = CURRENT_TIMESTAMP");
 
-    let sql = format!("UPDATE notes SET {} WHERE id = ?", sets.join(", "));
+    let sql = format!(
+        "UPDATE notes SET {} WHERE id = ? AND trashed_at IS NULL",
+        sets.join(", ")
+    );
     let mut query = sqlx::query(&sql);
     if let Some(title) = &change.title {
         query = query.bind(title.clone());
@@ -407,7 +417,8 @@ const SEGMENT_SPAN: i64 = 1 << 20;
 ///
 /// Returns an empty result for a query with nothing searchable in it, rather
 /// than every note — an empty search box should not look like a full-table
-/// scan.
+/// scan. A note in Trash keeps its index rows, so Restore needs no
+/// re-indexing, and is never a hit (KNEG-401).
 pub async fn search(
     pool: &SqlitePool,
     query: &str,
@@ -429,7 +440,7 @@ pub async fn search(
                 CASE WHEN notes.id IN (SELECT rowid FROM notes_fts WHERE content MATCH ?1) THEN 1 WHEN notes.id IN (SELECT rowid FROM notes_fts WHERE transcript_text MATCH ?1) THEN 3 ELSE -1 END AS matched
          FROM notes_fts
          JOIN notes ON notes.id = notes_fts.rowid
-         WHERE notes_fts MATCH ?1
+         WHERE notes_fts MATCH ?1 AND notes.trashed_at IS NULL
          ORDER BY rank
          LIMIT ?2",
     )
@@ -586,13 +597,14 @@ pub async fn delete_folder(pool: &SqlitePool, id: i64) -> Result<bool, StorageEr
 /// "leave it alone" -- the right reading for a partial update and the wrong
 /// one for "no folder", so a caller could never unfile a note through it.
 /// `updated_at` is deliberately not touched: filing a note is not working on
-/// it, and the sidebar orders by that column.
+/// it, and the sidebar orders by that column. A note in Trash is not moved,
+/// and answers as one that isn't there (KNEG-401).
 pub async fn set_folder(
     pool: &SqlitePool,
     id: i64,
     folder_id: Option<i64>,
 ) -> Result<bool, StorageError> {
-    let result = sqlx::query("UPDATE notes SET folder_id = ? WHERE id = ?")
+    let result = sqlx::query("UPDATE notes SET folder_id = ? WHERE id = ? AND trashed_at IS NULL")
         .bind(folder_id)
         .bind(id)
         .execute(pool)

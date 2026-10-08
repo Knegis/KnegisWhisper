@@ -39,7 +39,6 @@ pub struct ApiState {
     pool: SqlitePool,
     token: LocalApiToken,
     guard: Option<std::sync::Arc<crate::discovery::AccessGuard>>,
-    recording_directory: std::path::PathBuf,
     runtime: Option<std::sync::Arc<dyn crate::runtime::Runtime>>,
     upload_directory: std::path::PathBuf,
 }
@@ -74,7 +73,6 @@ impl ApiState {
             pool,
             token,
             guard: None,
-            recording_directory: kw_notes_core::recordings::recording_dir(),
             runtime: None,
             upload_directory: std::path::PathBuf::new(),
         }
@@ -606,6 +604,9 @@ async fn search_notes(
     }))
 }
 
+/// One note. A note in Trash is gone as far as the API is concerned
+/// (KNEG-401): 404 here, and so for its export and a PATCH, and left out of
+/// list and search. Only a person brings it back, from Trash in the app.
 async fn get_note(
     State(state): State<ApiState>,
     Path(id): Path<String>,
@@ -614,6 +615,7 @@ async fn get_note(
     let note = notes::get(&state.pool, id)
         .await
         .map_err(|err| storage_failed("notes::get", &err))?
+        .filter(|note| note.trashed_at.is_none())
         .ok_or_else(|| ApiError::not_found("note"))?;
     Ok(Json(Item { data: note }))
 }
@@ -652,20 +654,20 @@ async fn patch_note(
     Ok(Json(Item { data: note }))
 }
 
+/// Move a note to Trash, as Delete does in the app (KNEG-401): its text and
+/// recording are kept until a person restores it or empties Trash there, and
+/// from here on the API answers 404 for it. A note already in Trash is 404
+/// too. Nothing the API does deletes a note for good.
 async fn delete_note(
     State(state): State<ApiState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     let id = crate::wire::parse_id(&id)?;
-    let removed = kw_notes_core::recordings::delete_with_recording(
-        &state.pool,
-        id,
-        &state.recording_directory,
-    )
-    .await
-    .map_err(|err| storage_failed("notes::delete", &err))?;
+    let moved = kw_notes_core::trash::trash(&state.pool, id)
+        .await
+        .map_err(|err| storage_failed("trash::trash", &err))?;
 
-    if removed {
+    if moved {
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(ApiError::not_found("note"))
@@ -784,14 +786,20 @@ async fn delete_audio(
 mod recording_deletion_tests {
     use super::*;
 
+    /// KNEG-401. DELETE moves the note to Trash, as Delete does in the app:
+    /// its recording row and file stay, for Restore, and from then on the
+    /// API treats it as gone -- GET, PATCH and export are 404, list and
+    /// search leave it out, and a second DELETE is 404. An unauthenticated
+    /// DELETE moves nothing.
     #[tokio::test]
-    async fn authenticated_delete_removes_recording_but_unauthenticated_does_not() {
+    async fn authenticated_delete_moves_the_note_to_trash_and_unauthenticated_does_not() {
         let dir = tempfile::tempdir().unwrap();
         let db = kw_storage::Db::open_in_memory().await.unwrap();
         let id = notes::create(
             db.pool(),
             &notes::NewNote {
                 title: "Recorded".to_owned(),
+                content: "the warehouse plan".to_owned(),
                 ..Default::default()
             },
         )
@@ -803,40 +811,84 @@ mod recording_deletion_tests {
             .await
             .unwrap();
         let token = LocalApiToken::generate().unwrap();
-        let mut state = ApiState::new(db.pool().clone(), token.clone());
-        state.recording_directory = dir.path().to_owned();
+        let state = ApiState::new(db.pool().clone(), token.clone());
         let server = serve(TcpListener::bind("127.0.0.1:0").await.unwrap(), state).unwrap();
-        let url = format!("http://127.0.0.1:{}/v1/notes/{id}", server.port());
+        let base = format!("http://127.0.0.1:{}/v1", server.port());
+        let url = format!("{base}/notes/{id}");
         let client = reqwest::Client::new();
+        let authorised = |request: reqwest::RequestBuilder| {
+            request.header("Authorization", token.header_value())
+        };
+        let status = |request: reqwest::RequestBuilder| async move {
+            request.send().await.unwrap().status()
+        };
+
+        assert_eq!(status(client.delete(&url)).await, StatusCode::UNAUTHORIZED);
+        assert!(notes::get(db.pool(), id)
+            .await
+            .unwrap()
+            .unwrap()
+            .trashed_at
+            .is_none());
+
         assert_eq!(
-            client.delete(&url).send().await.unwrap().status(),
-            StatusCode::UNAUTHORIZED
-        );
-        assert!(audio.exists());
-        assert_eq!(
-            client
-                .delete(&url)
-                .header("Authorization", token.header_value())
-                .send()
-                .await
-                .unwrap()
-                .status(),
+            status(authorised(client.delete(&url))).await,
             StatusCode::NO_CONTENT
         );
-        assert!(!audio.exists());
+        assert!(audio.exists(), "the recording waits in Trash with its note");
         assert!(kw_notes_core::recordings::get(db.pool(), id)
             .await
             .unwrap()
-            .is_none());
+            .is_some());
+        assert!(notes::get(db.pool(), id)
+            .await
+            .unwrap()
+            .unwrap()
+            .trashed_at
+            .is_some());
+
         assert_eq!(
-            client
-                .delete(&url)
-                .header("Authorization", token.header_value())
+            status(authorised(client.get(&url))).await,
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            status(authorised(
+                client
+                    .patch(&url)
+                    .json(&serde_json::json!({ "title": "Back" }))
+            ))
+            .await,
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            status(authorised(client.get(format!("{url}/export")))).await,
+            StatusCode::NOT_FOUND
+        );
+        let listed: serde_json::Value = authorised(client.get(format!("{base}/notes/list")))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(listed.get("data"), Some(&serde_json::json!([])));
+        let found: serde_json::Value =
+            authorised(client.get(format!("{base}/notes/search?q=warehouse")))
                 .send()
                 .await
                 .unwrap()
-                .status(),
+                .json()
+                .await
+                .unwrap();
+        assert_eq!(found.get("data"), Some(&serde_json::json!([])));
+        assert_eq!(
+            status(authorised(client.delete(&url))).await,
             StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            notes::get(db.pool(), id).await.unwrap().unwrap().title,
+            "Recorded",
+            "the refused PATCH changed nothing"
         );
         server.shutdown().await;
     }

@@ -174,7 +174,12 @@ pub async fn enqueue(
     let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
     // Acquire the writer lock before reading revisions.
     sqlx::query("INSERT OR IGNORE INTO note_summary_meta(note_id,edited) SELECT id,enhanced_content IS NOT NULL FROM notes WHERE id=?").bind(id).execute(&mut *tx).await.map_err(|e|e.to_string())?;
-    let (source,participants,revision,edited): (Option<String>,Option<String>,i64,bool)=sqlx::query_as("SELECT n.transcript,n.participants,m.revision,m.edited FROM notes n JOIN note_summary_meta m ON n.id=m.note_id WHERE n.id=?").bind(id).fetch_one(&mut *tx).await.map_err(|_|"This note no longer exists.")?;
+    let (source,participants,revision,edited,trashed): (Option<String>,Option<String>,i64,bool,bool)=sqlx::query_as("SELECT n.transcript,n.participants,m.revision,m.edited,n.trashed_at IS NOT NULL FROM notes n JOIN note_summary_meta m ON n.id=m.note_id WHERE n.id=?").bind(id).fetch_one(&mut *tx).await.map_err(|_|"This note no longer exists.")?;
+    // Nothing works on a note in Trash (KNEG-401). Dropping the transaction
+    // takes back the meta row inserted above.
+    if trashed {
+        return Err("This note is in Trash. Restore it to summarize it.".into());
+    }
     if revision != expected_revision {
         return Err("Summary changed. Reload before regenerating.".into());
     }
@@ -229,7 +234,18 @@ pub async fn edit(pool: &SqlitePool, id: i64, revision: i64, content: &str) -> R
 }
 
 pub async fn cancel(pool: &SqlitePool, id: i64) -> Result<(), String> {
-    sqlx::query("UPDATE note_summary_jobs SET status='cancelled',generation=generation+1,error=NULL WHERE note_id=? AND status IN ('queued','processing')").bind(id).execute(pool).await.map_err(|e|e.to_string())?;
+    let mut connection = pool.acquire().await.map_err(|e| e.to_string())?;
+    cancel_on(&mut connection, id)
+        .await
+        .map_err(|e| e.to_string())
+}
+/// [`cancel`] on a connection, so moving a note to Trash cancels its summary
+/// in the same transaction (KNEG-401).
+pub(crate) async fn cancel_on(
+    connection: &mut SqliteConnection,
+    id: i64,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE note_summary_jobs SET status='cancelled',generation=generation+1,error=NULL WHERE note_id=? AND status IN ('queued','processing')").bind(id).execute(connection).await?;
     Ok(())
 }
 pub async fn cancel_automatic(pool: &SqlitePool) -> Result<(), sqlx::Error> {
@@ -617,6 +633,38 @@ mod tests {
         let count:i64=sqlx::query_scalar("SELECT (SELECT count(*) FROM note_summary_jobs)+(SELECT count(*) FROM note_summary_meta)").fetch_one(db.pool()).await.unwrap();
         assert_eq!(count, 0);
     }
+    /// KNEG-401. A note moved to Trash takes its summary work with it: a
+    /// queued job is cancelled before it starts, one being made can't be
+    /// finished, and none is queued while the note is there. Restored, it can
+    /// be summarised again.
+    #[tokio::test]
+    async fn a_note_in_trash_is_not_summarised() {
+        let (db, settings, id) = fixture(true).await;
+        assert!(crate::trash::trash(db.pool(), id).await.unwrap());
+        assert_eq!(
+            state(db.pool(), id).await.unwrap().status.as_deref(),
+            Some("cancelled")
+        );
+        assert!(claim(db.pool()).await.unwrap().is_none());
+        let refused = enqueue(db.pool(), id, &settings, 0, false, false)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            refused,
+            "This note is in Trash. Restore it to summarize it."
+        );
+        assert!(claim(db.pool()).await.unwrap().is_none());
+
+        assert!(crate::trash::restore(db.pool(), id).await.unwrap());
+        enqueue(db.pool(), id, &settings, 0, false, false)
+            .await
+            .unwrap();
+        let job = claim(db.pool()).await.unwrap().unwrap();
+        assert!(crate::trash::trash(db.pool(), id).await.unwrap());
+        assert!(!active(db.pool(), &job).await.unwrap());
+        assert!(finish(db.pool(), &job, "Late", &[], "en").await.is_err());
+    }
+
     #[tokio::test]
     async fn disabling_cancels_only_queued_automatic_jobs() {
         let (db, settings, id) = fixture(true).await;
