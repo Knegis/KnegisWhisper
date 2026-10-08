@@ -511,6 +511,26 @@ h2,
 .hero-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 16px; margin-top: 24px; }
 .hero-actions > button { margin: 0; height: 38px; padding: 0 16px; border-radius: 2px; font-size: 14.5px; }
 .hero-actions > .learn-more { margin: 0; }
+
+/*
+ * A capture's live level (`components/LevelMeter.tsx`, KNEG-371): flat square
+ * segments in a row, lit from the left. Lit is `--band`, as the live
+ * transcript's caret is (`.live-caret`): a live fill beside a recording, not
+ * the marked state, which is a band with text on it. Unlit is `--faint`, so
+ * the meter's length shows at silence and a quiet room reads as quiet rather
+ * than as a meter that is missing. The one
+ * transition is the fill swap, 80ms -- short enough that ten readings a
+ * second read as movement, not lag. Reduced motion takes it away, and
+ * `useAudioLevel` holds the meter to four changes a second.
+ */
+.level-meter { display: inline-flex; align-items: center; gap: 2px; flex: none; vertical-align: middle; }
+.level-segment { display: block; width: 6px; height: 10px; background: var(--faint); transition: background-color 80ms linear; }
+.level-segment-lit { background: var(--band); }
+@media (prefers-reduced-motion: reduce) { .level-segment { transition: none; } }
+/* Dictation's, under "Listening…": wide enough to see from across the desk. */
+.hero-meter { display: flex; margin-top: 14px; }
+.hero-meter .level-segment { width: 8px; height: 12px; }
+
 /*
  * A shortcut's keys may break onto the next line between keys, never inside
  * one. They were kept on one line together, and a four-key accelerator at
@@ -690,6 +710,10 @@ button.control-copy { display: inline-flex; align-items: center; gap: 6px; heigh
 .rec-dot { width: 8px; height: 8px; flex-shrink: 0; border-radius: 50%; background: var(--rec); }
 .live-title { margin: 8px 0 0; font-family: var(--font-sans); font-size: 28px; line-height: 36px; letter-spacing: -0.3px; text-transform: none; color: var(--text); overflow-wrap: anywhere; }
 .live-sub { margin: 2px 0 0; font-size: 13.5px; line-height: 20px; color: var(--muted); overflow-wrap: anywhere; }
+/* The two captures' levels, each named in the machine voice, wrapping under each other in a narrow window. */
+.live-levels { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 24px; margin-top: 10px; }
+.live-level { display: inline-flex; align-items: center; gap: 10px; }
+.live-level-label { min-width: 6ch; font: 12px/16px var(--font-mono); letter-spacing: .5px; text-transform: uppercase; color: var(--muted); }
 .live-caveats { display: flex; flex-direction: column; gap: 10px; padding: 14px 28px 0; }
 .live-caveats > .caveat, .live-caveats > .error { margin: 0; }
 .live-transcript { flex: 1; min-height: 160px; display: flex; flex-direction: column; padding: 18px 28px 0; }
@@ -1765,6 +1789,15 @@ label:has(> input[type="checkbox"]) {
   }
 }
 
+/* The microphone's level beside "Recording", at the panel's right edge (KNEG-371). */
+.overlay-level {
+  margin-left: auto;
+}
+
+.overlay-level .level-segment {
+  width: 5px;
+}
+
 /* ------------------------------------------------- meeting notification */
 /*
  * 392x92 by default and at minimum. Wider than the overlay because it carries
@@ -2265,6 +2298,10 @@ button.floating-microphone:hover:not(:disabled) { background: transparent; color
 .microphone-glyph { position: relative; display: block; width: 20px; height: 20px; background: currentColor; mask: url('./assets/microphone.svg') center / contain no-repeat; opacity: 0; transform: scale(0.8); transition: opacity 120ms ease, transform 160ms ease; pointer-events: none; }
 .floating-microphone:is(:hover, :focus-visible, :active, [data-expanded="true"]) .microphone-glyph { opacity: 1; transform: scale(1); }
 .microphone-glyph.speaking { mask-image: url('./assets/microphone-speaking.svg'); }
+/* The level, a 2px strip under the glyph inside the recording pill (KNEG-371): the glyph's white, unlit at a third. */
+.microphone-level { position: absolute; left: 50%; bottom: 3px; gap: 1px; transform: translateX(-50%); pointer-events: none; }
+.microphone-level .level-segment { width: 3px; height: 2px; background: rgb(255 255 255 / 0.35); }
+.microphone-level .level-segment-lit { background: currentColor; }
 .microphone-spinner { position: relative; display: block; width: 18px; height: 18px; border: 2px solid #8888; border-top-color: currentColor; border-radius: 50%; animation: microphone-spin 1s linear infinite; }
 @keyframes microphone-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .microphone-spinner { animation: none; } .microphone-controls::before, .microphone-glyph { transition: none; } }

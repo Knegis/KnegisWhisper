@@ -40,6 +40,7 @@ use cpal::traits::HostTrait as _;
 use cpal::traits::{DeviceTrait as _, StreamTrait as _};
 
 use crate::capture::CaptureError;
+use crate::level::{rms_peak, LevelMeter, LevelReader};
 use crate::mix::Track;
 
 /// Whether this platform can capture system audio, and how.
@@ -207,6 +208,9 @@ pub fn support() -> SystemAudioSupport {
 pub struct SystemCapture {
     stream: cpal::Stream,
     samples: Arc<Mutex<Vec<f32>>>,
+    /// The callback holds the meter itself; this only reads it, and answers
+    /// `None` once the stream, and with it the callback, is gone.
+    level: LevelReader,
     sample_rate: u32,
     channels: u16,
     device: String,
@@ -241,6 +245,8 @@ impl SystemCapture {
         let sample_rate = config.sample_rate().0;
         let channels = config.channels();
         let samples = Arc::new(Mutex::new(Vec::new()));
+        let meter = LevelMeter::new();
+        let level = meter.reader();
 
         tracing::info!(
             device = name,
@@ -250,7 +256,9 @@ impl SystemCapture {
             "starting system audio capture"
         );
 
-        let stream = build_stream(&device, &config, Arc::clone(&samples))?;
+        // The meter is moved into the callback: the stream is its only owner,
+        // so dropping the stream is what ends the reader.
+        let stream = build_stream(&device, &config, Arc::clone(&samples), meter)?;
         stream
             .play()
             .map_err(|e| CaptureError::Stream(e.to_string()))?;
@@ -258,6 +266,7 @@ impl SystemCapture {
         Ok(Self {
             stream,
             samples,
+            level,
             sample_rate,
             channels,
             device: name,
@@ -311,6 +320,17 @@ impl SystemCapture {
     pub fn device(&self) -> &str {
         &self.device
     }
+
+    /// How loud what the speakers play is, for a meter (KNEG-371). The same
+    /// contract as [`crate::capture::Capture::level`]: `None` from the reader
+    /// once this capture is gone.
+    ///
+    /// An idle loopback delivers no callback at all (KNEG-38), so this reads
+    /// silence then rather than going stale.
+    #[must_use]
+    pub fn level(&self) -> LevelReader {
+        self.level.clone()
+    }
 }
 
 /// The stream format to open, which is not the same call on both platforms.
@@ -348,6 +368,7 @@ fn build_stream(
     device: &cpal::Device,
     config: &cpal::SupportedStreamConfig,
     samples: Arc<Mutex<Vec<f32>>>,
+    meter: LevelMeter,
 ) -> Result<cpal::Stream, CaptureError> {
     let cap = capacity(config.sample_rate().0, config.channels());
 
@@ -360,9 +381,16 @@ fn build_stream(
     macro_rules! build {
         ($sample:ty, $convert:expr) => {{
             let samples = Arc::clone(&samples);
+            let meter = meter.clone();
             device.build_input_stream(
                 &stream_config,
                 move |data: &[$sample], _| {
+                    // The meter first, and outside the lock: one pass over the
+                    // block, converted as it is read, and one atomic. Nothing
+                    // that allocates or waits (KNEG-371).
+                    let (rms, _) = rms_peak(data.iter().copied().map($convert));
+                    meter.record(rms);
+
                     let mut guard = samples.lock().unwrap_or_else(|e| e.into_inner());
                     // Append what fits and then stop, rather than grow.
                     let room = cap.saturating_sub(guard.len());

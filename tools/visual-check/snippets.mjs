@@ -942,3 +942,88 @@ export function choosePlayerSpeed(container, rate) {
     return select.value;
   `);
 }
+
+/* ------------------------------------------------------------ level meters */
+
+/**
+ * Every live sound-level meter on the page (KNEG-371): where it sits, its
+ * label on the Meetings page, what it shows (`data-level`, `data-lit`, and
+ * the lit segments actually drawn), whether it is hidden from assistive
+ * technology and has no `role`, its segments' transition, the lit and unlit
+ * colours, and its box against the window and the button it sits in, if any.
+ */
+export function levelMeters() {
+  return source(`
+    const box = (element) => {
+      if (!element) return null;
+      const rect = element.getBoundingClientRect();
+      return { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom, width: rect.width, height: rect.height };
+    };
+    return [...document.querySelectorAll('.level-meter')].map((meter) => {
+      const segment = meter.querySelector('.level-segment:not(.level-segment-lit)');
+      const lit = meter.querySelector('.level-segment-lit');
+      const host = meter.closest('button');
+      return {
+        className: meter.className,
+        label: meter.closest('.live-level')?.querySelector('.live-level-label')?.textContent.trim() ?? null,
+        level: Number(meter.dataset.level),
+        lit: Number(meter.dataset.lit),
+        litDrawn: meter.querySelectorAll('.level-segment-lit').length,
+        segments: meter.querySelectorAll('.level-segment').length,
+        ariaHidden: meter.getAttribute('aria-hidden'),
+        hiddenFromAssistiveTechnology: meter.closest('[aria-hidden="true"]') !== null,
+        role: meter.getAttribute('role'),
+        transition: getComputedStyle(meter.querySelector('.level-segment')).transitionDuration,
+        colours: {
+          unlit: segment ? getComputedStyle(segment).backgroundColor : null,
+          lit: lit ? getComputedStyle(lit).backgroundColor : null,
+        },
+        box: box(meter),
+        host: host ? { className: host.className, box: box(host) } : null,
+        viewport: { width: innerWidth, height: innerHeight },
+      };
+    });
+  `);
+}
+
+/** One reading through the dev console's `kw.level`, as a capture's publisher sends one. */
+export function emitLevel(level, session = "dictation", sourceName = "microphone") {
+  return source(`
+    if (!globalThis.kw?.level) throw new Error('The fixture dev console has no level');
+    globalThis.kw.level(${JSON.stringify(level)}, ${JSON.stringify(session)}, ${JSON.stringify(sourceName)});
+    return true;
+  `);
+}
+
+/** The dev console's fake levels for `session` (`kw.levels`): ten a second, or stopped with a last 0. */
+export function fakeLevels(session, running) {
+  return source(`
+    if (!globalThis.kw?.levels) throw new Error('The fixture dev console has no levels');
+    globalThis.kw.levels(${JSON.stringify(session)}, ${JSON.stringify(running)});
+    return true;
+  `);
+}
+
+/**
+ * Timestamps every change of what the first meter matching `selector` shows
+ * (its `data-level`), from now until `levelChanges` reads them.
+ */
+export function watchLevelChanges(selector) {
+  return source(`
+    window.__levelWatch?.disconnect();
+    const meter = document.querySelector(${JSON.stringify(selector)});
+    if (!meter) throw new Error('No meter matches ' + ${JSON.stringify(selector)});
+    const changes = window.__levelChanges = [];
+    window.__levelWatch = new MutationObserver(() => changes.push({ t: performance.now(), level: meter.dataset.level }));
+    window.__levelWatch.observe(meter, { attributes: true, attributeFilter: ['data-level'] });
+    return true;
+  `);
+}
+
+/** The changes `watchLevelChanges` saw, oldest first, and stops watching. */
+export function levelChanges() {
+  return source(`
+    window.__levelWatch?.disconnect();
+    return window.__levelChanges ?? [];
+  `);
+}

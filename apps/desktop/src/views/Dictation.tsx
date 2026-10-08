@@ -5,8 +5,8 @@
  *
  *   - **The hero**, centred: whether dictation will work (`lib/readiness.ts`)
  *     and, when it will, the shortcut to press. When it will not, the one
- *     problem and the button that fixes it; while recording, "Listening…" and
- *     a timer.
+ *     problem and the button that fixes it; while recording, "Listening…", a
+ *     timer, and the microphone's live level (`LevelMeter`, KNEG-371).
  *   - **The control bar** at the foot: the microphone, and where speech
  *     becomes text -- an installed model on this computer or a cloud
  *     provider -- each chosen right here in its chip's menu (`ChipMenu`);
@@ -51,6 +51,7 @@ import { DictationHistoryPanel } from "../components/DictationHistoryPanel";
 import { Icon, IconFilled } from "../components/Icon";
 import { Keycaps } from "../components/Keycaps";
 import { LearnMore } from "../components/LearnMore";
+import { LevelMeter } from "../components/LevelMeter";
 import { LocalLanguagePicker } from "../components/LocalLanguagePicker";
 import { LocalServerHealth } from "../components/LocalServerHealth";
 import { PanelHeader } from "../components/Panel";
@@ -424,6 +425,7 @@ export function DictationView({
         extra: clock(recordingSince === null ? 0 : (now - recordingSince) / 1000),
       }}
       heading="Listening…"
+      meter={<LevelMeter session="dictation" source="microphone" segments={16} />}
       sub="Speak now, then press Stop and transcribe. The overlay is visible while you record."
     />
   ) : mic.busy ? (

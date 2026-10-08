@@ -21,8 +21,9 @@
  *     is saved, a note beside Start and the list's foot say so, and the live
  *     view says it of a meeting started that way (KNEG-409).
  *   - **Live**, while a meeting is running: its state and a timer, which
- *     captures opened and where the audio goes, the live transcript, and a
- *     bar with what is in effect, Discard, and Stop.
+ *     captures opened and where the audio goes, how loud each capture is
+ *     ("You", and "Others" with system audio; `LevelMeter`, KNEG-371), the
+ *     live transcript, and a bar with what is in effect, Discard, and Stop.
  *   - **The list panel**: the meeting under way, the meetings saved lately --
  *     each opens its note in Notes -- and any recording an earlier session
  *     left behind, with Recover.
@@ -82,6 +83,7 @@ import { ChipMenu, type ChipMenuHandle } from "../components/ChipMenu";
 import { ControlBar } from "../components/ControlBar";
 import { Icon, IconFilled } from "../components/Icon";
 import { LearnMore } from "../components/LearnMore";
+import { LevelMeter } from "../components/LevelMeter";
 import { PanelAction, PanelHeader, PanelItem, PanelSection } from "../components/Panel";
 import { formatClock } from "../components/RecordingPlayer";
 import { PanelCollapsed, SplitView } from "../components/SplitView";
@@ -800,6 +802,21 @@ export function Meetings({
             </p>
             <h2 className="live-title" ref={liveHeading} tabIndex={-1}>{liveTitle}</h2>
             <p className="live-sub">{sub.join(" · ")}</p>
+            {/* How loud each capture is (KNEG-371): you, and the others only
+                when system audio opened -- the sub-line above says which.
+                Decoration, labels included: `LevelMeter` says why. */}
+            <div className="live-levels" aria-hidden="true">
+              <span className="live-level">
+                <span className="live-level-label">You</span>
+                <LevelMeter session="meeting" source="microphone" />
+              </span>
+              {liveSources?.systemAudio ? (
+                <span className="live-level">
+                  <span className="live-level-label">Others</span>
+                  <LevelMeter session="meeting" source="system" />
+                </span>
+              ) : null}
+            </div>
           </header>
           {error || stalled || transcriptEnded || notesFlushFailed || outcome ? (
             <div className="live-caveats">

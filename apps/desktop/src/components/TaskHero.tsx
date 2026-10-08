@@ -33,18 +33,22 @@ import { Icon } from "./Icon";
  * The heading is an `h2`: the page's `h1` is its list panel's title, or,
  * while the panel is collapsed, the visually hidden one `SplitView` draws in
  * its place.
- * `children` is for the setup state's fix button and its Learn more.
+ * `meter` is for a recording's live sound level (`LevelMeter`, KNEG-371),
+ * under the heading. `children` is for the setup state's fix button and its
+ * Learn more.
  */
 export function TaskHero({
   icon,
   status,
   heading,
+  meter,
   sub,
   children,
 }: {
   icon: IconName;
   status: { tone: "ready" | "recording" | "setup" | "busy"; label: string; extra?: string };
   heading: ReactNode;
+  meter?: ReactNode;
   sub: ReactNode;
   children?: ReactNode;
 }) {
@@ -59,6 +63,7 @@ export function TaskHero({
         {status.extra === undefined ? null : <span className="hero-extra">{status.extra}</span>}
       </p>
       <h2 className="hero-heading">{heading}</h2>
+      {meter === undefined ? null : <div className="hero-meter">{meter}</div>}
       <div className="hero-sub">{sub}</div>
       {children === undefined ? null : <div className="hero-actions">{children}</div>}
     </div>

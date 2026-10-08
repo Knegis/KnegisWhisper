@@ -314,6 +314,55 @@ incomplete or the file can't be removed, and recovery following the plan --
 is covered by `cargo test`, not here. Not measured: a real meeting with it on,
 whose transcript is complete and whose file is gone.
 
+## Level meters
+
+```
+node tools/visual-check/level-meters.mjs --url http://127.0.0.1:5191/
+```
+
+Same options as the chip menus (the banner is always removed). It measures
+KNEG-371: the live sound-level meters. Levels reach the page as `audio-level`
+events, as Rust's publishers send them (`src-tauri/src/audio_level.rs`). The
+fixtures' dev console sends one reading (`kw.level(0.75)`) or ten a second
+(`kw.levels()`, stopped with a last 0), and the fixtures' `meeting_start` sends
+ten a second for each capture that opened, stopped at Stop or Discard.
+Dictation's recording is announced with `kw.dictationState`. The main window is
+1000x720; the overlay is measured at its own window's sizes. A reading is read
+150ms after the meter shows it, once the 80ms fill swap has finished. Six
+checks:
+
+1. While a dictation records, the Dictation hero has exactly one meter, 16
+   segments, hidden from assistive technology with no `role`, showing 0.
+   After one reading of 0.75, it shows 0.75 with 12 segments lit, drawn in a
+   colour other than the unlit ones. At idle it is gone. Loaded at 720x520
+   and recording, the meter is inside the window and nothing scrolls sideways.
+2. With no reading after that 0.75 for 650ms, the same meter shows 0 with
+   none lit, still mounted: staleness at 400ms.
+3. A meeting started with Other participants pressed has "You" and "Others"
+   meters in its live header, both above 0 and lit differently. After Stop and
+   save, none. Started with the chip released, one, "You". Loaded at 720x520
+   with both, both meters are inside the window and nothing scrolls sideways,
+   measured as chip-menus check 8 measures the idle pages.
+4. The Dictation meter for 2s at ten readings a second, each way. Without
+   emulation the segments' transition is 0.08s and at least 12 changes show.
+   With `prefers-reduced-motion: reduce` emulated it is 0s, with at most 10
+   changes and none closer than 240ms to the one before. A `MutationObserver`
+   in the page timestamps the changes.
+5. `#overlay` at 280x96 (`overlay.rs`), label mode: the 8-segment meter right
+   of "Recording", inside the window, 6 of 8 lit at 0.75, gone at idle.
+6. `#overlay` at 96x96 (`persistent_overlay.rs`' `SIZE`) as the floating
+   microphone, horizontal and vertical: a 6-segment strip inside the button
+   and the window, 5 of 6 lit at 0.75, gone at idle.
+
+Measured in headless Edge against dev fixtures, not in the Tauri window; a
+false check makes it exit 1. Rust's side is covered by `cargo test`: the
+meter's arithmetic and max-hold (`kw_audio_core::level`), `Buffer::push`
+feeding it, the publisher's last 0 and its pacing, and the dictation and
+meeting readers ending with their captures. Not measured: whether a real
+microphone or real system audio moves a meter, how the −60..0 dBFS range
+feels, and what the meters cost in CPU. No audio reaches a browser tab, so
+those are by hand.
+
 ## Running application windows
 
 Launch the running development application with its WebView2 debugger exposed:

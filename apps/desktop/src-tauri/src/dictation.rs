@@ -43,9 +43,10 @@ pub const OUTCOME_EVENT: &str = "dictation-outcome";
 
 /// What the microphone thread is asked to do.
 enum MicCommand {
+    /// Answered with the new capture's level, for the meter (KNEG-371).
     Start {
         device: Option<String>,
-        reply: tokio::sync::oneshot::Sender<Result<(), String>>,
+        reply: tokio::sync::oneshot::Sender<Result<kw_audio_core::LevelReader, String>>,
     },
     Finish {
         reply: tokio::sync::oneshot::Sender<Result<kw_audio_core::Recording, String>>,
@@ -53,11 +54,17 @@ enum MicCommand {
     Cancel,
 }
 
+/// Hands a started recording's level to whatever shows it.
+type OnLevel = Box<dyn Fn(kw_audio_core::LevelReader) + Send + Sync>;
+
 /// Records from the microphone on a dedicated thread.
 pub struct MicRecorder {
     commands: mpsc::Sender<MicCommand>,
     /// The input device the user chose, or `None` for the system default.
     device: RwLock<Option<String>>,
+    /// Given each recording's level as it starts (KNEG-371). `build` points
+    /// it at the Dictation page's meter and the overlay's.
+    on_level: Option<OnLevel>,
 }
 
 impl std::fmt::Debug for MicRecorder {
@@ -86,7 +93,21 @@ impl MicRecorder {
         Self {
             commands: tx,
             device: RwLock::new(None),
+            on_level: None,
         }
+    }
+
+    /// Give each recording's level to `on_level` as it starts.
+    ///
+    /// The reader answers `None` once that recording is finished or
+    /// cancelled, so whatever it is handed to needs no stop of its own.
+    #[must_use]
+    pub fn with_on_level(
+        mut self,
+        on_level: impl Fn(kw_audio_core::LevelReader) + Send + Sync + 'static,
+    ) -> Self {
+        self.on_level = Some(Box::new(on_level));
+        self
     }
 
     /// Choose the input device. Takes effect on the next recording.
@@ -113,8 +134,9 @@ impl MicRecorder {
                     let started = kw_audio_core::Capture::start(device.as_deref());
                     let answer = match started {
                         Ok(capture) => {
+                            let level = capture.level();
                             active = Some(capture);
-                            Ok(())
+                            Ok(level)
                         }
                         Err(err) => Err(err.to_string()),
                     };
@@ -156,9 +178,14 @@ impl MicRecorder {
 impl Recorder for MicRecorder {
     async fn start(&self) -> Result<(), DictationError> {
         let device = self.preferred_device();
-        self.ask(|reply| MicCommand::Start { device, reply })
+        let level = self
+            .ask(|reply| MicCommand::Start { device, reply })
             .await
-            .map_err(DictationError::Microphone)
+            .map_err(DictationError::Microphone)?;
+        if let Some(on_level) = &self.on_level {
+            on_level(level);
+        }
+        Ok(())
     }
 
     async fn finish(&self) -> Result<Capture, DictationError> {
@@ -766,7 +793,19 @@ impl DictationRuntime {
             generation: local_llm,
         } = local;
 
-        let recorder = Arc::new(MicRecorder::spawn());
+        // Each recording's level goes to the Dictation page and the overlay
+        // as an event, and stops with the recording (KNEG-371).
+        let recorder = Arc::new(MicRecorder::spawn().with_on_level({
+            let app = app.clone();
+            move |reader| {
+                crate::audio_level::publish(
+                    &app,
+                    crate::audio_level::LevelSession::Dictation,
+                    crate::audio_level::LevelSource::Microphone,
+                    reader,
+                );
+            }
+        }));
         let state = Arc::new(RwLock::new(SessionState::Idle));
 
         let session = kw_app_core::dictation::Dictation::new(
@@ -1708,6 +1747,42 @@ mod tests {
                 recorder.cancel().await;
             }
             Err(err) => assert!(matches!(err, DictationError::Microphone(_))),
+        }
+    }
+
+    /// A recording that starts hands its level to the meter once, and that
+    /// level ends with the recording (KNEG-371). Like the test above it opens
+    /// the real default microphone where there is one; on a machine with
+    /// none, the start fails and nothing is handed over.
+    #[tokio::test]
+    async fn a_started_recording_hands_its_level_over_and_it_ends_with_the_recording() {
+        let handed = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorder = MicRecorder::spawn().with_on_level({
+            let handed = Arc::clone(&handed);
+            move |reader| handed.lock().unwrap().push(reader)
+        });
+
+        if recorder.start().await.is_err() {
+            assert!(handed.lock().unwrap().is_empty(), "no recording, no level");
+            return;
+        }
+        let reader = {
+            let handed = handed.lock().unwrap();
+            assert_eq!(handed.len(), 1, "one level per recording started");
+            handed[0].clone()
+        };
+        assert!(reader.take().is_some(), "the recording is running");
+
+        recorder.cancel().await;
+        // `cancel` is a message to the microphone thread, which drops the
+        // capture when it reads it.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while reader.take().is_some() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the level outlived the cancelled recording"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
     }
 

@@ -1293,6 +1293,28 @@ leavesDevice: boolean,
  */
 problem: string | null, };
 
+/* ----------------------------------------------------------- sound levels */
+/**
+ * What a level is for, so each meter listens only to its own.
+ */
+export type LevelSession = "dictation" | "meeting" | "microphone-check";
+
+/**
+ * Which capture a level is from.
+ */
+export type LevelSource = "microphone" | "system";
+
+/**
+ * One reading of one capture's level.
+ */
+export type AudioLevel = { session: LevelSession, source: LevelSource,
+/**
+ * 0 at −60 dBFS or quieter, 1 at full scale, linear in decibels
+ * (`kw_audio_core::level_from_rms`). The loudest block since the last
+ * reading, so a short sound is not missed between two.
+ */
+level: number, };
+
 /* ---------------------------------------------------- local transcription */
 /**
  * Whether the local server can be installed here.

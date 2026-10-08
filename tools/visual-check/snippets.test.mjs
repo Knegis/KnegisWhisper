@@ -64,6 +64,12 @@ test("every renderer snippet is syntactically valid JavaScript", () => {
     snippets.startPlaybackSampler(),
     snippets.playbackSamples(),
     snippets.choosePlayerSpeed(".note-side-player", "1.5"),
+    snippets.levelMeters(),
+    snippets.emitLevel(0.75),
+    snippets.emitLevel(0.3, "meeting", "system"),
+    snippets.fakeLevels("dictation", true),
+    snippets.watchLevelChanges(".hero-meter .level-meter"),
+    snippets.levelChanges(),
   ];
   for (const value of values) {
     assert.doesNotThrow(() => new Function(value), value);

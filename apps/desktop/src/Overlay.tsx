@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { useEffect, useRef, useState } from "react";
 import { getDictationState, onDictationState, onDictationOutcome, toggleDictation, getOverlayPreferences, onOverlayPreferences, dragOverlay, setOverlayMessage, setOverlayLanguageMenu, type SessionState, type OverlayPreferences } from "./lib/ipc";
 import { microphoneState, isMicrophoneDrag } from "./lib/microphone";
+import { LevelMeter } from "./components/LevelMeter";
 import "./styles.css";
 export function Overlay() {
   const [state, setState] = useState<SessionState | null>(null);
@@ -118,7 +119,8 @@ export function Overlay() {
   };
   if (!prefs?.enabled) {
     const label = state === null ? unavailable ? "State unknown" : "..." : state === "recording" ? "Recording" : state === "transcribing" ? "Transcribing" : state === "inserting" ? "Inserting" : "Ready";
-    return <div className={`overlay overlay-${state ?? "idle"}`}><span className={`indicator indicator-${state === "recording" ? "recording" : "idle"}`} aria-hidden="true"/><span className="overlay-text">{label}</span></div>;
+    // The microphone's live level beside "Recording" (KNEG-371), mounted only while recording.
+    return <div className={`overlay overlay-${state ?? "idle"}`}><span className={`indicator indicator-${state === "recording" ? "recording" : "idle"}`} aria-hidden="true"/><span className="overlay-text">{label}</span>{state === "recording" ? <LevelMeter session="dictation" source="microphone" segments={8} className="overlay-level"/> : null}</div>;
   }
   const view = microphoneState(state, unavailable);
   return <div className={`microphone-overlay ${prefs.vertical ? "is-vertical" : ""}`}>
@@ -156,6 +158,8 @@ export function Overlay() {
   } if (e.detail === 0 && !view.disabled && !pending)
     void act(); }}>
    {view.busy ? <span className="microphone-spinner" aria-hidden="true"/> : <span className={`microphone-glyph ${view.recording ? "speaking" : ""}`} aria-hidden="true"/>}
+   {/* A strip of the live level under the glyph while recording (KNEG-371). `speaking` stays the recording flag: the glyph is the privacy indicator, and a level-driven one would look idle through a pause. */}
+   {view.recording ? <LevelMeter session="dictation" source="microphone" segments={6} className="microphone-level"/> : null}
   </button>
   <button type="button" className="microphone-language-toggle" aria-label="Choose dictation languages" aria-expanded={menuOpen} title="Dictation languages" onClick={() => { setHoldHover(true); setMenuOpen(value => !value); }}><span>{menuOpen ? "\u00d7" : ">"}</span></button>
   </div>

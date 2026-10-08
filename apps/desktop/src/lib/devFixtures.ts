@@ -35,6 +35,7 @@ import { mockIPC, mockWindows, mockConvertFileSrc } from "@tauri-apps/api/mocks"
 
 import type {
   Accelerator,
+  AudioLevel,
   Binding,
   CalendarStatus,
   CleanupRoute,
@@ -60,6 +61,8 @@ import type {
   ImportReport,
   InputDevice,
   InstallProgress,
+  LevelSession,
+  LevelSource,
   Lists,
   LocalApiStatus,
   LocalLlmProgress,
@@ -788,6 +791,43 @@ let meetingNotes = "";
  * silent (KNEG-418).
  */
 let meetingWindowSilent = false;
+
+/*
+ * Fake sound levels (KNEG-371), sent as Rust's publishers send them
+ * (`src-tauri/src/audio_level.rs`): one `audio-level` per capture every
+ * 100 ms while it runs, and a last 0 per capture when it stops. A meeting's
+ * start here, as in Rust; `kw.levels` for dictation, whose recording the
+ * fixtures only ever announce (`kw.dictationState`). The microphone moves
+ * around 0.62 and the others around 0.3, never meeting, so the Meetings
+ * page's two meters always show different values.
+ */
+const fakeLevels = new Map<LevelSession, { timer: ReturnType<typeof setInterval>; sources: LevelSource[] }>();
+
+function fakeLevel(source: LevelSource, tick: number): number {
+  return source === "microphone" ? 0.62 + 0.08 * Math.sin(tick / 2) : 0.3 + 0.08 * Math.sin(tick / 3 + 1);
+}
+
+function startFakeLevels(session: LevelSession, sources: LevelSource[]): void {
+  stopFakeLevels(session);
+  let tick = 0;
+  const timer = setInterval(() => {
+    tick += 1;
+    for (const source of sources) {
+      void emit("audio-level", { session, source, level: fakeLevel(source, tick) } satisfies AudioLevel);
+    }
+  }, 100);
+  fakeLevels.set(session, { timer, sources });
+}
+
+function stopFakeLevels(session: LevelSession): void {
+  const running = fakeLevels.get(session);
+  if (running === undefined) return;
+  clearInterval(running.timer);
+  fakeLevels.delete(session);
+  for (const source of running.sources) {
+    void emit("audio-level", { session, source, level: 0 } satisfies AudioLevel);
+  }
+}
 
 /*
  * The Meetings page reads this in its first load, for the control bar's line
@@ -2075,6 +2115,8 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
       elapsedSeconds: 0,
       sources,
     };
+    // The meters' levels, from the captures that opened, as `start_live` publishes them.
+    startFakeLevels("meeting", wantsSystemAudio ? ["microphone", "system"] : ["microphone"]);
     return sources;
   },
   // `fixtureStop` saves the note (a folder deleted while the meeting ran has
@@ -2083,11 +2125,13 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
   // that is what makes the page read Recent again. Not the `idle` state, for
   // the reason `meeting_cancel` gives.
   meeting_stop: () => {
+    stopFakeLevels("meeting");
     const outcome = fixtureStop();
     void emit("meeting-outcome", outcome);
     return outcome;
   },
   meeting_cancel: () => {
+    stopFakeLevels("meeting");
     meetingStartedAt = null;
     meetingStatus = {
       ...meetingStatus,
@@ -2435,6 +2479,20 @@ const devConsole = {
   meetingWindowSilent(silent = true) {
     meetingWindowSilent = silent;
   },
+  /**
+   * Fake levels for `session`'s microphone, ten a second, as a running
+   * capture's publisher sends them; `false` stops them with the last 0 Rust
+   * sends. For dictation and the overlay (with `kw.dictationState`), whose
+   * recording the fixtures never start; a meeting's run from its Start.
+   */
+  levels(session: LevelSession = "dictation", running = true) {
+    if (running) startFakeLevels(session, ["microphone"]);
+    else stopFakeLevels(session);
+  },
+  /** One reading, e.g. `kw.level(0.75)`, for a meter to be seen at a known value. */
+  level(level: number, session: LevelSession = "dictation", source: LevelSource = "microphone") {
+    void emit("audio-level", { session, source, level } satisfies AudioLevel);
+  },
   modelProgress(written: number, total: number | null = 574_000_000) {
     void emit("local-model-progress", {
       stage: "model",
@@ -2602,6 +2660,7 @@ export function installDevFixtures(): void {
       "          kw.meetingWindowSilent()",
       "          kw.overlayFloating()",
       "          kw.dictationFailed()",
+      "          kw.levels()  ·  kw.level(0.75)",
     ].join("\n  "),
   );
 }

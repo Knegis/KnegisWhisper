@@ -11,6 +11,7 @@
 //! connection tests are explicitly invoked by the user, never run at startup.
 //! See `docs/NETWORK_BOUNDARY.md`.
 
+mod audio_level;
 mod automation;
 mod binary_locator;
 mod calendar;

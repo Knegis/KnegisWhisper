@@ -19,6 +19,7 @@ use ts_rs::TS;
 use cpal::traits::{DeviceTrait as _, HostTrait as _, StreamTrait as _};
 
 use crate::gate::{GateDecision, SpeechGate};
+use crate::level::{block_rms_peak, LevelMeter, LevelReader};
 use crate::mix::Track;
 use crate::wav;
 
@@ -98,6 +99,9 @@ pub struct Recording {
 struct Buffer {
     samples: Vec<f32>,
     gate: SpeechGate,
+    /// How loud the latest blocks were, for a meter (KNEG-371). Fed from the
+    /// same pass over each block as the gate.
+    level: LevelMeter,
     capacity: usize,
     truncated: bool,
     /// Samples handed out by [`Buffer::drain`] and no longer held.
@@ -116,6 +120,7 @@ impl Buffer {
         Self {
             samples: Vec::new(),
             gate: SpeechGate::new(),
+            level: LevelMeter::new(),
             capacity,
             truncated: false,
             drained: 0,
@@ -142,8 +147,16 @@ impl Buffer {
     }
 
     /// Append what fits. Once full, stop rather than grow.
+    ///
+    /// The gate and the meter are fed from one pass over the block, before
+    /// the cap, so both keep measuring once the buffer is full. The meter's
+    /// part is one atomic; nothing here allocates on its behalf (KNEG-371).
     fn push(&mut self, data: &[f32]) {
-        self.gate.observe_samples(data);
+        if !data.is_empty() {
+            let (rms, peak) = block_rms_peak(data);
+            self.gate.observe(rms, peak);
+            self.level.record(rms);
+        }
 
         let remaining = self.capacity.saturating_sub(self.samples.len());
         if remaining == 0 {
@@ -169,6 +182,9 @@ impl Buffer {
 pub struct Capture {
     stream: cpal::Stream,
     buffer: Arc<Mutex<Buffer>>,
+    /// Reads the buffer's meter without its lock, and without keeping it
+    /// alive: it answers `None` once this capture is dropped.
+    level: LevelReader,
     sample_rate: u32,
     channels: u16,
 }
@@ -207,7 +223,9 @@ impl Capture {
 
         let sample_rate = config.sample_rate().0;
         let channels = config.channels();
-        let buffer = Arc::new(Mutex::new(Buffer::new(sample_rate, channels)));
+        let buffer = Buffer::new(sample_rate, channels);
+        let level = buffer.level.reader();
+        let buffer = Arc::new(Mutex::new(buffer));
 
         tracing::info!(
             device = device.name().unwrap_or_else(|_| "<unnamed>".to_owned()),
@@ -225,9 +243,20 @@ impl Capture {
         Ok(Self {
             stream,
             buffer,
+            level,
             sample_rate,
             channels,
         })
+    }
+
+    /// How loud the microphone is, for a meter (KNEG-371).
+    ///
+    /// The reader holds the meter weakly, so it outlives nothing: once this
+    /// capture is finished, cancelled or dropped, `take` answers `None`, and
+    /// whatever is publishing the level knows to stop.
+    #[must_use]
+    pub fn level(&self) -> LevelReader {
+        self.level.clone()
     }
 
     fn build_stream(
@@ -421,6 +450,26 @@ mod tests {
         let after_push = buffer.gate.decide();
         let _ = buffer.drain(1);
         assert_eq!(buffer.gate.decide(), after_push);
+    }
+
+    /// The microphone's meter is fed by `push`, from the block the callback
+    /// already holds (KNEG-371), and it keeps measuring past the cap as the
+    /// gate does: a meter that went dark at thirty minutes would read as a
+    /// microphone that had stopped.
+    #[test]
+    fn pushing_a_block_updates_the_level_meter() {
+        let mut buffer = Buffer::new(10, 1);
+        let reader = buffer.level.reader();
+        buffer.push(&[0.1, -0.1, 0.1, -0.1]);
+        let level = reader.take().unwrap();
+        assert!(
+            (level - crate::level::level_from_rms(0.1)).abs() < 1e-5,
+            "level was {level}"
+        );
+
+        buffer.capacity = 0;
+        buffer.push(&[0.5, -0.5]);
+        assert!(reader.take().unwrap() > level, "a full buffer still meters");
     }
 
     #[test]

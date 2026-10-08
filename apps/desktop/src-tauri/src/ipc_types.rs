@@ -223,6 +223,11 @@ fn render() -> String {
             kw_audio_core::InputDevice,
             crate::dictation::RouteReport,
         ],
+        "sound levels" => [
+            crate::audio_level::LevelSession,
+            crate::audio_level::LevelSource,
+            crate::audio_level::AudioLevel,
+        ],
         "local transcription" => [
             crate::local_model::Availability,
             crate::local_model::VerifiedBy,

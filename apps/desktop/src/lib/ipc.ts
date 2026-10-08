@@ -37,6 +37,7 @@ import type {
   Accelerator,
   AccountStatus,
   AppleCalendarSupport,
+  AudioLevel,
   AudioSource,
   Availability,
   BinaryLocation,
@@ -81,6 +82,8 @@ import type {
   InputDevice,
   InstallProgress,
   KeytermSupport,
+  LevelSession,
+  LevelSource,
   Lists,
   LocalApiStatus,
   LocalLlmModelStatus,
@@ -158,6 +161,7 @@ export type {
   Accelerator,
   AccountStatus,
   AppleCalendarSupport,
+  AudioLevel,
   AudioSource,
   BinaryLocation,
   Binding,
@@ -200,6 +204,8 @@ export type {
   InputDevice,
   InstallProgress,
   KeytermSupport,
+  LevelSession,
+  LevelSource,
   Lists,
   LocalApiStatus,
   LocalLlmModelStatus,
@@ -1041,6 +1047,19 @@ export async function onDictationOutcome(
   return listen<DictationOutcome>("dictation-outcome", (event) =>
     handler(event.payload),
   );
+}
+
+/* ------------------------------------------------------------ sound levels */
+
+/**
+ * Every capture's live level (KNEG-371): about ten a second while it runs,
+ * and a last 0 when it stops. One event for all of them; `session` and
+ * `source` say whose, so a meter keeps only its own (`useAudioLevel`).
+ */
+export async function onAudioLevel(
+  handler: (reading: AudioLevel) => void,
+): Promise<UnlistenFn> {
+  return listen<AudioLevel>("audio-level", (event) => handler(event.payload));
 }
 
 /* -------------------------------------------------------- local transcription */

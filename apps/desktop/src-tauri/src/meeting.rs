@@ -113,7 +113,7 @@ use config::{
 use notes::segment;
 use notes::{labelled, pcm_bytes, select_transcript, whisper_for_note, WholePass};
 pub use recorder::Delivered;
-use recorder::{spawn_recorder, Drained, Finished, RecorderCommand, RecorderEnd};
+use recorder::{spawn_recorder, Drained, Finished, Recorder, RecorderCommand, RecorderEnd};
 pub use removal::RecordingRemoval;
 use watcher::{Transition, WatchState};
 
@@ -121,6 +121,7 @@ use std::sync::mpsc as sync_mpsc;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
+use crate::audio_level::{LevelSession, LevelSource};
 use kw_audio_core::{wav, SystemAudioSupport};
 use kw_meeting_core::local::LocalWindowProvider;
 use kw_meeting_core::{
@@ -1214,15 +1215,38 @@ impl MeetingRuntime {
         // The microphone chosen on the Dictation page: one choice for both
         // tasks (KNEG-341). Until this a meeting always opened the default.
         let microphone = crate::dictation::load_device(&self.db).await;
-        let (audio, commands, sources, recorder_end) =
-            match spawn_recorder(path.clone(), system_audio, microphone) {
-                Ok(parts) => parts,
-                Err(err) => {
-                    cancel_provider(provider.as_mut()).await;
-                    self.release_stream(stream_lease).await;
-                    return Err(err);
-                }
-            };
+        let Recorder {
+            audio,
+            commands,
+            sources,
+            ended: recorder_end,
+            levels,
+        } = match spawn_recorder(path.clone(), system_audio, microphone) {
+            Ok(recorder) => recorder,
+            Err(err) => {
+                cancel_provider(provider.as_mut()).await;
+                self.release_stream(stream_lease).await;
+                return Err(err);
+            }
+        };
+
+        // The meters on the Meetings page: "You", and "Others" when system
+        // audio opened (KNEG-371). Each publisher ends by itself when the
+        // recorder thread drops its capture, however the meeting ends.
+        crate::audio_level::publish(
+            &self.app,
+            LevelSession::Meeting,
+            LevelSource::Microphone,
+            levels.microphone,
+        );
+        if let Some(system) = levels.system {
+            crate::audio_level::publish(
+                &self.app,
+                LevelSession::Meeting,
+                LevelSource::System,
+                system,
+            );
+        }
 
         self.notes.begin(&path);
         // Beside the recording from its first second, as the typed notes are,

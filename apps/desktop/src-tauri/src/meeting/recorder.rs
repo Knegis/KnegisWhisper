@@ -21,7 +21,7 @@ use std::sync::mpsc as sync_mpsc;
 use std::sync::{Arc, OnceLock};
 
 use kw_audio_core::meeting::MixFeed;
-use kw_audio_core::{wav, Capture, SystemCapture, WavWriter};
+use kw_audio_core::{wav, Capture, LevelReader, SystemCapture, WavWriter};
 use serde::Serialize;
 use ts_rs::TS;
 
@@ -187,15 +187,30 @@ impl Drop for RecorderExit {
 
 /// What [`spawn_recorder`] hands back.
 ///
-/// A named type because the tuple grew a fourth member and clippy is right that
-/// four is where one stops reading it: the audio stream, the command channel,
-/// what actually opened, and the thread's own account of how it ended.
-pub(super) type Recorder = (
-    mpsc::UnboundedReceiver<Drained>,
-    sync_mpsc::Sender<RecorderCommand>,
-    Sources,
-    Arc<OnceLock<RecorderEnd>>,
-);
+/// A struct since the fifth member (KNEG-371). It was a named tuple of four --
+/// the audio stream, the command channel, what actually opened, and the
+/// thread's own account of how it ended -- and the level readers made it one
+/// too many to read by position.
+#[derive(Debug)]
+pub(super) struct Recorder {
+    pub(super) audio: mpsc::UnboundedReceiver<Drained>,
+    pub(super) commands: sync_mpsc::Sender<RecorderCommand>,
+    pub(super) sources: Sources,
+    pub(super) ended: Arc<OnceLock<RecorderEnd>>,
+    pub(super) levels: Levels,
+}
+
+/// How loud each capture is, for the Meetings page's meters (KNEG-371).
+///
+/// Each reader answers `None` once its capture is dropped, which happens when
+/// the recorder thread leaves -- by Finish, Cancel, a dropped meeting or a
+/// panic -- so a meter cannot outlive the recording it shows.
+#[derive(Debug)]
+pub(super) struct Levels {
+    pub(super) microphone: LevelReader,
+    /// `None` when system audio was not captured.
+    pub(super) system: Option<LevelReader>,
+}
 
 /// Start the capture thread.
 ///
@@ -214,8 +229,9 @@ pub(super) fn spawn_recorder(
     let (command_tx, command_rx) = sync_mpsc::channel::<RecorderCommand>();
     // The thread reports whether it got its devices before anything else
     // happens, so a failure to open the microphone is a failure to start rather
-    // than a meeting that records nothing.
-    let (ready_tx, ready_rx) = sync_mpsc::channel::<Result<Sources, String>>();
+    // than a meeting that records nothing. With the captures' levels, which
+    // can only be read from the captures, and those live on the thread.
+    let (ready_tx, ready_rx) = sync_mpsc::channel::<Result<(Sources, Levels), String>>();
     // The thread's own account of how it ended, rather than the caller's
     // inference from a closed channel. See [`RecorderEnd`].
     let ended = Arc::new(OnceLock::new());
@@ -232,11 +248,17 @@ pub(super) fn spawn_recorder(
         })
         .map_err(|e| format!("could not start the recording thread: {e}"))?;
 
-    let sources = ready_rx
+    let (sources, levels) = ready_rx
         .recv()
         .map_err(|_| "the recording thread stopped before it started".to_owned())??;
 
-    Ok((audio_rx, command_tx, sources, ended))
+    Ok(Recorder {
+        audio: audio_rx,
+        commands: command_tx,
+        sources,
+        ended,
+        levels,
+    })
 }
 
 /// The recorder thread.
@@ -246,7 +268,7 @@ fn record(
     microphone: Option<String>,
     audio: mpsc::UnboundedSender<Drained>,
     commands: sync_mpsc::Receiver<RecorderCommand>,
-    ready: sync_mpsc::Sender<Result<Sources, String>>,
+    ready: sync_mpsc::Sender<Result<(Sources, Levels), String>>,
     ended: &Arc<OnceLock<RecorderEnd>>,
 ) {
     // First, so it is the last local dropped and therefore runs before `audio`
@@ -287,11 +309,18 @@ fn record(
         }
     };
 
-    let _ = ready.send(Ok(Sources {
-        microphone: true,
-        system_audio: system.is_some(),
-        system_audio_reason: system_reason,
-    }));
+    let levels = Levels {
+        microphone: mic.level(),
+        system: system.as_ref().map(SystemCapture::level),
+    };
+    let _ = ready.send(Ok((
+        Sources {
+            microphone: true,
+            system_audio: system.is_some(),
+            system_audio_reason: system_reason,
+        },
+        levels,
+    )));
 
     let mut mixer = MixFeed::new();
 
@@ -439,6 +468,43 @@ mod tests {
         pump_result, MeetingState,
     };
     use kw_meeting_core::{MeetingError, MeetingTranscript};
+
+    /* ----------------------------------------------------------- the meters */
+
+    /// The levels the ready message carries are the open captures' own, and
+    /// they end with the recorder thread, so a meeting's meters cannot
+    /// outlive it (KNEG-371). Opens the real default microphone, as
+    /// `dictation`'s microphone-thread tests do, into a temporary file that
+    /// Cancel deletes; on a machine with no microphone the start fails and
+    /// there is nothing to measure.
+    #[test]
+    fn the_meters_are_the_captures_own_and_end_with_the_recorder() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("meters.wav");
+        let Ok(recorder) = spawn_recorder(path.clone(), false, None) else {
+            return;
+        };
+
+        assert!(
+            recorder.levels.system.is_none(),
+            "system audio was not asked for, so it has no meter"
+        );
+        assert!(
+            recorder.levels.microphone.take().is_some(),
+            "the microphone's capture is open"
+        );
+
+        recorder.commands.send(RecorderCommand::Cancel).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while recorder.levels.microphone.take().is_some() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the microphone's meter outlived the cancelled recording"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(!path.exists(), "Cancel deleted the recording");
+    }
 
     /* --------------------------------------------------- what was delivered */
 
