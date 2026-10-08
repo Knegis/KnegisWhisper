@@ -2,8 +2,16 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { menuGroups } from "../src/lib/chipMenu.js";
-import { cleanupLabel, destinationName, languageLabel, microphoneMenu, privacyLines } from "../src/lib/controlBar.js";
-import type { CleanupRoute } from "../src/generated/ipc-types.js";
+import {
+  LANGUAGES,
+  cleanupLabel,
+  destinationName,
+  languageLabel,
+  languageNote,
+  microphoneMenu,
+  privacyLines,
+} from "../src/lib/controlBar.js";
+import type { CleanupRoute, RouteReport } from "../src/generated/ipc-types.js";
 
 const local = { isLocal: true, leavesDevice: false, destination: "local model" };
 const cloud = { isLocal: false, leavesDevice: true, destination: "openai" };
@@ -61,6 +69,100 @@ test("languageLabel names the chosen languages, or says it detects", () => {
   assert.equal(languageLabel(["sv", "en"]), "Swedish, English");
   // A code this build has no name for is shown as itself rather than dropped.
   assert.equal(languageLabel(["xx"]), "xx");
+});
+
+/* ---------------------------------------- the language note (KNEG-370) */
+
+const cloudTo = (destination: string, cloudLanguage: string | null): RouteReport => ({
+  destination,
+  isLocal: false,
+  leavesDevice: true,
+  problem: null,
+  cloudLanguage,
+});
+const LOCAL_ROUTE: RouteReport = {
+  destination: "local model",
+  isLocal: true,
+  leavesDevice: false,
+  problem: null,
+  cloudLanguage: null,
+};
+const BROKEN_ROUTE: RouteReport = {
+  destination: "nowhere",
+  isLocal: false,
+  leavesDevice: false,
+  problem: "no provider",
+  cloudLanguage: null,
+};
+
+test("on local Whisper the note says how two languages are told apart", () => {
+  assert.equal(
+    languageNote("whisper", LOCAL_ROUTE, ["sv", "en"]),
+    "Choose up to two. With two, each dictation is checked for which one you spoke.",
+  );
+});
+
+test("on a cloud route that is sent a language, the note names the provider and the language", () => {
+  assert.equal(languageNote(null, cloudTo("openai", "sv"), ["sv"]), "Choose up to two. OpenAI is told to expect Swedish.");
+});
+
+test("a language sent although not one was chosen says the provider needs one (Corti)", () => {
+  for (const chosen of [["sv", "da"], []]) {
+    assert.equal(
+      languageNote(null, cloudTo("corti", "en"), chosen),
+      "Choose up to two. Corti needs one language, so it is told to expect English.",
+      chosen.join(","),
+    );
+  }
+});
+
+test("on a cloud route sent no language, the note says the provider detects it", () => {
+  assert.equal(
+    languageNote(null, cloudTo("openai", null), ["sv", "en"]),
+    "Choose up to two. With two, OpenAI detects the language itself.",
+  );
+  assert.equal(languageNote(null, cloudTo("openai", null), []), "Choose up to two. OpenAI detects the language itself.");
+});
+
+test("one language chosen but not sent says the provider can't be told it (xAI and Finnish)", () => {
+  assert.equal(
+    languageNote(null, cloudTo("xai", null), ["fi"]),
+    "Choose up to two. xAI can't be told Finnish, so it detects the language itself.",
+  );
+});
+
+test("a route with a problem, or a Parakeet model, adds nothing to Choose up to two", () => {
+  assert.equal(languageNote(null, BROKEN_ROUTE, ["sv"]), "Choose up to two.");
+  assert.equal(languageNote("parakeet", LOCAL_ROUTE, ["sv"]), "Choose up to two.");
+});
+
+test("an endpoint a person points at themselves starts its sentence with a capital, and a brand keeps its own", () => {
+  assert.equal(
+    languageNote(null, cloudTo("self-hosted", "sv"), ["sv"]),
+    "Choose up to two. Your self-hosted server is told to expect Swedish.",
+  );
+  assert.equal(
+    languageNote(null, cloudTo("custom", null), ["sv", "en"]),
+    "Choose up to two. With two, your custom endpoint detects the language itself.",
+  );
+  assert.match(languageNote(null, cloudTo("xai", "sv"), ["sv"]), /\. xAI is told/);
+});
+
+test("no language note shows a language code, only its name", () => {
+  const codes = LANGUAGES.map(([code]) => code);
+  const anyCode = new RegExp(`\\b(${codes.join("|")})\\b`);
+  for (const code of codes) {
+    const other = code === "sv" ? "en" : "sv";
+    for (const note of [
+      languageNote("whisper", LOCAL_ROUTE, [code]),
+      languageNote(null, cloudTo("openai", code), [code]),
+      languageNote(null, cloudTo("corti", code), [code, other]),
+      languageNote(null, cloudTo("openai", null), [code, other]),
+      languageNote(null, cloudTo("xai", null), [code]),
+    ]) {
+      assert.doesNotMatch(note, anyCode, note);
+    }
+  }
 });
 
 test("cleanupLabel covers every CleanupRoute state", () => {

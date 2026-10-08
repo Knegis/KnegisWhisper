@@ -31,15 +31,18 @@ import { FailureLine } from "../components/FailureLine";
 import { LearnMore } from "../components/LearnMore";
 import { MicrophoneSettings } from "../components/MicrophoneSettings";
 import { Row } from "../components/Row";
-import { destinationName, privacyLines } from "../lib/controlBar";
+import { destinationName, languageNote, privacyLines } from "../lib/controlBar";
+import { languagesApply, localEngine } from "../lib/dictationRoute";
 import {
   getDictationRoute,
+  getLocalDictationLanguages,
   getLocalStatus,
   getProviders,
   getSherpaStatus,
   installLocalModel,
   installSherpaModel,
   onInstallProgress,
+  onLocalDictationLanguages,
   refreshLocalServer,
   setCloudProvider,
   startLocalServer,
@@ -124,13 +127,16 @@ export function SettingsTranscription({
   onGoToVocabulary: () => void;
 }) {
   const load = useCallback(async () => {
-    const [providers, local, sherpa, route] = await Promise.all([
+    const [providers, local, sherpa, route, languages] = await Promise.all([
       getProviders(),
       getLocalStatus(),
       getSherpaStatus(),
       getDictationRoute(),
+      // For the note under the language picker, which says what the route
+      // does with them (KNEG-370).
+      getLocalDictationLanguages(),
     ]);
-    return { providers, local, sherpa, route };
+    return { providers, local, sherpa, route, languages };
   }, []);
 
   const { data, error, reload, guard } = useRefresh(load);
@@ -262,6 +268,24 @@ export function SettingsTranscription({
     return () => unlisten?.();
   }, [reload]);
 
+  // The languages are chosen on Dictation and from the floating microphone
+  // too. On their announcement the page re-reads, the route with them, so the
+  // note under the picker says what is sent now (KNEG-370).
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void onLocalDictationLanguages(() => {
+      if (!disposed) void reload();
+    }).then((fn) => {
+      if (disposed) fn();
+      else unlisten = fn;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [reload]);
+
   if (!data) {
     return (
       <div className="view">
@@ -270,7 +294,8 @@ export function SettingsTranscription({
     );
   }
 
-  const { providers, local, sherpa, route } = data;
+  const { providers, local, sherpa, route, languages } = data;
+  const engine = localEngine(route, sherpa);
   const withKeys = providers.filter((p) => p.configured);
   const serverFreshness = freshnessLabel(local.serverFreshness);
   const sherpaFreshness = freshnessLabel(sherpa.cliFreshness);
@@ -303,6 +328,13 @@ export function SettingsTranscription({
             detail={route.problem}
           />
         ) : null}
+        {/* Under where dictation goes, since the languages apply to that
+            route, local Whisper or cloud (KNEG-370). Off under a Parakeet
+            model, which uses its own; the last sentence says so either way. */}
+        <LocalLanguagePicker
+          disabled={!languagesApply(engine)}
+          note={`${languageNote(engine, route, languages)} Parakeet models use the languages they were made for.`}
+        />
         <Row
           label="Keys saved"
           value={
@@ -395,8 +427,6 @@ export function SettingsTranscription({
 
       <section data-surface="settings.transcription.local">
         <h2>Local transcription</h2>
-        <LocalLanguagePicker disabled={sherpa.selected !== null} />
-        <p className="muted">These languages apply to Whisper models. Parakeet models below use the languages they were made for.</p>
         {local.availability.state === "not-published" ? (
           <>
             <Row

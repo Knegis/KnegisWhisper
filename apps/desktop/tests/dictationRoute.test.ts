@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { localEngine, routeBusyLabel, routeHeld, routeMenu } from "../src/lib/dictationRoute.js";
+import { languagesApply, localEngine, routeBusyLabel, routeHeld, routeMenu } from "../src/lib/dictationRoute.js";
 import type {
   Dispatch,
   LocalStatus,
@@ -50,9 +50,27 @@ function sherpa(selected: string | null, models: SherpaModelStatus[] = PARAKEET)
   };
 }
 
-const cloudRoute = (destination: string): RouteReport => ({ destination, isLocal: false, leavesDevice: true, problem: null });
-const LOCAL_ROUTE: RouteReport = { destination: "local model", isLocal: true, leavesDevice: false, problem: null };
-const BROKEN_ROUTE: RouteReport = { destination: "nowhere", isLocal: false, leavesDevice: false, problem: "no provider" };
+const cloudRoute = (destination: string): RouteReport => ({
+  destination,
+  isLocal: false,
+  leavesDevice: true,
+  problem: null,
+  cloudLanguage: null,
+});
+const LOCAL_ROUTE: RouteReport = {
+  destination: "local model",
+  isLocal: true,
+  leavesDevice: false,
+  problem: null,
+  cloudLanguage: null,
+};
+const BROKEN_ROUTE: RouteReport = {
+  destination: "nowhere",
+  isLocal: false,
+  leavesDevice: false,
+  problem: "no provider",
+  cloudLanguage: null,
+};
 
 const WHISPER = [
   whisper("large", "Whisper Large", true),
@@ -243,6 +261,15 @@ test("which engine a local route runs on", () => {
   assert.equal(localEngine(BROKEN_ROUTE, sherpa(null)), null);
   assert.equal(localEngine(LOCAL_ROUTE, sherpa(null)), "whisper");
   assert.equal(localEngine(LOCAL_ROUTE, sherpa("unified")), "parakeet");
+});
+
+test("Dictation's languages apply, and their chip shows, on local Whisper and on cloud, not under Parakeet (KNEG-370)", () => {
+  assert.equal(languagesApply(localEngine(LOCAL_ROUTE, sherpa(null))), true);
+  // A Parakeet model selected while the route is not local is not in use.
+  assert.equal(languagesApply(localEngine(cloudRoute("openai"), sherpa("unified"))), true);
+  // A route with a problem still shows what will apply once it is fixed.
+  assert.equal(languagesApply(localEngine(BROKEN_ROUTE, sherpa(null))), true);
+  assert.equal(languagesApply(localEngine(LOCAL_ROUTE, sherpa("unified"))), false);
 });
 
 test("the chip says Starting while a local model is being switched to, and nothing for a cloud switch", () => {

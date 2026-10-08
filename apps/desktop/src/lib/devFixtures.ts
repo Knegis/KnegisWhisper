@@ -942,16 +942,30 @@ let microphoneChecking = false;
  */
 const dictationRoute = { useLocal: false, provider: "openai", model: "whisper-1" };
 
+/**
+ * A cloud route's `cloudLanguage` as `route::resolve` gives it for the common
+ * case (KNEG-370): one dictation language is sent, none or two are not. xAI's
+ * dropped languages and Corti's English are not emulated -- the page reads
+ * whatever arrives and repeats neither rule.
+ */
 function resolvedRoute(): RouteReport {
+  const [only, ...more] = localLanguages;
   return dictationRoute.useLocal
-    ? { destination: "local model", isLocal: true, leavesDevice: false, problem: null }
-    : { destination: dictationRoute.provider, isLocal: false, leavesDevice: true, problem: null };
+    ? { destination: "local model", isLocal: true, leavesDevice: false, problem: null, cloudLanguage: null }
+    : {
+        destination: dictationRoute.provider,
+        isLocal: false,
+        leavesDevice: true,
+        problem: null,
+        cloudLanguage: only !== undefined && more.length === 0 ? only : null,
+      };
 }
 
 /**
- * The local languages `dictation_set_local_language` stored. Swedish alone to
- * start, so the language chip -- shown on the local whisper route only --
- * reads as a choice rather than as "Detect language".
+ * Dictation's languages, as `dictation_set_local_language` stored them.
+ * Swedish alone to start, so the language chip -- shown on every route but a
+ * Parakeet model's -- reads as a choice rather than as "Detect language", and
+ * the fixtures' OpenAI route is told to expect it.
  */
 let localLanguages: string[] = ["sv"];
 

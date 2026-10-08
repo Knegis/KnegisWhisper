@@ -211,9 +211,15 @@ pub struct RouteSettings {
     /// `"self-hosted"`, `"local"`, or `"providers"`.
     pub transcription_mode: Option<String>,
     pub use_local_whisper: bool,
-    /// Decoder language for local dictation; absent means automatic detection.
+    /// The single dictation language stored before `local_languages` existed.
+    /// Read only while that list is empty; see
+    /// [`dictation_languages`](Self::dictation_languages).
     pub local_language: Option<String>,
-    /// Zero means automatic detection; one forces decoding; two restrict detection.
+    /// Dictation's languages, for every route (KNEG-370). Local Whisper gets
+    /// them all: zero means automatic detection, one forces decoding, two
+    /// restrict detection. A cloud route is sent the one when exactly one is
+    /// chosen and detects the language itself otherwise ([`resolve`]). The
+    /// name is from when only local Whisper read them.
     pub local_languages: Vec<String>,
     pub remote_transcription_url: Option<String>,
     pub remote_transcription_model: Option<String>,
@@ -222,8 +228,23 @@ pub struct RouteSettings {
     pub cloud_transcription_base_url: Option<String>,
     pub corti_environment: Option<String>,
     pub corti_tenant: Option<String>,
-    /// A BCP-47 tag or `"auto"`.
+    /// A BCP-47 tag or `"auto"`. Upstream's cloud language; nothing in this
+    /// application writes it, but a stored one still wins over Dictation's
+    /// languages.
     pub preferred_language: Option<String>,
+}
+
+impl RouteSettings {
+    /// Dictation's languages: `local_languages`, or the legacy
+    /// `local_language` while that list is empty.
+    #[must_use]
+    pub fn dictation_languages(&self) -> Vec<String> {
+        if self.local_languages.is_empty() {
+            self.local_language.clone().into_iter().collect()
+        } else {
+            self.local_languages.clone()
+        }
+    }
 }
 
 /// Per-request overrides.
@@ -232,7 +253,7 @@ pub struct RouteSettings {
 pub struct RouteRequest {
     /// An explicit model override. Doubles as the Azure deployment name.
     pub model: Option<String>,
-    /// Translation-aware language; wins over `preferred_language`.
+    /// Translation-aware language; wins over every setting.
     pub effective_language: Option<String>,
 }
 
@@ -247,6 +268,13 @@ fn required(value: Option<&str>, field: &'static str) -> Result<String, RouteErr
 
 /// Resolve the language to send, or `None` for automatic detection.
 ///
+/// In order: the request's `effective_language`; a stored
+/// `preferred_language` (`"auto"` meaning none); then Dictation's languages
+/// (KNEG-370), sent only when exactly one is chosen -- with two, a cloud
+/// provider is left to detect which was spoken, as local Whisper's detection
+/// pass does, rather than told one of them. The branches in [`resolve`] may
+/// still drop it (xAI) or default it (Corti).
+///
 /// A region subtag is dropped (`sv-SE` becomes `sv`): no transcription provider
 /// accepts a region, and sending one is rejected rather than ignored by several.
 fn resolve_language(settings: &RouteSettings, request: &RouteRequest) -> Option<String> {
@@ -257,18 +285,20 @@ fn resolve_language(settings: &RouteSettings, request: &RouteRequest) -> Option<
         }
     }
 
-    let preferred = settings.preferred_language.as_deref()?.trim();
-    if preferred.is_empty() || preferred == "auto" {
-        return None;
+    let preferred = settings.preferred_language.as_deref().map(str::trim);
+    if let Some(preferred) = preferred.filter(|p| !p.is_empty()) {
+        return (preferred != "auto").then(|| primary_subtag(preferred));
     }
 
-    Some(
-        preferred
-            .split('-')
-            .next()
-            .unwrap_or(preferred)
-            .to_lowercase(),
-    )
+    match settings.dictation_languages().as_slice() {
+        [one] if !one.trim().is_empty() => Some(primary_subtag(one.trim())),
+        _ => None,
+    }
+}
+
+/// A language tag without its region, lower-cased.
+fn primary_subtag(tag: &str) -> String {
+    tag.split('-').next().unwrap_or(tag).to_lowercase()
 }
 
 /// Resolve the model id for a provider.
@@ -430,11 +460,7 @@ pub fn resolve(
 
     if settings.use_local_whisper {
         return Ok(Transport::Local {
-            languages: if settings.local_languages.is_empty() {
-                settings.local_language.clone().into_iter().collect()
-            } else {
-                settings.local_languages.clone()
-            },
+            languages: settings.dictation_languages(),
         });
     }
 
@@ -488,7 +514,8 @@ pub fn resolve(
             provider: ProviderClientKind::Corti,
             model: Some(model),
             // Corti requires a concrete primary language; default to English
-            // rather than sending nothing and having it guess.
+            // rather than sending nothing and having it guess. So with none
+            // or two dictation languages chosen it is told English (KNEG-370).
             language: Some(language.unwrap_or_else(|| "en".to_owned())),
             max_upload_bytes: max_upload_bytes(registry, provider)?,
             corti: Some(CortiConfig {
@@ -983,8 +1010,11 @@ mod tests {
         }
     }
 
+    /// The legacy single language is kept through storage, and an explicit
+    /// `preferred_language` still wins over Dictation's languages on a cloud
+    /// route (KNEG-370).
     #[test]
-    fn local_language_survives_storage_and_does_not_replace_cloud_language() {
+    fn local_language_survives_storage_and_an_explicit_preferred_language_still_wins() {
         let settings = RouteSettings {
             use_local_whisper: true,
             local_language: Some("sv".into()),
@@ -1056,6 +1086,191 @@ mod tests {
             Transport::HttpBatch { language, .. } => assert_eq!(language.as_deref(), Some("en")),
             other => panic!("{other:?}"),
         }
+    }
+
+    /* ============================================ Dictation's languages (KNEG-370) */
+
+    /// The language a resolved cloud route carries.
+    fn sent(route: &Transport) -> Option<&str> {
+        match route {
+            Transport::HttpBatch { language, .. } | Transport::ProviderClient { language, .. } => {
+                language.as_deref()
+            }
+            Transport::Local { .. } => panic!("expected a cloud route, got {route:?}"),
+        }
+    }
+
+    /// Every cloud shape a dictation language reaches: three registry providers
+    /// over HttpBatch, two through their own clients, and a self-hosted server.
+    fn cloud_routes(languages: &[&str]) -> Vec<(&'static str, RouteSettings)> {
+        let languages: Vec<String> = languages.iter().map(|&code| code.to_owned()).collect();
+        let mut routes: Vec<(&'static str, RouteSettings)> =
+            ["openai", "groq", "berget", "mistral", "xai"]
+                .into_iter()
+                .map(|id| {
+                    (
+                        id,
+                        RouteSettings {
+                            local_languages: languages.clone(),
+                            ..providers(id)
+                        },
+                    )
+                })
+                .collect();
+        routes.push((
+            "self-hosted",
+            RouteSettings {
+                transcription_mode: Some("self-hosted".to_owned()),
+                remote_transcription_url: Some("http://127.0.0.1:8178/v1".to_owned()),
+                local_languages: languages,
+                ..Default::default()
+            },
+        ));
+        routes
+    }
+
+    #[test]
+    fn dictation_languages_fall_back_to_the_legacy_single_language() {
+        assert!(RouteSettings::default().dictation_languages().is_empty());
+        let legacy = RouteSettings {
+            local_language: Some("sv".into()),
+            ..Default::default()
+        };
+        assert_eq!(legacy.dictation_languages(), vec!["sv".to_owned()]);
+        let both = RouteSettings {
+            local_languages: vec!["en".into(), "da".into()],
+            ..legacy
+        };
+        assert_eq!(
+            both.dictation_languages(),
+            vec!["en".to_owned(), "da".to_owned()]
+        );
+    }
+
+    #[test]
+    fn one_dictation_language_is_sent_to_every_cloud_route() {
+        for (name, settings) in cloud_routes(&["sv"]) {
+            let route = resolve_with(&settings).unwrap();
+            assert_eq!(
+                matches!(route, Transport::ProviderClient { .. }),
+                matches!(name, "mistral" | "xai"),
+                "{name} resolved to an unexpected shape: {route:?}"
+            );
+            assert_eq!(sent(&route), Some("sv"), "{name}: {route:?}");
+        }
+    }
+
+    #[test]
+    fn none_or_two_dictation_languages_leave_the_provider_to_detect() {
+        for languages in [&[][..], &["sv", "en"][..]] {
+            for (name, settings) in cloud_routes(languages) {
+                let route = resolve_with(&settings).unwrap();
+                assert_eq!(sent(&route), None, "{name} with {languages:?}: {route:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_legacy_single_local_language_counts_as_one_dictation_language() {
+        let legacy = RouteSettings {
+            local_language: Some("sv".into()),
+            ..providers("openai")
+        };
+        assert_eq!(sent(&resolve_with(&legacy).unwrap()), Some("sv"));
+
+        // The list wins over the legacy field once anything is in it.
+        let both = RouteSettings {
+            local_language: Some("sv".into()),
+            local_languages: vec!["en".into(), "da".into()],
+            ..providers("openai")
+        };
+        assert_eq!(sent(&resolve_with(&both).unwrap()), None);
+    }
+
+    #[test]
+    fn a_preferred_auto_means_no_language_even_with_one_dictation_language() {
+        let settings = RouteSettings {
+            preferred_language: Some("auto".into()),
+            local_languages: vec!["sv".into()],
+            ..providers("openai")
+        };
+        assert_eq!(sent(&resolve_with(&settings).unwrap()), None);
+    }
+
+    #[test]
+    fn a_blank_preference_is_no_preference_so_the_dictation_language_is_sent() {
+        for blank in ["", "  "] {
+            let settings = RouteSettings {
+                preferred_language: Some(blank.into()),
+                local_languages: vec!["sv".into()],
+                ..providers("openai")
+            };
+            assert_eq!(
+                sent(&resolve_with(&settings).unwrap()),
+                Some("sv"),
+                "{blank:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_effective_language_wins_over_the_dictation_languages_too() {
+        let settings = RouteSettings {
+            local_languages: vec!["sv".into()],
+            ..providers("openai")
+        };
+        let request = RouteRequest {
+            effective_language: Some("en".to_owned()),
+            ..Default::default()
+        };
+        assert_eq!(
+            sent(&resolve(registry(), &settings, &request).unwrap()),
+            Some("en")
+        );
+    }
+
+    #[test]
+    fn xai_is_sent_a_dictation_language_only_if_it_supports_it() {
+        // Norwegian and Finnish are two of the eight dictation languages and
+        // not among xAI's 25, so xAI detects them itself.
+        for (code, expected) in [("sv", Some("sv")), ("fi", None), ("no", None)] {
+            let settings = RouteSettings {
+                local_languages: vec![code.into()],
+                ..providers("xai")
+            };
+            assert_eq!(sent(&resolve_with(&settings).unwrap()), expected, "{code}");
+        }
+    }
+
+    #[test]
+    fn corti_keeps_english_unless_exactly_one_dictation_language_is_chosen() {
+        for (languages, expected) in [(vec!["sv"], "sv"), (vec!["sv", "da"], "en"), (vec![], "en")]
+        {
+            let settings = RouteSettings {
+                local_languages: languages.iter().map(|&code| code.to_owned()).collect(),
+                ..configured("corti")
+            };
+            assert_eq!(
+                sent(&resolve_with(&settings).unwrap()),
+                Some(expected),
+                "{languages:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn local_whisper_still_gets_both_dictation_languages() {
+        let settings = RouteSettings {
+            use_local_whisper: true,
+            local_languages: vec!["sv".into(), "en".into()],
+            ..providers("openai")
+        };
+        assert_eq!(
+            resolve_with(&settings).unwrap(),
+            Transport::Local {
+                languages: vec!["sv".into(), "en".into()]
+            }
+        );
     }
 
     /* ============================================================ upload caps */

@@ -12,7 +12,7 @@
       "surfaceId": "settings.transcription",
       "component": "apps/desktop/src/views/SettingsTranscription.tsx",
       "built": true,
-      "note": "Chooses the cloud provider and model for dictation, from the registry. Six of the seven providers can be selected: three over HttpBatch and three through their own client in crates/transcription-core/src/clients.rs. Corti also takes an environment and a tenant here, because the router refuses to guess either. Tinfoil is listed with the reason it is refused -- an unattested request would present as Tinfoil while providing none of what the name means. Keys are stored on Settings > Providers."
+      "note": "Chooses the cloud provider and model for dictation, from the registry. Six of the seven providers can be selected: three over HttpBatch and three through their own client in crates/transcription-core/src/clients.rs. Corti also takes an environment and a tenant here, because the router refuses to guess either. Tinfoil is listed with the reason it is refused -- an unattested request would present as Tinfoil while providing none of what the name means. Keys are stored on Settings > Providers. Dictation's languages are chosen here too, under where dictation goes: local Whisper decodes with them and a cloud route is sent the one when exactly one is chosen, so the line under them says what the route in use does; the picker is off while a Parakeet model is the local engine (KNEG-370)."
     },
     "Settings > Transcription > Local": {
       "surfaceId": "settings.transcription.local",
@@ -60,7 +60,7 @@
       "surfaceId": "dictation.task",
       "component": "apps/desktop/src/views/Dictation.tsx",
       "built": true,
-      "note": "The dictation task: whether it will work (lib/readiness.ts) and the shortcut to press, in a centred hero; then a control bar with the microphone, the route (an installed model on this computer or a cloud provider) and, on the local whisper route, the languages, each chosen in place in its chip's menu -- the route and the languages only between dictations, since Rust reads them at Stop, and they are also set on Settings > Transcription, which owns them; a Tidy up chip that switches cleanup on and off once it has been set up in Settings > Cleanup & summaries (held during a dictation, and saying under itself when it cannot run), and until then links there; the privacy line; the last result; and the Start button, held while a route switch is applied. The shortcut editor is on Settings > Shortcuts, reached from the history panel."
+      "note": "The dictation task: whether it will work (lib/readiness.ts) and the shortcut to press, in a centred hero; then a control bar with the microphone, the route (an installed model on this computer or a cloud provider) and, on every route but a Parakeet model's, the languages with a line saying what the route does with them (KNEG-370), each chosen in place in its chip's menu -- the route and the languages only between dictations, since Rust reads them at Stop, and they are also set on Settings > Transcription, which owns them; a Tidy up chip that switches cleanup on and off once it has been set up in Settings > Cleanup & summaries (held during a dictation, and saying under itself when it cannot run), and until then links there; the privacy line; the last result; and the Start button, held while a route switch is applied. The shortcut editor is on Settings > Shortcuts, reached from the history panel."
     },
     "Dictation > History": {
       "surfaceId": "dictation.history",

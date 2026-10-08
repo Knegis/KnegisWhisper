@@ -837,6 +837,26 @@ export function taskPageState() {
   `);
 }
 
+/**
+ * The open language panel (`LocalLanguagePicker` in a chip's menu): the line
+ * under the choices, the languages ticked, whether Detect automatically is
+ * marked, and whether the picker is off.
+ */
+export function languagePanel() {
+  return source(`
+    const picker = document.querySelector('.chip-menu .local-language-picker');
+    if (!picker) return null;
+    return {
+      note: picker.querySelector('p.muted')?.textContent ?? null,
+      ticked: [...picker.querySelectorAll('.local-language-options label')]
+        .filter((label) => label.querySelector('input')?.checked)
+        .map((label) => label.textContent.trim()),
+      detect: picker.querySelector(':scope > button')?.getAttribute('aria-pressed') ?? null,
+      disabled: picker.disabled,
+    };
+  `);
+}
+
 /** Puts keyboard focus on the chip, as Tab would have. */
 export function focusChip(prefix) {
   return source(`

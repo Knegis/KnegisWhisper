@@ -1300,7 +1300,16 @@ leavesDevice: boolean,
 /**
  * Present when the route cannot be resolved at all.
  */
-problem: string | null, };
+problem: string | null,
+/**
+ * The language a cloud route sends with the audio, as `route::resolve`
+ * settled it from Dictation's languages and each provider's own rule
+ * (xAI drops one it cannot take, Corti needs one). `None` where the
+ * provider detects the language itself, on the local route, which reads
+ * the languages on its own, and on a route with a problem (KNEG-370).
+ * Read rather than re-derived, so a screen never repeats those rules.
+ */
+cloudLanguage: string | null, };
 
 /* ----------------------------------------------------------- sound levels */
 /**

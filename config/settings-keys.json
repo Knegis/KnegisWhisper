@@ -137,7 +137,7 @@
       "reachable": true
     },
     "transcription.route": {
-      "what": "Where dictation audio goes: the local engine, or a named cloud provider and model.",
+      "what": "Where dictation audio goes (the local engine, or a named cloud provider and model), and Dictation's languages: local Whisper decodes with them, and a cloud route is sent the language when exactly one is chosen and detects it otherwise (KNEG-370). Imports share both.",
       "writtenBy": [
         "dictation_use_local",
         "dictation_set_cloud_provider",

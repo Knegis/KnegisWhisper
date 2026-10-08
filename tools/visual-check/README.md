@@ -75,11 +75,12 @@ every write, and the fixtures keep them in memory. States the fixture defaults
 cannot reach -- a slow write, a refused one, an unconfigured Tidy up, a route
 with a caveat -- are made by wrapping the page's `invoke` for that one command
 after the shell loads (`installInvokeStub` in `snippets.mjs`), and again after
-each reload. It numbers eleven checks (3 is measured in two halves):
+each reload. It numbers twelve checks (3 is measured in two halves):
 
 1. At 1000x720 the microphone, route, Dictation language, Meetings provider and
    Meetings language menus each open inside the window and above the control
-   bar.
+   bar. The Dictation language panel is opened on the fixtures' OpenAI route,
+   since its chip shows on cloud routes too (KNEG-370).
 2. On the Dictation route menu: ArrowDown reaches a greyed row and Enter there
    does nothing; ArrowUp to a normal row and Enter chooses it; Escape closes
    with focus back on the chip; Tab closes; `aria-expanded` is right and
@@ -113,6 +114,14 @@ each reload. It numbers eleven checks (3 is measured in two halves):
     with the chip disabled and unpressed and the note "Other participants can't
     be recorded on this computer." Each press is on a fresh Meetings page, once
     the button is enabled.
+11. Dictation's language chip on the fixtures' OpenAI route (KNEG-370): Detect
+    automatically, then Swedish, then English, each written once and followed
+    by a re-read of the route, with the panel's note reading "OpenAI detects
+    the language itself.", "OpenAI is told to expect Swedish." and "With two,
+    OpenAI detects the language itself." in turn. Choosing Parakeet Unified
+    removes the chip, and choosing Whisper Large v3 Turbo (Q5) brings it back
+    with Whisper's note. The fixtures send one language and not two; xAI's and
+    Corti's own rules are Rust's, tested in `route.rs`.
 
 Like the shell rail, it reports **measured in headless Edge against dev
 fixtures, not in the Tauri window**, and a false check makes it exit 1.

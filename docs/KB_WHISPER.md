@@ -13,22 +13,32 @@ time, so the model chosen for long recordings is also the one dictation uses, an
 the screen says so under the list. A separate model for long recordings was
 considered and not built (KNEG-407).
 
-The **Whisper dictation languages** picker is available in Settings, from the
-language chip on the Dictation page while dictation uses a local Whisper model,
-and from the `>` button beside the floating microphone. Pick one or two
-languages, or choose Detect automatically to clear the selection. The choice
-persists and stays in sync between all three. A single language forces that
-decoder language. Two languages first run local language detection, then decode
-using whichever selected language has the highest reported probability. This
-adds a detection pass and chooses one language per dictation; it does not
-guarantee accurate language switching within one sentence. If neither selected
-language has a reported score, the app asks for automatic detection or a single
-language.
+The **dictation languages** picker is available in Settings > Transcription,
+under where dictation goes, from the language chip on the Dictation page on every
+route but a Parakeet model's, and from the `>` button beside the floating
+microphone. Pick one or two languages, or choose Detect automatically to clear
+the selection. The choice persists and stays in sync between all three. On local
+Whisper a single language forces that decoder language. Two languages first run
+local language detection, then decode using whichever selected language has the
+highest reported probability. This adds a detection pass and chooses one
+language per dictation; it does not guarantee accurate language switching within
+one sentence. If neither selected language has a reported score, the app asks
+for automatic detection or a single language.
 
 Supported choices are Swedish, English, Danish, Norwegian, Finnish, German,
-French, and Spanish. The setting applies to local Whisper dictation; other local
-engines retain their model-defined languages. Changing this setting does not
-restart the model or change cloud-provider language preferences.
+French, and Spanish. Parakeet models keep their model-defined languages, and the
+picker is off while one is in use. Changing this setting does not restart the
+model.
+
+The same choice applies to cloud dictation and to imports, which share the
+dictation route (KNEG-370): a cloud provider is sent the language when exactly one
+is chosen, and detects it itself when none or two are. Two provider rules apply on
+top, in `route::resolve`: xAI is not told a language outside the 25 it accepts
+(Norwegian and Finnish among the eight here), and Corti, which needs one, is told
+English unless exactly one is chosen. The line under the picker says which, read
+from the language the resolved route carries (`RouteReport.cloud_language`). That
+each provider accepts each of the eight codes is believed, not measured: no cloud
+dictation with a chosen language has been run against a live provider.
 
 These are KBLab's official default Stage 2 GGML Q5 models, specialized for Swedish.
 They supplement the existing Whisper models. The downloads are approximately

@@ -77,6 +77,18 @@ export function localEngine(route: RouteReport, sherpa: SherpaStatus): "whisper"
   return sherpa.selected !== null ? "parakeet" : "whisper";
 }
 
+/**
+ * Whether Dictation's languages apply on a route with this local engine, and
+ * so whether the page offers them: everywhere but under a Parakeet model,
+ * which uses the languages it was made for. Local Whisper decodes with them
+ * and a cloud route is sent one when exactly one is chosen (KNEG-370). A
+ * route with a problem (`null`) offers them too, as what will apply once it
+ * is fixed.
+ */
+export function languagesApply(engine: "whisper" | "parakeet" | null): boolean {
+  return engine !== "parakeet";
+}
+
 export function routeMenu(
   providers: readonly ProviderSummary[],
   local: LocalStatus,

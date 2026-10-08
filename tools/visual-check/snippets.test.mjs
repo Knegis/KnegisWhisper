@@ -58,6 +58,7 @@ test("every renderer snippet is syntactically valid JavaScript", () => {
     snippets.menuVisible(),
     snippets.menuState(),
     snippets.taskPageState(),
+    snippets.languagePanel(),
     snippets.focusChip("Microphone: "),
     snippets.themeState(),
     snippets.playerState(),
