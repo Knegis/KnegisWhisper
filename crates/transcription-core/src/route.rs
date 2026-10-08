@@ -40,6 +40,9 @@
 //!   Passing it through would ship the user's custom key and audio to OpenAI.
 //! * xAI drops the language unless it is one of the 25 it supports, so
 //!   inverse text normalisation via `format=true` stays valid.
+//!
+//! Mistral drops a language its documentation does not list in the same way
+//! ([`MISTRAL_STT_LANGUAGES`]); that one is ours, not upstream's (KNEG-370).
 
 use kw_provider_registry::Registry;
 use kw_security::KeyRef;
@@ -61,6 +64,19 @@ const DEFAULT_OPENAI_BASE: &str = "https://api.openai.com/v1";
 pub const XAI_STT_LANGUAGES: [&str; 25] = [
     "ar", "cs", "da", "de", "en", "es", "fa", "fil", "fr", "hi", "id", "it", "ja", "ko", "mk",
     "ms", "nl", "pl", "pt", "ro", "ru", "sv", "th", "tr", "vi",
+];
+
+/// The 13 languages Mistral's transcription documentation lists, as read
+/// from <https://docs.mistral.ai/capabilities/audio_transcription> on
+/// 2026-10-08.
+///
+/// A language outside it is dropped rather than sent, so Mistral detects it
+/// itself, as it did for every dictation before KNEG-370 sent one. Whether
+/// Mistral refuses an unlisted language or decodes it badly was not tried;
+/// leaving it to detect is the behaviour that was already in use. Swedish,
+/// Danish, Norwegian and Finnish are not listed.
+pub const MISTRAL_STT_LANGUAGES: [&str; 13] = [
+    "en", "zh", "hi", "es", "ar", "fr", "pt", "ru", "de", "ja", "ko", "it", "nl",
 ];
 
 /// How a credential is presented.
@@ -273,7 +289,7 @@ fn required(value: Option<&str>, field: &'static str) -> Result<String, RouteErr
 /// (KNEG-370), sent only when exactly one is chosen -- with two, a cloud
 /// provider is left to detect which was spoken, as local Whisper's detection
 /// pass does, rather than told one of them. The branches in [`resolve`] may
-/// still drop it (xAI) or default it (Corti).
+/// still drop it (xAI, Mistral) or default it (Corti).
 ///
 /// A region subtag is dropped (`sv-SE` becomes `sv`): no transcription provider
 /// accepts a region, and sending one is rejected rather than ignored by several.
@@ -501,6 +517,12 @@ pub fn resolve(
                 language: match (kind, language.as_deref()) {
                     // Dropping an unsupported language keeps format=true valid.
                     (ProviderClientKind::Xai, Some(lang)) if !XAI_STT_LANGUAGES.contains(&lang) => {
+                        None
+                    }
+                    // One Mistral does not list is left for it to detect.
+                    (ProviderClientKind::Mistral, Some(lang))
+                        if !MISTRAL_STT_LANGUAGES.contains(&lang) =>
+                    {
                         None
                     }
                     _ => language,
@@ -894,6 +916,13 @@ mod tests {
         assert_eq!(unique.len(), 25, "the set should have no duplicates");
     }
 
+    #[test]
+    fn the_mistral_language_set_has_exactly_the_thirteen_documented_entries() {
+        assert_eq!(MISTRAL_STT_LANGUAGES.len(), 13);
+        let unique: std::collections::BTreeSet<&&str> = MISTRAL_STT_LANGUAGES.iter().collect();
+        assert_eq!(unique.len(), 13, "the set should have no duplicates");
+    }
+
     /// An unconfigured Corti is refused, and the refusal names the field.
     ///
     /// It used to default to `us` / `base`, which is a real endpoint under a
@@ -1149,14 +1178,16 @@ mod tests {
 
     #[test]
     fn one_dictation_language_is_sent_to_every_cloud_route() {
-        for (name, settings) in cloud_routes(&["sv"]) {
+        // German, which every provider here lists; Swedish is not on
+        // Mistral's list (see the Mistral test below).
+        for (name, settings) in cloud_routes(&["de"]) {
             let route = resolve_with(&settings).unwrap();
             assert_eq!(
                 matches!(route, Transport::ProviderClient { .. }),
                 matches!(name, "mistral" | "xai"),
                 "{name} resolved to an unexpected shape: {route:?}"
             );
-            assert_eq!(sent(&route), Some("sv"), "{name}: {route:?}");
+            assert_eq!(sent(&route), Some("de"), "{name}: {route:?}");
         }
     }
 
@@ -1237,6 +1268,29 @@ mod tests {
             let settings = RouteSettings {
                 local_languages: vec![code.into()],
                 ..providers("xai")
+            };
+            assert_eq!(sent(&resolve_with(&settings).unwrap()), expected, "{code}");
+        }
+    }
+
+    #[test]
+    fn mistral_is_sent_a_dictation_language_only_if_it_supports_it() {
+        // Mistral's transcription docs list neither Swedish, Danish, Norwegian
+        // nor Finnish, so it detects those itself, as it always did before
+        // KNEG-370; the four it lists are sent.
+        for (code, expected) in [
+            ("sv", None),
+            ("da", None),
+            ("no", None),
+            ("fi", None),
+            ("de", Some("de")),
+            ("fr", Some("fr")),
+            ("es", Some("es")),
+            ("en", Some("en")),
+        ] {
+            let settings = RouteSettings {
+                local_languages: vec![code.into()],
+                ..providers("mistral")
             };
             assert_eq!(sent(&resolve_with(&settings).unwrap()), expected, "{code}");
         }

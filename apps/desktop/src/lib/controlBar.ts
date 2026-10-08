@@ -123,26 +123,26 @@ export function privacyLines(
 }
 
 /**
+ * A language by name, or by its code where this build has no name for it:
+ * shown as itself rather than dropped, so nothing claims fewer languages than
+ * are set.
+ */
+function languageName(code: string): string {
+  return LANGUAGES.find(([known]) => known === code)?.[1] ?? code;
+}
+
+/**
  * The language chip: the chosen languages by name, or "Detect language" when
  * none is chosen. A route that is told a language all the same (Corti) says
- * so in the picker's note (`languageNote`). A code with no name here is shown as
- * itself rather than dropped, so the chip never claims fewer languages than
- * are set.
+ * so in the picker's note (`languageNote`).
  */
 export function languageLabel(codes: readonly string[]): string {
   if (codes.length === 0) return "Detect language";
-  return codes
-    .map((code) => LANGUAGES.find(([known]) => known === code)?.[1] ?? code)
-    .join(", ");
+  return codes.map(languageName).join(", ");
 }
 
 /** How every language note begins; what follows depends on the route. */
 export const LANGUAGE_NOTE_LEAD = "Choose up to two.";
-
-/** A language by name, or by its code where this build has no name for it, as `languageLabel` does. */
-function languageName(code: string): string {
-  return LANGUAGES.find(([known]) => known === code)?.[1] ?? code;
-}
 
 /**
  * A destination's name to begin a sentence with. The two endpoint phrases
@@ -160,10 +160,11 @@ function sentenceStart(destination: string): string {
  *
  *   - **local Whisper** checks each dictation for which of two was spoken;
  *   - **a cloud route** says what it is sent, from `route.cloudLanguage`,
- *     which Rust settles (`route::resolve`) -- so xAI dropping a language it
- *     cannot take, and Corti being told English when not exactly one is
- *     chosen, are read here rather than repeated. With nothing sent, it
- *     says the provider detects the language, and why when one was chosen;
+ *     which Rust settles (`route::resolve`) -- so xAI and Mistral dropping a
+ *     language they do not list, and Corti being told English when not
+ *     exactly one is chosen, are read here rather than repeated. With
+ *     nothing sent, it says the provider detects the language, and why when
+ *     one was chosen;
  *   - **a route with a problem**, which sends nothing, and a **Parakeet**
  *     model, which uses its own languages, add nothing.
  */

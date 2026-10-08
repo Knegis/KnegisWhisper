@@ -944,9 +944,9 @@ const dictationRoute = { useLocal: false, provider: "openai", model: "whisper-1"
 
 /**
  * A cloud route's `cloudLanguage` as `route::resolve` gives it for the common
- * case (KNEG-370): one dictation language is sent, none or two are not. xAI's
- * dropped languages and Corti's English are not emulated -- the page reads
- * whatever arrives and repeats neither rule.
+ * case (KNEG-370): one dictation language is sent, none or two are not. The
+ * languages xAI and Mistral drop, and Corti's English, are not emulated -- the
+ * page reads whatever arrives and repeats none of those rules.
  */
 function resolvedRoute(): RouteReport {
   const [only, ...more] = localLanguages;

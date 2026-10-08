@@ -32,13 +32,38 @@ model.
 
 The same choice applies to cloud dictation and to imports, which share the
 dictation route (KNEG-370): a cloud provider is sent the language when exactly one
-is chosen, and detects it itself when none or two are. Two provider rules apply on
-top, in `route::resolve`: xAI is not told a language outside the 25 it accepts
-(Norwegian and Finnish among the eight here), and Corti, which needs one, is told
-English unless exactly one is chosen. The line under the picker says which, read
-from the language the resolved route carries (`RouteReport.cloud_language`). That
-each provider accepts each of the eight codes is believed, not measured: no cloud
-dictation with a chosen language has been run against a live provider.
+is chosen, and detects it itself when none or two are. Three provider rules apply
+on top, in `route::resolve`:
+
+- xAI is not told a language outside the 25 it accepts (`XAI_STT_LANGUAGES`).
+  Norwegian and Finnish, two of the eight here, are not among them.
+- Mistral is not told a language outside the 13 its transcription documentation
+  lists (`MISTRAL_STT_LANGUAGES`). Swedish, Danish, Norwegian and Finnish are not
+  among them, so Mistral goes on detecting those itself, as it did for every
+  dictation before KNEG-370.
+- Corti, which needs a language, is told English unless exactly one is chosen.
+
+The line under the picker says which applies, read from the language the resolved
+route carries (`RouteReport.cloud_language`).
+
+What each provider does with the language is known to three different degrees.
+No cloud dictation with a chosen language has been run against a live provider.
+
+- **Documented:**
+  - Corti's language page (<https://docs.corti.ai/stt/languages>, read
+    2026-10-08) lists all eight codes for Transcribe. English, Danish, German and
+    French are Premier; Swedish, Norwegian (`no`), Finnish and Spanish are
+    Enhanced.
+  - Mistral's (<https://docs.mistral.ai/capabilities/audio_transcription>, read
+    the same day) lists English, Spanish, French and German of the eight, and
+    none of the other four, which are now filtered. It does not say what an
+    unlisted language would do.
+- **Believed:** OpenAI, Groq, Berget and a self-hosted or custom server are
+  Whisper-based and take ISO-639-1 codes. That they accept all eight is assumed,
+  not tried.
+- **By hand:** xAI is now sent `format=true` (inverse text normalisation) whenever
+  it is sent a language (`clients.rs`, the xAI arm). Before KNEG-370 it never was,
+  so numbers and dates on xAI dictations may now be written differently.
 
 These are KBLab's official default Stage 2 GGML Q5 models, specialized for Swedish.
 They supplement the existing Whisper models. The downloads are approximately

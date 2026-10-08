@@ -885,7 +885,7 @@ async function checkCloudLanguage(cdp, out, report) {
       && measured.whisper.route === "Whisper Large v3 Turbo (Q5)" && measured.whisper.chip === "Swedish, English"
       && measured.whisper.panel?.note === NOTES.whisper,
     screenshots: [shot],
-    note: "The fixtures' route sends one language and not two (resolvedRoute); xAI's dropped languages and Corti's English are Rust's (route.rs tests), not exercised here. The notes waited for are the page's, not the fixtures'.",
+    note: "The fixtures' route sends one language and not two (resolvedRoute); the languages xAI and Mistral drop, and Corti's English, are Rust's (route.rs tests), not exercised here. The notes waited for are the page's, not the fixtures'.",
   });
 }
 

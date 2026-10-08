@@ -120,8 +120,8 @@ each reload. It numbers twelve checks (3 is measured in two halves):
     the language itself.", "OpenAI is told to expect Swedish." and "With two,
     OpenAI detects the language itself." in turn. Choosing Parakeet Unified
     removes the chip, and choosing Whisper Large v3 Turbo (Q5) brings it back
-    with Whisper's note. The fixtures send one language and not two; xAI's and
-    Corti's own rules are Rust's, tested in `route.rs`.
+    with Whisper's note. The fixtures send one language and not two; xAI's,
+    Mistral's and Corti's own rules are Rust's, tested in `route.rs`.
 
 Like the shell rail, it reports **measured in headless Edge against dev
 fixtures, not in the Tauri window**, and a false check makes it exit 1.

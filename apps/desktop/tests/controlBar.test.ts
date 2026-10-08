@@ -124,10 +124,14 @@ test("on a cloud route sent no language, the note says the provider detects it",
   assert.equal(languageNote(null, cloudTo("openai", null), []), "Choose up to two. OpenAI detects the language itself.");
 });
 
-test("one language chosen but not sent says the provider can't be told it (xAI and Finnish)", () => {
+test("one language chosen but not sent says the provider can't be told it (xAI and Finnish, Mistral and Swedish)", () => {
   assert.equal(
     languageNote(null, cloudTo("xai", null), ["fi"]),
     "Choose up to two. xAI can't be told Finnish, so it detects the language itself.",
+  );
+  assert.equal(
+    languageNote(null, cloudTo("mistral", null), ["sv"]),
+    "Choose up to two. Mistral can't be told Swedish, so it detects the language itself.",
   );
 });
 
