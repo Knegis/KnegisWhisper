@@ -96,7 +96,11 @@ and the outcome says why. The WAV is attached exactly as with the switch off,
 then the attachment and the file are removed in one transaction
 (`recordings::delete_attached`), which also adds "The recording was deleted
 after transcribing (Settings › Meetings)." to the note's recording details; a
-file that can't be removed stays attached, and the outcome says so. The note
+file that can't be removed stays attached, and the outcome says so. Nothing is
+removed until the note is on disk: commits are not synced (WAL,
+`synchronous = NORMAL`), so a full WAL checkpoint first writes them into the
+database file and syncs it, and if it can't finish -- a reader holding it back
+past the busy timeout -- the recording stays attached and the outcome says so. The note
 keeps its transcript and typed notes, and Replay has no player. While the switch
 is on the Meetings page says so beside Start, at the foot of its list and in the
 live view of a meeting started that way. Discard always deletes the recording.

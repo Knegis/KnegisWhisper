@@ -16,10 +16,11 @@
 //!
 //! **How.** The recording is attached to the note exactly as it is when the
 //! switch is off, and only then deleted with
-//! [`kw_notes_core::recordings::delete_attached`], which removes the
-//! attachment and the file in one transaction. A crash before that leaves the
-//! recording attached, so it is never offered under Interrupted and cannot
-//! become a second note.
+//! [`kw_notes_core::recordings::delete_attached`], which first makes sure the
+//! note is on disk (a full WAL checkpoint; it keeps the recording when it
+//! can't) and then removes the attachment and the file in one transaction. A
+//! crash before that leaves the recording attached, so it is never offered
+//! under Interrupted and cannot become a second note.
 
 use std::path::Path;
 

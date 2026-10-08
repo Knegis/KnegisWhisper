@@ -104,6 +104,24 @@ pub async fn delete_with_recording(
 /// note keeps its recording and says nothing about deleting it, and the error
 /// says why. A file already gone from disk counts as removed. `Ok(false)` when
 /// the note has no recording attached, and nothing changes.
+///
+/// **Nothing is removed until the note is on disk.** The database is WAL with
+/// `synchronous = NORMAL` (`kw_storage::Db::open`), so a commit is not synced:
+/// the note and its attachment, committed a moment before, can still be only
+/// in the operating system's cache. A power loss then would lose them, and
+/// with this function removing the file, the transcript and the recording
+/// both. So a `wal_checkpoint(FULL)` runs first: it waits (the busy timeout)
+/// for any reader on an older snapshot, copies every committed frame into the
+/// database file and syncs it. Only when it says it copied all of them is the
+/// note durable and the file removed; otherwise the recording stays attached
+/// and the error says why. This deletion's own commit is still unsynced, so a
+/// power loss after the file is gone can leave the note -- transcript, typed
+/// notes and all -- with an attachment naming a missing file: the recording
+/// is gone, as asked, and nothing else is.
+///
+/// The order is not reversed -- commit, then remove -- because a crash
+/// between the two would leave a file no note owns, offered under
+/// Interrupted and recoverable into a second note.
 pub async fn delete_attached(
     pool: &SqlitePool,
     note_id: i64,
@@ -112,6 +130,17 @@ pub async fn delete_attached(
 ) -> Result<bool, String> {
     let failed =
         |error: sqlx::Error| format!("could not delete the recording's attachment: {error}");
+    let (busy, log, checkpointed): (i64, i64, i64) = sqlx::query_as("PRAGMA wal_checkpoint(FULL)")
+        .fetch_one(pool)
+        .await
+        .map_err(failed)?;
+    if !checkpointed_everything(busy, log, checkpointed) {
+        return Err(
+            "the note couldn't yet be confirmed as written to disk, so its recording was kept \
+             with it"
+                .to_owned(),
+        );
+    }
     let mut tx = pool.begin().await.map_err(failed)?;
     let key: Option<String> =
         sqlx::query_scalar("DELETE FROM note_recordings WHERE note_id = ? RETURNING storage_key")
@@ -149,8 +178,23 @@ pub async fn delete_attached(
             return Err(format!("could not delete {}: {error}", path.display()));
         }
     }
-    tx.commit().await.map_err(failed)?;
+    // The file is gone by now, so a failed commit cannot be undone: the note
+    // still lists a recording, and saying it is merely kept would be false.
+    tx.commit().await.map_err(|error| {
+        format!(
+            "the recording's file was deleted, but the note couldn't be updated to match, so it \
+             may still list a recording that's no longer there: {error}"
+        )
+    })?;
     Ok(true)
+}
+
+/// Whether `PRAGMA wal_checkpoint(FULL)`'s answer -- `busy`, the frames in
+/// the WAL (`log`), the frames copied (`checkpointed`) -- means every commit
+/// so far is in the database file and synced: nothing held it back, and it
+/// copied every frame. `-1` for both is a database with no WAL, in memory.
+const fn checkpointed_everything(busy: i64, log: i64, checkpointed: i64) -> bool {
+    busy == 0 && log == checkpointed
 }
 
 /// A recording attached to a note, as stored.
@@ -638,6 +682,132 @@ mod tests {
         assert!(delete_attached(db.pool(), id, &root, SAYS).await.is_err());
         assert!(outside.exists());
         assert!(get(db.pool(), id).await.unwrap().is_some());
+    }
+
+    #[test]
+    fn only_a_checkpoint_that_copied_every_frame_makes_the_note_safe_to_rely_on() {
+        // (busy, frames in the WAL, frames checkpointed) as
+        // `PRAGMA wal_checkpoint(FULL)` answers.
+        assert!(checkpointed_everything(0, 12, 12));
+        assert!(checkpointed_everything(0, 0, 0), "an empty WAL");
+        assert!(
+            checkpointed_everything(0, -1, -1),
+            "no WAL at all: an in-memory database"
+        );
+        assert!(!checkpointed_everything(1, 12, 4), "a reader held it back");
+        assert!(!checkpointed_everything(1, 12, 12));
+        assert!(!checkpointed_everything(0, 12, 4));
+    }
+
+    /// A database on disk in WAL mode, as the application opens it, and a
+    /// note with its recording attached and the file beside it.
+    async fn on_disk(dir: &Path) -> (Db, i64) {
+        let db = Db::open(&dir.join("notes.db")).await.unwrap();
+        let id = recorded_note(db.pool(), None).await;
+        std::fs::write(dir.join("owned.wav"), b"audio").unwrap();
+        (db, id)
+    }
+
+    /// The same database through a pool that waits only briefly for a
+    /// checkpoint, so a held-back one is measured in milliseconds rather than
+    /// the application's five seconds.
+    async fn impatient(dir: &Path) -> SqlitePool {
+        use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
+        SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(
+                SqliteConnectOptions::new()
+                    .filename(dir.join("notes.db"))
+                    .journal_mode(SqliteJournalMode::Wal)
+                    .busy_timeout(std::time::Duration::from_millis(100)),
+            )
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_recording_on_a_wal_database_is_deleted_once_its_note_is_checkpointed() {
+        let dir = tempfile::tempdir().unwrap();
+        let (db, id) = on_disk(dir.path()).await;
+        attach(db.pool(), id, "owned.wav", Some(12.0), None)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            delete_attached(db.pool(), id, dir.path(), SAYS).await,
+            Ok(true)
+        );
+        assert!(get(db.pool(), id).await.unwrap().is_none());
+        assert!(!dir.path().join("owned.wav").exists());
+
+        // What a power loss now would leave: the database file without its
+        // WAL. The note and its attachment were written into the file itself
+        // before the recording went; only the deletion's own commit is not.
+        use sqlx::Connection as _;
+        let copy = dir.path().join("as-on-disk.db");
+        std::fs::copy(dir.path().join("notes.db"), &copy).unwrap();
+        let mut alone = sqlx::SqliteConnection::connect_with(
+            &sqlx::sqlite::SqliteConnectOptions::new().filename(&copy),
+        )
+        .await
+        .unwrap();
+        let note: Option<String> = sqlx::query_scalar("SELECT title FROM notes WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&mut alone)
+            .await
+            .unwrap();
+        assert_eq!(note.as_deref(), Some("Board review"));
+        let attached: Option<String> =
+            sqlx::query_scalar("SELECT storage_key FROM note_recordings WHERE note_id = ?")
+                .bind(id)
+                .fetch_optional(&mut alone)
+                .await
+                .unwrap();
+        assert_eq!(attached.as_deref(), Some("owned.wav"));
+    }
+
+    #[tokio::test]
+    async fn a_recording_is_kept_while_its_note_cannot_be_checkpointed() {
+        use sqlx::Connection as _;
+        let dir = tempfile::tempdir().unwrap();
+        let (db, id) = on_disk(dir.path()).await;
+        // A reader on the snapshot from before the attachment: a FULL
+        // checkpoint cannot copy past it, so the attachment's commit cannot
+        // be shown to be on disk.
+        let mut reader = sqlx::SqliteConnection::connect_with(
+            &sqlx::sqlite::SqliteConnectOptions::new().filename(dir.path().join("notes.db")),
+        )
+        .await
+        .unwrap();
+        let mut held = reader.begin().await.unwrap();
+        let _: i64 = sqlx::query_scalar("SELECT count(*) FROM notes")
+            .fetch_one(&mut *held)
+            .await
+            .unwrap();
+        attach(db.pool(), id, "owned.wav", Some(12.0), None)
+            .await
+            .unwrap();
+
+        let pool = impatient(dir.path()).await;
+        let error = delete_attached(&pool, id, dir.path(), SAYS)
+            .await
+            .unwrap_err();
+        assert!(error.contains("written to disk"), "{error}");
+        assert!(dir.path().join("owned.wav").exists());
+        assert!(get(db.pool(), id).await.unwrap().is_some());
+        assert_eq!(
+            notes::get(db.pool(), id)
+                .await
+                .unwrap()
+                .unwrap()
+                .recording_details,
+            None
+        );
+
+        // Once the reader lets go, the same call deletes.
+        held.rollback().await.unwrap();
+        assert_eq!(delete_attached(&pool, id, dir.path(), SAYS).await, Ok(true));
+        assert!(!dir.path().join("owned.wav").exists());
     }
 
     #[tokio::test]

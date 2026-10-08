@@ -29,7 +29,8 @@ neither a duplicate note nor an attachment claim. Both sidecars are removed
 only after that commit. Then, if the `.meeting.json` says to delete the
 recording -- or, with no `.meeting.json`, the setting says so now -- and
 segments were transcribed, the attachment and the WAV are removed together
-(`recordings::delete_attached`); a recovery of typed notes alone keeps the WAV.
+(`recordings::delete_attached`), once a full WAL checkpoint has put the note on
+disk; a recovery of typed notes alone keeps the WAV.
 A `.meeting.json` written before KNEG-409 has no delete choice and keeps it. If
 there are neither typed notes nor transcribed segments, recovery leaves the WAV
 available for a later attempt. Recovered notes say that audio may end abruptly

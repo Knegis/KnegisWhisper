@@ -1226,9 +1226,11 @@ impl MeetingRuntime {
 
         self.notes.begin(&path);
         // Beside the recording from its first second, as the typed notes are,
-        // so a meeting recovered after a crash keeps its name and folder. Not
-        // a reason to refuse the meeting: without it, a recovered note is
-        // named for when it started and filed in no folder, as before.
+        // so a meeting recovered after a crash keeps its name, folder and
+        // delete choice. Not a reason to refuse the meeting: without it, a
+        // recovered note is named for when it started and filed in no
+        // folder, as before, and its recording is kept or deleted as the
+        // setting says at recovery, not as it said at Start (KNEG-409).
         if let Err(error) = draft::write_plan(&path, &plan) {
             tracing::warn!(
                 %error,
