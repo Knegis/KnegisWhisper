@@ -200,6 +200,7 @@ fn render() -> String {
         ],
         "notes" => [
             kw_notes_core::notes::Note,
+            kw_notes_core::notes::NoteListItem,
             kw_notes_core::notes::Folder,
             kw_notes_core::notes::SearchHit,
             kw_notes_core::notes::SearchHitRow,

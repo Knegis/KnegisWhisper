@@ -4465,3 +4465,7 @@ mod provider_setting_tests {
         }
     }
 }
+
+#[cfg(all(test, windows, feature = "tauri-test"))]
+#[path = "meeting/native_recovery_test.rs"]
+mod native_recovery_test;

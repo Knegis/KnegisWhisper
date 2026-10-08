@@ -77,8 +77,9 @@ import {
   exportNoteToFile,
   EXPORT_FORMATS,
   getFolders,
-  getNotes,
+  getNoteSummaries,
   getNote,
+  getNoteSummaryMetadata,
   getPeople,
   getTrash,
   restoreNote,
@@ -88,16 +89,18 @@ import {
   type ExportFormat,
   type Folder,
   type Note,
+  type NoteListItem,
   type SearchHit,
 } from "../lib/ipc";
 import { parseStoredTime } from "../lib/dayGroups";
 import { recentMeta } from "../lib/meetingView";
 import { groupNotesByFolder } from "../lib/noteGroups";
-import { noteCount, personLabel } from "../lib/people";
+import { noteCount, personLabel, readParticipants } from "../lib/people";
 import { hitMeta } from "../lib/searchHit";
 import { deleteForeverQuestion, emptyTrashQuestion, movedToTrash, trashedMeta, trashSpaceLine } from "../lib/trash";
 import { carriesNote, draggedNoteId, folderChange, NOTE_DRAG_TYPE } from "../lib/noteDrag";
-import { useRefresh } from "../lib/useRefresh";
+import { useNotesLibrary } from "../lib/useNotesLibrary";
+import { acknowledgeNote, noteHasPerson } from "../lib/noteList";
 
 function noteDate(value: string | null) {
   if (!value) return "Date unavailable";
@@ -125,7 +128,7 @@ type FocusTarget = "undo" | "title" | "trash";
  * The right-click menu's target: a note, or a folder heading. `fromButton` when the open note's
  * More opened it, so a second press of More closes it rather than reopening it (KNEG-377).
  */
-type ContextMenu = { x: number; y: number; anchor: HTMLButtonElement; fromButton?: boolean } & ({ kind: "note"; note: Note } | { kind: "folder"; folder: Folder });
+type ContextMenu = { x: number; y: number; anchor: HTMLButtonElement; fromButton?: boolean } & ({ kind: "note"; note: NoteListItem | Note } | { kind: "folder"; folder: Folder });
 
 export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, onImport }: { initialNoteId?: number | null; openRequest?: { id: number; transcriptRow: number | null } | null; onOpenNote?: (id: number, transcriptRow?: number) => void; onImport: () => void }) {
   const [context, setContext] = useState<ContextMenu | null>(null);
@@ -187,29 +190,36 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
     setCollapsed(prev => { if (!prev.has(folderId)) return prev; const next = new Set(prev); next.delete(folderId); return next; });
   }, []);
 
+  const selectionGeneration = useRef(0);
   const load = useCallback(async () => {
-    const [notes, folders, people, trash] = await Promise.all([getNotes(), getFolders(), getPeople(), getTrash()]);
+    const [notes, folders, people, trash] = await Promise.all([getNoteSummaries(), getFolders(), getPeople(), getTrash()]);
     return { notes, folders, people, trash };
   }, []);
 
-  const { data, error, guard, reload, fail } = useRefresh(load);
+  const { data, error, guard, reload, fail, revision, beginUpdate, apply, isCurrent, clearError } = useNotesLibrary(load);
 
   // The person the library is narrowed to (KNEG-362), by email, and their notes as Rust lists them:
   // found among every note rather than picked from the library's newest hundred, and, as the
-  // library's own list is, at most a hundred, the most recently edited first -- each comes with its
-  // whole transcript. Panel state, as the search is: a note opened from the list keeps it, and
+  // library's own list is, at most a hundred, the most recently edited first -- each holds metadata only. Panel state, as the search is: a note opened from the list keeps it, and
   // navigation never comes back to it. Read again on every reload, so a person added to or removed
   // from a note shows here at once.
   const [personEmail, setPersonEmail] = useState<string | null>(null);
-  const [personNotes, setPersonNotes] = useState<{ email: string; notes: Note[] } | null>(null);
+  const [personNotes, setPersonNotes] = useState<{ email: string; notes: NoteListItem[] } | null>(null);
   const personGeneration = useRef(0);
+  const acknowledged = useRef(new Map<number, NoteListItem | null>());
   useEffect(() => {
     const generation = ++personGeneration.current;
     if (personEmail === null) { setPersonNotes(null); return; }
-    void getNotes({ person: personEmail, limit: PERSON_NOTES })
-      .then(found => { if (generation === personGeneration.current) setPersonNotes({ email: personEmail, notes: found }); })
-      .catch(fail);
-  }, [personEmail, data, fail]);
+    void getNoteSummaries({ person: personEmail, limit: PERSON_NOTES })
+      .then(found => {
+        if (!alive.current || generation !== personGeneration.current) return;
+        for (const [id, saved] of acknowledged.current) {
+          found = acknowledgeNote(found, saved && noteHasPerson(saved, personEmail) ? saved : null, id, PERSON_NOTES);
+        }
+        setPersonNotes({ email: personEmail, notes: found });
+      })
+      .catch(cause => { if (alive.current && generation === personGeneration.current) fail(cause); });
+  }, [personEmail, revision, fail]);
 
   // Trash (KNEG-401): panel state, as the person filter is, and never at the same time. A note
   // opened from it is a place, though: Back to it shows it read-only, Trash open or not.
@@ -242,17 +252,19 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
     if (!data || initialSelectionDone.current) return;
     initialSelectionDone.current = true;
     if (initialNoteId !== null || openRequest) return;
-    const open = (note: Note) => { setRequestedNote(note); reveal(note.folderId); setOpenNoteId(note.id); onOpenNote?.(note.id); };
-    const newest = () => { const first = data.notes.at(0); if (first) open(first); };
+    const token = ++selectionGeneration.current;
+    const open = (note: Note) => { if (!alive.current || token !== selectionGeneration.current) return; setRequestedNote(note); reveal(note.folderId); setOpenNoteId(note.id); onOpenNote?.(note.id); };
+    const fetch = (id: number) => { void getNote(id).then(note => { if (note && note.trashedAt === null) open(note); }).catch(fail); };
+    const newest = () => { const first = data.notes.at(0); if (first) fetch(first.id); };
     const last = lastOpenNoteId;
     const listed = data.notes.find(note => note.id === last);
-    if (listed) { open(listed); return; }
+    if (listed) { fetch(listed.id); return; }
     if (last === null) { newest(); return; }
     // Not among the library's newest notes -- an older one opened from search -- so fetched, as an
     // open request is. Not opened once the page has gone: `onOpenNote` would navigate back to it.
     // Nor once it is in Trash (KNEG-401): coming back to Notes opens the newest note, as for one
     // deleted.
-    void getNote(last).then(note => { if (!alive.current) return; if (note && note.trashedAt === null) open(note); else newest(); }).catch(fail);
+    void getNote(last).then(note => { if (!alive.current || token !== selectionGeneration.current) return; if (note && note.trashedAt === null) open(note); else newest(); }).catch(fail);
   }, [data, initialNoteId, openRequest, onOpenNote, reveal, fail]);
   useEffect(() => { if (openNoteId !== null) lastOpenNoteId = openNoteId; }, [openNoteId]);
   const mainRef = useRef<HTMLElement>(null);
@@ -300,10 +312,11 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
   useEffect(() => {
     if (!openRequest) return;
     let cancelled = false;
+    const token = ++selectionGeneration.current;
     void (async () => {
       await workspaceRef.current?.flush();
       const note = await getNote(openRequest.id);
-      if (cancelled) return;
+      if (cancelled || token !== selectionGeneration.current) return;
       if (!note) throw new Error("This note is no longer available.");
       // A note in Trash -- Back to it -- shows read-only; a live one leaves Trash for the library.
       if (note.trashedAt === null) setTrashOpen(false);
@@ -313,14 +326,53 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
   }, [openRequest, fail, reveal]);
 
   const selectNote = async (id: number, transcriptRow?: number) => {
+    const token = ++selectionGeneration.current;
     await workspaceRef.current?.flush();
     const note = await getNote(id);
+    if (!alive.current || token !== selectionGeneration.current) return;
     if (!note) throw new Error("This note is no longer available.");
     if (note.trashedAt === null) setTrashOpen(false);
     setRequestedNote(note);
     setOpenNoteId(id);
     onOpenNote?.(id, transcriptRow);
   };
+  useEffect(() => {
+    if (openNoteId === null) return;
+    acknowledged.current.clear();
+    const selected = openNoteId;
+    const token = selectionGeneration.current;
+    const update = beginUpdate();
+    let cancelled = false;
+    void getNote(selected).then(note => {
+      if (!cancelled && alive.current && token === selectionGeneration.current && isCurrent(update)) setRequestedNote(note);
+    }).catch(fail);
+    return () => { cancelled = true; };
+    // Selection already reads the document; only a structural reload needs another read.
+  }, [revision, fail, beginUpdate, isCurrent]);
+
+  const savedNote = useCallback(async (id: number, patch: { title?: string; content?: string }) => {
+    clearError();
+    const token = beginUpdate();
+    try {
+      const saved = await getNoteSummaryMetadata(id);
+      if (!alive.current || !isCurrent(token)) return;
+      apply(token, current => ({ ...current, notes: acknowledgeNote(current.notes, saved, id, 100) }));
+      setRequestedNote(current => current?.id === id && saved ? { ...current, ...saved, ...patch } : current);
+      acknowledged.current.set(id, saved);
+      setPersonNotes(current => current ? {
+        ...current,
+        notes: acknowledgeNote(current.notes, saved && noteHasPerson(saved, current.email) ? saved : null, id, PERSON_NOTES),
+      } : current);
+      // Timestamp changes can change the newest name chosen for an email.
+      if (saved && readParticipants(saved.participants).some(person => person.email !== null)) {
+        const people = await getPeople();
+        apply(token, current => ({ ...current, people }));
+      }
+      if (!isCurrent(token)) return;
+      if (saved === null || saved.trashedAt !== null) { await reload(); if (saved !== null && saved.trashedAt !== null) { const full = await getNote(id); setRequestedNote(current => current?.id === id ? full : current); } }
+    } catch (cause) { fail(new Error(`The note was saved, but its library entry could not be refreshed: ${String(cause)}`)); }
+  }, [apply, beginUpdate, clearError, fail, isCurrent, reload]);
+
   // Trash pressed: the open note is saved first, as opening another is, since Trash's own page takes
   // the main area; pressed again, it is left as Show all notes leaves it.
   const toggleTrash = () => {
@@ -330,7 +382,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
   // What opens once the open note has gone to or left Trash: nothing while Trash stays open, so its
   // page shows, and otherwise the newest note, as on a first visit. Returns the note opened.
   const openNewest = async (stayInTrash: boolean): Promise<number | null> => {
-    const [newest] = stayInTrash ? [] : await getNotes({ limit: 1 });
+    const [newest] = stayInTrash ? [] : await getNoteSummaries({ limit: 1 });
     if (newest) { await selectNote(newest.id); return newest.id; }
     setOpenNoteId(null);
     return null;
@@ -353,7 +405,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
   // Delete (KNEG-401): to Trash, without a question -- Undo is beside the line that says so, and
   // focus goes to it. The open note is saved first, as a move is, and the newest note opens in its
   // place.
-  const moveToTrash = (note: Note) => {
+  const moveToTrash = (note: NoteListItem | Note) => {
     const from = document.activeElement;
     void finished(async () => {
       const wasOpen = note.id === openNoteId;
@@ -437,7 +489,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
   };
   // A note's menu, at the pointer for a right-click and under the button otherwise: the
   // keyboard's menu key, Shift+F10, and the open note's More.
-  const openNoteMenu = (note: Note, anchor: HTMLButtonElement, at?: { x: number; y: number }) => {
+  const openNoteMenu = (note: NoteListItem | Note, anchor: HTMLButtonElement, at?: { x: number; y: number }) => {
     const rect = anchor.getBoundingClientRect();
     setContext({ kind: "note", note, x: at?.x ?? rect.left, y: at?.y ?? rect.bottom, anchor });
   };
@@ -454,7 +506,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
   // null for the strip, undefined for none.
   const [drag, setDrag] = useState<{ noteId: number; folderId: number | null } | null>(null);
   const [dropTarget, setDropTarget] = useState<number | null | undefined>(undefined);
-  const moveNote = useCallback((note: Note, folderId: number | null) => {
+  const moveNote = useCallback((note: NoteListItem | Note, folderId: number | null) => {
     reveal(folderId);
     // Flushed first: the workspace may hold an unsaved edit of this very note,
     // and the reload after the move would show the stored text over the typed one.
@@ -501,7 +553,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
   }
 
   const { notes, folders, people, trash } = data;
-  const openNote = notes.find((note) => note.id === openNoteId) ?? (requestedNote?.id === openNoteId ? requestedNote : null);
+  const openNote = requestedNote?.id === openNoteId ? requestedNote : null;
   // A note in Trash, reached from Trash or by Back, opens read-only.
   const trashedView = openNote !== null && openNote.trashedAt !== null
     ? <TrashedNote key={openNote.id} note={openNote} entry={trash.notes.find(item => item.id === openNote.id) ?? null}
@@ -515,7 +567,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
   const personName = person !== null ? personLabel(person) : (personEmail ?? "");
   const personList = personEmail !== null && personNotes?.email === personEmail ? personNotes.notes : null;
   const now = new Date();
-  const renderEntry = (note: Note) => {
+  const renderEntry = (note: NoteListItem) => {
     // The Meetings list's meta line, "26 Aug · 31 min", so a meeting reads the same in both panels.
     const meta = recentMeta(note.createdAt, note.audioDurationSeconds, now);
     return (
@@ -735,6 +787,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
             note={openNote}
             revealRow={revealRow?.noteId === openNote.id ? revealRow : null}
             reload={reload}
+            onSaved={savedNote}
             onExport={() => exportNote(openNote.id)}
             onMore={anchor => toggleMoreMenu(openNote, anchor)}
             moreOpen={context?.fromButton === true && context.kind === "note" && context.note.id === openNote.id}
@@ -797,7 +850,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
           void guard(async () => { await deleteFolder(folder.id); });
         }}>Delete folder</button></>}
       </div>, document.body)}
-      <FolderSharing folder={shareFolder} trigger={shareTrigger.current} importRequest={shareImportRequest} close={() => setShareFolder(null)} flush={async () => { await workspaceRef.current?.flush(); }} imported={async folderId => { await workspaceRef.current?.flush(); await reload(); reveal(folderId); setQuery(""); setHits(null); setPersonEmail(null); const notes = await getNotes({ folderId, limit: 1 }); if (notes[0]) await selectNote(notes[0].id); }} />
+      <FolderSharing folder={shareFolder} trigger={shareTrigger.current} importRequest={shareImportRequest} close={() => setShareFolder(null)} flush={async () => { await workspaceRef.current?.flush(); }} imported={async folderId => { await workspaceRef.current?.flush(); await reload(); reveal(folderId); setQuery(""); setHits(null); setPersonEmail(null); const notes = await getNoteSummaries({ folderId, limit: 1 }); if (notes[0]) await selectNote(notes[0].id); }} />
     </SplitView>
   );
 }

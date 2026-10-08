@@ -34,7 +34,7 @@ use serde_json::Value;
 use sqlx::{FromRow, SqlitePool};
 use ts_rs::TS;
 
-use crate::notes::{Note, COLUMNS};
+use crate::notes::{Note, NoteListItem, COLUMNS, LIST_COLUMNS};
 
 /// The most people one note keeps.
 pub const MAX_PARTICIPANTS: usize = 200;
@@ -306,8 +306,17 @@ pub async fn list_by_person(
     limit: i64,
 ) -> Result<Vec<Note>, StorageError> {
     let limit = limit.clamp(1, 500);
-    let sql = format!(
-        "SELECT {COLUMNS} FROM notes
+    let sql = person_list_sql(COLUMNS);
+    Ok(sqlx::query_as::<_, Note>(&sql)
+        .bind(email.trim().to_ascii_lowercase())
+        .bind(limit)
+        .fetch_all(pool)
+        .await?)
+}
+
+fn person_list_sql(columns: &str) -> String {
+    format!(
+        "SELECT {columns} FROM notes
          WHERE trashed_at IS NULL AND EXISTS (
              SELECT 1
              FROM json_each(CASE WHEN json_valid(notes.participants) THEN CASE WHEN json_type(notes.participants) = 'array' THEN notes.participants END END) AS p
@@ -315,12 +324,23 @@ pub async fn list_by_person(
                AND lower(trim(json_extract(p.value, '$.email'), {SPACE})) = ?
          )
          ORDER BY updated_at DESC LIMIT ?"
-    );
-    Ok(sqlx::query_as::<_, Note>(&sql)
-        .bind(email.trim().to_ascii_lowercase())
-        .bind(limit)
-        .fetch_all(pool)
-        .await?)
+    )
+}
+
+/// The same email predicate as the full list, without note bodies.
+pub async fn list_summaries_by_person(
+    pool: &SqlitePool,
+    email: &str,
+    limit: i64,
+) -> Result<Vec<NoteListItem>, StorageError> {
+    Ok(sqlx::query_as(&person_list_sql(LIST_COLUMNS).replace(
+        "ORDER BY updated_at DESC LIMIT",
+        "ORDER BY updated_at DESC, id DESC LIMIT",
+    ))
+    .bind(email.trim().to_ascii_lowercase())
+    .bind(limit.clamp(1, 500))
+    .fetch_all(pool)
+    .await?)
 }
 
 /// The display names in a stored `participants`, for the summary prompt's

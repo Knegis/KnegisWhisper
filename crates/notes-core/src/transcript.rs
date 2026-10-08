@@ -300,6 +300,18 @@ pub fn normalise_timestamps(segments: &[Segment], note: &NoteMeta) -> Vec<Segmen
         .collect()
 }
 
+/// One row's start on exactly the clock used by `rows`, without cloning words.
+#[must_use]
+pub fn row_start_seconds(segments: &[Segment], note: &NoteMeta, index: usize) -> Option<f64> {
+    let timestamp = segments.get(index)?.timestamp?;
+    let start = recording_start_ms(segments, note);
+    let timestamp = match start.filter(|start| *start > EPOCH_THRESHOLD) {
+        Some(start) => (timestamp - start) / 1000.0,
+        None => timestamp,
+    };
+    timestamp.is_finite().then_some(timestamp)
+}
+
 /// When the recording started, in whatever unit the segments use.
 fn recording_start_ms(segments: &[Segment], note: &NoteMeta) -> Option<f64> {
     let earliest = segments

@@ -110,6 +110,7 @@ import type {
   NewNoteRequest,
   NonActivating,
   Note,
+  NoteListItem,
   NoteRecording,
   NoteUpdateRequest,
   Offer,
@@ -237,6 +238,7 @@ export type {
   ModelStatus,
   NonActivating,
   Note,
+  NoteListItem,
   NoteRecording,
   Offer,
   OverlayStatus,
@@ -791,6 +793,15 @@ export async function getNotes(options?: {
     limit: options?.limit ?? null,
   });
 }
+
+/** Lightweight desktop lists; full `getNotes` remains available to existing callers. */
+export async function getNoteSummaries(options?: { noteType?: string; folderId?: number; person?: string; limit?: number }): Promise<NoteListItem[]> {
+  return invoke<NoteListItem[]>("notes_list_summaries", {
+    noteType: options?.noteType ?? null, folderId: options?.folderId ?? null,
+    person: options?.person ?? null, limit: options?.limit ?? null,
+  });
+}
+export const getNoteSummaryMetadata = (id: number) => invoke<NoteListItem | null>("notes_get_summary", { id });
 
 /**
  * Everyone named by email on a note, the most notes first (KNEG-362). People

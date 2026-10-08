@@ -1476,6 +1476,11 @@ function fixtureNote(given: Pick<Note, "id" | "title" | "noteType" | "createdAt"
   };
 }
 
+function noteListItem(note: Note) {
+  const { id, title, noteType, folderId, participants, audioDurationSeconds, createdAt, updatedAt, trashedAt } = note;
+  return { id, title, noteType, folderId, participants, audioDurationSeconds, createdAt, updatedAt, trashedAt, hasTranscript: Boolean(note.transcript?.trim()) };
+}
+
 /**
  * The notes not in Trash (KNEG-401): every list, search and count reads these, as Rust's queries
  * ask for `trashed_at IS NULL`. Only `notes_get` and the Trash read the rest.
@@ -2007,6 +2012,17 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
       (y.updatedAt ?? "").localeCompare(x.updatedAt ?? ""),
     );
     return typeof limit === "number" ? out.slice(0, limit) : out;
+  },
+  notes_list_summaries: (a) => {
+    const limit = arg<number | null>(a, "limit") ?? 100;
+    return (HANDLERS.notes_list!({ ...a, limit: null }) as Note[])
+      .map(noteListItem)
+      .sort((left, right) => (right.updatedAt ?? "").localeCompare(left.updatedAt ?? "") || right.id - left.id)
+      .slice(0, limit);
+  },
+  notes_get_summary: (a) => {
+    const note = notes.find(note => note.id === arg<number>(a, "id"));
+    return note ? noteListItem(note) : null;
   },
   notes_search: (a) => {
     const query = (arg<string>(a, "query") ?? "").trim().toLowerCase();

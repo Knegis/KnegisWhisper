@@ -1234,6 +1234,46 @@ pub async fn notes_list(
     list_notes(&state, note_type, folder_id, person, limit).await
 }
 
+/// Desktop metadata list. The full `notes_list` wire contract stays unchanged.
+#[tauri::command]
+pub async fn notes_list_summaries(
+    state: State<'_, AppState>,
+    note_type: Option<String>,
+    folder_id: Option<i64>,
+    person: Option<String>,
+    limit: Option<i64>,
+) -> CmdResult<Vec<notes::NoteListItem>> {
+    let folder_id = positive_id(folder_id, "folderId")?;
+    let limit = notes_limit(limit)?;
+    if let Some(email) = person {
+        if email.trim().is_empty() {
+            return Err("a person filter needs an email".to_owned());
+        }
+        if note_type.is_some() || folder_id.is_some() {
+            return Err(
+                "'person' is a filter of its own: send it without 'noteType' or 'folderId'"
+                    .to_owned(),
+            );
+        }
+        return people::list_summaries_by_person(state.db().pool(), &email, limit)
+            .await
+            .map_err(|e| fail("could not list the person's notes", e));
+    }
+    notes::list_summaries(state.db().pool(), note_type.as_deref(), folder_id, limit)
+        .await
+        .map_err(|e| fail("could not list notes", e))
+}
+
+#[tauri::command]
+pub async fn notes_get_summary(
+    state: State<'_, AppState>,
+    id: i64,
+) -> CmdResult<Option<notes::NoteListItem>> {
+    notes::get_summary(state.db().pool(), id)
+        .await
+        .map_err(|e| fail("could not read note metadata", e))
+}
+
 /// `notes_list`'s work, apart from Tauri's `State` so a test can run it.
 async fn list_notes(
     state: &AppState,

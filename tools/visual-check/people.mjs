@@ -9,7 +9,7 @@
  * Emails and names are typed with CDP's `Input.insertText` into the focused
  * field, and every button pressed with a real pointer press. The page's
  * `invoke` is wrapped (`installInvokeStub`) to log what reached
- * `notes_set_participants` and `notes_list`. The fixtures answer as Rust's
+ * `notes_set_participants` and `notes_list_summaries`. The fixtures answer as Rust's
  * `notes_core::people` does -- checked, tidied, refused in the same words --
  * but which emails Rust accepts, how it counts and names people, and that it
  * filters by email in any case are pinned by `cargo test` (`people.rs`,
@@ -130,7 +130,7 @@ async function addPerson(cdp, email, name) {
 const lastCall = async (cdp, command) => (await cdp.evaluate(snippets.stubCalls(command))).at(-1) ?? null;
 const storedParticipants = async (cdp, id) => (await cdp.evaluate(snippets.invoke("notes_get", { id })))?.participants ?? null;
 
-const SETUP_NOTE = "1000x720 unless stated. Checks 1-4 run in sequence from one fresh load; 5 and 6 each start from a fresh load. Text is typed with CDP Input.insertText into the focused field; buttons are pressed with real CDP pointer presses, a People row after scrolling it into view as a person scrolls the panel. invoke is wrapped to log notes_set_participants and notes_list.";
+const SETUP_NOTE = "1000x720 unless stated. Checks 1-4 run in sequence from one fresh load; 5 and 6 each start from a fresh load. Text is typed with CDP Input.insertText into the focused field; buttons are pressed with real CDP pointer presses, a People row after scrolling it into view as a person scrolls the panel. invoke is wrapped to log notes_set_participants and notes_list_summaries.";
 
 export async function runPeople(options) {
   const out = resolve(options.out);
@@ -204,7 +204,7 @@ export async function runPeople(options) {
       id: "2",
       claim: "Pressing a person in People shows only their notes, fetched by their email, in place of the folders.",
       expectation: [
-        `press "${MAJA.name}" in People: notes_list sent with person "${MAJA.email}";`,
+        `press "${MAJA.name}" in People: notes_list_summaries sent with person "${MAJA.email}";`,
         `a section "Notes with ${MAJA.name}" holding exactly ["${SCRATCH.title}"] and the action "Show all notes";`,
         "no folder groups and no Folders or Not in a folder heading; the person shown pressed"
       ].join(" "),
@@ -217,7 +217,7 @@ export async function runPeople(options) {
       await pressText(cdp, ".list-panel button.notes-person .notes-person-name", MAJA.name);
       await waitFor(cdp, `${field(snippets.peopleState(), "filtered")}?.titles.length > 0`, "the person's notes");
       const after = await state(cdp);
-      const asked = await cdp.evaluate(snippets.stubCalls("notes_list"));
+      const asked = await cdp.evaluate(snippets.stubCalls("notes_list_summaries"));
       const shot = "02-notes-with-person-1000x720.png";
       await cdp.screenshot(resolve(out, shot));
       return {

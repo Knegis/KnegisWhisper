@@ -329,3 +329,25 @@ Native file-dialog attachment/cancellation was not exercised in this pass. macOS
 Linux, hosted CI and release validation remain unverified. Synthetic audio/provider
 checks do not establish real-meeting transcription or summary quality; KNEG-278's
 model-quality limitations still apply. Remaining checks are tracked on KNEG-297.
+
+
+## Lightweight desktop library (KNEG-420)
+
+Desktop Notes and recent Meetings read `notes_list_summaries`: title, dates,
+folder, type, people, duration, Trash state and a stored-transcript flag. Bodies,
+summaries and transcript/word JSON are read through `notes_get` only for the
+selected note. Existing `notes_list`, HTTP and MCP full-note contracts remain
+unchanged. Lightweight lists break equal update-time ties by descending id.
+
+Title/body autosave acknowledges the committed write through `notes_get_summary`
+and updates the library entry without rereading folders or scanning Trash files.
+A note with email participants also refreshes People because updating it may
+change the newest display name chosen for an email. Person-filter entries are
+patched from the same metadata, with delayed reads guarded against older results.
+Structural changes and participant edits still refresh authoritative backend data.
+A metadata-refresh failure is reported separately from a failed save.
+
+Search projects timestamps from SQLite without returning transcript text or word
+arrays, validates playable segment field shapes, and computes the selected start
+on the same clock as Transcript rows. It still uses the existing FTS ranking and
+read transaction. No migration or new index is required.

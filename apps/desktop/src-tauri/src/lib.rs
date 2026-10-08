@@ -487,6 +487,8 @@ pub fn run() -> anyhow::Result<()> {
             commands::import_openwhispr,
             commands::pick_import_file,
             commands::notes_list,
+            commands::notes_list_summaries,
+            commands::notes_get_summary,
             commands::notes_search,
             commands::notes_get,
             commands::notes_create,

@@ -109,7 +109,7 @@ import {
   getInputDevices,
   getLocalStatus,
   getMeetingStatus,
-  getNotes,
+  getNoteSummaries,
   getRecoverableRecordings,
   getSherpaStatus,
   getSummarySettings,
@@ -222,7 +222,7 @@ export function Meetings({
   // its retry stay in the panel. Retried through `guard`, which clears the
   // last error before reading again -- a plain `reload` keeps it even when
   // the read succeeds.
-  const loadRecent = useCallback(() => getNotes({ noteType: "meeting", limit: 20 }), []);
+  const loadRecent = useCallback(() => getNoteSummaries({ noteType: "meeting", limit: 20 }), []);
   const recentRead = useRefresh(loadRecent);
   // What the two local providers need on this computer (KNEG-387), read on
   // their own for the same reason: a failure leaves both unknown, which holds

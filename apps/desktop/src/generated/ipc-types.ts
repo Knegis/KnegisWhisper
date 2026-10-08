@@ -1060,6 +1060,15 @@ transcribedBy: string | null, createdAt: string | null, updatedAt: string | null
 trashedAt: string | null, };
 
 /**
+ * Lightweight desktop library entry. Large note bodies stay in `get`.
+ */
+export type NoteListItem = { id: number, title: string, noteType: string, folderId: number | null, participants: string | null, audioDurationSeconds: number | null, createdAt: string | null, updatedAt: string | null, trashedAt: string | null,
+/**
+ * A stored nonblank transcript; the full reader validates its contents.
+ */
+hasTranscript: boolean, };
+
+/**
  * A folder.
  */
 export type Folder = { id: number, name: string, isDefault: boolean, sortOrder: number, };

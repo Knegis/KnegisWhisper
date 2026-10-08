@@ -151,11 +151,12 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
    */
   revealRow?: { index: number } | null;
   reload: () => Promise<void>;
+  onSaved: (id: number, patch: { title?: string; content?: string }) => Promise<void>;
   onExport: () => void;
   onMore: (anchor: HTMLButtonElement) => void;
   /** Whether the menu More opens is open, for its `aria-expanded`. */
   moreOpen: boolean;
-}>(function NoteWorkspace({ note, revealRow = null, reload, onExport, onMore, moreOpen }, ref) {
+}>(function NoteWorkspace({ note, revealRow = null, reload, onSaved, onExport, onMore, moreOpen }, ref) {
   const saved = useRef({ title: note.title, content: note.content });
   const draft = useRef({ title: note.title, content: note.content });
   const [title, setTitle] = useState(note.title);
@@ -343,8 +344,8 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
     if (!await updateNote(note.id, request)) throw new Error("This note no longer exists.");
     if (typeof request.content === "string") saved.current.content = request.content;
     if (typeof request.title === "string") saved.current.title = request.title;
-    await reload();
-  }, [note.id, reload]);
+    await onSaved(note.id, { ...(typeof request.title === "string" ? { title: request.title } : {}), ...(typeof request.content === "string" ? { content: request.content } : {}) });
+  }, [note.id, onSaved]);
   const autosave = useAutosave<Patch>({ save });
   const normalizeTitle = useCallback(() => {
     const normalized = draft.current.title.trim() || "Untitled note";
