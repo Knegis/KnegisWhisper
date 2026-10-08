@@ -148,16 +148,21 @@ export function languageLabel(codes: readonly string[]): string {
  * The chip's label is the current row's own words, so the full name is the
  * chip's `title` once the chip has cut it short. "System default" is id `""`,
  * which the page turns back into `null` when it is chosen.
+ *
+ * `group` puts every row under one heading -- the Meetings page's "Used by
+ * meetings and dictation", which says beside the rows that the choice is
+ * shared (KNEG-364). Dictation's menu has none.
  */
 export function microphoneMenu(
   devices: readonly InputDevice[],
   device: string | null,
+  group: string | null = null,
 ): { label: string; missing: string | null; options: MenuOption[] } {
   const missing = device !== null && !devices.some((d) => d.name === device) ? device : null;
   const row = (id: string, label: string, current: boolean): MenuOption => ({
     id,
     label,
-    group: null,
+    group,
     current,
     disabled: false,
     reason: null,

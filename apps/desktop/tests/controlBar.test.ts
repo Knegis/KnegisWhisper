@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { menuGroups } from "../src/lib/chipMenu.js";
 import { cleanupLabel, destinationName, languageLabel, microphoneMenu, privacyLines } from "../src/lib/controlBar.js";
 import type { CleanupRoute } from "../src/generated/ipc-types.js";
 
@@ -134,6 +135,21 @@ test("a chosen microphone that is unplugged is listed first as itself, not as th
     reason: null,
   });
   assert.equal(menu.options.filter((o) => o.current).length, 1);
+});
+
+test("given a heading, every microphone row sits under it, as one group in the order listed (KNEG-364)", () => {
+  const heading = "Used by meetings and dictation";
+  const menu = microphoneMenu(devices, "USB Mic", heading);
+  assert.deepEqual(menu.options.map((o) => o.group), [heading, heading, heading, heading]);
+  assert.deepEqual(
+    menuGroups(menu.options).map((run) => [run.group, run.items.map((item) => item.option.id)]),
+    [[heading, ["USB Mic", "", "Microphone Array (Realtek(R) Audio)", "Headset (Jabra Evolve2 65)"]]],
+  );
+  // Only the heading changes: the rows, their words and what is current are Dictation's.
+  const plain = microphoneMenu(devices, "USB Mic");
+  assert.deepEqual(menu.options.map((o) => ({ ...o, group: null })), plain.options);
+  assert.equal(menu.label, plain.label);
+  assert.equal(menu.missing, plain.missing);
 });
 
 test("every microphone row can be chosen, and none is grouped", () => {

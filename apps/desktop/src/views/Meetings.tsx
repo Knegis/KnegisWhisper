@@ -8,13 +8,15 @@
  *     can be recorded (`lib/readiness.ts`) and, when it cannot, the one
  *     problem and the button that fixes it. Under it, a card while a meeting
  *     application is in a call, with a way to record that call. At the foot,
- *     the control bar: the microphone -- the system default, the only one the
- *     recorder opens -- whether the other participants are captured, a choice
+ *     the control bar: the microphone, chosen in its chip's menu and shared
+ *     with dictation, whose footer runs a five-second "Test microphone"
+ *     (KNEG-364) -- whether the other participants are captured, a choice
  *     kept on this page only, who transcribes in what language, each chosen in
  *     its chip's menu (`ChipMenu`), whether a summary is made, a toggle
  *     that is a link to Cleanup & summaries until a provider and model are
  *     chosen there, and the folder the note is saved to. Then where the audio
- *     goes, which is never hidden, the caveats, the meeting's name, and Start.
+ *     goes, which is never hidden, the caveats, what the microphone check
+ *     heard, the meeting's name, and Start.
  *     The name and the folder go to Rust with Start and stay with the meeting
  *     (KNEG-365); the page keeps neither for a meeting already running.
  *     While Settings > Meetings deletes each recording once its transcript
@@ -23,7 +25,9 @@
  *   - **Live**, while a meeting is running: its state and a timer, which
  *     captures opened and where the audio goes, how loud each capture is
  *     ("You", and "Others" with system audio; `LevelMeter`, KNEG-371), the
- *     live transcript, and a bar with what is in effect, Discard, and Stop.
+ *     live transcript, and a bar with what is in effect -- the microphone the
+ *     meeting actually opened, from Rust, not the one chosen now (KNEG-364)
+ *     -- Discard, and Stop.
  *   - **The list panel**: the meeting under way, the meetings saved lately --
  *     each opens its note in Notes -- and any recording an earlier session
  *     left behind, with Recover.
@@ -81,6 +85,7 @@ import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, u
 import { Chip } from "../components/Chip";
 import { ChipMenu, type ChipMenuHandle } from "../components/ChipMenu";
 import { ControlBar } from "../components/ControlBar";
+import { FailureLine } from "../components/FailureLine";
 import { Icon, IconFilled } from "../components/Icon";
 import { LearnMore } from "../components/LearnMore";
 import { LevelMeter } from "../components/LevelMeter";
@@ -92,6 +97,7 @@ import { languageLabel, privacyLines } from "../lib/controlBar";
 import { timeOfDay } from "../lib/dayGroups";
 import {
   cancelMeeting,
+  checkMicrophone,
   flushMeetingPanelNotes,
   getFolders,
   getMeetingDeleteRecordings,
@@ -113,12 +119,14 @@ import {
   onMeetingState,
   onMeetingTranscript,
   recoverMeetingRecording,
+  setInputDevice,
   setSummarySettings,
   startMeeting,
   stopMeeting,
   type Detected,
   type MeetingOutcome,
   type MeetingState,
+  type MicrophoneCheck,
   type RecoverableRecording,
   type Sources,
 } from "../lib/ipc";
@@ -139,9 +147,12 @@ import {
   folderMenu,
   interruptedTitle,
   liveElapsed,
+  liveMicrophone,
   meetingLanguageMenu,
   meetingIntro,
   meetingMicrophone,
+  MICROPHONE_CHECK_LISTENING,
+  microphoneCheckLine,
   privacyProvider,
   recentMeta,
   recordedSources,
@@ -221,15 +232,32 @@ export function Meetings({
     return { whisper, sherpa };
   }, []);
   const engines = useRefresh(loadEngines).data ?? null;
-  // The microphone chosen on Dictation, which meetings record too (KNEG-341).
-  // A failed read leaves the chip saying the default, which is what a meeting
-  // falls back to anyway.
+  // The microphone meetings and dictation both record (KNEG-341), chosen in
+  // the chip's menu here as on Dictation (KNEG-364), read on its own: a
+  // failed read leaves the chip saying the default, which is what a meeting
+  // falls back to anyway, with the failure in view under the bar. A choice is
+  // written through this read's `guard`, so it is read back -- the chip names
+  // what was saved -- and a failure to save it is in view the same way.
   const loadMicrophone = useCallback(async () => {
     const [devices, chosen] = await Promise.all([getInputDevices(), getInputDevice()]);
     return { devices, chosen };
   }, []);
-  const microphoneRead = useRefresh(loadMicrophone).data ?? null;
+  const microphoneRefresh = useRefresh(loadMicrophone);
+  const microphoneRead = microphoneRefresh.data ?? null;
   const microphone = meetingMicrophone(microphoneRead?.devices ?? null, microphoneRead?.chosen ?? null);
+  /**
+   * The five-second "Test microphone" (KNEG-364): listening, what it heard,
+   * or why it couldn't. `null` before the first. Start is held while it
+   * listens, and a choice made meanwhile applies to the next check -- this
+   * one keeps the microphone it opened, as a meeting does.
+   */
+  const [check, setCheck] = useState<
+    | { state: "listening" }
+    | { state: "done"; result: MicrophoneCheck }
+    | { state: "failed"; error: string }
+    | null
+  >(null);
+  const checking = check?.state === "listening";
   // The folders the Folder chip offers (KNEG-365), read on their own for the
   // same reason: a failure leaves only "No folder", which is where a note
   // goes anyway, and nothing else on the page waits for them.
@@ -296,8 +324,12 @@ export function Meetings({
       // A new meeting's own outcome has not happened yet, so the last one's
       // "Saved as note ..." must not sit under it. Start clears it too, but a
       // meeting started from the notification window never passes through
-      // this page's Start.
-      if (next === "recording") setOutcome(null);
+      // this page's Start. The same for what the last microphone check heard;
+      // one still listening is left to finish.
+      if (next === "recording") {
+        setOutcome(null);
+        setCheck((last) => (last?.state === "listening" ? last : null));
+      }
       // The state event carries the state and nothing else, and the sentence
       // explaining it lives on `MeetingStatus`. Reloading is how it gets here
       // -- the same thing the outcome listener below does, for the same reason.
@@ -491,8 +523,10 @@ export function Meetings({
   // missing, no provider, a provider or language write in flight, or the
   // review still describing the previous configuration -- its answer arrives
   // after the re-read, and until it does `readiness` cannot be trusted to
-  // know that the new provider needs a language.
-  const startHeld = startBlocked || selected === null || writing || !reviewCurrent;
+  // know that the new provider needs a language. And the microphone check
+  // while it listens: five seconds, and a meeting would open the microphone
+  // under it (KNEG-364).
+  const startHeld = startBlocked || selected === null || writing || !reviewCurrent || checking;
   // While a meeting is running, the provider it is running with -- which the
   // notification's Record button may have picked rather than this page.
   const liveProvider =
@@ -552,10 +586,29 @@ export function Meetings({
     void guard(write).finally(() => setWriting(false));
   };
 
+  // The microphone chip's choice: written, then the microphone read again,
+  // through that read's own `guard`. Shared with dictation (KNEG-341), so
+  // this changes its microphone too, as the chip's title says.
+  const chooseMicrophone = (id: string) => {
+    void microphoneRefresh.guard(() => setInputDevice(id || null));
+  };
+  // "Test microphone": Rust opens the saved microphone for five seconds and
+  // sends its level as `microphone-check` meanwhile (KNEG-364). Its refusals
+  // -- a meeting under way, a dictation recording, a check already running --
+  // start "Not now: ", and `FailureLine` shows them as the line itself.
+  const testMicrophone = () => {
+    if (checking) return;
+    setCheck({ state: "listening" });
+    checkMicrophone()
+      .then((result) => setCheck({ state: "done", result }))
+      .catch((cause: unknown) => setCheck({ state: "failed", error: message(cause) }));
+  };
+
   const start = (withSystem: boolean) => {
     if (startHeld) return;
     void guard(async () => {
       setOutcome(null);
+      setCheck(null);
       // The outcome event clears the last meeting's lines; this makes sure a
       // new meeting never opens on them should that event not have arrived.
       setTranscript(emptyLiveTranscript());
@@ -786,6 +839,9 @@ export function Meetings({
       // setting may have changed since, and applies to the next one.
       status.plan?.deleteRecording ? "Recording deleted after saving" : null,
     ].filter((part): part is string => part !== null);
+    // The microphone this meeting opened, as Rust reports it, and not the
+    // setting: a choice made now applies to the next recording (KNEG-364).
+    const openedMicrophone = liveMicrophone(liveSources);
     return (
       <SplitView label="Meetings list" heading="Meetings" panel={panel}>
         <section data-surface="meetings.record" className="meeting-live" aria-label="Meeting">
@@ -830,7 +886,7 @@ export function Meetings({
               rather than controls. */}
           <div className="live-bar">
             <div className="live-chips" role="group" aria-label="In effect for this meeting">
-              <Chip icon="microphone" label={microphone.label} title={microphone.title} srText={microphone.title} />
+              <Chip icon="microphone" label={openedMicrophone.label} title={openedMicrophone.title} srText={openedMicrophone.title} />
               {liveSources?.systemAudio ? <Chip icon="others" label="Other participants" /> : null}
               <Chip icon="computer" label={transcriber ? transcriber.name : "Not set up"} />
               <Chip icon="language" label={language} />
@@ -963,11 +1019,21 @@ export function Meetings({
           <ControlBar
             strip={
               <>
-                {/* Static: the microphone is chosen on Dictation, and both
-                    tasks share it (KNEG-341). The `title` is a hover away,
-                    so the same sentence is also the chip's hidden text for a
-                    screen reader. */}
-                <Chip icon="microphone" label={microphone.label} title={microphone.title} srText={microphone.title} />
+                {/* Chosen here as on Dictation, one choice for both tasks
+                    (KNEG-341, KNEG-364): the rows sit under a heading that
+                    says so, and the `title` says choosing here changes
+                    dictation's too. The footer runs the five-second test;
+                    it is left off while one listens, so it is never a press
+                    that does nothing. */}
+                <ChipMenu
+                  icon="microphone"
+                  name="Microphone"
+                  label={microphone.label}
+                  title={microphone.title}
+                  options={microphone.options}
+                  onChoose={chooseMicrophone}
+                  {...(checking ? {} : { footer: { label: "Test microphone", onClick: testMicrophone } })}
+                />
                 {/* Unpressed, not just disabled, where system audio cannot be
                     captured: a pressed "Other participants" beside a caution
                     saying they cannot be recorded would be two answers on one
@@ -1054,6 +1120,39 @@ export function Meetings({
             {error ? <p className="error">{error}</p> : null}
             {pollError ? (
               <p className="error">{`Couldn't check whether a meeting app is in a call: ${pollError}`}</p>
+            ) : null}
+            {/* The microphone chip's own read and write (KNEG-364): a choice
+                that couldn't be saved, or a list that couldn't be read, in
+                view, with what the software said under Details. */}
+            {microphoneRefresh.error !== null ? (
+              <FailureLine text="The microphone choice couldn't be read or saved." detail={microphoneRefresh.error} />
+            ) : null}
+            {microphone.missing !== null ? (
+              <p className="control-note">
+                Not connected, so meetings and dictation use the system default
+                until it is plugged back in.
+              </p>
+            ) : null}
+            {/* The microphone check (KNEG-364). One live region from
+                "Listening" to what it heard, so the result is read out when
+                it replaces the line; the meter beside the line is decoration
+                (`LevelMeter`). Heard nothing is a caveat: something to look
+                at before a meeting, not a failure. A refusal or a failure is
+                `FailureLine`'s, outside the region, as an alert. */}
+            {check !== null && check.state !== "failed" ? (
+              <div className="microphone-check" role="status">
+                {check.state === "listening" ? (
+                  <>
+                    <p className="control-note">{MICROPHONE_CHECK_LISTENING}</p>
+                    <LevelMeter session="microphone-check" source="microphone" />
+                  </>
+                ) : (
+                  <p className={check.result.heard ? "control-note" : "caveat"}>{microphoneCheckLine(check.result)}</p>
+                )}
+              </div>
+            ) : null}
+            {check?.state === "failed" ? (
+              <FailureLine text="The microphone couldn't be tested." detail={check.error} />
             ) : null}
             {/* Why the chip is off, said beside it in every state -- the
                 hero's caution is only there while the page is Ready, and a

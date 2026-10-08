@@ -668,7 +668,15 @@ button.control-copy { display: inline-flex; align-items: center; gap: 6px; heigh
 /* Dictation's Discard, drawn as Meetings' is (`.live-actions`): the Kit's secondary edge, and its icon. */
 .control-row > button.secondary { display: inline-flex; align-items: center; gap: 8px; }
 /* The body's gap spaces its children; a caveat's or a disclosure's own top margin would double it. */
-.control-body > .caveat, .control-body > .learn-more { margin: 0; }
+.control-body > .caveat, .control-body > .learn-more, .control-body > .failure-line { margin: 0; }
+/*
+ * Meetings' microphone check (KNEG-364): its line, and while it listens the
+ * meter beside it, wrapping under it in a narrow window. "Heard nothing" is a
+ * caveat, as wide as the others.
+ */
+.microphone-check { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; min-width: 0; }
+.microphone-check > p { margin: 0; }
+.microphone-check > .caveat { flex: 1 1 100%; }
 /*
  * Meetings' name field (KNEG-365), in the room left of Start, at the row's
  * 38px and the Kit's 2px corner. Its fill is every text field's (`# Text

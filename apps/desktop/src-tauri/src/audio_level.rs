@@ -28,7 +28,7 @@ use ts_rs::TS;
 pub const LEVEL_EVENT: &str = "audio-level";
 
 /// How often a publisher reads its capture's level.
-const TICK: Duration = Duration::from_millis(100);
+pub const TICK: Duration = Duration::from_millis(100);
 
 /// The smallest change worth sending: a hundredth of the meter, 0.6 dB.
 const MIN_CHANGE: f32 = 0.01;
@@ -39,8 +39,8 @@ const MIN_CHANGE: f32 = 0.01;
 /// silence (`lib/levelMeter.ts`), which is right for a capture that went away
 /// without its last 0 arriving and wrong for a steady sound whose level does
 /// not move by [`MIN_CHANGE`]. Two ticks, 200 ms, keeps a steady sound well
-/// inside that. Silence is never repeated: the page shows it without being
-/// told.
+/// inside that. Silence is never repeated, nor is a level under
+/// [`MIN_CHANGE`]: the page shows both as nothing without being told.
 const REPEAT_AFTER_TICKS: u32 = 2;
 
 /// What a level is for, so each meter listens only to its own.
@@ -49,15 +49,8 @@ const REPEAT_AFTER_TICKS: u32 = 2;
 pub enum LevelSession {
     Dictation,
     Meeting,
-    /// The 5-second test on the Meetings page (KNEG-364).
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the Meetings microphone check (KNEG-364) is the next change, and \
-                      starts the first publisher for it; `expect` so this goes when it lands"
-        )
-    )]
+    /// The 5-second test on the Meetings page (KNEG-364,
+    /// `microphone_check.rs`).
     MicrophoneCheck,
 }
 
@@ -87,8 +80,22 @@ pub struct AudioLevel {
 /// Spawns and returns at once. Usable for any capture, whoever opened it --
 /// the session and source are only labels on the event.
 pub fn publish(app: &AppHandle, session: LevelSession, source: LevelSource, reader: LevelReader) {
+    tauri::async_runtime::spawn(run(
+        move || reader.take(),
+        TICK,
+        sender(app, session, source),
+    ));
+}
+
+/// What sends one capture's levels to the page, labelled with whose they
+/// are: for [`publish`], and for a caller that runs [`run`] itself.
+pub fn sender(
+    app: &AppHandle,
+    session: LevelSession,
+    source: LevelSource,
+) -> impl FnMut(f32) + Send + 'static {
     let app = app.clone();
-    tauri::async_runtime::spawn(run(reader, TICK, move |level| {
+    move |level| {
         let reading = AudioLevel {
             session,
             source,
@@ -97,20 +104,31 @@ pub fn publish(app: &AppHandle, session: LevelSession, source: LevelSource, read
         if let Err(err) = app.emit(LEVEL_EVENT, reading) {
             tracing::debug!(error = %err, "could not send a sound level");
         }
-    }));
+    }
 }
 
 /// The publisher's loop, apart from the app so a test can run it.
 ///
+/// `take` reads the level, as [`LevelReader::take`] does: `None` once the
+/// capture is gone, which ends the loop. A closure rather than the reader so
+/// a caller can keep what it reads as well -- the microphone check sums up
+/// every reading (`microphone_check.rs`) -- without a second reader, which
+/// would take half of them. Awaited in place there, and spawned by
+/// [`publish`].
+///
 /// A tick that comes late is skipped rather than made up: a burst of stale
 /// readings after a stall would only move the meter for nothing.
-async fn run(reader: LevelReader, every: Duration, mut send: impl FnMut(f32)) {
+pub async fn run(
+    mut take: impl FnMut() -> Option<f32>,
+    every: Duration,
+    mut send: impl FnMut(f32),
+) {
     let mut ticks = tokio::time::interval(every);
     ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut pacing = Pacing::default();
     loop {
         ticks.tick().await;
-        match pacing.next(reader.take()) {
+        match pacing.next(take()) {
             Step::Send(level) => send(level),
             Step::Hold => {}
             Step::Stop => {
@@ -145,7 +163,9 @@ impl Pacing {
             return Step::Stop;
         };
         let moved = (level - self.shown).abs() >= MIN_CHANGE;
-        let repeat = self.shown > 0.0 && self.held + 1 >= REPEAT_AFTER_TICKS;
+        // Only a level the page can show is repeated: one under a hundredth
+        // of the meter lights nothing, and going stale changes nothing.
+        let repeat = self.shown >= MIN_CHANGE && self.held + 1 >= REPEAT_AFTER_TICKS;
         if moved || repeat {
             self.shown = level;
             self.held = 0;
@@ -182,10 +202,14 @@ mod tests {
 
         tokio::time::timeout(
             Duration::from_secs(5),
-            run(reader, Duration::from_millis(1), |level| {
-                sent.push(level);
-                capture = None;
-            }),
+            run(
+                || reader.take(),
+                Duration::from_millis(1),
+                |level| {
+                    sent.push(level);
+                    capture = None;
+                },
+            ),
         )
         .await
         .expect("the publisher stops once its capture is dropped");
@@ -241,6 +265,23 @@ mod tests {
         );
     }
 
+    /// A level too small to light anything is sent when it is reached, as
+    /// any change is, and then not again: only a level the page can show is
+    /// worth repeating against its staleness.
+    #[test]
+    fn a_level_too_small_to_show_is_not_repeated() {
+        let mut pacing = Pacing::default();
+        assert_eq!(pacing.next(Some(0.5)), Step::Send(0.5));
+        assert_eq!(
+            pacing.next(Some(0.005)),
+            Step::Send(0.005),
+            "falling counts"
+        );
+        for _ in 0..6 {
+            assert_eq!(pacing.next(Some(0.005)), Step::Hold);
+        }
+    }
+
     /// Falling silent is sent once, then not again.
     #[test]
     fn going_quiet_is_sent_once() {
@@ -252,8 +293,7 @@ mod tests {
         assert_eq!(pacing.next(Some(0.0)), Step::Hold);
     }
 
-    /// The payload as the page reads it, with the session Task 6's
-    /// microphone check will use.
+    /// The payload as the page reads it, with the microphone check's session.
     #[test]
     fn a_reading_serializes_as_the_page_reads_it() {
         let json = serde_json::to_value(AudioLevel {

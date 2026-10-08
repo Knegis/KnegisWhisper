@@ -1027,3 +1027,52 @@ export function levelChanges() {
     return window.__levelChanges ?? [];
   `);
 }
+
+/* -------------------------------------------------------- meeting microphone */
+
+/**
+ * The Meetings microphone check (KNEG-364): its live region and the lines in
+ * it (text and class), the meter beside them (hidden from assistive
+ * technology, its level), every failure line in the control bar with what
+ * its Details hold, and whether Start and Record this call are held.
+ */
+export function microphoneCheckState() {
+  return source(`
+    const text = (item) => item.textContent.trim();
+    const region = document.querySelector('.control-body .microphone-check');
+    const meter = region?.querySelector('.level-meter') ?? null;
+    const start = document.querySelector('.control-start');
+    const record = [...document.querySelectorAll('.call-card button')].find((item) => text(item) === 'Record this call');
+    return {
+      role: region?.getAttribute('role') ?? null,
+      lines: region ? [...region.querySelectorAll('p')].map((item) => ({ text: text(item), className: item.className })) : [],
+      meter: meter && {
+        hiddenFromAssistiveTechnology: meter.closest('[aria-hidden="true"]') !== null,
+        role: meter.getAttribute('role'),
+        level: Number(meter.dataset.level),
+        lit: Number(meter.dataset.lit),
+        segments: meter.querySelectorAll('.level-segment').length,
+      },
+      failures: [...document.querySelectorAll('.control-body > .failure-line')].map((line) => ({
+        role: line.getAttribute('role'),
+        text: line.querySelector('p.error') ? text(line.querySelector('p.error')) : null,
+        summary: line.querySelector('summary') ? text(line.querySelector('summary')) : null,
+        details: [...line.querySelectorAll('.learn-more-body')].map(text),
+      })),
+      start: start ? { disabled: start.disabled } : null,
+      record: record ? { disabled: record.disabled } : null,
+    };
+  `);
+}
+
+/** The live view's chips -- statements, not buttons -- with each one's label, hover and hidden text. */
+export function liveChips() {
+  return source(`
+    return [...document.querySelectorAll('.meeting-live .live-chips .chip')].map((chip) => ({
+      tag: chip.tagName.toLowerCase(),
+      label: chip.querySelector('.chip-label')?.textContent ?? null,
+      title: chip.getAttribute('title'),
+      srText: chip.querySelector('.sr-only')?.textContent ?? null,
+    }));
+  `);
+}

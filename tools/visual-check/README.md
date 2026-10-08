@@ -357,11 +357,67 @@ checks:
 Measured in headless Edge against dev fixtures, not in the Tauri window; a
 false check makes it exit 1. Rust's side is covered by `cargo test`: the
 meter's arithmetic and max-hold (`kw_audio_core::level`), `Buffer::push`
-feeding it, the publisher's last 0 and its pacing, and the dictation and
-meeting readers ending with their captures. Not measured: whether a real
-microphone or real system audio moves a meter, how the −60..0 dBFS range
+feeding it, and the publisher's last 0 and its pacing. The dictation and
+meeting readers ending with their captures are tested too, but those tests
+open the real microphone, so they are `#[ignore]`d and run by hand with
+`cargo test -p knegiswhisper --lib -- --ignored`. Not measured: whether a
+real microphone or real system audio moves a meter, how the −60..0 dBFS range
 feels, and what the meters cost in CPU. No audio reaches a browser tab, so
 those are by hand.
+
+## Meeting microphone
+
+```
+node tools/visual-check/meeting-microphone.mjs --url http://127.0.0.1:5191/
+```
+
+Same options as the chip menus (the banner is always removed). It measures
+KNEG-364: choosing the microphone on the Meetings page, which one a live
+meeting names, and "Test microphone". Chips, rows and buttons are pressed with
+real pointer presses; the page's `invoke` is wrapped (`installInvokeStub`) to
+log `dictation_set_device` and, for one failure, to refuse the check. The
+fixtures' `microphone_check` sends levels on the `microphone-check` session
+for 5 s and answers as Rust would, refusing while `kw.dictationState` says a
+dictation records; their `meeting_start` names the microphone it opened. Each
+check starts from a fresh load on Meetings at 1000x720. Eight checks:
+
+1. The chip, named "Microphone: System default", opens a listbox above the
+   bar with one heading, "Used by meetings and dictation", over the four
+   rows, and the footer "Test microphone"; its title says choosing here
+   changes dictation's microphone too.
+2. Choosing the headset calls `dictation_set_device` once with it, the chip
+   names it, and Dictation's Microphone chip does too.
+3. A meeting started with the headset chosen names it on its live chip, a
+   static span. With "Line In" chosen on Dictation while it runs, and Meetings
+   entered again, the live chip still names the headset.
+4. Test microphone: a `role=status` region reading "Listening for 5 seconds —
+   say something. Nothing is recorded." with a 12-segment meter, hidden from
+   assistive technology and above 0; Start and Record this call disabled; the
+   menu without its footer. Four to seven seconds later the region reads
+   "Heard you on Microphone Array (Realtek(R) Audio).", the meter is gone and
+   both buttons are enabled again.
+5. With "USB Mic" stored (not a fixture device), the chip reads "USB Mic (not
+   connected)" with its note in view, and the check ends "USB Mic isn't
+   connected, so this tested Microphone Array (Realtek(R) Audio). Heard you
+   on …".
+6. While a dictation records, the check's refusal is one alert line in Rust's
+   own words ("Not now: …") with no Details; with the check refused by the
+   stub, "The microphone couldn't be tested." with the error under Details.
+   Neither holds Start.
+7. At 720x520, listening: the meter is inside the window and nothing scrolls
+   sideways, as chip-menus check 8 measures.
+8. With `heard: false` laid over the fixtures' answer (the stub's merge), the
+   region reads "Heard nothing from … Check it isn't muted, or choose another
+   microphone." as a caveat.
+
+Measured in headless Edge against dev fixtures, not in the Tauri window; a
+false check makes it exit 1. Rust's side is covered by `cargo test`
+(`microphone_check.rs`): the refusals, one check at a time, what counts as
+heard from a series of levels, and which microphone stood in for the one
+chosen. Its whole check on the real default microphone is an `#[ignore]`d
+test, run by hand. Not measured: real devices, whether opening a Bluetooth
+headset switches it to its call profile, and the system's microphone
+indicator during the five seconds.
 
 ## Running application windows
 

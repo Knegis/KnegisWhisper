@@ -283,6 +283,13 @@ impl MeetingState {
 #[serde(rename_all = "camelCase")]
 pub struct Sources {
     pub microphone: bool,
+    /// The microphone the meeting opened, by its device name; `None` when
+    /// the device gave none (KNEG-364). From the capture
+    /// (`kw_audio_core::Capture::device_name`), not from the setting: a choice
+    /// that was not connected falls back to the default, and a choice made
+    /// while the meeting runs applies to the next one, so the live view names
+    /// this rather than what is chosen now.
+    pub microphone_name: Option<String>,
     pub system_audio: bool,
     /// Why system audio is not being captured, when it is not.
     pub system_audio_reason: Option<String>,
@@ -1536,6 +1543,19 @@ impl MeetingRuntime {
         if let Some(lease) = lease {
             self.stream.release(lease).await;
         }
+    }
+
+    /// Whether a meeting is starting or recording, so its microphone is open
+    /// or about to be: what the microphone check asks before opening it
+    /// (KNEG-364). A start holds the lifecycle until it has finished, so a
+    /// check asked during one waits it out, as [`Self::status`] does, and
+    /// answers for how it ended. Finishing is not under way: the microphone
+    /// is closed by then.
+    pub async fn is_under_way(&self) -> bool {
+        matches!(
+            self.lifecycle.lock().await.phase,
+            SessionPhase::Starting | SessionPhase::Recording
+        )
     }
 
     /// What is happening, for the screen.

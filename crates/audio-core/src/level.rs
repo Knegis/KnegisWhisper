@@ -92,12 +92,6 @@ impl LevelMeter {
         self.loudest.fetch_max(rms.to_bits(), Ordering::Relaxed);
     }
 
-    /// [`LevelMeter::record`] for a block of normalised samples.
-    pub fn observe(&self, samples: &[f32]) {
-        let (rms, _) = block_rms_peak(samples);
-        self.record(rms);
-    }
-
     /// The reading half, which does not keep the meter alive.
     #[must_use]
     pub fn reader(&self) -> LevelReader {
@@ -248,11 +242,14 @@ mod tests {
         assert_eq!(reader.take(), None);
     }
 
+    /// A block's RMS, recorded as a capture callback records it, is what the
+    /// reader is given.
     #[test]
-    fn observing_samples_records_their_rms() {
+    fn a_blocks_recorded_rms_is_what_the_reader_takes() {
         let meter = LevelMeter::new();
         let reader = meter.reader();
-        meter.observe(&[0.1, -0.1, 0.1, -0.1]);
+        let (rms, _) = block_rms_peak(&[0.1, -0.1, 0.1, -0.1]);
+        meter.record(rms);
         let level = reader.take().unwrap();
         assert!(close(level, level_from_rms(0.1)), "level was {level}");
     }

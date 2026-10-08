@@ -25,10 +25,10 @@
  * transcript is sent: a privacy line that errs errs towards saying so.
  */
 
-import type { Detected, Folder, InputDevice, Sources, SummarySettings } from "../generated/ipc-types.js";
+import type { Detected, Folder, InputDevice, MicrophoneCheck, Sources, SummarySettings } from "../generated/ipc-types.js";
 import { PROVIDER_REGISTRY, type ProviderRegistry } from "../generated/providers.js";
 import type { MenuOption } from "./chipMenu.js";
-import { destinationName, LANGUAGES, languageLabel } from "./controlBar.js";
+import { destinationName, LANGUAGES, languageLabel, microphoneMenu } from "./controlBar.js";
 import { parseStoredTime, timeOfDay } from "./dayGroups.js";
 
 /**
@@ -356,30 +356,66 @@ export function privacyProvider<T>(live: T | null, selected: T | null, savedUnus
   return live ?? (savedUnusable ? null : selected);
 }
 
+/** The heading over the Meetings microphone menu's rows (KNEG-364). */
+const MICROPHONE_HEADING = "Used by meetings and dictation";
+
 /**
- * The Meetings microphone chip: what a meeting will record from, and the
- * sentence its hover and screen-reader text carry (KNEG-341).
+ * The Meetings microphone chip and its menu, before a meeting starts: what a
+ * meeting will record from, chosen here (KNEG-364), and the sentence its
+ * hover carries.
  *
- * Meetings record the microphone chosen on Dictation -- one choice for both,
- * saved across restarts (`dictation.rs` `INPUT_DEVICE_KEY`). A chosen device
- * that is not connected is recorded as the system default instead
- * (`kw_audio_core::Capture::start`), so the chip says that before Start rather
- * than naming a microphone that will not be used. `devices` is `null` until the
- * list arrives, and then a choice is named rather than called unplugged.
+ * One choice for both tasks, saved across restarts (`dictation.rs`
+ * `INPUT_DEVICE_KEY`, KNEG-341), so the menu is Dictation's
+ * (`microphoneMenu`) under a heading that says so, and the chip's `title`
+ * says that choosing here changes dictation's microphone too. A chosen device
+ * that is not connected is listed as itself, "(not connected)", and recorded
+ * as the system default instead (`kw_audio_core::Capture::start`).
+ *
+ * `devices` is `null` until the list arrives. Until then the choice is listed
+ * as itself and not called unplugged: nothing is known yet either way.
  */
 export function meetingMicrophone(
   devices: readonly InputDevice[] | null,
   chosen: string | null,
-): { label: string; title: string } {
-  const shared = "Dictation and meetings use the same microphone, chosen on Dictation.";
-  if (chosen === null) {
-    return { label: "Default microphone", title: `Meetings record the system default microphone. ${shared}` };
-  }
-  if (devices !== null && !devices.some((device) => device.name === chosen)) {
-    return {
-      label: `${chosen} (not connected)`,
-      title: `${chosen} isn't connected, so meetings record the system default microphone until it is.`,
-    };
-  }
-  return { label: chosen, title: `Meetings record ${chosen}. ${shared}` };
+): { label: string; title: string; missing: string | null; options: MenuOption[] } {
+  const known = devices ?? (chosen === null ? [] : [{ name: chosen, isDefault: false }]);
+  return {
+    ...microphoneMenu(known, chosen, MICROPHONE_HEADING),
+    title: "Meetings and dictation use the same microphone. Choosing one here changes it for dictation too.",
+  };
+}
+
+/**
+ * The live view's microphone chip: the microphone the running meeting opened,
+ * as Rust reports it (`Sources.microphoneName`, from the capture), and not the
+ * one chosen now. A choice made while it runs -- here before it started, or
+ * on Dictation -- is used from the next recording, and the chip must not move
+ * with it (KNEG-364). A device that gave no name, or sources not read yet, are
+ * "your microphone" rather than a name invented for them.
+ */
+export function liveMicrophone(sources: Sources | null): { label: string; title: string } {
+  const name = sources?.microphoneName ?? null;
+  const later = "A microphone chosen now is used from the next recording.";
+  return name === null
+    ? { label: "Microphone", title: `This meeting is recording from your microphone. ${later}` }
+    : { label: name, title: `This meeting is recording from ${name}. ${later}` };
+}
+
+/** What the page says while "Test microphone" listens (KNEG-364). */
+export const MICROPHONE_CHECK_LISTENING = "Listening for 5 seconds — say something. Nothing is recorded.";
+
+/**
+ * What a finished microphone check found, as the Meetings page says it
+ * (KNEG-364): which microphone it heard you on, or heard nothing from -- and
+ * first, when the one chosen was not connected, that the default stood in.
+ *
+ * `device` is `null` only for a device that gave no name, and a chosen device
+ * is found by its name, so that is the system default.
+ */
+export function microphoneCheckLine(check: MicrophoneCheck): string {
+  const tested = check.device ?? "the system default microphone";
+  const result = check.heard
+    ? `Heard you on ${tested}.`
+    : `Heard nothing from ${tested}. Check it isn't muted, or choose another microphone.`;
+  return check.fellBack === null ? result : `${check.fellBack} isn't connected, so this tested ${tested}. ${result}`;
 }

@@ -227,6 +227,7 @@ fn render() -> String {
             crate::audio_level::LevelSession,
             crate::audio_level::LevelSource,
             crate::audio_level::AudioLevel,
+            crate::microphone_check::MicrophoneCheck,
         ],
         "local transcription" => [
             crate::local_model::Availability,

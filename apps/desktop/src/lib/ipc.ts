@@ -103,6 +103,7 @@ import type {
   MeetingProviderSummary,
   MeetingState,
   MeetingStatus,
+  MicrophoneCheck,
   MicrophoneSupport,
   ModelCacheStatus,
   ModelStatus,
@@ -225,6 +226,7 @@ export type {
   MeetingProviderSummary,
   MeetingState,
   MeetingStatus,
+  MicrophoneCheck,
   MicrophoneSupport,
   ModelCacheStatus,
   ModelStatus,
@@ -1008,6 +1010,12 @@ export async function getInputDevices(): Promise<InputDevice[]> {
   return invoke<InputDevice[]>("input_devices");
 }
 
+/**
+ * Choose the microphone dictation and meetings record from, or `null` for the
+ * system default: one choice for both, made on either page, saved before it
+ * is applied (`audio.inputDevice`, KNEG-341). A meeting already running keeps
+ * the microphone it opened.
+ */
 export async function setInputDevice(device: string | null): Promise<void> {
   return invoke<void>("dictation_set_device", { device });
 }
@@ -1016,11 +1024,22 @@ export async function setInputDevice(device: string | null): Promise<void> {
  * The microphone the next recording will use, or `null` for the system
  * default. Read back so the screen can show the choice rather than assume
  * one -- the select was uncontrolled and showed "System default" whatever
- * was chosen. The choice itself still lives only in memory and is forgotten
- * on restart; that is KNEG-341, not fixed here.
+ * was chosen. Saved (`audio.inputDevice`) and brought back at startup since
+ * KNEG-341, and meetings read the same choice at Start.
  */
 export async function getInputDevice(): Promise<string | null> {
   return invoke<string | null>("dictation_device");
+}
+
+/**
+ * The Meetings page's "Test microphone" (KNEG-364): five seconds of the saved
+ * microphone, then what was heard. Its level arrives meanwhile as
+ * `audio-level` with session `microphone-check`. Nothing is recorded or sent.
+ * Refused, in a sentence starting "Not now: ", while a meeting is under way,
+ * a dictation records, or another check runs.
+ */
+export async function checkMicrophone(): Promise<MicrophoneCheck> {
+  return invoke<MicrophoneCheck>("microphone_check");
 }
 
 /**

@@ -72,6 +72,7 @@ import type {
   MeetingProviderSummary,
   MeetingState,
   MeetingStatus,
+  MicrophoneCheck,
   NewNoteRequest,
   Note,
   NoteRecording,
@@ -909,6 +910,26 @@ const INPUT_DEVICES: InputDevice[] = [
  * default, as in Rust.
  */
 let dictationDevice: string | null = null;
+
+/**
+ * The microphone a capture opens, as `Capture::start` picks it: the one
+ * chosen when it is connected, the system default otherwise. What a fixture
+ * meeting's `Sources` names, and what the microphone check tested (KNEG-364).
+ */
+function fixtureOpenedMicrophone(): string | null {
+  const chosen = INPUT_DEVICES.find((device) => device.name === dictationDevice);
+  return (chosen ?? INPUT_DEVICES.find((device) => device.isDefault))?.name ?? null;
+}
+
+/**
+ * Whether a dictation is recording, as `kw.dictationState` last announced it
+ * -- the fixtures never record one -- so the microphone check can be refused
+ * as Rust refuses it (KNEG-364).
+ */
+let fixtureDictating = false;
+
+/** Whether the fixture microphone check is listening: one at a time, as in Rust. */
+let microphoneChecking = false;
 
 /**
  * What `dictation_set_cloud_provider` and `dictation_use_local` stored, which
@@ -1946,6 +1967,36 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
     return null;
   },
   dictation_device: () => dictationDevice,
+  // Rust's `microphone_check` (`microphone_check.rs`): refused where Rust
+  // refuses, in its words; otherwise five seconds of fake levels on the
+  // check's own session, as its publisher sends them, with a last 0, and
+  // then what it heard. The fixtures' microphone always hears you; which one
+  // was tested follows `dictation_set_device`, the default standing in for
+  // a choice that isn't connected.
+  microphone_check: async () => {
+    if (meetingStatus.state !== "idle" && meetingStatus.state !== "finishing") {
+      throw new Error("Not now: a meeting is under way. Test the microphone once it has ended.");
+    }
+    if (fixtureDictating) {
+      throw new Error("Not now: a dictation is recording. Test the microphone once it has finished.");
+    }
+    if (microphoneChecking) throw new Error("Not now: the microphone is already being tested.");
+    microphoneChecking = true;
+    try {
+      startFakeLevels("microphone-check", ["microphone"]);
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+      stopFakeLevels("microphone-check");
+      const device = fixtureOpenedMicrophone();
+      return {
+        device,
+        fellBack: dictationDevice !== null && dictationDevice !== device ? dictationDevice : null,
+        heard: true,
+        peakLevel: 0.7,
+      } satisfies MicrophoneCheck;
+    } finally {
+      microphoneChecking = false;
+    }
+  },
   insertion_supported: () => true,
   dictation_route: () => resolvedRoute(),
   dictation_use_local: (a) => {
@@ -2097,6 +2148,9 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
     const wantsSystemAudio = arg<boolean>(a, "systemAudio") ?? false;
     const sources: Sources = {
       microphone: true,
+      // The microphone the meeting opened, kept for its whole run: a choice
+      // made afterwards does not move it, as in Rust (KNEG-364).
+      microphoneName: fixtureOpenedMicrophone(),
       systemAudio: wantsSystemAudio,
       systemAudioReason: wantsSystemAudio
         ? null
@@ -2382,6 +2436,7 @@ A fixture summary of "${note.title}", written without a model.
  */
 const devConsole = {
   dictationState(state: SessionState) {
+    fixtureDictating = state === "recording";
     void emit("dictation-state", state);
   },
   /**

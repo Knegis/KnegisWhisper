@@ -70,6 +70,8 @@ test("every renderer snippet is syntactically valid JavaScript", () => {
     snippets.fakeLevels("dictation", true),
     snippets.watchLevelChanges(".hero-meter .level-meter"),
     snippets.levelChanges(),
+    snippets.microphoneCheckState(),
+    snippets.liveChips(),
   ];
   for (const value of values) {
     assert.doesNotThrow(() => new Function(value), value);

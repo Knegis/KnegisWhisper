@@ -1735,7 +1735,10 @@ mod tests {
         assert_eq!(cleanup.clean("um, hello there").await, "um, hello there");
     }
 
+    // Ignored so `cargo test` never opens the microphone on its own, where
+    // there is one: run it by hand with `--ignored`.
     #[tokio::test]
+    #[ignore = "opens the real microphone"]
     async fn the_microphone_thread_answers_even_with_no_microphone() {
         // CI has no input device. The point is that the thread replies rather
         // than hanging, so a dictation fails with a message instead of wedging
@@ -1752,9 +1755,11 @@ mod tests {
 
     /// A recording that starts hands its level to the meter once, and that
     /// level ends with the recording (KNEG-371). Like the test above it opens
-    /// the real default microphone where there is one; on a machine with
-    /// none, the start fails and nothing is handed over.
+    /// the real default microphone where there is one, and is ignored for
+    /// the same reason; on a machine with none, the start fails and nothing
+    /// is handed over.
     #[tokio::test]
+    #[ignore = "opens the real microphone"]
     async fn a_started_recording_hands_its_level_over_and_it_ends_with_the_recording() {
         let handed = Arc::new(std::sync::Mutex::new(Vec::new()));
         let recorder = MicRecorder::spawn().with_on_level({

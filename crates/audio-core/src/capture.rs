@@ -185,6 +185,9 @@ pub struct Capture {
     /// Reads the buffer's meter without its lock, and without keeping it
     /// alive: it answers `None` once this capture is dropped.
     level: LevelReader,
+    /// The device actually opened, by the name the system gives it; `None`
+    /// when it gave none. See [`Capture::device_name`].
+    device_name: Option<String>,
     sample_rate: u32,
     channels: u16,
 }
@@ -192,6 +195,7 @@ pub struct Capture {
 impl std::fmt::Debug for Capture {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Capture")
+            .field("device_name", &self.device_name)
             .field("sample_rate", &self.sample_rate)
             .field("channels", &self.channels)
             .finish_non_exhaustive()
@@ -226,9 +230,10 @@ impl Capture {
         let buffer = Buffer::new(sample_rate, channels);
         let level = buffer.level.reader();
         let buffer = Arc::new(Mutex::new(buffer));
+        let device_name = device.name().ok();
 
         tracing::info!(
-            device = device.name().unwrap_or_else(|_| "<unnamed>".to_owned()),
+            device = device_name.as_deref().unwrap_or("<unnamed>"),
             sample_rate,
             channels,
             format = ?config.sample_format(),
@@ -244,9 +249,24 @@ impl Capture {
             stream,
             buffer,
             level,
+            device_name,
             sample_rate,
             channels,
         })
+    }
+
+    /// The microphone this capture opened, by the name the system gives it,
+    /// or `None` when it gave none (KNEG-364).
+    ///
+    /// Not necessarily the one asked for: a device asked for by name that is
+    /// not connected falls back to the default (see [`Capture::start`]), and
+    /// this names the default then. That is the point of asking the capture
+    /// rather than the setting -- a screen saying which microphone is in use
+    /// names the one that is, and a choice changed afterwards does not move
+    /// it.
+    #[must_use]
+    pub fn device_name(&self) -> Option<&str> {
+        self.device_name.as_deref()
     }
 
     /// How loud the microphone is, for a meter (KNEG-371).

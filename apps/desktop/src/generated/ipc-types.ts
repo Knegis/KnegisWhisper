@@ -692,7 +692,16 @@ export type MeetingState = "idle" | "recording" | "recording-without-transcript"
  * never worked produces. [`Delivered`] carries which of the possible answers
  * applies, and says plainly that two of them cannot be told apart.
  */
-export type Sources = { microphone: boolean, systemAudio: boolean,
+export type Sources = { microphone: boolean,
+/**
+ * The microphone the meeting opened, by its device name; `None` when
+ * the device gave none (KNEG-364). From the capture
+ * (`kw_audio_core::Capture::device_name`), not from the setting: a choice
+ * that was not connected falls back to the default, and a choice made
+ * while the meeting runs applies to the next one, so the live view names
+ * this rather than what is chosen now.
+ */
+microphoneName: string | null, systemAudio: boolean,
 /**
  * Why system audio is not being captured, when it is not.
  */
@@ -1314,6 +1323,31 @@ export type AudioLevel = { session: LevelSession, source: LevelSource,
  * reading, so a short sound is not missed between two.
  */
 level: number, };
+
+/**
+ * What a microphone check found.
+ */
+export type MicrophoneCheck = {
+/**
+ * The microphone the check opened, by its device name; `None` when the
+ * device gave none.
+ */
+device: string | null,
+/**
+ * The microphone chosen, when it was not connected and the check tested
+ * the system default (`device`) instead; `None` when it tested the one
+ * chosen, or none was chosen.
+ */
+fellBack: string | null,
+/**
+ * Whether it heard someone: [`HEARD_READINGS`] readings at
+ * [`HEARD_LEVEL`] or louder.
+ */
+heard: boolean,
+/**
+ * The loudest reading, 0..1 as the meter shows it.
+ */
+peakLevel: number, };
 
 /* ---------------------------------------------------- local transcription */
 /**

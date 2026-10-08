@@ -34,6 +34,7 @@ mod media;
 mod media_job;
 mod meeting;
 mod meeting_window;
+mod microphone_check;
 mod overlay;
 mod persistent_overlay;
 mod reasoning;
@@ -289,6 +290,8 @@ pub fn run() -> anyhow::Result<()> {
             tauri::async_runtime::block_on(session.restore_device());
 
             app.manage(session);
+            // The Meetings page's "Test microphone": one at a time (KNEG-364).
+            app.manage(microphone_check::MicrophoneChecks::default());
 
             // Meetings. Nothing starts here and nothing is scheduled: a meeting
             // begins only when somebody presses the button, which is what "the
@@ -523,6 +526,7 @@ pub fn run() -> anyhow::Result<()> {
             dictation::dictation_set_device,
             dictation::dictation_device,
             dictation::input_devices,
+            microphone_check::microphone_check,
             dictation::insertion_supported,
             local_model::local_model_status,
             local_model::local_model_install,

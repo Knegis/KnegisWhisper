@@ -316,6 +316,7 @@ fn record(
     let _ = ready.send(Ok((
         Sources {
             microphone: true,
+            microphone_name: mic.device_name().map(str::to_owned),
             system_audio: system.is_some(),
             system_audio_reason: system_reason,
         },
@@ -473,11 +474,14 @@ mod tests {
 
     /// The levels the ready message carries are the open captures' own, and
     /// they end with the recorder thread, so a meeting's meters cannot
-    /// outlive it (KNEG-371). Opens the real default microphone, as
+    /// outlive it (KNEG-371); and `Sources` names the microphone the capture
+    /// opened (KNEG-364). Opens the real default microphone, as
     /// `dictation`'s microphone-thread tests do, into a temporary file that
     /// Cancel deletes; on a machine with no microphone the start fails and
-    /// there is nothing to measure.
+    /// there is nothing to measure. Ignored so `cargo test` never opens the
+    /// microphone on its own: run it by hand with `--ignored`.
     #[test]
+    #[ignore = "opens the real microphone"]
     fn the_meters_are_the_captures_own_and_end_with_the_recorder() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("meters.wav");
@@ -488,6 +492,15 @@ mod tests {
         assert!(
             recorder.levels.system.is_none(),
             "system audio was not asked for, so it has no meter"
+        );
+        assert!(
+            recorder
+                .sources
+                .microphone_name
+                .as_deref()
+                .is_some_and(|name| !name.is_empty()),
+            "the microphone that opened is named: {:?}",
+            recorder.sources.microphone_name
         );
         assert!(
             recorder.levels.microphone.take().is_some(),
