@@ -43,6 +43,7 @@ test("every renderer snippet is syntactically valid JavaScript", () => {
     snippets.meetingWindowSilent(true),
     snippets.scriptConfirm(true, { meeting_status: { elapsedSeconds: 1 } }),
     snippets.scriptConfirm(false),
+    snippets.scriptConfirm(true, null, { cmd: "notes_trash", args: { id: 103 } }),
     snippets.confirmQuestions(),
     snippets.meetingPageState(),
     snippets.meetingPlanState(),

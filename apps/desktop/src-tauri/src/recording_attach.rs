@@ -353,7 +353,8 @@ mod tests {
         let response = crate::recordings::response_for(&request, &copy);
         assert_eq!(response.status(), tauri::http::StatusCode::PARTIAL_CONTENT);
         assert_eq!(response.body(), &original[44..64]);
-        assert!(recordings::delete_with_recording(db.pool(), id, &root)
+        assert!(kw_notes_core::trash::trash(db.pool(), id).await.unwrap());
+        assert!(recordings::delete_forever(db.pool(), id, &root)
             .await
             .unwrap());
         assert!(!copy.exists());

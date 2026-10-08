@@ -2448,6 +2448,8 @@ button.microphone-language-toggle:hover:not(:disabled) { background: transparent
 .notes-main:has(> .note-detail-wide) { overflow: hidden; scrollbar-gutter: auto; }
 .note-detail-wide > .note-body { scrollbar-gutter: stable; }
 .notes-notices { flex: none; padding-top: 12px; }
+/* Always drawn, as the page's live region (KNEG-401), and taking no room while it says nothing. */
+.notes-notices:empty { padding-top: 0; }
 .notes-main:has(> .note-detail-wide) > .notes-notices { width: calc(100% - 340px); overflow: hidden; scrollbar-gutter: stable; }
 .notes-notices > p { margin-block: 0 6px; }
 .notes-notices .row { display: flex; flex-wrap: wrap; gap: 2px 10px; padding-block: 0 6px; }

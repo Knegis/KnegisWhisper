@@ -115,7 +115,14 @@ returns to a note moved to Trash since. Restore brings it back as it was, in its
 or in none, when the folder was deleted meanwhile. Delete forever and Empty trash ask first,
 naming the note and its recording's length, or how many notes and what their recordings
 take, and say "Your original file isn't touched." when a recording was copied from an
-imported file; no file name is shown. Discarding a meeting is unchanged: its recording is
+imported file; no file name is shown. Empty trash deletes only the notes its question
+counted: one moved to Trash while it was asking, through the local API say, stays. A
+recording that can't be deleted -- an app holding the file open -- stops the whole
+deletion with a line saying so, the notes still in Trash, and pressing again finishes.
+After Delete, focus goes to Undo; after Undo or Restore, to the note's title; after Delete
+forever or Empty trash, to Trash's page. The line above the note that says these things is
+a live region, always there, so what comes into it is announced. Leaving Trash opens a note,
+the newest when the one open was deleted forever. Discarding a meeting is unchanged: its recording is
 deleted at once, not moved to Trash. The local API's `DELETE /v1/notes/{id}`, the CLI's
 `notes delete` and the MCP `notes_delete` move a note to Trash too, and from then on treat
 it as gone; only the app restores a note or deletes one forever.
@@ -226,9 +233,15 @@ live view of a meeting started that way. Discard always deletes the recording.
   alone still returns it. Its search index rows are kept, so Restore needs no re-indexing.
   `recordings::storage_keys` is deliberately not filtered: a note in Trash still owns its
   WAV, so crash recovery never offers it as an interrupted meeting. Moving a note to Trash
-  cancels a summary queued or being made for it. Delete forever and Empty trash delete the
-  rows in one transaction, put that deletion on disk with a full WAL checkpoint, and only
-  then remove the files (`recordings::empty_trash` says why in that order). The OpenWhispr
+  cancels a summary queued or being made for it, and its summary can't be edited. Delete
+  forever and Empty trash follow `delete_attached`'s order (`recordings::empty_trash` says
+  why): a full WAL checkpoint first, so the move to Trash is on disk, and nothing deleted if
+  it can't finish; then, in one transaction, the rows of the notes still in Trash deleted and
+  their files removed, a file already gone counting as removed and any other failure rolling
+  the deletion back with a plain-words error; then the commit. A file is never removed after
+  the commit, where a crash would leave a WAV no note owns for recovery to offer back; the
+  worst left is notes still in Trash without their recordings, after an error the person saw,
+  and pressing again finishes. The OpenWhispr
   importer still needs an empty `notes` table, and notes in Trash count; its refusal says
   how many are there.
 - `notes.participants` keeps its shape, a JSON array of `{displayName, email}` read

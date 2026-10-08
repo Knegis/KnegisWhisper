@@ -32,6 +32,20 @@ test("a size reads at the scale a person reads it, in the units a disk is sold i
   assert.equal(trashSize(0), "0 KB");
 });
 
+test("a size that rounds up to the next unit is said in that unit, and a tenth is shown only below ten", () => {
+  // Never "1000 KB" or "1000 MB": what rounds to a thousand is the next unit.
+  assert.equal(trashSize(999_499), "999 KB");
+  assert.equal(trashSize(999_500), "1.0 MB");
+  assert.equal(trashSize(999_999), "1.0 MB");
+  assert.equal(trashSize(999_499_999), "999 MB");
+  assert.equal(trashSize(999_500_000), "1.0 GB");
+  // Never "10.0 MB" beside "10 MB": what rounds to ten tenths of ten is ten.
+  assert.equal(trashSize(9_949_999), "9.9 MB");
+  assert.equal(trashSize(9_950_000), "10 MB");
+  assert.equal(trashSize(9_999_999), "10 MB");
+  assert.equal(trashSize(9_950_000_000), "10 GB");
+});
+
 test("a recording's length is minutes, at least one, as the library rounds it", () => {
   assert.equal(recordingLength(1860), "31 min");
   assert.equal(recordingLength(20), "1 min");
@@ -92,10 +106,19 @@ test("Empty trash asks with how many notes and what their recordings take", () =
     emptyTrashQuestion(summary([trashed({ id: 1, hasRecording: true, recordingBytes: 2_400_000 })])),
     "Delete 1 note forever? Its recording (2.4 MB) is deleted with it. This can't be undone.",
   );
+  // Several notes and one recording: which one goes is said, not "its".
+  assert.equal(
+    emptyTrashQuestion(summary([trashed({ id: 1, hasRecording: true, recordingBytes: 3_840_044, originalFilename: "genomgang.m4a" }), trashed({ id: 2 })])),
+    "Delete 2 notes forever? One of them has a recording (3.8 MB); it is deleted with them. Your original file isn't touched. This can't be undone.",
+  );
   assert.equal(emptyTrashQuestion(summary([trashed({ id: 1 }), trashed({ id: 2 })])), "Delete 2 notes forever? This can't be undone.");
   assert.equal(
     emptyTrashQuestion(summary([trashed({ id: 1, hasRecording: true, originalFilename: "call.mp4", recordingBytes: 5_000_000 }), trashed({ id: 2, hasRecording: true, recordingBytes: 0 })])),
-    "Delete 2 notes forever? Their recordings (5.0 MB) are deleted with them. Your original files aren't touched. This can't be undone.",
+    "Delete 2 notes forever? Their recordings (5.0 MB) are deleted with them. Your original file isn't touched. This can't be undone.",
+  );
+  assert.equal(
+    emptyTrashQuestion(summary([trashed({ id: 1, hasRecording: true, originalFilename: "a.mp4", recordingBytes: 1_000_000 }), trashed({ id: 2, hasRecording: true, originalFilename: "b.m4a", recordingBytes: 1_000_000 })])),
+    "Delete 2 notes forever? Their recordings (2.0 MB) are deleted with them. Your original files aren't touched. This can't be undone.",
   );
 });
 

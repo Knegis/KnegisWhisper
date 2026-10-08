@@ -2092,8 +2092,10 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
     return true;
   },
   notes_trash_list: () => fixtureTrash(),
-  notes_empty_trash: () => {
-    const trashed = notes.filter((n) => n.trashedAt !== null).map((n) => n.id);
+  notes_empty_trash: (a) => {
+    // Only the notes the question counted, and only while still in Trash.
+    const asked = arg<number[]>(a, "ids") ?? [];
+    const trashed = notes.filter((n) => n.trashedAt !== null && asked.includes(n.id)).map((n) => n.id);
     for (const id of trashed) deleteFixtureNote(id);
     return trashed.length;
   },

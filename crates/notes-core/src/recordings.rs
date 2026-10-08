@@ -8,9 +8,9 @@
 //!
 //! `storage_key` is a bare file name inside the application's recordings
 //! directory, never a path. File resolution and deletion live here so desktop
-//! playback, an import's cleanup, a meeting's deleted recording and deleting
-//! from Trash (KNEG-401) apply the same storage rules. Delete itself removes
-//! no file: it moves the note to Trash (`crate::trash`), recording and all.
+//! playback, a meeting's deleted recording (KNEG-409) and deleting forever from
+//! Trash (KNEG-401) apply the same storage rules. Delete itself removes no
+//! file: it moves the note to Trash (`crate::trash`), recording and all.
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -47,150 +47,158 @@ pub fn storage_key_for(path: &Path) -> Option<String> {
     is_valid_storage_key(key).then(|| key.to_owned())
 }
 
-/// Best-effort cleanup: deletion of the database row has already committed.
-pub async fn remove_file(directory: &Path, key: &str) {
+/// Remove the recording `key` names inside `directory`. A file already gone
+/// counts as removed, and so does a key that isn't a bare file name: no file
+/// of the application's can have one, and nothing outside the directory is
+/// ever touched for it. Any other failure is returned, for the caller to undo
+/// what it was removing the file for.
+pub async fn remove_file(directory: &Path, key: &str) -> std::io::Result<()> {
     let Some(path) = resolve(directory, key) else {
         tracing::warn!(
             storage_key = key,
             "refused to remove an invalid recording key"
         );
-        return;
+        return Ok(());
     };
     match tokio::fs::remove_file(path).await {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => {
-            tracing::warn!(storage_key = key, error = %error, "could not remove a deleted note's recording");
-        }
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
     }
 }
 
-/// Delete a note and then its recording. The first DELETE acquires SQLite's
-/// write lock, so an attachment cannot slip between its capture and note removal.
-/// A failed transaction leaves both rows and the file intact. Filesystem failure
-/// after commit is logged and deliberately does not change the deletion result.
-pub async fn delete_with_recording(
-    pool: &SqlitePool,
-    id: i64,
-    recording_directory: &Path,
-) -> Result<bool, StorageError> {
-    let mut tx = pool.begin().await?;
-    let key: Option<String> =
-        sqlx::query_scalar("DELETE FROM note_recordings WHERE note_id = ? RETURNING storage_key")
-            .bind(id)
-            .fetch_optional(&mut *tx)
-            .await?;
-    let removed = sqlx::query("DELETE FROM notes WHERE id = ?")
-        .bind(id)
-        .execute(&mut *tx)
-        .await?
-        .rows_affected()
-        > 0;
-    tx.commit().await?;
-    if removed {
-        if let Some(key) = key {
-            remove_file(recording_directory, &key).await;
-        }
-    }
-    Ok(removed)
+/// Why notes in Trash weren't deleted forever (KNEG-401). The first three are
+/// said to the person as they are, in plain words, and none of them deletes
+/// a note.
+#[derive(Debug, thiserror::Error)]
+pub enum PurgeError {
+    /// The move to Trash couldn't be shown to be on disk, so nothing was
+    /// deleted: a power loss could otherwise bring the notes back out of
+    /// Trash with their recordings gone.
+    #[error(
+        "Trash couldn't yet be confirmed as saved on this computer, so nothing was deleted. Try \
+         again in a moment."
+    )]
+    NotOnDisk,
+    /// A recording's file couldn't be removed. The deletion was rolled back,
+    /// so every note is still in Trash -- though a recording removed before
+    /// the one that wouldn't go is gone -- and trying again finishes.
+    #[error(
+        "A recording in Trash couldn't be deleted from this computer, so the notes are still in \
+         Trash. Close any app that may be using it and try again."
+    )]
+    RecordingKept,
+    /// The recordings were removed, but the notes couldn't then be: they are
+    /// still in Trash, without them, and trying again finishes.
+    #[error(
+        "The recordings were deleted, but the notes couldn't be removed from Trash. Try again to \
+         finish."
+    )]
+    NotesKept,
+    #[error(transparent)]
+    Storage(#[from] StorageError),
 }
 
 /// Delete note `id` forever, with its recording, when it is in Trash
-/// (KNEG-401). `false` for a note that isn't there or isn't in Trash: a live
-/// note goes to Trash first, so a screen that is out of date can't delete one
-/// for good. See [`empty_trash`] for the order things are deleted in.
+/// (KNEG-401). `Ok(false)` for a note that isn't there or isn't in Trash: a
+/// live note goes to Trash first, so a screen that is out of date can't
+/// delete one for good. See [`empty_trash`] for the order things are deleted
+/// in.
 pub async fn delete_forever(
     pool: &SqlitePool,
     id: i64,
     directory: &Path,
-) -> Result<bool, StorageError> {
-    Ok(purge_trash(pool, Some(id), directory).await? > 0)
+) -> Result<bool, PurgeError> {
+    Ok(empty_trash(pool, &[id], directory).await? > 0)
 }
 
-/// Delete every note in Trash forever, with their recordings, and say how
-/// many notes went (KNEG-401). Nothing calls this but a person: Trash is
-/// never emptied on its own.
+/// Delete forever the notes `ids` that are still in Trash, with their
+/// recordings, and say how many went (KNEG-401). `ids` are the notes the
+/// person was asked about: a note moved to Trash while they were deciding --
+/// through the local API, say -- is not among them, and stays. Nothing calls
+/// this but a person: Trash is never emptied on its own.
 ///
-/// **The order, and why.**
+/// **The order, and why** -- `delete_attached`'s, so a recording deleted
+/// forever can never come back:
 ///
-/// 1. One transaction, holding SQLite's write lock from its start
-///    (`BEGIN IMMEDIATE`), takes the recordings' names as it deletes their
-///    rows, then deletes the notes. The files removed are exactly those of
-///    the notes whose deletion commits -- a note restored a moment before is
-///    not among them -- and a transaction that fails removes no file.
-/// 2. A full WAL checkpoint then writes the deletion into the database file
-///    and syncs it, as `delete_attached` does before it removes a file. A
-///    commit is not synced (WAL, `synchronous = NORMAL`), so without this a
-///    power loss after the files went could bring the notes back into Trash,
-///    naming recordings that are gone.
-/// 3. Only then are the files removed.
+/// 1. A full WAL checkpoint, so the notes' move to Trash is in the database
+///    file and synced. A commit is not synced (WAL, `synchronous = NORMAL`),
+///    and without this a power loss after the files went could bring a note
+///    back out of Trash, live, with its recording gone. If it can't finish --
+///    a reader holding it back past the busy timeout -- nothing is deleted,
+///    and the error says so.
+/// 2. One transaction, holding SQLite's write lock from its start
+///    (`BEGIN IMMEDIATE`), deletes the recordings' rows, taking their names,
+///    and the notes -- only those still in Trash.
+/// 3. The files are removed, inside that transaction. A file already gone
+///    counts as removed. Any other failure rolls the transaction back and is
+///    returned: the notes stay in Trash, and the person sees why.
+/// 4. The transaction commits.
 ///
-/// Files are never removed first, inside the transaction, as
-/// `delete_attached` removes its one: a commit that then failed would leave
-/// the notes still in Trash naming files already gone -- files deleted for a
-/// deletion that never happened.
-///
-/// If the checkpoint can't finish -- a reader holding it back past the busy
-/// timeout -- the files are removed anyway, and that is logged. The deletion
-/// has committed, so only a power loss in the next moments could undo it,
-/// and then the notes would be back in Trash without the recordings the
-/// person had confirmed deleting. Keeping the files instead would leave them
-/// owned by no note, and recovery offers every such WAV as an interrupted
-/// meeting: what was deleted forever would be offered back. The same is
-/// left, as with [`delete_with_recording`], by a crash between the commit
-/// and the removal; a file that can't be removed is logged and left too.
-pub async fn empty_trash(pool: &SqlitePool, directory: &Path) -> Result<u64, StorageError> {
-    purge_trash(pool, None, directory).await
-}
-
-/// The notes in Trash -- `only` that one, or all of them -- deleted with
-/// their recordings, as [`empty_trash`] describes. Returns how many notes
-/// went.
-async fn purge_trash(
+/// Files are never removed after the commit: a crash or a failure between
+/// the two would leave a WAV no note owns, which crash recovery offers under
+/// Meetings › Interrupted -- a recording deleted forever, offered back, with
+/// no error anyone saw. The worst this order leaves is notes still in Trash
+/// whose recordings are gone -- after a failed removal of a later file, a
+/// failed commit, or a power loss before the commit reached the disk -- and
+/// pressing again finishes, the missing files counting as removed.
+pub async fn empty_trash(
     pool: &SqlitePool,
-    only: Option<i64>,
+    ids: &[i64],
     directory: &Path,
-) -> Result<u64, StorageError> {
-    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
-    let keys: Vec<String> = sqlx::query_scalar(
-        "DELETE FROM note_recordings WHERE note_id IN
-             (SELECT id FROM notes WHERE trashed_at IS NOT NULL AND (?1 IS NULL OR id = ?1))
-         RETURNING storage_key",
-    )
-    .bind(only)
-    .fetch_all(&mut *tx)
-    .await?;
-    let deleted =
-        sqlx::query("DELETE FROM notes WHERE trashed_at IS NOT NULL AND (?1 IS NULL OR id = ?1)")
-            .bind(only)
-            .execute(&mut *tx)
-            .await?
-            .rows_affected();
-    tx.commit().await?;
-    if keys.is_empty() {
-        return Ok(deleted);
+) -> Result<u64, PurgeError> {
+    if ids.is_empty() {
+        return Ok(0);
     }
-    match sqlx::query_as::<_, (i64, i64, i64)>("PRAGMA wal_checkpoint(FULL)")
+    // A JSON array for `json_each`: one bound value, however many notes.
+    let ids = format!(
+        "[{}]",
+        ids.iter().map(i64::to_string).collect::<Vec<_>>().join(",")
+    );
+    let (busy, log, checkpointed): (i64, i64, i64) = sqlx::query_as("PRAGMA wal_checkpoint(FULL)")
         .fetch_one(pool)
         .await
-    {
-        Ok((busy, log, checkpointed)) if checkpointed_everything(busy, log, checkpointed) => {}
-        Ok((busy, log, checkpointed)) => tracing::warn!(
-            busy,
-            log,
-            checkpointed,
-            "the deleted notes couldn't yet be confirmed as written to disk; removing their \
-             recordings anyway"
-        ),
-        Err(error) => tracing::warn!(
-            error = %error,
-            "could not confirm the deleted notes were written to disk; removing their recordings \
-             anyway"
-        ),
+        .map_err(StorageError::from)?;
+    if !checkpointed_everything(busy, log, checkpointed) {
+        return Err(PurgeError::NotOnDisk);
     }
-    for key in keys {
-        remove_file(directory, &key).await;
+    let mut tx = pool
+        .begin_with("BEGIN IMMEDIATE")
+        .await
+        .map_err(StorageError::from)?;
+    let keys: Vec<String> = sqlx::query_scalar(
+        "DELETE FROM note_recordings WHERE note_id IN
+             (SELECT id FROM notes
+              WHERE trashed_at IS NOT NULL AND id IN (SELECT value FROM json_each(?)))
+         RETURNING storage_key",
+    )
+    .bind(&ids)
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(StorageError::from)?;
+    let deleted = sqlx::query(
+        "DELETE FROM notes
+         WHERE trashed_at IS NOT NULL AND id IN (SELECT value FROM json_each(?))",
+    )
+    .bind(&ids)
+    .execute(&mut *tx)
+    .await
+    .map_err(StorageError::from)?
+    .rows_affected();
+    for key in &keys {
+        if let Err(error) = remove_file(directory, key).await {
+            tracing::warn!(storage_key = %key, error = %error, "could not delete a recording in Trash");
+            tx.rollback().await.map_err(StorageError::from)?;
+            return Err(PurgeError::RecordingKept);
+        }
     }
+    // The files are gone by now, so a failed commit can't be undone: the notes
+    // are still in Trash without them, and saying nothing was deleted would be
+    // false.
+    tx.commit().await.map_err(|error| {
+        tracing::warn!(error = %error, "deleted Trash's recordings but not its notes");
+        PurgeError::NotesKept
+    })?;
     Ok(deleted)
 }
 
@@ -517,124 +525,6 @@ mod tests {
         assert_eq!(get(db.pool(), id).await.unwrap(), None);
     }
 
-    #[tokio::test]
-    async fn deletion_removes_only_the_owned_file_and_is_idempotent() {
-        let db = db().await;
-        let dir = tempfile::tempdir().unwrap();
-        let id = note(db.pool(), "Delete me").await;
-        std::fs::write(dir.path().join("owned.wav"), b"audio").unwrap();
-        std::fs::write(dir.path().join("unrelated.wav"), b"keep").unwrap();
-        attach(db.pool(), id, "owned.wav", None, None)
-            .await
-            .unwrap();
-        assert!(delete_with_recording(db.pool(), id, dir.path())
-            .await
-            .unwrap());
-        assert!(notes::get(db.pool(), id).await.unwrap().is_none());
-        assert!(get(db.pool(), id).await.unwrap().is_none());
-        assert!(!dir.path().join("owned.wav").exists());
-        assert!(dir.path().join("unrelated.wav").exists());
-        assert!(!delete_with_recording(db.pool(), id, dir.path())
-            .await
-            .unwrap());
-        let plain = note(db.pool(), "No recording").await;
-        assert!(delete_with_recording(db.pool(), plain, dir.path())
-            .await
-            .unwrap());
-        let missing = note(db.pool(), "Missing file").await;
-        attach(db.pool(), missing, "missing.wav", None, None)
-            .await
-            .unwrap();
-        assert!(delete_with_recording(db.pool(), missing, dir.path())
-            .await
-            .unwrap());
-    }
-
-    #[tokio::test]
-    async fn database_failure_rolls_back_attachment_and_preserves_file() {
-        let db = db().await;
-        let dir = tempfile::tempdir().unwrap();
-        let id = note(db.pool(), "Cannot delete").await;
-        std::fs::write(dir.path().join("owned.wav"), b"audio").unwrap();
-        attach(db.pool(), id, "owned.wav", None, None)
-            .await
-            .unwrap();
-        sqlx::query("CREATE TRIGGER prevent_delete BEFORE DELETE ON notes BEGIN SELECT RAISE(ABORT, 'test failure'); END")
-            .execute(db.pool()).await.unwrap();
-        assert!(delete_with_recording(db.pool(), id, dir.path())
-            .await
-            .is_err());
-        assert!(notes::get(db.pool(), id).await.unwrap().is_some());
-        assert!(get(db.pool(), id).await.unwrap().is_some());
-        assert!(dir.path().join("owned.wav").exists());
-    }
-
-    #[tokio::test]
-    async fn invalid_keys_never_remove_files_outside_recordings() {
-        let db = db().await;
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().join("recordings");
-        std::fs::create_dir(&root).unwrap();
-        let outside = dir.path().join("outside.wav");
-        std::fs::write(&outside, b"keep").unwrap();
-        for key in [
-            "../outside.wav",
-            "..\\outside.wav",
-            "C:outside.wav",
-            "a.wav:stream",
-            "/outside.wav",
-            "a.",
-            "",
-            ".",
-            "..",
-        ] {
-            assert!(resolve(&root, key).is_none());
-            let id = note(db.pool(), "Bad key").await;
-            attach(db.pool(), id, key, None, None).await.unwrap();
-            assert!(delete_with_recording(db.pool(), id, &root).await.unwrap());
-            assert!(outside.exists());
-        }
-    }
-
-    #[tokio::test]
-    async fn cleanup_failure_warns_but_does_not_undo_deletion() {
-        use tracing::instrument::WithSubscriber as _;
-        #[derive(Clone)]
-        struct Capture(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
-        impl std::io::Write for Capture {
-            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-                self.0.lock().unwrap().extend_from_slice(bytes);
-                Ok(bytes.len())
-            }
-            fn flush(&mut self) -> std::io::Result<()> {
-                Ok(())
-            }
-        }
-        let bytes = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let capture = Capture(bytes.clone());
-        let subscriber = tracing_subscriber::fmt()
-            .without_time()
-            .with_ansi(false)
-            .with_writer(move || capture.clone())
-            .finish();
-        let db = db().await;
-        let dir = tempfile::tempdir().unwrap();
-        // A directory is a deterministic remove_file failure on Windows and Unix.
-        std::fs::create_dir(dir.path().join("locked.wav")).unwrap();
-        let id = note(db.pool(), "Cleanup fails").await;
-        attach(db.pool(), id, "locked.wav", None, None)
-            .await
-            .unwrap();
-        assert!(delete_with_recording(db.pool(), id, dir.path())
-            .with_subscriber(subscriber)
-            .await
-            .unwrap());
-        assert!(get(db.pool(), id).await.unwrap().is_none());
-        assert!(String::from_utf8(bytes.lock().unwrap().clone())
-            .unwrap()
-            .contains("could not remove a deleted note's recording"));
-    }
-
     /* -------------------------------- deleting a note's recording (KNEG-409) */
 
     const SAYS: &str = "The recording was deleted.";
@@ -925,8 +815,17 @@ mod tests {
         id
     }
 
+    async fn sorted_keys(pool: &SqlitePool) -> Vec<String> {
+        let mut keys = storage_keys(pool).await.unwrap();
+        keys.sort();
+        keys
+    }
+
+    /// Empty trash deletes the notes it was asked about that are still in
+    /// Trash, and their files: not a live note it is handed, and not one
+    /// moved to Trash while the person was deciding.
     #[tokio::test]
-    async fn emptying_the_trash_deletes_only_its_notes_and_their_files() {
+    async fn emptying_the_trash_deletes_only_the_notes_asked_about_and_their_files() {
         let db = db().await;
         let p = db.pool();
         let dir = tempfile::tempdir().unwrap();
@@ -936,8 +835,15 @@ mod tests {
         std::fs::write(dir.path().join("live.wav"), b"audio").unwrap();
         attach(p, live, "live.wav", None, None).await.unwrap();
         std::fs::write(dir.path().join("unrelated.wav"), b"keep").unwrap();
+        // Moved to Trash after the question was asked about the others.
+        let later = trashed(p, dir.path(), "Later", Some("later.wav")).await;
 
-        assert_eq!(empty_trash(p, dir.path()).await.unwrap(), 2);
+        assert_eq!(
+            empty_trash(p, &[recorded, typed, live], dir.path())
+                .await
+                .unwrap(),
+            2
+        );
 
         assert!(notes::get(p, recorded).await.unwrap().is_none());
         assert!(notes::get(p, typed).await.unwrap().is_none());
@@ -945,12 +851,14 @@ mod tests {
         assert!(!dir.path().join("trashed.wav").exists());
         assert!(notes::get(p, live).await.unwrap().is_some());
         assert!(dir.path().join("live.wav").exists());
+        assert!(crate::trash::is_trashed(p, later).await.unwrap());
+        assert!(dir.path().join("later.wav").exists());
         assert!(dir.path().join("unrelated.wav").exists());
-        assert_eq!(storage_keys(p).await.unwrap(), ["live.wav"]);
+        assert_eq!(sorted_keys(p).await, ["later.wav", "live.wav"]);
         assert_eq!(
-            empty_trash(p, dir.path()).await.unwrap(),
+            empty_trash(p, &[], dir.path()).await.unwrap(),
             0,
-            "an empty Trash empties to nothing"
+            "asked about nothing, nothing goes"
         );
     }
 
@@ -984,69 +892,211 @@ mod tests {
         assert!(!delete_forever(p, 404, dir.path()).await.unwrap());
     }
 
-    /// The deletion is in the database file itself -- not only in its WAL,
-    /// which a power loss can take with it -- before any file goes, so the
-    /// notes can't come back naming recordings that were deleted.
     #[tokio::test]
-    async fn emptied_notes_are_written_to_disk_before_their_files_go() {
+    async fn a_recording_already_gone_from_disk_is_deleted_forever() {
+        let db = db().await;
+        let p = db.pool();
+        let dir = tempfile::tempdir().unwrap();
+        let id = note(p, "Missing file").await;
+        attach(p, id, "missing.wav", None, None).await.unwrap();
+        assert!(crate::trash::trash(p, id).await.unwrap());
+
+        assert!(delete_forever(p, id, dir.path()).await.unwrap());
+        assert!(notes::get(p, id).await.unwrap().is_none());
+    }
+
+    /// A file that won't go rolls the whole deletion back and says why, in
+    /// words the screen shows: every note stays in Trash with its recording
+    /// row, so no file is left that no note owns. Once the file can go,
+    /// pressing again finishes, a file already removed counting as removed.
+    #[tokio::test]
+    async fn a_recording_that_cannot_be_removed_keeps_its_notes_in_trash_and_says_why() {
+        let db = db().await;
+        let p = db.pool();
+        let dir = tempfile::tempdir().unwrap();
+        let plain = trashed(p, dir.path(), "Plain", Some("plain.wav")).await;
+        let locked = note(p, "Locked").await;
+        // A directory is a deterministic remove_file failure on Windows and Unix.
+        std::fs::create_dir(dir.path().join("locked.wav")).unwrap();
+        attach(p, locked, "locked.wav", None, None).await.unwrap();
+        assert!(crate::trash::trash(p, locked).await.unwrap());
+
+        let error = empty_trash(p, &[plain, locked], dir.path())
+            .await
+            .unwrap_err();
+        assert!(matches!(error, PurgeError::RecordingKept), "{error:?}");
+        assert_eq!(
+            error.to_string(),
+            "A recording in Trash couldn't be deleted from this computer, so the notes are \
+             still in Trash. Close any app that may be using it and try again."
+        );
+        for id in [plain, locked] {
+            assert!(crate::trash::is_trashed(p, id).await.unwrap(), "{id}");
+            assert!(get(p, id).await.unwrap().is_some(), "{id}");
+        }
+        assert!(dir.path().join("locked.wav").exists());
+        assert_eq!(sorted_keys(p).await, ["locked.wav", "plain.wav"]);
+
+        std::fs::remove_dir(dir.path().join("locked.wav")).unwrap();
+        assert_eq!(
+            empty_trash(p, &[plain, locked], dir.path()).await.unwrap(),
+            2
+        );
+        assert!(!dir.path().join("plain.wav").exists());
+        assert!(storage_keys(p).await.unwrap().is_empty());
+    }
+
+    /// The move to Trash is in the database file itself -- not only in its
+    /// WAL, which a power loss can take with it -- before any file is
+    /// touched, so a note whose recording goes can't come back out of Trash.
+    /// Shown with a removal that fails: the deletion rolls back, and the file
+    /// on its own already holds the note, in Trash.
+    #[tokio::test]
+    async fn the_move_to_trash_is_on_disk_before_any_file_goes() {
         use sqlx::Connection as _;
         let dir = tempfile::tempdir().unwrap();
         let db = Db::open(&dir.path().join("notes.db")).await.unwrap();
         let p = db.pool();
-        let live = note(p, "Live").await;
-        let id = trashed(p, dir.path(), "Recorded", Some("owned.wav")).await;
-
-        assert_eq!(empty_trash(p, dir.path()).await.unwrap(), 1);
-        assert!(!dir.path().join("owned.wav").exists());
-
-        // What a power loss now would leave: the database file without its
-        // WAL. The live note is in it, so it was written after every commit
-        // so far; the emptied note is not, so that includes the deletion.
-        let copy = dir.path().join("as-on-disk.db");
-        std::fs::copy(dir.path().join("notes.db"), &copy).unwrap();
-        let mut alone = sqlx::SqliteConnection::connect_with(
-            &sqlx::sqlite::SqliteConnectOptions::new().filename(&copy),
-        )
-        .await
-        .unwrap();
-        let left: Vec<i64> = sqlx::query_scalar("SELECT id FROM notes ORDER BY id")
-            .fetch_all(&mut alone)
-            .await
-            .unwrap();
-        assert_eq!(left, [live]);
-        assert_ne!(live, id);
-        let attached: i64 = sqlx::query_scalar("SELECT count(*) FROM note_recordings")
-            .fetch_one(&mut alone)
-            .await
-            .unwrap();
-        assert_eq!(attached, 0);
-    }
-
-    /// A file that won't go is logged and left: the notes are already
-    /// deleted, as confirmed, and nothing brings them back.
-    #[tokio::test]
-    async fn a_file_that_cannot_be_removed_does_not_bring_its_note_back() {
-        let db = db().await;
-        let p = db.pool();
-        let dir = tempfile::tempdir().unwrap();
         let id = note(p, "Locked").await;
-        // A directory is a deterministic remove_file failure on Windows and Unix.
         std::fs::create_dir(dir.path().join("locked.wav")).unwrap();
         attach(p, id, "locked.wav", None, None).await.unwrap();
         assert!(crate::trash::trash(p, id).await.unwrap());
 
-        assert_eq!(empty_trash(p, dir.path()).await.unwrap(), 1);
-        assert!(notes::get(p, id).await.unwrap().is_none());
-        assert!(get(p, id).await.unwrap().is_none());
+        // What a power loss would leave: the database file without its WAL.
+        let in_file = |name: &'static str| {
+            let copy = dir.path().join(name);
+            std::fs::copy(dir.path().join("notes.db"), &copy).unwrap();
+            async move {
+                let mut alone = sqlx::SqliteConnection::connect_with(
+                    &sqlx::sqlite::SqliteConnectOptions::new().filename(&copy),
+                )
+                .await
+                .unwrap();
+                sqlx::query_scalar::<_, Option<String>>("SELECT trashed_at FROM notes WHERE id = ?")
+                    .bind(id)
+                    .fetch_optional(&mut alone)
+                    .await
+                    .ok()
+                    .flatten()
+                    .flatten()
+            }
+        };
+        assert_eq!(
+            in_file("before.db").await,
+            None,
+            "the move to Trash is only in the WAL yet"
+        );
+
+        assert!(matches!(
+            empty_trash(p, &[id], dir.path()).await,
+            Err(PurgeError::RecordingKept)
+        ));
+
+        assert!(
+            in_file("after.db").await.is_some(),
+            "on disk, in Trash, before the file was tried"
+        );
+        assert!(crate::trash::is_trashed(p, id).await.unwrap());
+    }
+
+    /// While the move to Trash can't be shown to be on disk -- a reader on an
+    /// older snapshot holds the checkpoint back -- nothing is deleted, and the
+    /// error says so. Once it lets go, the same call deletes.
+    #[tokio::test]
+    async fn nothing_is_deleted_while_trash_cannot_be_checkpointed() {
+        use sqlx::Connection as _;
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::open(&dir.path().join("notes.db")).await.unwrap();
+        let id = note(db.pool(), "Recorded").await;
+        std::fs::write(dir.path().join("owned.wav"), b"audio").unwrap();
+        attach(db.pool(), id, "owned.wav", None, None)
+            .await
+            .unwrap();
+        let mut reader = sqlx::SqliteConnection::connect_with(
+            &sqlx::sqlite::SqliteConnectOptions::new().filename(dir.path().join("notes.db")),
+        )
+        .await
+        .unwrap();
+        let mut held = reader.begin().await.unwrap();
+        let _: i64 = sqlx::query_scalar("SELECT count(*) FROM notes")
+            .fetch_one(&mut *held)
+            .await
+            .unwrap();
+        assert!(crate::trash::trash(db.pool(), id).await.unwrap());
+
+        let pool = impatient(dir.path()).await;
+        let error = delete_forever(&pool, id, dir.path()).await.unwrap_err();
+        assert!(matches!(error, PurgeError::NotOnDisk), "{error:?}");
+        assert!(error.to_string().contains("nothing was deleted"), "{error}");
+        assert!(dir.path().join("owned.wav").exists());
+        assert!(crate::trash::is_trashed(db.pool(), id).await.unwrap());
+        assert!(get(db.pool(), id).await.unwrap().is_some());
+
+        held.rollback().await.unwrap();
+        assert!(delete_forever(&pool, id, dir.path()).await.unwrap());
+        assert!(!dir.path().join("owned.wav").exists());
     }
 
     #[tokio::test]
-    async fn concurrent_attach_cannot_survive_note_deletion() {
+    async fn a_database_failure_deletes_nothing() {
+        let db = db().await;
+        let p = db.pool();
+        let dir = tempfile::tempdir().unwrap();
+        let id = trashed(p, dir.path(), "Cannot delete", Some("owned.wav")).await;
+        sqlx::query("CREATE TRIGGER prevent_delete BEFORE DELETE ON notes BEGIN SELECT RAISE(ABORT, 'test failure'); END")
+            .execute(p).await.unwrap();
+
+        assert!(matches!(
+            delete_forever(p, id, dir.path()).await,
+            Err(PurgeError::Storage(_))
+        ));
+        assert!(notes::get(p, id).await.unwrap().is_some());
+        assert!(get(p, id).await.unwrap().is_some());
+        assert!(dir.path().join("owned.wav").exists());
+    }
+
+    /// A stored name that would reach outside the recordings directory names
+    /// no file of the application's: nothing outside is touched, and the note
+    /// still goes.
+    #[tokio::test]
+    async fn invalid_keys_never_remove_files_outside_recordings() {
+        let db = db().await;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("recordings");
+        std::fs::create_dir(&root).unwrap();
+        let outside = dir.path().join("outside.wav");
+        std::fs::write(&outside, b"keep").unwrap();
+        for key in [
+            "../outside.wav",
+            "..\\outside.wav",
+            "C:outside.wav",
+            "a.wav:stream",
+            "/outside.wav",
+            "a.",
+            "",
+            ".",
+            "..",
+        ] {
+            assert!(resolve(&root, key).is_none());
+            let id = note(db.pool(), "Bad key").await;
+            attach(db.pool(), id, key, None, None).await.unwrap();
+            assert!(crate::trash::trash(db.pool(), id).await.unwrap());
+            assert!(
+                delete_forever(db.pool(), id, &root).await.unwrap(),
+                "{key:?}"
+            );
+            assert!(outside.exists());
+        }
+    }
+
+    #[tokio::test]
+    async fn concurrent_attach_cannot_survive_deletion_forever() {
         let dir = tempfile::tempdir().unwrap();
         let db = Db::open(&dir.path().join("notes.db")).await.unwrap();
         let id = note(db.pool(), "Concurrent").await;
+        assert!(crate::trash::trash(db.pool(), id).await.unwrap());
         let (deleted, _attached) = tokio::join!(
-            delete_with_recording(db.pool(), id, dir.path()),
+            delete_forever(db.pool(), id, dir.path()),
             attach(db.pool(), id, "race.wav", None, None),
         );
         assert!(deleted.unwrap());

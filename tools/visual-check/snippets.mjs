@@ -536,10 +536,14 @@ export function meetingWindowSilent(silent) {
  * calls can be read. `mergeWhileOpen` is laid over the stub's `merge` while
  * the question is "open" -- after it is asked and before it is answered --
  * for what changes behind a modal dialog; it needs `installInvokeStub` first.
+ * `invokeWhileOpen`, `{ cmd, args }`, is a command sent while the question is
+ * open, not waited for -- another client changing something meanwhile, as the
+ * local API can move a note to Trash while Empty trash is asking (KNEG-401).
  */
-export function scriptConfirm(answer, mergeWhileOpen = null) {
+export function scriptConfirm(answer, mergeWhileOpen = null, invokeWhileOpen = null) {
   return source(`
     const merge = ${JSON.stringify(mergeWhileOpen)};
+    const call = ${JSON.stringify(invokeWhileOpen)};
     window.__confirmQuestions = [];
     window.confirm = (question) => {
       window.__confirmQuestions.push(String(question));
@@ -549,6 +553,8 @@ export function scriptConfirm(answer, mergeWhileOpen = null) {
         if (!stub) throw new Error('The invoke stub is not installed');
         for (const [cmd, value] of Object.entries(merge)) stub.merge[cmd] = value;
       }
+      // Something else happening while the question is open, as another client of the app would.
+      if (call !== null) void window.__TAURI_INTERNALS__.invoke(call.cmd, call.args);
       return ${JSON.stringify(answer)};
     };
     return true;
@@ -830,6 +836,21 @@ export function trashState() {
       workspace: Boolean(document.querySelector('.notes-main .note-detail')),
       title: document.querySelector('.note-detail input[aria-label="Title"]')?.value ?? null,
       error: document.querySelector('.notes-notices .error')?.textContent.trim() ?? null,
+      notices: (() => {
+        const region = document.querySelector('.notes-main > .notes-notices');
+        return region ? { role: region.getAttribute('role'), text: region.textContent.trim() } : null;
+      })(),
+      focus: (() => {
+        const active = document.activeElement;
+        if (!active || active === document.body) return null;
+        return {
+          tag: active.tagName.toLowerCase(),
+          className: typeof active.className === 'string' ? active.className : '',
+          text: active.textContent.trim().slice(0, 80),
+          label: active.getAttribute('aria-label'),
+          value: 'value' in active ? active.value : null,
+        };
+      })(),
       innerWidth,
       scrollWidth: document.scrollingElement.scrollWidth,
     };

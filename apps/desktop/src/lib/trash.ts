@@ -16,15 +16,27 @@
 import type { TrashedNote, TrashSummary } from "../generated/ipc-types.js";
 import { recentMeta } from "./meetingView.js";
 
+/** The units above kilobytes, decimal, as a disk is sold. */
+const UNITS: ReadonlyArray<readonly [string, number]> = [["MB", 1e6], ["GB", 1e9], ["TB", 1e12]];
+
 /**
  * Bytes as a person reads them, in the decimal units a disk is sold in:
- * "412 MB", "3.8 MB", "1.3 GB", "640 KB". Anything at all is at least 1 KB.
+ * "412 MB", "3.8 MB", "1.3 GB", "640 KB". Kilobytes are whole, and anything at
+ * all is at least 1 KB. Above them, a tenth is shown while the number is below
+ * ten. A size is always said in the unit its rounded number fits: what rounds
+ * to a thousand is the next unit up ("1.0 MB", never "1000 KB"), and what
+ * rounds to ten is whole ("10 MB", never "10.0 MB"). Rounding is done on whole
+ * tenths of the byte count, so a boundary is never decided by a float.
  */
 export function trashSize(bytes: number): string {
-  if (bytes >= 1_000_000_000) return `${(bytes / 1_000_000_000).toFixed(1)} GB`;
-  if (bytes >= 10_000_000) return `${Math.round(bytes / 1_000_000)} MB`;
-  if (bytes >= 1_000_000) return `${(bytes / 1_000_000).toFixed(1)} MB`;
-  return `${bytes === 0 ? 0 : Math.max(1, Math.round(bytes / 1000))} KB`;
+  if (Math.round(bytes / 1000) < 1000) return `${bytes === 0 ? 0 : Math.max(1, Math.round(bytes / 1000))} KB`;
+  for (const [unit, size] of UNITS) {
+    const tenths = Math.round((bytes * 10) / size);
+    if (tenths < 100) return `${(tenths / 10).toFixed(1)} ${unit}`;
+    const whole = Math.round(bytes / size);
+    if (whole < 1000 || unit === "TB") return `${whole} ${unit}`;
+  }
+  return `${Math.round(bytes / 1e12)} TB`;
 }
 
 /** A recording's length as the library's rows give it: whole minutes, at least one. */
@@ -77,12 +89,12 @@ export function emptyTrashQuestion(summary: TrashSummary): string {
   if (recorded.length > 0) {
     // What the files measured; a recording whose file is already gone takes nothing.
     const size = summary.recordingBytes > 0 ? ` (${trashSize(summary.recordingBytes)})` : "";
-    parts.push(recorded.length === 1
-      ? `Its recording${size} is deleted with it.`
+    parts.push(count === 1 ? `Its recording${size} is deleted with it.`
+      // Several notes and one recording: "its" would not say whose.
+      : recorded.length === 1 ? `One of them has a recording${size}; it is deleted with them.`
       : `Their recordings${size} are deleted with them.`);
-    if (recorded.some((note) => note.originalFilename !== null)) {
-      parts.push(recorded.length === 1 ? "Your original file isn't touched." : "Your original files aren't touched.");
-    }
+    const imported = recorded.filter((note) => note.originalFilename !== null).length;
+    if (imported > 0) parts.push(imported === 1 ? "Your original file isn't touched." : "Your original files aren't touched.");
   }
   parts.push(CANNOT_UNDO);
   return parts.join(" ");

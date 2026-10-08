@@ -105,6 +105,24 @@ async function pressText(cdp, selector, text) {
 }
 
 const state = (cdp) => cdp.evaluate(snippets.trashState());
+
+/** Where focus should land after a Trash action, as DOM expressions. */
+const FOCUS_ON = {
+  undo: "document.activeElement?.matches('.notes-moved button') ?? false",
+  title: (title) => `(document.activeElement?.matches('.note-detail input[aria-label="Title"]') ?? false) && document.activeElement.value === ${JSON.stringify(title)}`,
+  spaceLine: "document.activeElement?.matches('.trash-space-line') ?? false",
+  choose: "document.activeElement?.matches('.trash-choose') ?? false",
+};
+
+/** Waits up to `timeout` ms for `expression`, and says whether it came true, without failing the check itself. */
+async function settles(cdp, expression, timeout = 4000) {
+  try {
+    await waitFor(cdp, expression, "focus", timeout);
+    return true;
+  } catch {
+    return false;
+  }
+}
 const calls = (cdp, command) => cdp.evaluate(snippets.stubCalls(command));
 const titles = (rows) => rows.map((row) => row.title);
 
@@ -148,7 +166,7 @@ async function openTrashed(cdp, title) {
   await waitFor(cdp, `document.querySelector('.trashed-note .trashed-note-title')?.textContent === ${JSON.stringify(title)}`, `"${title}" to open in Trash`);
 }
 
-const SETUP_NOTE = "1000x720 unless stated. Checks 1-6 run in sequence from one fresh load; 7 and 8 each start from a fresh load. Buttons are pressed with real CDP pointer presses, the Trash row after scrolling it into view; a library row's menu is opened with a contextmenu event; window.confirm is scripted and keeps each question; invoke is wrapped to log notes_trash, notes_restore, notes_delete_forever, notes_empty_trash and notes_update.";
+const SETUP_NOTE = "1000x720 unless stated. Checks 1-6 run in sequence from one fresh load; 7 and 8 each start from a fresh load. Buttons are pressed with real CDP pointer presses, the Trash row after scrolling it into view; a library row's menu is opened with a contextmenu event; window.confirm is scripted and keeps each question (in check 6 it also sends notes_trash for 103 while open, as another client would); invoke is wrapped to log notes_trash, notes_restore, notes_delete_forever, notes_empty_trash and notes_update. Focus is read from document.activeElement, waited for up to 4 s.";
 
 export async function runTrash(options) {
   const out = resolve(options.out);
@@ -184,7 +202,7 @@ export async function runTrash(options) {
       claim: "Delete moves a note to Trash without a question, says so with Undo, and the note is gone from the library and from search.",
       expectation: [
         `"${SCRATCH}" open; Delete in its menu: no question asked; notes_trash sent { id: 103 };`,
-        `"Moved “${SCRATCH}” to Trash." with an Undo button; "${SCRATCH}" not in the library; "${WEEKLY}" open in its place;`,
+        `"Moved “${SCRATCH}” to Trash." with an Undo button, in the always-drawn role="status" region above the note, and focus on Undo; "${SCRATCH}" not in the library; "${WEEKLY}" open in its place;`,
         `Trash shows 1; the library's search for "${SCRATCH_WORD}" says nothing matches`,
       ].join(" "),
     }, async () => {
@@ -194,6 +212,7 @@ export async function runTrash(options) {
       await cdp.evaluate(snippets.clearStubCalls());
       await deleteRow(cdp, SCRATCH);
       await waitFor(cdp, noteOpen(WEEKLY), "the newest note to open in its place");
+      const onUndo = await settles(cdp, FOCUS_ON.undo);
       const after = await state(cdp);
       const questions = await cdp.evaluate(snippets.confirmQuestions());
       const sent = await calls(cdp, "notes_trash");
@@ -207,10 +226,12 @@ export async function runTrash(options) {
       await cdp.evaluate(CLEAR_SEARCH);
       await waitFor(cdp, "document.querySelectorAll('.list-panel .notes-entry').length > 0", "the library to come back");
       return {
-        measured: { after, questions, sent, searched },
+        measured: { after, questions, sent, searched, onUndo },
         matches: questions.length === 0
           && JSON.stringify(sent) === JSON.stringify([{ id: 103 }])
           && after.moved?.text === `Moved “${SCRATCH}” to Trash.` && JSON.stringify(after.moved?.undo) === JSON.stringify(["Undo"])
+          && after.notices?.role === "status" && after.notices.text.startsWith(`Moved “${SCRATCH}” to Trash.`)
+          && onUndo && after.focus?.tag === "button" && after.focus.text === "Undo"
           && !after.library.includes(SCRATCH) && after.title === WEEKLY
           && after.entry?.count === 1
           && searched.includes(`Nothing matches "${SCRATCH_WORD}"`),
@@ -220,20 +241,22 @@ export async function runTrash(options) {
 
     await check({
       id: "2",
-      claim: "Undo brings the note back to the library and opens it again.",
-      expectation: `the line from check 1 still above "${WEEKLY}"; press its Undo: notes_restore sent { id: 103 }; "${SCRATCH}" open and in the library; the line gone; Trash shows 0`,
+      claim: "Undo brings the note back to the library and opens it again, with focus on its title.",
+      expectation: `the line from check 1 still above "${WEEKLY}"; press its Undo: notes_restore sent { id: 103 }; "${SCRATCH}" open and in the library, focus on its title; the line gone, the status region still drawn; Trash shows 0`,
     }, async () => {
       if ((await state(cdp)).moved?.text !== `Moved “${SCRATCH}” to Trash.`) throw new Error("The line from check 1 is gone");
       await cdp.evaluate(snippets.clearStubCalls());
       await pressText(cdp, ".notes-moved button", "Undo");
       await waitFor(cdp, noteOpen(SCRATCH), `"${SCRATCH}" to open again`);
+      const onTitle = await settles(cdp, FOCUS_ON.title(SCRATCH));
       const after = await state(cdp);
       const sent = await calls(cdp, "notes_restore");
       return {
-        measured: { after, sent },
+        measured: { after, sent, onTitle },
         matches: JSON.stringify(sent) === JSON.stringify([{ id: 103 }])
           && after.title === SCRATCH && after.library.includes(SCRATCH)
-          && after.moved === null && after.entry?.count === 0,
+          && after.moved === null && after.notices?.role === "status" && after.entry?.count === 0
+          && onTitle,
       };
     });
 
@@ -277,18 +300,19 @@ export async function runTrash(options) {
 
     await check({
       id: "4",
-      claim: "Restore brings the note back into the library, in its folder, open as an ordinary note.",
-      expectation: `press Restore: notes_restore sent { id: 101 }; Trash closed and showing 0; "${WEEKLY}" in the library and open in a workspace with its title field`,
+      claim: "Restore brings the note back into the library, in its folder, open as an ordinary note, with focus on its title.",
+      expectation: `press Restore: notes_restore sent { id: 101 }; Trash closed and showing 0; "${WEEKLY}" in the library and open in a workspace with its title field, which has focus`,
     }, async () => {
       await cdp.evaluate(snippets.clearStubCalls());
       await pressText(cdp, ".trashed-note-banner button", "Restore");
       await waitFor(cdp, noteOpen(WEEKLY), `"${WEEKLY}" to open in a workspace`);
+      const onTitle = await settles(cdp, FOCUS_ON.title(WEEKLY));
       const after = await state(cdp);
       const folders = await cdp.evaluate(snippets.notesFolders());
       const sent = await calls(cdp, "notes_restore");
       return {
-        measured: { after, folders, sent },
-        matches: JSON.stringify(sent) === JSON.stringify([{ id: 101 }])
+        measured: { after, folders, sent, onTitle },
+        matches: onTitle && JSON.stringify(sent) === JSON.stringify([{ id: 101 }])
           && after.entry?.pressed === false && after.entry.count === 0
           && after.view === null && after.space === null && after.workspace === true
           && Object.values(folders.folders).some((filed) => filed.includes(WEEKLY)),
@@ -301,7 +325,7 @@ export async function runTrash(options) {
       expectation: [
         `delete "${WEEKLY}" again, open it from Trash, Delete forever answered No: the question is exactly`,
         `"Delete “${WEEKLY}” forever? Its recording (2 min) is deleted with it. This can't be undone." -- no ".wav", no stored name -- and nothing is sent;`,
-        "answered Yes: notes_delete_forever sent { id: 101 }; notes_get gives null; Trash empty, its page saying \"Trash is empty.\" with Empty trash disabled",
+        "answered Yes: notes_delete_forever sent { id: 101 }; notes_get gives null; Trash empty, its page saying \"Trash is empty.\" with Empty trash disabled, and focus on that line",
       ].join(" "),
     }, async () => {
       await deleteRow(cdp, WEEKLY);
@@ -316,33 +340,37 @@ export async function runTrash(options) {
       await cdp.evaluate(snippets.scriptConfirm(true));
       await pressText(cdp, ".trashed-note-banner button", "Delete forever");
       await waitFor(cdp, "document.querySelectorAll('.list-panel .notes-trashed').length === 0", "Trash to empty");
+      const onLine = await settles(cdp, FOCUS_ON.spaceLine);
       const questions = await cdp.evaluate(snippets.confirmQuestions());
       const sent = await calls(cdp, "notes_delete_forever");
       const stored = await cdp.evaluate(snippets.invoke("notes_get", { id: 101 }));
       const after = await state(cdp);
       const expected = `Delete “${WEEKLY}” forever? Its recording (2 min) is deleted with it. This can't be undone.`;
       return {
-        measured: { declined, questions, sent, stored, after },
+        measured: { declined, questions, sent, stored, after, onLine },
         matches: JSON.stringify(declined.questions) === JSON.stringify([expected]) && declined.sent.length === 0
           && declined.trash.view?.title === WEEKLY
           && JSON.stringify(questions) === JSON.stringify([expected]) && !/\.wav|20260901-101500/.test(questions.join(" "))
           && JSON.stringify(sent) === JSON.stringify([{ id: 101 }]) && stored === null
           && after.entry?.count === 0 && after.view === null
-          && after.space?.lines[0] === "Trash is empty." && after.space.emptyTrash?.disabled === true,
+          && after.space?.lines[0] === "Trash is empty." && after.space.emptyTrash?.disabled === true
+          && onLine && after.focus?.text === "Trash is empty.",
       };
     });
 
     await check({
       id: "6",
-      claim: "Empty trash asks first, with how many notes and what their recordings take, and deletes every note in Trash.",
+      claim: "Leaving an emptied Trash opens a note; Empty trash asks first, with how many notes and what their recordings take, and deletes the notes it asked about and no other.",
       expectation: [
-        `Show all notes, delete "${WORDS}" (a recording copied from an import) and the long-titled note (none), press Trash, then Empty trash answered Yes:`,
-        `the question is exactly "Delete 2 notes forever? Its recording (${ONE_RECORDING}) is deleted with it. Your original file isn't touched. This can't be undone.";`,
-        "notes_empty_trash sent once; Trash empty and showing 0; notes_get gives null for 105 and 104",
+        `Show all notes from the Trash check 5 left empty: the library back with "${NORDBANK}", the newest note, open;`,
+        `delete "${WORDS}" (a recording copied from an import) and the long-titled note (none), press Trash, then Empty trash answered Yes while "${SCRATCH}" is moved to Trash behind the question:`,
+        `the question is exactly "Delete 2 notes forever? One of them has a recording (${ONE_RECORDING}); it is deleted with them. Your original file isn't touched. This can't be undone.";`,
+        `notes_empty_trash sent once with ids [104, 105]; notes_get gives null for both; "${SCRATCH}" still in Trash, which shows 1; focus on "Choose a note in Trash…"`,
       ].join(" "),
     }, async () => {
       await pressText(cdp, ".list-panel .panel-action", "Show all notes");
       await waitFor(cdp, "document.querySelectorAll('.list-panel .notes-entry').length > 0", "the library");
+      const left = await settles(cdp, noteOpen(NORDBANK));
       await deleteRow(cdp, WORDS);
       // A second later, so the two are told apart by when they went, as Rust's second-long stamps tell them.
       await delay(1100);
@@ -351,23 +379,28 @@ export async function runTrash(options) {
       await waitFor(cdp, "document.querySelectorAll('.list-panel .notes-trashed').length === 2", "the Trash list");
       const listed = await state(cdp);
       await cdp.evaluate(snippets.clearStubCalls());
-      await cdp.evaluate(snippets.scriptConfirm(true));
+      await cdp.evaluate(snippets.scriptConfirm(true, null, { cmd: "notes_trash", args: { id: 103 } }));
       await pressText(cdp, ".trash-space button", "Empty trash");
-      await waitFor(cdp, "document.querySelectorAll('.list-panel .notes-trashed').length === 0", "Trash to empty");
+      await waitFor(cdp, `[...document.querySelectorAll('.list-panel .notes-trashed .notes-entry-title')].map((title) => title.textContent).join() === ${JSON.stringify(SCRATCH)}`, "Trash to hold only the note moved there meanwhile");
+      const onChoose = await settles(cdp, FOCUS_ON.choose);
       const questions = await cdp.evaluate(snippets.confirmQuestions());
       const sent = await calls(cdp, "notes_empty_trash");
       const stored = [await cdp.evaluate(snippets.invoke("notes_get", { id: 105 })), await cdp.evaluate(snippets.invoke("notes_get", { id: 104 }))];
+      const meanwhile = await cdp.evaluate(snippets.invoke("notes_get", { id: 103 }));
       const after = await state(cdp);
       const shot = "06-trash-emptied-1000x720.png";
       await cdp.screenshot(resolve(out, shot));
       return {
-        measured: { listed, questions, sent, stored, after },
-        matches: JSON.stringify(titles(listed.trashed)) === JSON.stringify([LONG, WORDS])
+        measured: { left, listed, questions, sent, stored, meanwhile: meanwhile?.trashedAt ?? null, after, onChoose },
+        matches: left
+          && JSON.stringify(titles(listed.trashed)) === JSON.stringify([LONG, WORDS])
           && listed.space?.lines[0] === `Recordings in Trash take ${ONE_RECORDING} on this computer.`
-          && JSON.stringify(questions) === JSON.stringify([`Delete 2 notes forever? Its recording (${ONE_RECORDING}) is deleted with it. Your original file isn't touched. This can't be undone.`])
+          && JSON.stringify(questions) === JSON.stringify([`Delete 2 notes forever? One of them has a recording (${ONE_RECORDING}); it is deleted with them. Your original file isn't touched. This can't be undone.`])
           && !/genomgang|\.wav|\.m4a/.test(questions.join(" "))
-          && sent.length === 1 && stored.every((note) => note === null)
-          && after.entry?.count === 0 && after.space?.lines[0] === "Trash is empty.",
+          && JSON.stringify(sent) === JSON.stringify([{ ids: [104, 105] }]) && stored.every((note) => note === null)
+          && typeof meanwhile?.trashedAt === "string"
+          && after.entry?.count === 1 && JSON.stringify(titles(after.trashed)) === JSON.stringify([SCRATCH])
+          && onChoose,
         screenshots: [shot],
       };
     });

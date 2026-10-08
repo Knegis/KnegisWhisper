@@ -212,6 +212,18 @@ pub async fn edit(pool: &SqlitePool, id: i64, revision: i64, content: &str) -> R
         .execute(&mut *tx)
         .await
         .map_err(|e| e.to_string())?;
+    // Nothing edits a note in Trash (KNEG-401): a save already on its way when
+    // it went is refused. Read under the writer lock the insert above took, and
+    // dropping the transaction takes that insert back.
+    let trashed: Option<bool> =
+        sqlx::query_scalar("SELECT trashed_at IS NOT NULL FROM notes WHERE id=?")
+            .bind(id)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+    if trashed == Some(true) {
+        return Err("This note is in Trash. Restore it to edit it.".into());
+    }
     let changed = sqlx::query(
         "UPDATE note_summary_meta SET revision=revision+1,edited=1 WHERE note_id=? AND revision=?",
     )
@@ -654,6 +666,22 @@ mod tests {
             "This note is in Trash. Restore it to summarize it."
         );
         assert!(claim(db.pool()).await.unwrap().is_none());
+        // Nor is its summary edited: a save on its way when it went is refused.
+        assert_eq!(
+            edit(db.pool(), id, 0, "Written in Trash")
+                .await
+                .unwrap_err(),
+            "This note is in Trash. Restore it to edit it."
+        );
+        assert_eq!(
+            notes::get(db.pool(), id)
+                .await
+                .unwrap()
+                .unwrap()
+                .enhanced_content,
+            None
+        );
+        assert_eq!(state(db.pool(), id).await.unwrap().revision, 0);
 
         assert!(crate::trash::restore(db.pool(), id).await.unwrap());
         enqueue(db.pool(), id, &settings, 0, false, false)

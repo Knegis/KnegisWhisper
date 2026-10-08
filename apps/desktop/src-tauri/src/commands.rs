@@ -1417,7 +1417,20 @@ pub async fn notes_restore(state: State<'_, AppState>, id: i64) -> CmdResult<boo
 pub async fn notes_delete_forever(state: State<'_, AppState>, id: i64) -> CmdResult<bool> {
     note_recordings::delete_forever(state.db().pool(), id, state.recording_directory())
         .await
-        .map_err(|e| fail("could not delete the note", e))
+        .map_err(|e| purge_failed("could not delete the note", e))
+}
+
+/// A deletion forever that didn't happen, as the screen shows it: why, in
+/// plain words, when the person can act on it -- Trash not yet on disk, a
+/// recording that won't go, notes left in Trash without theirs -- and a
+/// storage failure with its context otherwise.
+fn purge_failed(context: &str, error: note_recordings::PurgeError) -> String {
+    match error {
+        note_recordings::PurgeError::Storage(e) => fail(context, e),
+        said @ (note_recordings::PurgeError::NotOnDisk
+        | note_recordings::PurgeError::RecordingKept
+        | note_recordings::PurgeError::NotesKept) => said.to_string(),
+    }
 }
 
 /// Everything in Trash, most recently trashed first, with what their
@@ -1429,13 +1442,15 @@ pub async fn notes_trash_list(state: State<'_, AppState>) -> CmdResult<trash::Tr
         .map_err(|e| fail("could not list Trash", e))
 }
 
-/// Delete every note in Trash forever, with their recordings. Returns how
-/// many notes went.
+/// Delete forever, with their recordings, the notes `ids` that are still in
+/// Trash: the ones Empty trash asked about. A note moved to Trash while the
+/// question was open -- through the local API, say -- isn't among them and
+/// stays. Returns how many notes went.
 #[tauri::command]
-pub async fn notes_empty_trash(state: State<'_, AppState>) -> CmdResult<u64> {
-    note_recordings::empty_trash(state.db().pool(), state.recording_directory())
+pub async fn notes_empty_trash(state: State<'_, AppState>, ids: Vec<i64>) -> CmdResult<u64> {
+    note_recordings::empty_trash(state.db().pool(), &ids, state.recording_directory())
         .await
-        .map_err(|e| fail("could not empty Trash", e))
+        .map_err(|e| purge_failed("could not empty Trash", e))
 }
 
 /// Move a note into a folder, or out of every folder with `folderId: null`.

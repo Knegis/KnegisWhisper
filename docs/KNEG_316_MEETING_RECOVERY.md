@@ -11,9 +11,12 @@ one recording at a time. Nothing is transcribed or saved until the user presses
 **Recover** on a row.
 
 A note in Trash (KNEG-401) still owns its WAV -- Restore brings the recording back
-with it -- so that WAV is attached, not interrupted, and is never offered here; it is
-removed only when the note is deleted forever or Trash is emptied, once that deletion
-is on disk.
+with it -- so that WAV is attached, not interrupted, and is never offered here. It is
+removed only when the note is deleted forever or Trash is emptied, and only inside the
+transaction that deletes the note's rows, before it commits
+(`recordings::empty_trash`, the order `delete_attached` uses): a file that can't be
+removed rolls the deletion back, so no WAV is ever left that no note owns, to come back
+here as an interrupted meeting.
 
 Recovery checks that the WAV is still a regular, unattached file in the owned
 directory. A WAV left open by `WavWriter` has zero lengths in its header; the

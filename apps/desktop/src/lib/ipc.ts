@@ -873,9 +873,13 @@ export async function getTrash(): Promise<TrashSummary> {
   return invoke<TrashSummary>("notes_trash_list");
 }
 
-/** Delete every note in Trash forever, with their recordings. Returns how many went. */
-export async function emptyTrash(): Promise<number> {
-  return invoke<number>("notes_empty_trash");
+/**
+ * Delete forever, with their recordings, the notes `ids` that are still in Trash: the ones Empty
+ * trash asked about, so a note moved to Trash while the question was open -- through the local API,
+ * say -- stays. Returns how many went.
+ */
+export async function emptyTrash(ids: number[]): Promise<number> {
+  return invoke<number>("notes_empty_trash", { ids });
 }
 
 export async function getFolders(): Promise<Folder[]> {

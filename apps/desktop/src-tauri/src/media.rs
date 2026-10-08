@@ -2387,13 +2387,16 @@ mod retained_import_tests {
                     crate::recordings::response_for(&request, &copy).status(),
                     206
                 );
-                kw_notes_core::recordings::delete_with_recording(
+                assert!(kw_notes_core::trash::trash(db.pool(), result.note_id)
+                    .await
+                    .unwrap());
+                assert!(kw_notes_core::recordings::delete_forever(
                     db.pool(),
                     result.note_id,
                     &runtime.recording_directory,
                 )
                 .await
-                .unwrap();
+                .unwrap());
                 assert!(!copy.exists());
                 assert!(path.exists());
                 println!(
@@ -2454,13 +2457,16 @@ mod retained_import_tests {
             let response = crate::recordings::response_for(&request, &copy);
             assert_eq!(response.status(), 206);
             assert_eq!(response.body().len(), 44);
-            kw_notes_core::recordings::delete_with_recording(
+            assert!(kw_notes_core::trash::trash(db.pool(), result.note_id)
+                .await
+                .unwrap());
+            assert!(kw_notes_core::recordings::delete_forever(
                 db.pool(),
                 result.note_id,
                 &recordings,
             )
             .await
-            .unwrap();
+            .unwrap());
             assert!(!copy.exists());
             assert!(original.exists());
         }

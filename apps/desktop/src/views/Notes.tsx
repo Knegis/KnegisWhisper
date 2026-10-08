@@ -214,6 +214,14 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
   // "Moved “X” to Trash." with Undo, shown above the note open once the move was made, and gone as
   // soon as another opens. `reopen` when X was the open note, so Undo opens it again.
   const [moved, setMoved] = useState<{ id: number; title: string; reopen: boolean; shownWith: number | null } | null>(null);
+  // Where focus goes once a Trash action has finished and the page has been read again. What had
+  // focus -- a library row, a button of the note in Trash -- is gone by then, and focus would fall to
+  // the page's body, behind the rail and the library, with Undo out of a keyboard's reach. "undo":
+  // the Undo beside "Moved to Trash"; "title": the open note's title, once its editor is ready and
+  // the field enabled; "trash": Trash's page -- its "Choose a note" line, or, with nothing left to
+  // choose, the line saying what Trash holds. A request per action, so the same target twice moves
+  // focus twice.
+  const [focusAfter, setFocusAfter] = useState<{ target: "undo" | "title" | "trash"; at: number } | null>(null);
 
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<SearchHit[] | null>(null);
@@ -243,6 +251,28 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
   }, [data, initialNoteId, openRequest, onOpenNote, reveal, fail]);
   useEffect(() => { if (openNoteId !== null) lastOpenNoteId = openNoteId; }, [openNoteId]);
   const mainRef = useRef<HTMLElement>(null);
+  // Tried every 50 ms for up to 3 s: the title stays disabled until the editor beneath it is ready,
+  // which the page is never told, and a note opened by navigation arrives a moment after the reload.
+  useEffect(() => {
+    if (focusAfter === null) return;
+    const find = (): HTMLElement | null => {
+      const main = mainRef.current;
+      if (!main) return null;
+      if (focusAfter.target === "undo") return main.querySelector<HTMLElement>(".notes-moved button");
+      if (focusAfter.target === "title") return main.querySelector<HTMLElement>('.note-detail input[aria-label="Title"]:not(:disabled)');
+      return main.querySelector<HTMLElement>(".trash-choose") ?? main.querySelector<HTMLElement>(".trash-space-line");
+    };
+    let tries = 0;
+    const timer = setInterval(() => {
+      const element = find();
+      if (element || ++tries > 60) {
+        clearInterval(timer);
+        element?.focus();
+      }
+    }, 50);
+    return () => clearInterval(timer);
+  }, [focusAfter]);
+  const focusLater = (target: "undo" | "title" | "trash") => setFocusAfter({ target, at: Date.now() });
   // A note opens at its top. The pane outlives the note inside it, so on its own it keeps the
   // previous note's offset, clamped against the new note's first layout before the editor has its
   // content: measured on 2026-09-26 at 122px in a 480px window. An open request used to call
@@ -280,67 +310,92 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
     onOpenNote?.(id, transcriptRow);
   };
   // Trash pressed: the open note is saved first, as opening another is, since Trash's own page takes
-  // the main area; pressed again, the library and the note come back.
+  // the main area; pressed again, it is left as Show all notes leaves it.
   const toggleTrash = () => {
-    if (trashOpen) { setTrashOpen(false); return; }
+    if (trashOpen) { leaveTrash(); return; }
     void (async () => { await workspaceRef.current?.flush(); setPersonEmail(null); setTrashOpen(true); })().catch(fail);
   };
-  // What opens once the open note has gone to or left Trash: nothing while Trash is open, so its
+  // What opens once the open note has gone to or left Trash: nothing while Trash stays open, so its
   // page shows, and otherwise the newest note, as on a first visit. Returns the note opened.
-  const openNewest = async (): Promise<number | null> => {
-    const [newest] = trashOpen ? [] : await getNotes({ limit: 1 });
+  const openNewest = async (stayInTrash: boolean): Promise<number | null> => {
+    const [newest] = stayInTrash ? [] : await getNotes({ limit: 1 });
     if (newest) { await selectNote(newest.id); return newest.id; }
     setOpenNoteId(null);
     return null;
   };
-  // Delete (KNEG-401): to Trash, without a question -- Undo is beside the line that says so. The open
-  // note is saved first, as a move is, and the newest note opens in its place.
+  // Leaving Trash -- Show all notes, Trash pressed again, a person pressed -- shows the library with a
+  // note open: the one that was, while it is live, and the newest otherwise, so the page is never left
+  // empty after Delete forever or Empty trash.
+  const leaveTrash = () => {
+    setTrashOpen(false);
+    const open = data?.notes.find(note => note.id === openNoteId) ?? (requestedNote?.id === openNoteId ? requestedNote : null);
+    if (open === null || open.trashedAt !== null) void openNewest(false).catch(fail);
+  };
+  // Runs a Trash action as `guard` runs any change -- the error in view, the page read again -- and
+  // says whether it got to its end, so focus moves only after one that did.
+  const finished = async (work: () => Promise<boolean>): Promise<boolean> => {
+    let done = false;
+    await guard(async () => { done = await work(); });
+    return done;
+  };
+  // Delete (KNEG-401): to Trash, without a question -- Undo is beside the line that says so, and
+  // focus goes to it. The open note is saved first, as a move is, and the newest note opens in its
+  // place.
   const moveToTrash = (note: Note) => {
-    void guard(async () => {
+    void finished(async () => {
       const wasOpen = note.id === openNoteId;
       if (wasOpen) await workspaceRef.current?.flush();
-      if (!(await trashNote(note.id))) return;
-      const shownWith = wasOpen ? await openNewest() : openNoteId;
+      if (!(await trashNote(note.id))) return false;
+      const shownWith = wasOpen ? await openNewest(false) : openNoteId;
       setMoved({ id: note.id, title: note.title, reopen: wasOpen, shownWith });
-    });
+      return true;
+    }).then(done => { if (done) focusLater("undo"); });
   };
   const undoTrash = () => {
     if (moved === null) return;
     const { id, reopen } = moved;
     setMoved(null);
-    void guard(async () => { if ((await restoreNote(id)) && reopen) await selectNote(id); });
+    void finished(async () => { if ((await restoreNote(id)) && reopen) await selectNote(id); return true; })
+      .then(done => { if (done) focusLater("title"); });
   };
   // Restore, from a note in Trash: it comes back to the library, open, in its folder -- or in none,
-  // when its folder was deleted meanwhile.
+  // when its folder was deleted meanwhile -- with focus on its title.
   const restoreTrashed = (note: Note) => {
-    void guard(async () => {
-      if (!(await restoreNote(note.id))) return;
+    void finished(async () => {
+      if (!(await restoreNote(note.id))) return false;
       setMoved(current => (current?.id === note.id ? null : current));
       setTrashOpen(false);
       const back = await getNote(note.id);
       if (back) { setRequestedNote(back); reveal(back.folderId); }
-    });
+      return true;
+    }).then(done => { if (done) focusLater("title"); });
   };
-  // Delete forever and Empty trash ask first, from what Trash holds now, so the question names
-  // the recordings that would go.
+  // Delete forever and Empty trash ask first, from what Trash holds now, so the question names the
+  // recordings that would go. Inside Trash, focus goes to its page; reached by Back, to the note that
+  // opens in its place.
   const deleteForever = (id: number) => {
-    void guard(async () => {
+    const inTrash = trashOpen;
+    void finished(async () => {
       const entry = (await getTrash()).notes.find(item => item.id === id);
-      if (!entry || !window.confirm(deleteForeverQuestion(entry))) return;
-      if (!(await deleteNoteForever(id))) return;
+      if (!entry || !window.confirm(deleteForeverQuestion(entry))) return false;
+      if (!(await deleteNoteForever(id))) return false;
       setMoved(current => (current?.id === id ? null : current));
-      if (id === openNoteId) await openNewest();
-    });
+      if (id === openNoteId) await openNewest(inTrash);
+      return true;
+    }).then(done => { if (done) focusLater(inTrash ? "trash" : "title"); });
   };
+  // Only the notes the question counted: one moved to Trash while it was open -- through the local
+  // API, say -- isn't among them, and Rust leaves it in Trash.
   const emptyAll = () => {
-    void guard(async () => {
+    void finished(async () => {
       const held = await getTrash();
-      if (held.notes.length === 0 || !window.confirm(emptyTrashQuestion(held))) return;
-      await emptyTrash();
+      if (held.notes.length === 0 || !window.confirm(emptyTrashQuestion(held))) return false;
+      await emptyTrash(held.notes.map(item => item.id));
       const gone = (id: number | null) => held.notes.some(item => item.id === id);
       setMoved(current => (current !== null && gone(current.id) ? null : current));
-      if (gone(openNoteId)) await openNewest();
-    });
+      if (gone(openNoteId)) await openNewest(true);
+      return true;
+    }).then(done => { if (done) focusLater("trash"); });
   };
   const newNote = () => guard(async () => {
     await workspaceRef.current?.flush();
@@ -476,7 +531,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
           <button key={item.email} type="button" className="notes-person" aria-pressed={pressed}
             // The address behind a name, and the whole of either when the row cuts it off.
             title={item.name === null ? item.email : `${item.name}\n${item.email}`}
-            onClick={() => { setTrashOpen(false); setPersonEmail(pressed ? null : item.email); }}>
+            onClick={() => { if (trashOpen) leaveTrash(); setPersonEmail(pressed ? null : item.email); }}>
             <Icon name="meetings" size={16} />
             <span className="notes-person-name">{personLabel(item)}</span>
             <span className="notes-folder-count"><span aria-hidden="true">{item.noteCount}</span><span className="sr-only">, {noteCount(item.noteCount)}</span></span>
@@ -516,7 +571,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
   const trashSection = (
     <>
       <PanelSection label="Trash">
-        <PanelAction icon="back" label="Show all notes" onClick={() => setTrashOpen(false)} />
+        <PanelAction icon="back" label="Show all notes" onClick={leaveTrash} />
         {trash.notes.map((item) => (
           <PanelItem key={item.id} className="notes-trashed" titleClassName="notes-entry-title" title={item.title}
             meta={trashedMeta(item, now)} current={openNoteId === item.id} tooltip={item.title}
@@ -639,22 +694,22 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
   return (
     <SplitView label="Notes library" heading="Notes" panel={panel}>
       <section className="notes-main" aria-label="Note editor" ref={mainRef}>
-        {error || exportedTo || movedLine !== null ? (
-          <div className="notes-notices">
-            {error ? <p className="error">{error}</p> : null}
-            {movedLine !== null ? <p className="notes-moved" role="status">{movedLine} <button type="button" onClick={undoTrash}>Undo</button></p> : null}
-            {exportedTo ? <Row label="Written to" value={exportedTo} /> : null}
-          </div>
-        ) : null}
+        {/* Always drawn, empty when there is nothing to say, so what comes into it -- a failure, "Moved
+            to Trash", "Written to" -- is announced: a live region added already filled often is not. */}
+        <div className="notes-notices" role="status">
+          {error ? <p className="error">{error}</p> : null}
+          {movedLine !== null ? <p className="notes-moved">{movedLine} <button type="button" onClick={undoTrash}>Undo</button></p> : null}
+          {exportedTo ? <Row label="Written to" value={exportedTo} /> : null}
+        </div>
         {trashOpen ? (
           <>
             {/* Trash's page (KNEG-401): what its recordings take, and Empty trash. Nothing empties it on its own. */}
             <div className="trash-space">
-              <p>{trashSpaceLine(trash)}</p>
+              <p className="trash-space-line" tabIndex={-1}>{trashSpaceLine(trash)}</p>
               <p className="muted">Deleted notes stay in Trash, with their recordings, until you empty it.</p>
               <button type="button" disabled={trash.notes.length === 0} onClick={emptyAll}>Empty trash</button>
             </div>
-            {trashedView ?? (trash.notes.length === 0 ? null : <p className="trash-choose muted">Choose a note in Trash to see it, restore it or delete it forever.</p>)}
+            {trashedView ?? (trash.notes.length === 0 ? null : <p className="trash-choose muted" tabIndex={-1}>Choose a note in Trash to see it, restore it or delete it forever.</p>)}
           </>
         ) : trashedView ?? (openNote ? (
           <NoteWorkspace
