@@ -28,6 +28,18 @@ export type RecordingPlayerHandle = {
    */
   position: () => PlayerPosition | null;
   resume: (from: PlayerPosition) => void;
+  /**
+   * The recording's time now, read from the element rather than from the
+   * last `timeupdate` (four a second), for a transcript row highlighting word
+   * by word on every animation frame (KNEG-408). `null` with no player.
+   */
+  time: () => number | null;
+  /**
+   * Go to `seconds`, playing on if it was playing: a word of the transcript
+   * clicked (KNEG-408). A row or selection being played still stops at its
+   * end when `seconds` is inside it, and plays on when it is past it.
+   */
+  seek: (seconds: number) => void;
 };
 
 type RecordingPlayerProps = {
@@ -153,6 +165,16 @@ export const RecordingPlayer = forwardRef<RecordingPlayerHandle, RecordingPlayer
             if (started) beginIntervalCheck();
             else clearIntervalPlayback();
           });
+        },
+        time: () => audioRef.current?.currentTime ?? null,
+        seek: (seconds) => {
+          const audio = audioRef.current;
+          if (audio === null) return;
+          const end = intervalEndRef.current;
+          if (end !== null && seconds >= end) clearIntervalPlayback();
+          audio.currentTime = seconds;
+          setCurrentTime(seconds);
+          onCurrentTime(seconds);
         },
       }),
       [beginIntervalCheck, clearIntervalPlayback, onCurrentTime, play],

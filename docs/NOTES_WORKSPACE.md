@@ -57,6 +57,17 @@ keys, Home and End; a hidden Transcript tab is skipped. At widths of 900px or le
 the list panel initially collapses (and collapses when entering that width); the
 title bar's list toggle reopens it. Tabs wrap when necessary.
 
+A row that local Whisper timed word by word (KNEG-408) -- a media import, or a
+meeting's whole-recording pass, on a Whisper engine -- is drawn word by word while
+it plays, and the word being said is marked. Clicking a word plays from it; a row
+or selection played with its Play button still stops at its end when the word is
+inside it. Every other row is marked as a whole row, as before: notes saved before
+word timings were kept, Parakeet, cloud providers and live captions, and a row whose
+text no longer matches its words. With reduced motion asked for, the mark jumps
+from word to word instead of fading. How far the mark sits from the sound on a real
+Swedish recording has not been judged by ear yet (see Data compatibility for what
+was measured).
+
 Under the title, the meta row gives the note's date, the recording's length, its
 participants and where its transcript was made (KNEG-368): "Transcribed on this
 computer", or "Transcribed by" the provider or server that made it. A meeting
@@ -146,6 +157,22 @@ live view of a meeting started that way. Discard always deletes the recording.
   Existing notes keep NULL and show nothing; nothing guesses where they were
   transcribed. `notes_create` and the local API's create don't take it, and
   shared-folder packages don't carry it.
+- A transcript segment may carry `words`, a list of `{text, start, end}` on the
+  segment's clock (KNEG-408). Only local Whisper writes them, from the per-token
+  times its server returns with every timed request, joined into words; no forced
+  alignment is run. The pinned server was seen sending them on 2026-10-08
+  (`crates/transcription-core/tests/word_timings.rs`, ignored, `ggml-tiny`, the
+  English fixture): every row came back with words that spell it. Against the
+  fixture's measured speech the first sentence's first word started 0.01 s late and
+  the second's 0.37 s early, and each row's last word ran on to the row's end. A
+  segment without words leaves the key out, so it is
+  stored byte for byte as before, and one with a `words` in any other shape, which
+  an imported transcript may carry, reads as none. Both search indexes read only
+  `text`, so a word is found by its row, never by its timing. `Note.transcript`, which
+  `notes_list` and the local API's notes return whole, grows by about 46 bytes a
+  word: a synthetic hour of 9,000 words is 169 KB without them and 589 KB with
+  (`an_hour_of_words_is_measured` in `transcript.rs`). Media import's own answer to
+  the screen (`MediaImportResult.segments`) carries no words.
 - No new renderer command or user-editable transcript API was added. Existing note
   exports and separate summary exports retain their behavior.
 

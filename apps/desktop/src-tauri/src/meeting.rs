@@ -1880,6 +1880,8 @@ impl MeetingRuntime {
                         text: saved.text.clone(),
                         start,
                         end,
+                        // Only the spans are read back from the labelling.
+                        words: Vec::new(),
                     }
                 })
                 .collect(),

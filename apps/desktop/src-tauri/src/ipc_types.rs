@@ -207,6 +207,7 @@ fn render() -> String {
             crate::commands::NoteUpdateRequest,
             kw_notes_core::transcript::Format,
             crate::commands::ExportedTranscript,
+            kw_notes_core::transcript::Word,
             kw_notes_core::transcript::TranscriptRow,
             kw_notes_core::recordings::NoteRecording,
         ],

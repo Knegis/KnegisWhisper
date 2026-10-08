@@ -1131,6 +1131,12 @@ filename: string, content: string,
 segmentCount: number, };
 
 /**
+ * One timed word of a [`Segment`] (KNEG-408): seconds from the start of the
+ * recording, or epoch milliseconds when its segment's are.
+ */
+export type Word = { text: string, start: number, end: number, };
+
+/**
  * One transcript segment as a playable row: normalised to seconds from the
  * start of the recording, with its speaker resolved the way export resolves
  * it, so the screen and the export files never disagree about who said what.
@@ -1165,7 +1171,16 @@ speaker: string | null,
  * The raw diarisation label a rename addresses; absent for typed names,
  * capture sources, and anonymous segments without a label.
  */
-speakerId: string | null, text: string, };
+speakerId: string | null, text: string,
+/**
+ * The row word by word, on the row's clock, for highlighting each word
+ * as the recording plays (KNEG-408). Empty unless the segment's words
+ * still spell its text, whitespace aside: a row whose text changed after
+ * it was transcribed is highlighted as a row, never at words it no
+ * longer has. Empty, too, for every note saved before KNEG-408 and every
+ * engine but local Whisper.
+ */
+words: Array<Word>, };
 
 /**
  * A recording attached to a note, as stored.

@@ -44,6 +44,54 @@ pub struct Segment {
     pub speaker_is_placeholder: bool,
     /// `mic` or `system`, for meetings with no diarisation.
     pub source: Option<String>,
+    /// The segment word by word, on the same clock as `timestamp`, when local
+    /// Whisper timed every word of it (KNEG-408).
+    ///
+    /// Left out of the JSON when empty, so a segment without words -- every
+    /// one saved before, and every one from another engine -- is stored
+    /// byte for byte as it was. Read leniently: a `words` this did not write,
+    /// which an imported transcript may carry, is no words rather than an
+    /// unreadable transcript. Only [`rows`] shows them, and only while they
+    /// still spell the text.
+    #[serde(
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "lenient_words"
+    )]
+    pub words: Vec<Word>,
+}
+
+impl Segment {
+    /// Change what the segment says. Its words go with the old text: they
+    /// spelled it, and highlighting them against new text would point at
+    /// words that are not there.
+    pub fn set_text(&mut self, text: impl Into<String>) {
+        self.text = text.into();
+        self.words.clear();
+    }
+}
+
+/// `words` as [`Word`]s, or none when they are anything else.
+fn lenient_words<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<Word>, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(serde_json::from_value(value).unwrap_or_default())
+}
+
+/// Whether `words` spell `text`, whitespace aside.
+fn spells(words: &[Word], text: &str) -> bool {
+    words
+        .iter()
+        .flat_map(|word| word.text.chars())
+        .filter(|c| !c.is_whitespace())
+        .eq(text.chars().filter(|c| !c.is_whitespace()))
+}
+
+/// One timed word of a [`Segment`] (KNEG-408): seconds from the start of the
+/// recording, or epoch milliseconds when its segment's are.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+pub struct Word {
+    pub text: String,
+    pub start: f64,
+    pub end: f64,
 }
 
 /// The words used for speakers with no name.
@@ -107,6 +155,13 @@ pub struct TranscriptRow {
     /// capture sources, and anonymous segments without a label.
     pub speaker_id: Option<String>,
     pub text: String,
+    /// The row word by word, on the row's clock, for highlighting each word
+    /// as the recording plays (KNEG-408). Empty unless the segment's words
+    /// still spell its text, whitespace aside: a row whose text changed after
+    /// it was transcribed is highlighted as a row, never at words it no
+    /// longer has. Empty, too, for every note saved before KNEG-408 and every
+    /// engine but local Whisper.
+    pub words: Vec<Word>,
 }
 
 /// Which format to emit.
@@ -225,11 +280,21 @@ pub fn normalise_timestamps(segments: &[Segment], note: &NoteMeta) -> Vec<Segmen
         return segments.to_vec();
     };
 
+    let seconds = |t: f64| (t - start_ms) / 1000.0;
     segments
         .iter()
         .map(|segment| Segment {
-            timestamp: segment.timestamp.map(|t| (t - start_ms) / 1000.0),
-            end_timestamp: segment.end_timestamp.map(|t| (t - start_ms) / 1000.0),
+            timestamp: segment.timestamp.map(seconds),
+            end_timestamp: segment.end_timestamp.map(seconds),
+            words: segment
+                .words
+                .iter()
+                .map(|word| Word {
+                    text: word.text.clone(),
+                    start: seconds(word.start),
+                    end: seconds(word.end),
+                })
+                .collect(),
             ..segment.clone()
         })
         .collect()
@@ -306,6 +371,9 @@ pub fn merge(segments: &[Segment]) -> Vec<Segment> {
                 text: text.to_owned(),
                 timestamp: Some(timestamp),
                 end_timestamp: Some(timestamp),
+                // A merged segment's text is several segments' text, so no
+                // one segment's words spell it.
+                words: Vec::new(),
                 ..segment.clone()
             });
         }
@@ -460,6 +528,11 @@ pub fn rows(
                     .filter(|id| !id.trim().is_empty())
                     .map(str::to_owned),
                 text: segment.text.clone(),
+                words: if spells(&segment.words, &segment.text) {
+                    segment.words.clone()
+                } else {
+                    Vec::new()
+                },
             }
         })
         .collect()
@@ -850,6 +923,221 @@ mod tests {
         assert_eq!(rows[0].end_seconds, Some(3.0));
         assert_eq!(rows[1].start_seconds, None);
         assert_eq!(rows[1].end_seconds, Some(3.0));
+    }
+
+    /* ------------------------------------------------- words (KNEG-408) */
+
+    fn words(list: &[(&str, f64, f64)]) -> Vec<Word> {
+        list.iter()
+            .map(|(text, start, end)| Word {
+                text: (*text).to_owned(),
+                start: *start,
+                end: *end,
+            })
+            .collect()
+    }
+
+    fn worded(text: &str, at: f64, list: &[(&str, f64, f64)]) -> Segment {
+        Segment {
+            words: words(list),
+            ..segment(text, at, None)
+        }
+    }
+
+    /// Every segment saved before KNEG-408, and every one saved since by
+    /// another engine: no words, and the JSON exactly as before.
+    const BEFORE: &str = r#"{"text":"Hej då.","timestamp":1.5,"endTimestamp":2.5,"speaker":"speaker_0","speakerName":"Speaker 1","speakerIsPlaceholder":true,"source":null}"#;
+
+    #[test]
+    fn a_segment_without_words_is_stored_byte_for_byte_as_before() {
+        let segment: Segment = serde_json::from_str(BEFORE).unwrap();
+        assert!(segment.words.is_empty());
+        assert_eq!(serde_json::to_string(&segment).unwrap(), BEFORE);
+        assert_eq!(
+            serde_json::to_string(&Segment {
+                text: "x".to_owned(),
+                ..Default::default()
+            })
+            .unwrap(),
+            r#"{"text":"x","timestamp":null,"endTimestamp":null,"speaker":null,"speakerName":null,"speakerIsPlaceholder":false,"source":null}"#
+        );
+    }
+
+    #[test]
+    fn a_segments_words_are_stored_and_read_back() {
+        let segment = worded("Hej då.", 1.5, &[("Hej", 1.5, 1.9), ("då.", 2.0, 2.5)]);
+        let json = serde_json::to_string(&segment).unwrap();
+        assert!(
+            json.ends_with(r#""words":[{"text":"Hej","start":1.5,"end":1.9},{"text":"då.","start":2.0,"end":2.5}]}"#),
+            "{json}"
+        );
+        assert_eq!(serde_json::from_str::<Segment>(&json).unwrap(), segment);
+    }
+
+    #[test]
+    fn words_in_a_shape_this_did_not_write_cost_the_words_not_the_transcript() {
+        // An imported transcript may carry a `words` of its own. It was
+        // ignored before KNEG-408, and failing the whole parse on it now
+        // would empty the Transcript tab of a note that used to show.
+        for words in [
+            r#"["Hej","då"]"#,
+            r#"[{"text":"Hej"}]"#,
+            r#""Hej då""#,
+            "null",
+        ] {
+            let raw = format!(r#"[{{"text":"Hej då.","timestamp":1.5,"words":{words}}}]"#);
+            let segments = parse_stored(Some(&raw)).unwrap();
+            assert_eq!(segments[0].text, "Hej då.", "{words}");
+            assert!(segments[0].words.is_empty(), "{words}");
+        }
+    }
+
+    #[test]
+    fn a_row_shows_the_words_that_spell_it() {
+        let segments = vec![worded(
+            "Hej, hur mår du?",
+            3.0,
+            &[
+                ("Hej,", 3.0, 3.4),
+                ("hur", 3.5, 3.7),
+                ("mår", 3.7, 4.0),
+                ("du?", 4.0, 4.3),
+            ],
+        )];
+        let rows = rows(&segments, &note(), &no_mappings(), &labels());
+        assert_eq!(rows[0].words, segments[0].words);
+    }
+
+    #[test]
+    fn a_row_whose_text_its_words_do_not_spell_has_no_words() {
+        // Highlighting must never point at text that is not there: a row
+        // edited after it was transcribed keeps its row, not its words.
+        let segments = vec![
+            worded("Hej då.", 1.0, &[("Hej", 1.0, 1.3), ("hå.", 1.4, 1.8)]),
+            worded("Hej", 2.0, &[("Hej", 2.0, 2.3), ("då.", 2.4, 2.8)]),
+            worded(" Hej  då. ", 3.0, &[("Hej", 3.0, 3.3), ("då.", 3.4, 3.8)]),
+        ];
+        let rows = rows(&segments, &note(), &no_mappings(), &labels());
+        assert!(rows[0].words.is_empty());
+        assert!(rows[1].words.is_empty());
+        assert_eq!(rows[2].words.len(), 2, "spaces aside, the words spell it");
+    }
+
+    #[test]
+    fn epoch_millisecond_words_become_seconds_with_their_segment() {
+        let base = 1_756_000_000_000.0;
+        let segments = vec![
+            segment("start", base, None),
+            worded(
+                "Hej då.",
+                base + 5_000.0,
+                &[
+                    ("Hej", base + 5_000.0, base + 5_400.0),
+                    ("då.", base + 5_500.0, base + 6_000.0),
+                ],
+            ),
+        ];
+        let normalised = normalise_timestamps(&segments, &note());
+        assert_eq!(
+            normalised[1].words,
+            words(&[("Hej", 5.0, 5.4), ("då.", 5.5, 6.0)])
+        );
+        assert_eq!(
+            rows(&segments, &note(), &no_mappings(), &labels())[1].words,
+            normalised[1].words
+        );
+    }
+
+    #[test]
+    fn merged_segments_have_no_words() {
+        // A merged segment's text is two segments' text: its words would be
+        // one of theirs, so it keeps none. Only export merges.
+        let segments = vec![
+            Segment {
+                speaker: Some("speaker_0".to_owned()),
+                ..worded(
+                    "Good morning",
+                    0.0,
+                    &[("Good", 0.0, 0.3), ("morning", 0.3, 0.8)],
+                )
+            },
+            Segment {
+                speaker: Some("speaker_0".to_owned()),
+                ..worded("everyone", 0.9, &[("everyone", 0.9, 1.4)])
+            },
+            worded("Alone", 9.0, &[("Alone", 9.0, 9.5)]),
+        ];
+        let merged = merge(&segments);
+        assert_eq!(merged.len(), 2);
+        assert!(merged.iter().all(|segment| segment.words.is_empty()));
+    }
+
+    #[test]
+    fn changing_a_segments_text_drops_its_words() {
+        let mut segment = worded("Hej då.", 1.0, &[("Hej", 1.0, 1.3), ("då.", 1.4, 1.8)]);
+        segment.set_text("Hej hej.");
+        assert_eq!(segment.text, "Hej hej.");
+        assert!(segment.words.is_empty());
+    }
+
+    /// Finding 5: `notes_list` returns whole transcripts, so stored words
+    /// travel on every list. A synthetic hour: 9,000 words, 150 a minute,
+    /// in 750 rows of twelve, saved as the meeting pass saves them.
+    #[test]
+    fn an_hour_of_words_is_measured() {
+        const WORDS: [&str; 12] = [
+            "Vi",
+            "behöver",
+            "två",
+            "dagar",
+            "till",
+            "innan",
+            "lanseringen,",
+            "säger",
+            "Anna,",
+            "och",
+            "Ravi",
+            "håller.",
+        ];
+        let mut with = Vec::new();
+        for row in 0..750_u32 {
+            let start = f64::from(row) * 4.8;
+            let list: Vec<(&str, f64, f64)> = WORDS
+                .iter()
+                .enumerate()
+                .map(|(at, text)| {
+                    let at = start + f64::from(u32::try_from(at).unwrap()) * 0.4;
+                    (
+                        *text,
+                        (at * 100.0).round() / 100.0,
+                        ((at + 0.33) * 100.0).round() / 100.0,
+                    )
+                })
+                .collect();
+            with.push(Segment {
+                end_timestamp: Some(start + 4.73),
+                speaker: Some("speaker_0".to_owned()),
+                speaker_name: Some("Speaker 1".to_owned()),
+                speaker_is_placeholder: true,
+                ..worded(&WORDS.join(" "), start, &list)
+            });
+        }
+        let without: Vec<Segment> = with
+            .iter()
+            .cloned()
+            .map(|segment| Segment {
+                words: Vec::new(),
+                ..segment
+            })
+            .collect();
+
+        let with = serde_json::to_string(&with).unwrap().len();
+        let without = serde_json::to_string(&without).unwrap().len();
+        let per_word = (with - without) / 9_000;
+        println!("an hour, 9000 words: {without} bytes without words, {with} with, {per_word} bytes a word");
+        // What the stored format costs, pinned: a field added to `Word` --
+        // whisper's probabilities, say -- has to be a decision.
+        assert!(per_word <= 48, "{per_word} bytes a word");
     }
 
     /* ------------------------------------------------------------- merging */

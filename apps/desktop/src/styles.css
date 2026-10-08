@@ -1436,6 +1436,22 @@ button.transcript-play:hover:not(:disabled) { color: var(--text); }
 .transcript-row-current { background: var(--band-wash); }
 .transcript .transcript-row-current .transcript-clock { color: var(--band-text); }
 
+/*
+ * A playing row with word timings (KNEG-408) is drawn word by word, and the
+ * word being said is a solid `--band` fill with `--band-ink` text -- the
+ * marked colours, on the row's wash. The shadow widens the fill without
+ * moving a letter. `TranscriptPanel` moves the class every animation frame;
+ * under reduced motion the fill jumps from word to word rather than fading.
+ */
+.transcript-word {
+  border-radius: 2px;
+  cursor: pointer;
+  transition: background-color 120ms ease-out, color 120ms ease-out, box-shadow 120ms ease-out;
+}
+.transcript-word:hover { text-decoration: underline; text-underline-offset: 3px; }
+.transcript-word-current { background: var(--band); color: var(--band-ink); box-shadow: 0 0 0 2px var(--band); }
+@media (prefers-reduced-motion: reduce) { .transcript-word { transition: none; } }
+
 /* Wrap on narrow notes while keeping the field and actions beside their label when space permits. */
 .transcript-rename {
   display: flex;

@@ -378,6 +378,8 @@ pub fn cues(tokens: &[String], timestamps: &[f64]) -> Vec<TimedSegment> {
                 // begins with a word -- but the clamp costs nothing and the
                 // alternative is a cue that runs backwards.
                 end: last.max(start),
+                // Sherpa reports one onset per token and no ends: no words.
+                words: Vec::new(),
             });
             text.clear();
             ready = false;
@@ -401,6 +403,7 @@ pub fn cues(tokens: &[String], timestamps: &[f64]) -> Vec<TimedSegment> {
             text: text.trim().to_owned(),
             start,
             end: last.max(start),
+            words: Vec::new(),
         });
     }
 

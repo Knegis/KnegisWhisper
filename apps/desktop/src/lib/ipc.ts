@@ -151,6 +151,7 @@ import type {
   UnhandledAction,
   UpdateCheckResult,
   VerifiedBy,
+  Word,
 } from "../generated/ipc-types.js";
 
 /*
@@ -270,6 +271,7 @@ export type {
   UnhandledAction,
   UpdateCheckResult,
   VerifiedBy,
+  Word,
 };
 
 /** `local_model::Availability` — whether a server binary exists for this platform. */

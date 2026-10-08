@@ -48,6 +48,8 @@ pub(super) fn segment(
             AudioSource::Mic => "mic".to_owned(),
             AudioSource::System => "system".to_owned(),
         }),
+        // A live caption is timed as a whole, never word by word.
+        words: Vec::new(),
     }
 }
 
@@ -293,6 +295,19 @@ pub(super) fn labelled(
             }),
             speaker_is_placeholder: speaker.is_some(),
             source: None,
+            // Whisper's words for the passage, so its row highlights word by
+            // word as the recording plays (KNEG-408). The text is trimmed
+            // here and the words are not; the row compares them with
+            // whitespace aside, so the trim costs nothing.
+            words: timed
+                .words
+                .iter()
+                .map(|word| kw_notes_core::Word {
+                    text: word.text.clone(),
+                    start: word.start,
+                    end: word.end,
+                })
+                .collect(),
         });
     }
 
@@ -585,6 +600,46 @@ mod tests {
             text: text.to_owned(),
             start,
             end,
+            words: Vec::new(),
+        }
+    }
+
+    fn timed_word(text: &str, start: f64, end: f64) -> kw_transcription_core::local::TimedWord {
+        kw_transcription_core::local::TimedWord {
+            text: text.to_owned(),
+            start,
+            end,
+        }
+    }
+
+    #[test]
+    fn a_passages_words_stay_with_its_segment_labelled_or_not() {
+        // KNEG-408: the meeting's whole-recording pass keeps the words
+        // whisper timed, so its note's rows highlight word by word.
+        let mut pass = two_utterances();
+        pass.timings[0].words = vec![
+            timed_word("Morning", 0.0, 0.6),
+            timed_word("all.", 0.7, 1.9),
+        ];
+        let expected = vec![
+            kw_notes_core::Word {
+                text: "Morning".to_owned(),
+                start: 0.0,
+                end: 0.6,
+            },
+            kw_notes_core::Word {
+                text: "all.".to_owned(),
+                start: 0.7,
+                end: 1.9,
+            },
+        ];
+        let turns = [turn(0, 0.0, 2.2), turn(1, 2.4, 5.1)];
+        for (segments, _) in [
+            labelled(&pass, None, false),
+            labelled(&pass, Some(&turns), true),
+        ] {
+            assert_eq!(segments[0].words, expected);
+            assert!(segments[1].words.is_empty());
         }
     }
 

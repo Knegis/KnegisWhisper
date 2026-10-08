@@ -1242,6 +1242,35 @@ mod tests {
         }
     }
 
+    /// KNEG-408. Both search indexes read a segment's `text` alone, so a word
+    /// held only in its timed `words` -- which a note never shows on its own
+    /// -- finds nothing, and the words beside it change nothing about a hit.
+    #[tokio::test]
+    async fn timed_words_are_not_searched() {
+        let db = db().await;
+        let p = db.pool();
+        let id = meeting(
+            p,
+            "Worded",
+            r#"[{"text":"Hej då.","timestamp":1.0,"endTimestamp":2.0,
+                 "words":[{"text":"Hej","start":1.0,"end":1.3},{"text":"giraffe","start":1.4,"end":1.8}]}]"#,
+        )
+        .await;
+
+        assert!(search(p, "giraffe", 10).await.unwrap().is_empty());
+        let hits = search(p, "Hej", 10).await.unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].id, id);
+        assert_eq!(hits[0].snippet, "[Hej] då.");
+        assert_eq!(
+            hits[0].transcript_row,
+            Some(SearchHitRow {
+                index: 0,
+                start_seconds: Some(1.0)
+            })
+        );
+    }
+
     /// A row with no timestamp is still the row the words are in. It is named
     /// with no time rather than dropped or put at 0:00.
     #[tokio::test]

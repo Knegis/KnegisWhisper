@@ -209,6 +209,42 @@ impl From<&kw_transcription_core::local::TimedSegment> for ImportedSegment {
     }
 }
 
+/// One timed utterance as an import stores it in `notes.transcript`: an
+/// [`ImportedSegment`] and its words (KNEG-408).
+///
+/// Its own type so the words reach the note's rows and not the screen that
+/// started the import, which has no use for them: `MediaImportResult` stays
+/// as it was. Without words the JSON is byte for byte what an import stored
+/// before, and what `kw_notes_core::transcript::Segment` reads.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredImportSegment {
+    text: String,
+    timestamp: f64,
+    end_timestamp: f64,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    words: Vec<kw_notes_core::Word>,
+}
+
+impl From<&kw_transcription_core::local::TimedSegment> for StoredImportSegment {
+    fn from(segment: &kw_transcription_core::local::TimedSegment) -> Self {
+        Self {
+            text: segment.text.clone(),
+            timestamp: segment.start,
+            end_timestamp: segment.end,
+            words: segment
+                .words
+                .iter()
+                .map(|word| kw_notes_core::Word {
+                    text: word.text.clone(),
+                    start: word.start,
+                    end: word.end,
+                })
+                .collect(),
+        }
+    }
+}
+
 /// Progress of installing a media-import sidecar, or of running an import
 /// once both are ready.
 ///
@@ -1443,14 +1479,15 @@ async fn save_import_job(
         .into_owned();
     let duration_ms = (pending.duration * 1000.0).round() as u64;
     let segments: Vec<ImportedSegment> = transcript.segments.iter().map(Into::into).collect();
-    let saved_segments = if segments.is_empty() {
-        vec![ImportedSegment {
+    let saved_segments: Vec<StoredImportSegment> = if transcript.segments.is_empty() {
+        vec![StoredImportSegment {
             text: transcript.text.clone(),
             timestamp: 0.0,
             end_timestamp: pending.duration,
+            words: Vec::new(),
         }]
     } else {
-        segments.clone()
+        transcript.segments.iter().map(Into::into).collect()
     };
     let note = kw_notes_core::notes::NewNote {
         title,
@@ -2196,6 +2233,7 @@ mod retained_import_tests {
                     text: "hello".to_owned(),
                     start: 0.0,
                     end: 1.0,
+                    words: Vec::new(),
                 }]
             } else {
                 vec![]
@@ -2463,6 +2501,76 @@ mod retained_import_tests {
             assert_eq!(note.transcribed_by.as_deref(), Some(expected), "{provider}");
         }
     }
+
+    async fn stored(transcript: kw_transcription_core::Transcript) -> (MediaImportResult, String) {
+        let dir = tempfile::tempdir().unwrap();
+        let original = fixture(dir.path());
+        let db = Db::open_in_memory().await.unwrap();
+        let result = save_import(
+            &db,
+            transcript,
+            MediaImportSource::Audio,
+            &original,
+            &original,
+            &dir.path().join("recordings"),
+        )
+        .await
+        .unwrap();
+        let note = kw_notes_core::notes::get(db.pool(), result.note_id)
+            .await
+            .unwrap()
+            .unwrap();
+        (result, note.transcript.unwrap())
+    }
+
+    #[tokio::test]
+    async fn an_import_keeps_its_words_in_the_note_and_out_of_the_answer() {
+        // KNEG-408. The words are for the note's rows; the screen that
+        // started the import is told what it always was.
+        let mut worded = transcript(true);
+        worded.segments.first_mut().unwrap().words = vec![
+            kw_transcription_core::local::TimedWord {
+                text: "hel".to_owned(),
+                start: 0.1,
+                end: 0.3,
+            },
+            kw_transcription_core::local::TimedWord {
+                text: "lo".to_owned(),
+                start: 0.3,
+                end: 0.6,
+            },
+        ];
+        let (result, transcript) = stored(worded).await;
+        assert_eq!(
+            transcript,
+            r#"[{"text":"hello","timestamp":0.0,"endTimestamp":1.0,"words":[{"text":"hel","start":0.1,"end":0.3},{"text":"lo","start":0.3,"end":0.6}]}]"#
+        );
+        let answer = serde_json::to_string(&result).unwrap();
+        assert!(!answer.contains("words"), "{answer}");
+        let rows = kw_notes_core::transcript::rows(
+            &kw_notes_core::transcript::parse_stored(Some(&transcript)).unwrap(),
+            &kw_notes_core::NoteMeta::default(),
+            &std::collections::BTreeMap::new(),
+            &kw_notes_core::SpeakerLabels::default(),
+        );
+        assert_eq!(rows.first().unwrap().words.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn an_import_without_words_is_stored_as_before() {
+        let (_, timed) = stored(transcript(true)).await;
+        assert_eq!(
+            timed,
+            r#"[{"text":"hello","timestamp":0.0,"endTimestamp":1.0}]"#
+        );
+        let (_, untimed) = stored(transcript(false)).await;
+        assert!(
+            untimed.starts_with(r#"[{"text":"hello","timestamp":0.0,"endTimestamp":"#)
+                && !untimed.contains("words"),
+            "{untimed}"
+        );
+    }
+
     #[tokio::test]
     async fn database_failure_rolls_back_note_and_removes_copy() {
         let dir = tempfile::tempdir().unwrap();

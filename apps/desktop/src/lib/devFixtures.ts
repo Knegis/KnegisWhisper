@@ -93,6 +93,7 @@ import type {
   TranscriptRow,
   Transcription,
   UpdateCheckResult,
+  Word,
 } from "../generated/ipc-types";
 // `OverlayPreferences` is hand-written in `ipc.ts`, not generated: Rust's
 // `persistent_overlay::Snapshot` has no `ts_rs` derive. A type-only import, so
@@ -742,7 +743,7 @@ function fixtureStop(): MeetingOutcome {
     ...notes,
   ];
   noteTranscriptRows.set(noteId, segments.map((segment, index) => ({
-    index, text: segment.text, speaker: null, speakerId: null, startSeconds: segment.timestamp, endSeconds: segment.endTimestamp,
+    index, text: segment.text, speaker: null, speakerId: null, startSeconds: segment.timestamp, endSeconds: segment.endTimestamp, words: [],
   })));
   if (!plan.deleteRecording) {
     noteRecordings.set(noteId, { noteId, storageKey: `fixture-meeting-${noteId}.wav`, durationSeconds: FIXTURE_RECORDING_SECONDS, originalFilename: null, createdAt: nowIso() });
@@ -1470,6 +1471,34 @@ function fixtureNote(given: Pick<Note, "id" | "title" | "noteType" | "createdAt"
   };
 }
 
+/** A stored segment as an import local Whisper timed word by word saves it (KNEG-408). */
+type StoredSegment = { text: string; timestamp: number; endTimestamp: number; words?: Word[] };
+
+/**
+ * One row of fixture note 105: `text`, a word every `step` seconds from `start`, each lasting
+ * most of its step, and the row ending just after its last word.
+ */
+function wordedSegment(start: number, step: number, text: string): StoredSegment {
+  const hundredths = (seconds: number) => Math.round(seconds * 100) / 100;
+  const words = text.split(" ").map((word, at) => ({
+    text: word,
+    start: hundredths(start + at * step),
+    end: hundredths(start + at * step + step * 0.8),
+  }));
+  return { text, timestamp: start, endTimestamp: hundredths((words.at(-1)?.end ?? start) + 0.3), words };
+}
+
+/**
+ * Fixture note 105's transcript: two rows timed word by word and one, as every note saved before
+ * KNEG-408 is, without words, all inside the fixture recording's first 20 s.
+ * `tools/visual-check/word-highlight.mjs` plays it.
+ */
+const WORD_TIMING_SEGMENTS: StoredSegment[] = [
+  wordedSegment(0.5, 0.65, "Hej och välkommen till genomgången av lanseringen, som flyttas till torsdag i nästa vecka."),
+  wordedSegment(10.2, 0.5, "Installationsprogrammet är signerat, så vi kan släppa när lokaliseringen är klar."),
+  { text: "Den här raden har inga ord, bara en tid.", timestamp: 16.4, endTimestamp: 19.6 },
+];
+
 let notes: Note[] = [
   fixtureNote({
     id: 101,
@@ -1537,6 +1566,18 @@ let notes: Note[] = [
     createdAt: "2026-08-20T19:45:00Z",
     updatedAt: "2026-08-23T07:10:00Z",
   }),
+  fixtureNote({
+    id: 105,
+    // An import transcribed by local Whisper, whose rows highlight word by word (KNEG-408). The
+    // oldest note, so it is listed last and every check that opens the newest still opens 101.
+    title: "Word timings",
+    noteType: "import",
+    transcript: JSON.stringify(WORD_TIMING_SEGMENTS),
+    audioDurationSeconds: FIXTURE_RECORDING_SECONDS,
+    transcribedBy: fixtureTranscribedBy("local"),
+    createdAt: "2026-08-19T10:00:00Z",
+    updatedAt: "2026-08-19T10:12:00Z",
+  }),
 ];
 
 // Every note here is served the same playable WAV (`servePlayableRecordings`), so 101's recording
@@ -1553,6 +1594,16 @@ const noteRecordings = new Map<number, NoteRecording>([
       createdAt: "2026-08-26T09:00:00Z",
     },
   ],
+  [
+    105,
+    {
+      noteId: 105,
+      storageKey: "20260819-100000.wav",
+      durationSeconds: FIXTURE_RECORDING_SECONDS,
+      originalFilename: "genomgang.m4a",
+      createdAt: "2026-08-19T10:00:00Z",
+    },
+  ],
 ]);
 
 const noteTranscriptRows = new Map<number, TranscriptRow[]>([
@@ -1566,6 +1617,8 @@ const noteTranscriptRows = new Map<number, TranscriptRow[]>([
         speaker: "Anna",
         speakerId: "speaker_0",
         text: "The localisation pass needs two more days.",
+        // Saved before KNEG-408, as most notes were: highlighted as a row.
+        words: [],
       },
       {
         index: 1,
@@ -1574,13 +1627,23 @@ const noteTranscriptRows = new Map<number, TranscriptRow[]>([
         speaker: "Ravi",
         speakerId: "speaker_1",
         text: "Then Thursday is the earliest honest date.",
+        words: [],
       },
     ],
   ],
+  [105, WORD_TIMING_SEGMENTS.map((segment, index) => ({
+    index,
+    startSeconds: segment.timestamp,
+    endSeconds: segment.endTimestamp,
+    speaker: null,
+    speakerId: null,
+    text: segment.text,
+    words: segment.words ?? [],
+  }))],
 ]);
 const speakerNames = new Map<number, Map<string, string>>();
 
-let nextNoteId = 105;
+let nextNoteId = 106;
 let nextFolderId = 4;
 
 function fixtureImport(result: Omit<MediaImportResult, "noteId" | "recording" | "retainedBytes">): MediaImportResult {
@@ -1590,7 +1653,7 @@ function fixtureImport(result: Omit<MediaImportResult, "noteId" | "recording" | 
   const segments = result.segments.length ? result.segments : [{ text: result.text, timestamp: 0, endTimestamp: durationSeconds }];
   notes.unshift(fixtureNote({ id: noteId, title: "Imported fixture", noteType: "import", transcript: JSON.stringify(segments), audioDurationSeconds: durationSeconds, transcribedBy: fixtureTranscribedBy(result.provider), createdAt: nowIso(), updatedAt: nowIso() }));
   noteRecordings.set(noteId, recording);
-  noteTranscriptRows.set(noteId, segments.map((segment, index) => ({ index, text: segment.text, speaker: null, speakerId: null, startSeconds: segment.timestamp, endSeconds: segment.endTimestamp })));
+  noteTranscriptRows.set(noteId, segments.map((segment, index) => ({ index, text: segment.text, speaker: null, speakerId: null, startSeconds: segment.timestamp, endSeconds: segment.endTimestamp, words: [] })));
   const complete = { ...result, noteId, recording, retainedBytes: durationSeconds * 32000 + 44 };
   latestImportSnapshot = { operationId: `fixture-${noteId}`, stage: "succeeded", elapsedSeconds: 1, provider: result.provider, model: result.model, result: complete, error: null };
   return complete;

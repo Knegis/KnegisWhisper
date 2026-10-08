@@ -405,6 +405,10 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
     setPlaybackStarted(true); playerRef.current?.playInterval(start, end);
   }, []);
   const onPlayingChange = useCallback((value: boolean) => { setPlaying(value); if (value) setPlaybackStarted(true); }, []);
+  // For a transcript row highlighting word by word, and a word clicked (KNEG-408). Read through the
+  // ref, so whichever slot the one player is drawn in answers.
+  const playerTime = useCallback(() => playerRef.current?.time() ?? null, []);
+  const seek = useCallback((seconds: number) => { playerRef.current?.seek(seconds); }, []);
   // The Transcript at row `index`, selected and in view, and nothing else. False when the save
   // failed or the note has gone.
   const openRow = async (index: number): Promise<boolean> => {
@@ -446,6 +450,7 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
   const transcriptBody = transcriptError ? <p className="error" role="alert">{transcriptError} <button type="button" onClick={() => { void loadTranscript(); }}>Retry</button></p> : !transcript ? <p role="status">Loading transcript and recording…</p> : transcript.rows.length ?
     <TranscriptPanel sourceRequest={sourceRequest} onSourceShown={clearSource} rows={transcript.rows}
       recording={transcript.recording} currentTime={currentTime} playing={playing} visible={wide || tab === "transcript"} playInterval={playInterval}
+      time={playerTime} seek={seek}
       suggestions={transcript.suggestions} onRename={async (speakerId, name) => {
         await renameNoteSpeaker(note.id, speakerId, name);
         // Rust resolves display names for both rows and export; reload those rows after each edit.

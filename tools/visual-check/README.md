@@ -195,6 +195,47 @@ recordings Rust streams with range requests; a false check makes it exit 1.
 Not measured: the reading position across a move, and a summary source's
 interval playback (`playInterval`) across one.
 
+## Word highlight
+
+```powershell
+node tools/visual-check/word-highlight.mjs --url http://127.0.0.1:5191/
+```
+
+Same options as the chip menus (the banner is always removed). It measures
+KNEG-408: a transcript row that local Whisper timed word by word marks the word
+being said as its recording plays, and a click on a word goes there. Fixture
+note 105, "Word timings", is an import whose row 1 has fourteen words, one every
+0.65 s from 0.5 s, row 2 eleven, and row 3 none, as every note saved before
+KNEG-408 has none; it plays the fixtures' two-minute WAV, and Edge runs with
+`--mute-audio`. The words and times are read from the page's own
+`note_transcript_rows`. Each check starts from a fresh load at 1440x900 on Notes
+with note 105 opened from the library, its transcript in the side column, and
+plays a row with the row's own Play, pressed with a real pointer press. Four
+checks:
+
+1. Row 1 playing, three samples 1.2s apart: one span per word, exactly one word
+   lit in each, the last to have started at the recording's time (or 0.1s
+   before it, the frame between the page's step and the read), later in each
+   sample.
+2. A real press on a later word, "nästa" at 8.3s: the seek ends within 0.05s of
+   its start (`seeked`), that word is lit 300ms later, the recording still
+   plays, and the row is not selected by the press.
+3. Row 3, without words, playing: its text is drawn whole, no row draws a word
+   span, and nothing is lit.
+4. Reduced motion: a word span's computed `transition-duration` is not 0s
+   without the preference (the control) and 0s with `prefers-reduced-motion:
+   reduce` emulated, under which two samples still light the expected word,
+   the second later than the first.
+
+Measured in headless Edge against dev fixtures, not in the Tauri window; a false
+check makes it exit 1. The fixtures' words are invented, evenly spaced; which
+rows Rust gives words, and that a row whose text its words no longer spell gets
+none, is covered by `cargo test` (`transcript.rs`, `local.rs`, `speech.rs`,
+`media.rs`, `meeting/notes.rs`), and that the pinned server sends word times at
+all by the ignored `crates/transcription-core/tests/word_timings.rs`. Not
+measured: how far the mark is from the sound on a real recording, and scrolling
+or CPU on an hour-long note.
+
 ## Note meta
 
 ```powershell

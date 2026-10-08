@@ -1012,6 +1012,64 @@ export function choosePlayerSpeed(container, rate) {
   `);
 }
 
+/* ------------------------------------------------------------ word timings */
+
+/** Note `id`'s transcript rows, words and all, as the page's own `note_transcript_rows` answers. */
+export function noteTranscriptRows(id) {
+  return source(`
+    return window.__TAURI_INTERNALS__.invoke('note_transcript_rows', { id: ${JSON.stringify(id)} });
+  `);
+}
+
+/**
+ * One read, in one task, of the recording's time and the open note's
+ * transcript rows (KNEG-408): for each row whether it is the playing one
+ * (`aria-current`) and selected, its text as drawn, how many word spans it
+ * draws, which of them carry `transcript-word-current`, and the first span's
+ * computed transition. Read together so the lit word and the time are of the
+ * same moment.
+ */
+export function wordHighlightState() {
+  return source(`
+    const audio = document.querySelector('audio');
+    const rows = [...document.querySelectorAll('.note-detail .transcript .transcript-rows li')];
+    return {
+      time: audio ? audio.currentTime : null,
+      paused: audio ? audio.paused : null,
+      rows: rows.map((row) => {
+        const words = [...row.querySelectorAll('.transcript-text .transcript-word')];
+        return {
+          current: row.getAttribute('aria-current') === 'true',
+          selected: row.getAttribute('aria-selected') === 'true',
+          text: row.querySelector('.transcript-text')?.textContent ?? null,
+          words: words.length,
+          lit: words.flatMap((word, at) => word.classList.contains('transcript-word-current') ? [at] : []),
+          transition: words[0] ? getComputedStyle(words[0]).transitionDuration : null,
+        };
+      }),
+    };
+  `);
+}
+
+/** Records where the one recording was when its next seek began and when it ended, into `window.__seek`. */
+export function watchSeek() {
+  return source(`
+    const audio = document.querySelector('audio');
+    if (!audio) throw new Error('No recording on the page');
+    const seek = window.__seek = { seeking: null, seeked: null };
+    audio.addEventListener('seeking', () => { seek.seeking = audio.currentTime; }, { once: true });
+    audio.addEventListener('seeked', () => { seek.seeked = audio.currentTime; }, { once: true });
+    return true;
+  `);
+}
+
+/** What `watchSeek` recorded so far. */
+export function seekRecord() {
+  return source(`
+    return window.__seek ?? null;
+  `);
+}
+
 /* ------------------------------------------------------------ level meters */
 
 /**
