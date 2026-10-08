@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { waitFor, reload, press, pressText } from "./interactions.mjs";
 /**
  * Measures, against dev fixtures, deleting each meeting recording once its
  * transcript is saved (KNEG-409): the switch on Settings > Meetings, off by
@@ -42,7 +43,7 @@ const FOOT_ON = "Recordings are deleted after transcribing.";
 const FOOT_OFF = "Recordings are saved on this computer.";
 const LIVE_PART = "Recording deleted after saving";
 const DELETED = "The recording was deleted; the transcript is in the note.";
-const DETAILS = "The recording was deleted after transcribing (Settings › Meetings).";
+const DETAILS = "The recording was deleted after transcribing, as chosen for this meeting.";
 const NAME = "Board review";
 
 const WIDE = { width: 1440, height: 900 };
@@ -54,57 +55,19 @@ const START_ENABLED = "(() => { const start = document.querySelector('.control-s
 const NOTE_OPEN = "Boolean(document.querySelector('.note-detail input[aria-label=\"Title\"]:enabled'))";
 const SETTING_SHOWN = `(${snippets.recordingsSetting(CHECKBOX)}).found`;
 
-async function waitFor(cdp, expression, description, timeout = 10_000) {
-  const deadline = Date.now() + timeout;
-  while (Date.now() < deadline) {
-    try {
-      if (await cdp.evaluate(expression)) return;
-    } catch {
-      // Between two documents during a reload there is no context to evaluate in.
-    }
-    await delay(60);
-  }
-  throw new Error(`Timed out waiting for ${description}`);
-}
 
-async function reload(cdp, timeout = 15_000) {
-  let off = () => {};
-  let timer;
-  const loaded = new Promise((resolveLoad, reject) => {
-    timer = setTimeout(() => reject(new Error("Timed out waiting for the reload")), timeout);
-    off = cdp.on("Page.loadEventFired", () => resolveLoad());
-  });
-  try {
-    await cdp.send("Page.reload", { ignoreCache: true });
-    await loaded;
-  } finally {
-    clearTimeout(timer);
-    off();
-  }
-}
+
+
 
 async function viewport(cdp, { width, height }) {
   await cdp.send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: false });
 }
 
 /** A real pointer press at a measured point, as a person's click is. */
-async function press(cdp, { x, y }) {
-  await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
-  await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 });
-  await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
-  await delay(150);
-}
+
 
 /** Presses the element's centre, which must be on screen for the press to reach it. */
-async function pressText(cdp, selector, text) {
-  await cdp.evaluate(`document.querySelector(${JSON.stringify(selector)}) && [...document.querySelectorAll(${JSON.stringify(selector)})].find((item) => item.textContent.trim() === ${JSON.stringify(text)})?.scrollIntoView({ block: "center" })`);
-  const point = await cdp.evaluate(snippets.centerOfText(selector, text));
-  const size = await cdp.evaluate("({ width: innerWidth, height: innerHeight })");
-  if (point.x < 0 || point.y < 0 || point.x > size.width || point.y > size.height) {
-    throw new Error(`${selector} "${text}" is off screen at ${JSON.stringify(point)}`);
-  }
-  await press(cdp, point);
-}
+
 
 const setting = (cdp) => cdp.evaluate(snippets.recordingsSetting(CHECKBOX));
 const notesOnPage = (cdp) => cdp.evaluate(snippets.meetingRecordingNotes());
@@ -351,7 +314,7 @@ export async function runMeetingRecordings(options) {
         measured: { on, off },
         matches: on.title === NAME && on.tab === "Replay"
           && on.audios === 0 && on.players === 0 && on.rowPlays === 0 && on.rows.length === 2
-          && on.details.includes(DETAILS) && on.noRecording.length === 1
+          && on.disposition.includes(DETAILS) && on.noRecording.length === 1
           && off.audios >= 1 && off.rowPlays === 2 && off.rows.length === 2 && off.noRecording.length === 0,
         screenshots: [shot, offShot],
         note: "The off run is the control: the same probe on a note whose recording the fixtures attached.",

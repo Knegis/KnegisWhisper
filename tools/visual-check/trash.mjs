@@ -23,6 +23,7 @@
  * Checks 1 to 6 are one sequence from one fresh load, as a person would go
  * through them; 7, 8 and 9 each start from a fresh load.
  */
+import { press, waitFor, reload, pressText } from "./interactions.mjs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { parseShellArgs, shellUsage } from "./args.mjs";
@@ -58,52 +59,16 @@ const CLEAR_SEARCH = "(() => { const input = document.querySelector('.panel-sear
 const noteOpen = (title) => `(() => { const input = document.querySelector('.note-detail input[aria-label="Title"]'); return Boolean(input) && !input.disabled && input.value === ${JSON.stringify(title)}; })()`;
 const TODAY = "new Date().toLocaleDateString(undefined, { day: 'numeric', month: 'short' })";
 
-async function waitFor(cdp, expression, description, timeout = 10_000) {
-  const deadline = Date.now() + timeout;
-  while (Date.now() < deadline) {
-    try {
-      if (await cdp.evaluate(expression)) return;
-    } catch {
-      // Between two documents during a reload there is no context to evaluate in.
-    }
-    await delay(60);
-  }
-  throw new Error(`Timed out waiting for ${description}`);
-}
 
-async function reload(cdp, timeout = 15_000) {
-  let off = () => {};
-  let timer;
-  const loaded = new Promise((resolveLoad, reject) => {
-    timer = setTimeout(() => reject(new Error("Timed out waiting for the reload")), timeout);
-    off = cdp.on("Page.loadEventFired", () => resolveLoad());
-  });
-  try {
-    await cdp.send("Page.reload", { ignoreCache: true });
-    await loaded;
-  } finally {
-    clearTimeout(timer);
-    off();
-  }
-}
+
+
 
 async function viewport(cdp, { width, height }) {
   await cdp.send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: false });
 }
 
 /** A real pointer press at the centre of the element matching `selector` and reading `text` (any, when null), which must be on screen. */
-async function pressText(cdp, selector, text) {
-  const point = await cdp.evaluate(snippets.centerOfText(selector, text));
-  const size = await cdp.evaluate("({ width: innerWidth, height: innerHeight })");
-  if (point.x < 0 || point.y < 0 || point.x > size.width || point.y > size.height) {
-    throw new Error(`${selector} "${text}" is off screen at ${JSON.stringify(point)}`);
-  }
-  const { x, y } = point;
-  await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
-  await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 });
-  await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
-  await delay(150);
-}
+
 
 const state = (cdp) => cdp.evaluate(snippets.trashState());
 
@@ -503,6 +468,27 @@ export async function runTrash(options) {
         measured: { undo, restore },
         matches: undo.moved && undo.stayed && restore.moved && restore.stayed,
       };
+    });
+
+
+    await check({
+      id: "10",
+      claim: "A press on blank space while Undo is waiting cancels later title autofocus.",
+      expectation: "A delayed restore opens the note, but the title does not take focus after the blank-space press.",
+    }, async () => {
+      await freshNotes(cdp);
+      await openNote(cdp, SCRATCH);
+      await deleteRow(cdp, SCRATCH);
+      await settles(cdp, FOCUS_ON.undo);
+      await cdp.evaluate(snippets.stubInvoke({ delay: { notes_restore: RESTORE_HELD_MS } }));
+      await pressText(cdp, ".notes-moved button", "Undo");
+      const point = await cdp.evaluate(`(() => { const box=document.querySelector('.split-main').getBoundingClientRect(); document.activeElement?.blur(); return {x:box.right-12,y:box.bottom-12}; })()`);
+      await press(cdp,point);
+      await waitFor(cdp,noteOpen(SCRATCH),"the restored note");
+      await delay(SETTLE_MS);
+      const focusedTitle = await cdp.evaluate(FOCUS_ON.title(SCRATCH));
+      await cdp.evaluate(snippets.stubInvoke({ delay: { notes_restore: null } }));
+      return {measured:{point,focusedTitle},matches:!focusedTitle};
     });
 
     const markdown = renderMarkdown(report);

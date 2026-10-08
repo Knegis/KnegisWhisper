@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { waitFor, reload, press } from "./interactions.mjs";
 /**
  * Runs repeatable measurements of the control-bar chips that change a setting
  * in place (KNEG-385) against dev fixtures: where each menu opens, its
@@ -38,34 +39,9 @@ const KEYS = {
 const field = (snippet, path) => `(${snippet})?.${path}`;
 const chipField = (prefix, path) => field(snippets.chipState(prefix), path);
 
-async function waitFor(cdp, expression, description, timeout = 10_000) {
-  const deadline = Date.now() + timeout;
-  while (Date.now() < deadline) {
-    try {
-      if (await cdp.evaluate(expression)) return;
-    } catch {
-      // Between two documents during a reload there is no context to evaluate in.
-    }
-    await delay(60);
-  }
-  throw new Error(`Timed out waiting for ${description}`);
-}
 
-async function reload(cdp, timeout = 15_000) {
-  let off = () => {};
-  let timer;
-  const loaded = new Promise((resolveLoad, reject) => {
-    timer = setTimeout(() => reject(new Error("Timed out waiting for the reload")), timeout);
-    off = cdp.on("Page.loadEventFired", () => resolveLoad());
-  });
-  try {
-    await cdp.send("Page.reload", { ignoreCache: true });
-    await loaded;
-  } finally {
-    clearTimeout(timer);
-    off();
-  }
-}
+
+
 
 async function viewport(cdp, width, height) {
   await cdp.send("Emulation.setDeviceMetricsOverride", {
@@ -93,12 +69,7 @@ async function key(cdp, name) {
 }
 
 /** A real pointer press at a measured point, as a person's click is. */
-async function press(cdp, { x, y }) {
-  await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
-  await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 });
-  await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
-  await delay(150);
-}
+
 
 const pressChip = async (cdp, prefix) => press(cdp, await cdp.evaluate(snippets.chipCenter(prefix)));
 const pressOption = async (cdp, name) => press(cdp, await cdp.evaluate(snippets.optionCenter(name)));
@@ -646,9 +617,15 @@ async function checkMinimumWindow(cdp, out, report) {
     await freshPage(cdp, page);
     const state = await lastState(cdp);
     measured[page] = state.scroll;
+    measured[`${page}Chips`] = await cdp.evaluate(`(() => { const chips=[...document.querySelectorAll('.control-strip .chip')].map(el=>{const r=el.getBoundingClientRect();return {text:el.textContent,top:Math.round(r.top),left:r.left,right:r.right,bottom:r.bottom,height:r.height};});return {chips,rows:new Set(chips.map(chip=>chip.top)).size,fit:chips.every(chip=>chip.left>=0&&chip.right<=innerWidth&&chip.bottom<=innerHeight)};})()`);
     const prefix = CHIP_OF[page];
     measured[`${page}Menu`] = await openMenu(cdp, prefix).then((menu) => ({ box: menu.box, viewport: menu.viewport, inside: placedInside(menu) }));
     await closeMenu(cdp);
+    if (page === "Meetings") {
+      measured.MicrophoneMenu = await openMenu(cdp, "Microphone: ").then(menu => ({box:menu.box,viewport:menu.viewport,inside:placedInside(menu)}));
+      await screenshot(cdp,out,"08-microphone-open-720x520.png");
+      await closeMenu(cdp);
+    }
   }
   const shot = await screenshot(cdp, out, "08-minimum-720x520.png");
   // `null <= null` is true, so a missing .split-main or .control-bar must fail
@@ -660,9 +637,10 @@ async function checkMinimumWindow(cdp, out, report) {
     id: "8",
     claim: "At 720x520 nothing scrolls sideways on Dictation or Meetings, and a menu still opens inside the window.",
     measured,
-    expectation: "after a load at 720x520, for each page: document, .split-main and .control-bar scrollWidth <= clientWidth; the page's first menu is inside the window",
+    expectation: "after a load at 720x520, for each page: document, .split-main and .control-bar scrollWidth <= clientWidth; the page's first menu and the Meetings microphone menu are inside the window; strip chip positions occupy at most the two designed rows",
     matches: fits(measured.Dictation) && fits(measured.Meetings)
-      && measured.DictationMenu.inside && measured.MeetingsMenu.inside,
+      && measured.DictationMenu.inside && measured.MeetingsMenu.inside && measured.MicrophoneMenu.inside
+      && measured.DictationChips.fit && measured.MeetingsChips.fit && measured.DictationChips.rows >= 1 && measured.DictationChips.rows <= 2 && measured.MeetingsChips.rows >= 1 && measured.MeetingsChips.rows <= 2,
     screenshots: [shot],
     note: "The screenshot is of Meetings, the last page measured. The control bar's own width is measured too, since the page scrolls inside the card.",
   });

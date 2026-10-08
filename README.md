@@ -249,6 +249,28 @@ the test window when finished:
 cargo test -p knegiswhisper --lib --features tauri-test native_recording_attachment_smoke -- --ignored --nocapture
 ```
 
+### Optional real microphone checks
+
+Ordinary tests use a fake capture factory for the microphone-thread reply proof.
+Run hardware checks individually; a bare `-- --ignored` also selects unrelated
+network and native-dialog tests. These four checks open a real microphone:
+
+```sh
+cargo test -p knegiswhisper --lib --features tauri-test a_real_microphone_thread_answers_or_reports_open_failure -- --ignored --nocapture
+cargo test -p knegiswhisper --lib --features tauri-test a_started_recording_hands_its_level_over_and_it_ends_with_the_recording -- --ignored --nocapture
+cargo test -p knegiswhisper --lib --features tauri-test the_meters_are_the_captures_own_and_end_with_the_recorder -- --ignored --nocapture
+cargo test -p knegiswhisper --lib --features tauri-test the_real_default_microphone_is_checked_and_closed -- --ignored --nocapture
+```
+
+The five-second test has a ten-second command deadline. Meeting and dictation
+starts are refused in Rust while its worker owns the microphone. Timeout requests
+cancellation, but keeps ownership until the capture thread actually exits. A
+permanently blocked driver may require restarting the app. Browser fixtures and
+device-free tests do not establish microphone quality or behavior across platforms.
+
+The complete KNEG-422/424 disposition and evidence are in
+[the validation ledger](docs/KNEG_422_424_VALIDATION.md).
+
 ## CI and delivery
 
 `dev` is the integration branch. Pull requests always run Contracts; changed-file selection

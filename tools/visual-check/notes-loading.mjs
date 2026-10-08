@@ -5,6 +5,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { launchEdge, killBrowser } from "./browser.mjs";
 import { connectCdp } from "./cdp.mjs";
+import { waitFor } from "./interactions.mjs";
 import * as snippets from "./snippets.mjs";
 const out = resolve("tools/visual-check/out/kneg-420");
 await mkdir(out, { recursive: true });
@@ -12,7 +13,7 @@ const browser = await launchEdge({ port: 9238, out, extraArgs: ["--disable-gpu"]
 const cdp = await connectCdp(browser.target.webSocketDebuggerUrl);
 const checks = [];
 const pause = ms => new Promise(done => setTimeout(done, ms));
-async function wait(expression) { const end = Date.now() + 15000; while (Date.now() < end) { if (await cdp.evaluate(expression)) return; await pause(80); } throw Error(`Timed out: ${expression}; ${JSON.stringify(await cdp.evaluate("({ headings:[...document.querySelectorAll('h2')].map(x=>x.textContent), people:[...document.querySelectorAll('.notes-person')].map(x=>({text:x.textContent,pressed:x.getAttribute('aria-pressed')})), title:document.querySelector('.note-title')?.value, errors:[...document.querySelectorAll('.error')].map(x=>x.textContent), lastCalls:window.__chipStub?.log.slice(-5) })"))}`); }
+const wait = expression => waitFor(cdp, expression);
 async function check(name, expression) { assert.ok(await cdp.evaluate(expression), name); checks.push(name); }
 const input = '.note-detail input[aria-label="Title"]';
 async function typeTitle(value) {
