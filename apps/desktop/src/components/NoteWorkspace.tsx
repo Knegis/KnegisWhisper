@@ -148,9 +148,11 @@ const playerSlotOf = (wide: boolean, tab: Tab): PlayerSlot => wide && tab !== "r
  * **The player card's header** (`PlayerHeader`), while the transcript is on
  * screen -- the column at the width, or the Transcript tab below it -- names
  * who is speaking at the player's time, or offers to play the selected lines
- * and to clear them. Below the width the mini player shows on the Transcript
- * tab before anything has played, so that offer is there to press; on Notes
- * it waits for playback, as before.
+ * and to clear them, and carries the Follow chip (`follow`): while it is on,
+ * the transcript keeps the playing line in view, until the person scrolls it.
+ * Below the width the mini player shows on the Transcript tab before anything
+ * has played, so that offer is there to press; on Notes it waits for
+ * playback, as before, and has no header, so no chip.
  */
 export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
   note: Note;
@@ -208,6 +210,21 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
   // The transcript lines selected, here rather than in the panel so the player card can offer to
   // play them, and so they outlive the panel's remount when the layout switches (KNEG-448).
   const [selection, setSelection] = useState<LineSelection>(NO_SELECTION);
+  // Follow (KNEG-448): whether the transcript keeps the playing line in view. On as each note opens
+  // (`Notes.tsx` mounts a workspace per note); the panel turns it off when the person scrolls the
+  // transcript, and the card's chip, a line or word pressed, Play selection and a summary source
+  // turn it back on. Here, beside the chip, and so it outlives the panel's remount.
+  const [follow, setFollow] = useState(true);
+  // Set as the chip turns Follow on and taken once by the panel, which then centres the line the
+  // player is at. Turning it on by pressing a line leaves the transcript where it is: that line is
+  // in view already, and moving it would move the next press's target.
+  const recentre = useRef(false);
+  const takeRecentre = useCallback(() => {
+    const due = recentre.current;
+    recentre.current = false;
+    return due;
+  }, []);
+  const releaseFollow = useCallback(() => setFollow(false), []);
   const [error, setError] = useState<string | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
   const [playing, setPlaying] = useState(false);
@@ -499,7 +516,14 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
     setPlaybackStarted(true); playerRef.current?.playInterval(start, end);
   }, []);
   const onPlayingChange = useCallback((value: boolean) => { setPlaying(value); if (value) setPlaybackStarted(true); }, []);
-  const playSelection = () => { if (toPlay !== null) playInterval(toPlay.start, toPlay.end); };
+  // A line or a word pressed: played from there to the end, with Follow on (KNEG-448).
+  const playFrom = useCallback((start: number) => { setFollow(true); playInterval(start, null); }, [playInterval]);
+  const playSelection = () => { if (toPlay !== null) { setFollow(true); playInterval(toPlay.start, toPlay.end); } };
+  // The card's chip: off, or on and back to the line the player is at.
+  const toggleFollow = () => {
+    if (!follow) recentre.current = true;
+    setFollow(!follow);
+  };
   const clearSelection = useCallback(() => setSelection(NO_SELECTION), []);
   // For a transcript row highlighting word by word (KNEG-408). Read through the ref, so whichever
   // slot the one player is drawn in answers.
@@ -517,20 +541,24 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
       return true;
     } catch (cause) { setError(message(cause)); return false; }
   };
-  // A summary's source link: the row, played.
+  // A summary's source link: the row, played, with Follow on.
   const showSource = async (index: number) => {
     if (!(await openRow(index))) return;
+    setFollow(true);
     const row = transcript?.rows.find(item => item.index === index);
     if (row?.startSeconds != null && transcript?.recording) playInterval(row.startSeconds, row.endSeconds);
   };
   // A search hit's row: only shown. Sound doesn't start because a search was answered -- the
-  // owner's ruling of 2026-10-07 (KNEG-406).
+  // owner's ruling of 2026-10-07 (KNEG-406). While something plays, Follow lets go, or it would
+  // take the transcript straight back from the row to the playing line (KNEG-448).
   const revealed = useRef<object | null>(null);
   useEffect(() => {
     if (!revealRow || revealed.current === revealRow) return;
     revealed.current = revealRow;
+    if (playing) setFollow(false);
     void openRow(revealRow.index);
-    // Only the request: `openRow` is redefined each render and reads refs and setters.
+    // Only the request: `openRow` is redefined each render and reads refs and setters, and
+    // `playing` is read as it is when the request arrives.
   }, [revealRow]);
   const startFromTranscript = () => {
     if (!ready || draft.current.content.trim() || !transcript?.rows.length) return;
@@ -547,9 +575,10 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
   const recordingDetails = note.recordingDetails && <details className="recording-details" open><summary>Recording details</summary><p>{note.recordingDetails}</p></details>;
   const transcriptBody = transcriptError ? <p className="error" role="alert">{transcriptError} <button type="button" onClick={() => { void loadTranscript(); }}>Retry</button></p> : !transcript ? <p role="status">Loading transcript and recording…</p> : transcript.rows.length ?
     <TranscriptPanel readOnly={blocked !== null} sourceRequest={sourceRequest} onSourceShown={clearSource} rows={transcript.rows} sections={sections}
-      recording={transcript.recording} currentTime={currentTime} playing={playing} visible={wide || tab === "transcript"} playInterval={playInterval}
+      recording={transcript.recording} currentTime={currentTime} playing={playing} visible={wide || tab === "transcript"} playFrom={playFrom}
       time={playerTime} selection={selection} onSelectionChange={setSelection}
-      suggestions={transcript.suggestions} onRename={renameSpeaker} />
+      suggestions={transcript.suggestions} onRename={renameSpeaker}
+      follow={follow} onReleaseFollow={releaseFollow} takeRecentre={takeRecentre} currentIndex={currentLine?.index ?? null} />
     : <p className="muted">This note has no transcript.</p>;
   // The panel heads itself (`TranscriptHeading`, sticky in whatever scrolls it); the column's
   // loading, error and empty lines get the same label over them, so it is there before the rows.
@@ -559,7 +588,8 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
   const transcriptOnScreen = wide ? playerSlot === "side" : tab === "transcript";
   const header = transcriptOnScreen && transcriptShown
     ? <PlayerHeader speaker={currentLine === null ? null : currentLine.speaker ?? currentLine.speakerId} playing={playing}
-      selection={toPlay?.label ?? null} onPlaySelection={playSelection} onClearSelection={clearSelection} />
+      selection={toPlay?.label ?? null} onPlaySelection={playSelection} onClearSelection={clearSelection}
+      follow={follow} onToggleFollow={toggleFollow} />
     : null;
   // Drawn in one of two places (`playerSlotOf`), never both. The header is a prop, so it comes and
   // goes without remounting the player or moving it (KNEG-377).

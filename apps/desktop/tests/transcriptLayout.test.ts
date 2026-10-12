@@ -11,6 +11,7 @@ import {
   lineStop,
   navigableLines,
   rangeSelection,
+  sameProps,
   sameSelectionOver,
   sectionMarks,
   selectionInterval,
@@ -359,4 +360,18 @@ test("sameSelectionOver compares only the given rows' membership", () => {
   assert.equal(sameSelectionOver([], new Set([1]), new Set([2])), true);
   const same = new Set([4]);
   assert.equal(sameSelectionOver(rows, same, same), true);
+});
+
+test("sameProps compares every key either side has, but the ones excepted", () => {
+  const selected = new Set([1]);
+  assert.equal(sameProps({ a: 1, b: "x" }, { a: 1, b: "x" }, []), true);
+  assert.equal(sameProps({ a: 1, b: "x" }, { a: 2, b: "x" }, []), false);
+  // A prop going from present to absent is a change, as from absent to present is.
+  const found: { a: number; find?: readonly number[] } = { a: 1, find: [3] };
+  const gone: { a: number; find?: readonly number[] } = { a: 1 };
+  assert.equal(sameProps(found, gone, []), false);
+  assert.equal(sameProps(gone, found, []), false);
+  // Excepted keys are left to the caller, as `selected` is to `sameSelectionOver`.
+  assert.equal(sameProps({ a: 1, selected }, { a: 1, selected: new Set([1]) }, ["selected"]), true);
+  assert.equal(sameProps({ a: Number.NaN }, { a: Number.NaN }, []), true);
 });

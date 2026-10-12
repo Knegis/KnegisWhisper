@@ -295,6 +295,19 @@ export function sameSelectionOver(rows: readonly TranscriptRow[], a: ReadonlySet
 }
 
 /**
+ * Whether two sets of a memoised component's props are the same, but for `except`, which the
+ * caller compares its own way: every key either of them has, so a prop that goes from present to
+ * absent -- or back -- is a change, as it would not be walking one side's keys alone.
+ */
+export function sameProps<P extends object>(previous: P, next: P, except: readonly (keyof P)[]): boolean {
+  const keys = new Set([...Object.keys(previous), ...Object.keys(next)] as (keyof P)[]);
+  for (const key of keys) {
+    if (!except.includes(key) && !Object.is(previous[key], next[key])) return false;
+  }
+  return true;
+}
+
+/**
  * The interval a selection plays: first selected playable row's start to the
  * last one's end (the recording's duration when that row runs to the end).
  * Under two playable lines there is nothing to offer, so null.

@@ -2,7 +2,7 @@ import { Fragment, memo, useEffect, useId, useRef, useState, type FormEvent, typ
 
 import type { TranscriptRow } from "../lib/ipc";
 import { normaliseSpeakerName, renameHeading, suggestionsFor } from "../lib/speakerNames";
-import { sameSelectionOver, type LineKey, type TranscriptSection, type TranscriptTurn } from "../lib/transcriptLayout";
+import { sameProps, sameSelectionOver, type LineKey, type TranscriptSection, type TranscriptTurn } from "../lib/transcriptLayout";
 import { message } from "../lib/useRefresh";
 import { wordsMatchText } from "../lib/wordTiming";
 import { Icon } from "./Icon";
@@ -47,12 +47,15 @@ export type TranscriptActions = {
   /**
    * A click, Enter or Space on a line. With `extend` (Shift held), the lines from the anchor to it
    * are selected and nothing plays; otherwise it alone is selected, and plays from its start to
-   * the end when the note has a recording.
+   * the end, with Follow on, when the note has a recording.
    */
   choose: (row: TranscriptRow, extend: boolean) => void;
-  /** A click, Enter or Space on a word: its line alone selected, and played from the word. */
+  /** A click, Enter or Space on a word: its line alone selected, and played from the word with Follow on. */
   playWord: (row: TranscriptRow, seconds: number) => void;
-  /** An arrow key, Home or End on a line: focus moves to another line; with `extend`, the selection goes with it. */
+  /**
+   * An arrow key, Home or End on a line: focus moves to another line, brought into view, and
+   * Follow lets go; with `extend`, the selection goes with it.
+   */
   move: (row: TranscriptRow, key: LineKey, extend: boolean) => void;
   /** Escape on a line: the selection cleared. False when there was none, so the key goes on. */
   clear: () => boolean;
@@ -133,9 +136,24 @@ const LINE_KEYS: ReadonlySet<string> = new Set<LineKey>(["ArrowUp", "ArrowDown",
 const WORD_KEYS: ReadonlySet<string> = new Set(["ArrowLeft", "ArrowRight", "Home", "End"]);
 
 /**
+ * Whether the page's text selection reaches into `element`: text dragged over in it, or a word in
+ * it double-clicked. The click that ends either is someone copying a quote, not asking to listen.
+ */
+function selectsText(element: Element): boolean {
+  const selection = window.getSelection();
+  if (selection === null || selection.isCollapsed) return false;
+  for (let at = 0; at < selection.rangeCount; at += 1) {
+    if (selection.getRangeAt(at).intersectsNode(element)) return true;
+  }
+  return false;
+}
+
+/**
  * One line: an option of its turn's listbox (KNEG-448). A click, Enter or Space selects it alone and
  * plays from its start to the end; with Shift, the lines from the anchor to it are selected and
- * nothing plays. Pressed again, it plays from its start again: only Escape clears a selection. The
+ * nothing plays. Pressed again, it plays from its start again: only Escape clears a selection. A
+ * click that ends a text selection in the line -- a drag over its text, or the second click of a
+ * double-click on a word -- does nothing, so a quote can be copied without starting playback. The
  * lines are one tab stop between them, and the arrow keys, Home and End move from line to line.
  * An untimed line is a disabled option that is never focused, selected or played.
  */
@@ -167,6 +185,8 @@ export const Line = memo(function Line({ row, selected, active, stop, canPlay, a
       onMouseDown={(event) => { if (timed && event.shiftKey) event.preventDefault(); }}
       onClick={(event) => {
         if (!timed) return;
+        // A Shift-click plays nothing, so it may extend the selection whatever text is selected.
+        if (!event.shiftKey && selectsText(event.currentTarget)) return;
         // Focus, which the Shift-press above kept from moving.
         if (event.shiftKey) event.currentTarget.focus({ preventScroll: true });
         actions.choose(row, event.shiftKey);
@@ -208,6 +228,7 @@ export const Line = memo(function Line({ row, selected, active, stop, canPlay, a
                 onClick={(event) => {
                   if (event.shiftKey) return;
                   event.stopPropagation();
+                  if (selectsText(event.currentTarget)) return;
                   actions.playWord(row, word.start);
                 }}>{word.text}</span>
             </Fragment>
@@ -221,14 +242,12 @@ export const Line = memo(function Line({ row, selected, active, stop, canPlay, a
 });
 
 /**
- * Whether a turn or a section would draw the same: every prop identical but `selected`, the note's
- * whole selection, which only has to select the same of `turns`' lines, the ones being drawn.
+ * Whether a turn or a section would draw the same: every prop either side has identical
+ * (`sameProps`) but `selected`, the note's whole selection, which only has to select the same of
+ * `turns`' lines, the ones being drawn.
  */
 function sameDrawing<P extends { selected: ReadonlySet<number> }>(previous: P, next: P, turns: readonly TranscriptTurn[]): boolean {
-  for (const key of Object.keys(next) as (keyof P)[]) {
-    if (key !== "selected" && !Object.is(previous[key], next[key])) return false;
-  }
-  return turns.every((turn) => sameSelectionOver(turn.rows, previous.selected, next.selected));
+  return sameProps(previous, next, ["selected"]) && turns.every((turn) => sameSelectionOver(turn.rows, previous.selected, next.selected));
 }
 
 /** What every turn is drawn with, whichever section it is in. */

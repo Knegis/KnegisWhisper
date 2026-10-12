@@ -1,0 +1,66 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import {
+  CARD_CLEARANCE,
+  FOLLOW_INERTIA_MS,
+  followBand,
+  inBand,
+  keyReleasesFollow,
+  releasesFollow,
+} from "../src/lib/followScroll.js";
+
+test("a wheel within FOLLOW_INERTIA_MS of Follow turning on is the flick before it; after that it lets go", () => {
+  assert.equal(FOLLOW_INERTIA_MS, 400);
+  assert.equal(releasesFollow("wheel", 0), false);
+  assert.equal(releasesFollow("wheel", FOLLOW_INERTIA_MS - 1), false);
+  assert.equal(releasesFollow("wheel", FOLLOW_INERTIA_MS), true);
+  assert.equal(releasesFollow("wheel", Number.POSITIVE_INFINITY), true);
+});
+
+test("a touch moving, a press on the scrollbar or a scrolling key lets go at once", () => {
+  for (const input of ["touch", "scrollbar", "key"] as const) {
+    assert.equal(releasesFollow(input, 0), true, input);
+  }
+});
+
+test("with focus on the page or the scroller, every scrolling key lets go, and no other key does", () => {
+  for (const key of ["PageUp", "PageDown", "Home", "End", "ArrowUp", "ArrowDown", " "]) {
+    assert.equal(keyReleasesFollow(key, "page", false), true, key);
+  }
+  for (const key of ["ArrowLeft", "ArrowRight", "Enter", "Tab", "Escape", "a"]) {
+    assert.equal(keyReleasesFollow(key, "page", false), false, key);
+  }
+});
+
+test("from a button or line inside the scroller, the scrolling keys let go but Space, which presses the button", () => {
+  for (const key of ["PageUp", "PageDown", "Home", "End", "ArrowUp", "ArrowDown"]) {
+    assert.equal(keyReleasesFollow(key, "inside", false), true, key);
+  }
+  assert.equal(keyReleasesFollow(" ", "inside", false), false);
+});
+
+test("a key the page handled itself, or one pressed elsewhere, never lets go", () => {
+  assert.equal(keyReleasesFollow("PageDown", "page", true), false);
+  assert.equal(keyReleasesFollow("ArrowDown", "inside", true), false);
+  assert.equal(keyReleasesFollow("PageDown", "elsewhere", false), false);
+  assert.equal(keyReleasesFollow(" ", "elsewhere", false), false);
+});
+
+test("followBand is the scroller less the head at the top and the card plus CARD_CLEARANCE at the bottom", () => {
+  assert.equal(CARD_CLEARANCE, 24);
+  assert.deepEqual(followBand({ top: 39, bottom: 900 }, 52, 104), { top: 91, bottom: 772 });
+  // No card (Replay holds the player, or the note has no recording): only the clearance.
+  assert.deepEqual(followBand({ top: 0, bottom: 500 }, 52, 0), { top: 52, bottom: 476 });
+});
+
+test("inBand: wholly inside, within a pixel of either edge for rounding; a line past an edge or taller than the band is not", () => {
+  const band = { top: 91, bottom: 772 };
+  assert.equal(inBand({ top: 300, bottom: 328 }, band), true);
+  assert.equal(inBand({ top: 91, bottom: 772 }, band), true);
+  assert.equal(inBand({ top: 90.5, bottom: 772.5 }, band), true);
+  assert.equal(inBand({ top: 89, bottom: 117 }, band), false);
+  assert.equal(inBand({ top: 750, bottom: 778 }, band), false);
+  assert.equal(inBand({ top: 80, bottom: 800 }, band), false);
+  // A hidden line -- in a closed section -- measures as an empty box at the origin.
+  assert.equal(inBand({ top: 0, bottom: 0 }, band), false);
+});

@@ -4,9 +4,10 @@
  * wide window as the M6 redesign draws it (KNEG-448). The claims arrive with
  * the tasks that make them true, so the ids are the plan's and are not
  * contiguous: 1, 11, 13, 14 and 16 are the column's header, sections, turns,
- * rename and hover, 2 and 3 the player card, and 4, 8 and 12 the click model
+ * rename and hover, 2 and 3 the player card, 4, 8 and 12 the click model
  * (a press plays from a line, Shift selects a range the card offers to play,
- * one tab stop with the arrow keys between lines).
+ * one tab stop with the arrow keys between lines), and 5, 6 and 7 Follow (the
+ * card's chip keeps the playing line in view until the person scrolls).
  *
  * Fixture note 106, "Roadmap review — long transcript"
  * (`apps/desktop/src/lib/devFixtures.ts`, its rows in `lib/fixtureTranscript.ts`):
@@ -105,7 +106,28 @@ const AFTER_UNTIMED = 40;
 const TAB_LIMIT = 150;
 /** CDP's modifier bit for Shift. */
 const SHIFT = 8;
-const KEY_CODES = { Escape: 27, Enter: 13, Tab: 9, ArrowDown: 40, ArrowUp: 38 };
+const KEY_CODES = { Escape: 27, Enter: 13, Tab: 9, ArrowDown: 40, ArrowUp: 38, PageDown: 34 };
+/**
+ * Claims 5 and 6 start playback with a press on line 25, "Den tar jag, jag har skrivit om hälften."
+ * (Jonas, 4:35 to 4:45), the second-last line of the first section. The press brings it to the
+ * foot of the visible band, so the lines after it start below the band.
+ */
+const FOLLOW_LINE = 24;
+/** The speed claims 5 to 7 play at, so the line changes they wait on come twice as fast. */
+const FOLLOW_RATE = "2";
+/** How long after a line starts playing claims 5 to 7 read where it stands: time for a smooth scroll it set off to end. */
+const SETTLE_MS = 800;
+/** How many line changes after the pressed line claim 5 watches. */
+const FOLLOW_CHANGES = 2;
+/** How far up claim 6's real wheel scrolls the column. */
+const WHEEL = 400;
+/** How far the playing line's centre may sit from the visible band's once Follow is pressed again. */
+const CENTRE_TOLERANCE = 40;
+/** Claim 7 plays from here, inside line 26 (4:49 to 4:58), so playback crosses into the second section at 5:02. */
+const CROSS_FROM = 295;
+const SECOND_SECTION = SECTIONS[1].title;
+/** The first line of the second section: line 27, "Då går vi vidare…" (5:02). */
+const SECOND_SECTION_FIRST = SECTIONS[0].lines;
 
 /** Counts `play()` from before the app's own code runs (as `transcript-search.mjs` does). */
 const COUNT_PLAYS = `(() => {
@@ -185,6 +207,68 @@ async function key(cdp, name, { modifiers = 0, settle = 150 } = {}) {
 async function escape(cdp) {
   await key(cdp, "Escape");
 }
+
+/** A real wheel at `point`, `deltaY` pixels (negative scrolls up), after moving the pointer there. */
+async function wheel(cdp, point, deltaY) {
+  await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: point.x, y: point.y });
+  await cdp.send("Input.dispatchMouseEvent", { type: "mouseWheel", x: point.x, y: point.y, deltaX: 0, deltaY });
+}
+
+/** A real drag with the left button held, from `from` to `to` in `steps` moves, as a person selects text. */
+async function drag(cdp, from, to, steps = 8) {
+  await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: from.x, y: from.y });
+  await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: from.x, y: from.y, button: "left", buttons: 1, clickCount: 1 });
+  for (let step = 1; step <= steps; step += 1) {
+    const x = from.x + ((to.x - from.x) * step) / steps;
+    const y = from.y + ((to.y - from.y) * step) / steps;
+    await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y, button: "left", buttons: 1 });
+    await delay(16);
+  }
+  await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: to.x, y: to.y, button: "left", buttons: 0, clickCount: 1 });
+  await delay(150);
+}
+
+/**
+ * `scroller`'s `scrollTop` once it has held still for three reads 100 ms apart -- a smooth scroll
+ * or a wheel's animation having ended -- or the last read after `timeout`.
+ */
+async function scrollSettled(cdp, scroller, timeout = 3_000) {
+  const until = Date.now() + timeout;
+  let last = null;
+  let still = 0;
+  while (Date.now() < until) {
+    const now = await cdp.evaluate(`document.querySelector(${JSON.stringify(scroller)})?.scrollTop ?? null`);
+    if (last !== null && now !== null && Math.abs(now - last) < 0.5) {
+      still += 1;
+      if (still >= 3) return now;
+    } else {
+      still = 0;
+    }
+    last = now;
+    await delay(100);
+  }
+  return last;
+}
+
+/** One line `watchPlayingLines` recorded, judged against the visible band of claim 5: under the head's bottom, over the card's top. */
+function bandLine(change) {
+  const at = change.settled;
+  return {
+    index: change.index,
+    scrollTopAtStart: round(change.scrollTop),
+    scrollTop: round(at.scrollTop),
+    top: round(at.top),
+    bottom: round(at.bottom),
+    headBottom: round(at.headBottom),
+    cardTop: round(at.cardTop),
+    current: at.current,
+    follow: at.follow,
+    inBand: at.drawn && at.headBottom !== null && at.top >= at.headBottom - 0.5 && at.bottom <= at.cardTop + 0.5,
+  };
+}
+
+/** The open note's recording, wherever its one player is drawn, is playing. */
+const notePlaying = "(() => { const audio = document.querySelector('.note-detail audio'); return Boolean(audio) && !audio.paused; })()";
 
 /** The time as the card's clock and the selection's label write it, m:ss (`lib/clock.ts`). */
 const clock = (seconds) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, "0")}`;
@@ -397,6 +481,7 @@ export async function runTranscriptColumn(options) {
         "within 0.5px of its .recording-controls row's, button[aria-label=\"Back 15 seconds\"] and button[aria-label=\"Forward 15 seconds\"],",
         "a .recording-clock reading m:ss / m:ss, exactly one select, and exactly 2 .recording-mark whose centres sit within",
         `${MARK_TOLERANCE}px of 5px + (range width - 10px) x 300/690 and x 600/690 from the range input's left; the recording ${DURATION}s long;`,
+        "a button.follow-chip reading \"Follow\", aria-pressed=\"true\" (on by default), its computed background the resolved --band;",
         "the two schemes resolve different --bg. Then, paused at 100 s, Forward 15 seconds lands on 115 and Back 15 seconds on 100 (±0.1 s)",
       ].join(" "),
     }, async () => {
@@ -407,7 +492,11 @@ export async function runTranscriptColumn(options) {
         const drawn = await useScheme(cdp, scheme);
         const state = await cdp.evaluate(snippets.playerCardState());
         const judged = judgeCard(state);
-        schemes[scheme] = { drawn, ...judged, state };
+        const follow = await cdp.evaluate(snippets.followChipState(CARD));
+        const followOn = follow.present && follow.text === "Follow" && follow.pressed === "true" && follow.drawn?.background === follow.band;
+        if (!followOn) judged.failed.push("follow");
+        judged.matches = judged.matches && followOn;
+        schemes[scheme] = { drawn, ...judged, follow, state };
         const shot = `02-card-${scheme}-1440x900.png`;
         await cdp.screenshot(resolve(out, shot));
         const zoom = `02-card-${scheme}-zoom.png`;
@@ -520,7 +609,9 @@ export async function runTranscriptColumn(options) {
         `itself, not a word) makes exactly 1 play() call; once the recording plays (the first animation frame playing after its seek) it is`,
         `within ${LANDING_TOLERANCE}s of the line's start; that line is the only aria-selected="true" line; and the card's .player-header`,
         `names "${CLICK_SPEAKER}", the line's speaker, beside its 6x6px marker in the resolved --band. Pressed again about 1s later: exactly 1`,
-        `more play() call, the recording back within ${LANDING_TOLERANCE}s of the line's start and playing, and that line still the only one selected`,
+        `more play() call, the recording back within ${LANDING_TOLERANCE}s of the line's start and playing, and that line still the only one selected.`,
+        "Then, paused, a real drag inside that line's text (the left button pressed 2px into its first line box, moved up to 160px along it",
+        "and released, lineTextDrag) leaves a text selection that reaches the line and makes no play() call",
       ].join(" "),
     }, async () => {
       const schemes = {};
@@ -538,6 +629,14 @@ export async function runTranscriptColumn(options) {
         await delay(1000);
         const second = await played(cdp, () => pressLine(cdp, CLICK_LINE));
         await stopPlaying(cdp);
+        // Selecting a quote to copy it is not asking to listen (KNEG-448, Task 7's review).
+        const playsBeforeDrag = await cdp.evaluate("window.__plays ?? null");
+        const across = await cdp.evaluate(snippets.lineTextDrag(CLICK_LINE));
+        await drag(cdp, across.from, across.to);
+        const selectedText = await cdp.evaluate(snippets.textSelectionState());
+        const dragPlays = (await cdp.evaluate("window.__plays ?? null")) - playsBeforeDrag;
+        await delay(300);
+        await cdp.evaluate("(() => { document.querySelector('.note-side .note-side-player audio')?.pause(); getSelection()?.removeAllRanges(); return true; })()");
         const only = (lines) => JSON.stringify(lines.selected) === JSON.stringify([CLICK_LINE]);
         const parts = {
           onePlay: first.plays === 1,
@@ -548,6 +647,9 @@ export async function runTranscriptColumn(options) {
           againPlays: second.plays === 1,
           againLanded: second.landed && near(second.playingAt, start, LANDING_TOLERANCE),
           stillSelected: only(second.lines),
+          dragOnText: across.onText,
+          dragSelected: !selectedText.collapsed && selectedText.text.length > 0 && selectedText.lines.includes(CLICK_LINE),
+          dragNoPlay: dragPlays === 0,
         };
         schemes[scheme] = {
           drawn,
@@ -555,6 +657,233 @@ export async function runTranscriptColumn(options) {
           first,
           header,
           second,
+          drag: { from: across.from, to: across.to, onText: across.onText, selected: selectedText, plays: dragPlays },
+          failed: Object.entries(parts).filter(([, ok]) => !ok).map(([name]) => name),
+          matches: Object.values(parts).every(Boolean),
+        };
+      }
+      return {
+        measured: { schemes },
+        matches: SCHEMES.every((scheme) => schemes[scheme].matches),
+        screenshots,
+      };
+    });
+
+    // 5. While Follow is on, each line that starts playing is in view.
+    await check({
+      id: "5",
+      claim: "Following keeps the playing line in view.",
+      expectation: [
+        `in each scheme, from a fresh load, at ${FOLLOW_RATE}x: a real press in line ${FOLLOW_LINE + 1}'s left padding (4:35, brought to the foot of the band by`,
+        `linePadPoint) plays it, and then, for it and each of the next ${FOLLOW_CHANGES} lines to become aria-current="true" (watchPlayingLines, read`,
+        `${SETTLE_MS} ms after each starts): the line is drawn, its top at or below the bottom of the column's .transcript-head and its bottom at or`,
+        "above the card's top (±0.5px), and the card's button.follow-chip is aria-pressed=\"true\". The column scrolled for at least one of the",
+        "new lines (its settled scrollTop differs from the line before's), so the lines did not start in view",
+      ].join(" "),
+    }, async () => {
+      const schemes = {};
+      const screenshots = [];
+      for (const scheme of SCHEMES) {
+        await openNote(cdp);
+        const drawn = await useScheme(cdp, scheme);
+        await cdp.evaluate(snippets.choosePlayerSpeed(CARD, FOLLOW_RATE));
+        const first = await played(cdp, () => pressLine(cdp, FOLLOW_LINE));
+        await cdp.evaluate(snippets.watchPlayingLines(SIDE_BODY, CARD, SETTLE_MS));
+        const crossed = await waited(
+          cdp,
+          `(window.__playingLines?.changes ?? []).filter((change) => change.settled !== null).length >= ${FOLLOW_CHANGES + 1}`,
+          `${FOLLOW_CHANGES} line changes`,
+          30_000,
+        );
+        const record = await cdp.evaluate(snippets.playingLinesRecord(true));
+        const shot = `05-following-${scheme}-1440x900.png`;
+        await cdp.screenshot(resolve(out, shot));
+        screenshots.push(shot);
+        await stopPlaying(cdp);
+        await cdp.evaluate(snippets.choosePlayerSpeed(CARD, "1"));
+        const lines = (record?.changes ?? []).filter((change) => change.settled !== null).map(bandLine);
+        const fresh = lines.slice(1);
+        const parts = {
+          started: first.landed && first.plays === 1,
+          crossed: crossed && fresh.length >= FOLLOW_CHANGES,
+          inBand: lines.length > 0 && lines.every((line) => line.inBand),
+          followOn: lines.length > 0 && lines.every((line) => line.follow === "true"),
+          // Against the line before's settled place: when a scroll starts, in the same commit or
+          // the next frame, is not what this claims.
+          moved: fresh.some((line, at) => Math.abs(line.scrollTop - lines[at].scrollTop) > 1),
+        };
+        schemes[scheme] = {
+          drawn,
+          first: { plays: first.plays, landed: first.landed, playingAt: first.playingAt },
+          lines,
+          failed: Object.entries(parts).filter(([, ok]) => !ok).map(([name]) => name),
+          matches: Object.values(parts).every(Boolean),
+        };
+      }
+      return {
+        measured: { schemes },
+        matches: SCHEMES.every((scheme) => schemes[scheme].matches),
+        screenshots,
+      };
+    });
+
+    // 6. A wheel lets go of the playing line; pressing Follow brings it back; PageDown lets go too.
+    await check({
+      id: "6",
+      claim: "Scrolling turns Follow off; pressing Follow brings the line back.",
+      expectation: [
+        `in each scheme, from a fresh load, at ${FOLLOW_RATE}x: line ${FOLLOW_LINE + 1} pressed in its padding (it plays), then, while it plays, a real`,
+        `mouseWheel of ${WHEEL}px up (Input.dispatchMouseEvent, deltaY -${WHEEL}) over .note-side-body: the column scrolls up and the card's`,
+        "button.follow-chip goes to aria-pressed=\"false\"; at the next line to start playing, scrollTop is where the wheel left it (±1px), as",
+        `the line starts and ${SETTLE_MS} ms later. Then, at 1x, a real press on the chip: it is aria-pressed="true" and, once the column has`,
+        `stopped scrolling, the playing line's centre is within ±${CENTRE_TOLERANCE}px of the visible band's (followBandState: the scroller inside its`,
+        "border, less the sticky head's height at the top and --player-h + 24px at the bottom). Then, with focus moved to <body>, a real",
+        "PageDown: the chip goes to aria-pressed=\"false\"",
+      ].join(" "),
+    }, async () => {
+      const schemes = {};
+      const screenshots = [];
+      for (const scheme of SCHEMES) {
+        await openNote(cdp);
+        const drawn = await useScheme(cdp, scheme);
+        await cdp.evaluate(snippets.choosePlayerSpeed(CARD, FOLLOW_RATE));
+        const first = await played(cdp, () => pressLine(cdp, FOLLOW_LINE));
+        // Past the 400 ms a wheel is not counted after Follow turns on, and past the press's own scroll.
+        await delay(600);
+        const before = await scrollSettled(cdp, SIDE_BODY);
+        const point = await cdp.evaluate(snippets.scrollerPoint(SIDE_BODY));
+        await wheel(cdp, point, -WHEEL);
+        const afterWheel = await scrollSettled(cdp, SIDE_BODY);
+        const released = await cdp.evaluate(snippets.followChipState(CARD));
+        const playingThen = (await cdp.evaluate(snippets.lineModelState())).playing[0] ?? null;
+        await cdp.evaluate(snippets.watchPlayingLines(SIDE_BODY, CARD, SETTLE_MS));
+        const changed = await waited(
+          cdp,
+          `(window.__playingLines?.changes ?? []).some((change) => change.index !== ${JSON.stringify(playingThen)} && change.settled !== null)`,
+          "the next line to play",
+          20_000,
+        );
+        const record = await cdp.evaluate(snippets.playingLinesRecord(true));
+        const next = (record?.changes ?? []).find((change) => change.index !== playingThen && change.settled !== null) ?? null;
+        const offShot = `06-let-go-${scheme}-1440x900.png`;
+        await cdp.screenshot(resolve(out, offShot));
+        screenshots.push(offShot, await cardShot(cdp, out, `06-card-follow-off-${scheme}-zoom.png`));
+        await cdp.evaluate(snippets.choosePlayerSpeed(CARD, "1"));
+        const chip = await cdp.evaluate(snippets.followChipState(CARD));
+        let pressedAgain = null;
+        let centred = null;
+        if (chip.point !== null) {
+          await pressPoint(cdp, chip.point, "the Follow chip");
+          pressedAgain = await cdp.evaluate(snippets.followChipState(CARD));
+          await delay(150);
+          await scrollSettled(cdp, SIDE_BODY);
+          centred = await cdp.evaluate(snippets.followBandState(SIDE_BODY));
+          const onShot = `06-follow-again-${scheme}-1440x900.png`;
+          await cdp.screenshot(resolve(out, onShot));
+          screenshots.push(onShot, await cardShot(cdp, out, `06-card-follow-on-${scheme}-zoom.png`));
+        }
+        const onBody = await cdp.evaluate(snippets.blurActive());
+        await key(cdp, "PageDown");
+        const afterKey = await cdp.evaluate(snippets.followChipState(CARD));
+        await stopPlaying(cdp);
+        const parts = {
+          started: first.landed && first.plays === 1,
+          wheelScrolled: typeof before === "number" && typeof afterWheel === "number" && before - afterWheel > 0 && point.inside,
+          released: released.pressed === "false",
+          nextLine: changed && next !== null,
+          stayed: next !== null && Math.abs(next.scrollTop - afterWheel) <= 1 && Math.abs(next.settled.scrollTop - afterWheel) <= 1,
+          pressedAgain: pressedAgain?.pressed === "true",
+          centred: centred !== null && centred.offset !== null && Math.abs(centred.offset) <= CENTRE_TOLERANCE,
+          onBody,
+          pageDownReleased: afterKey.pressed === "false",
+        };
+        schemes[scheme] = {
+          drawn,
+          first: { plays: first.plays, landed: first.landed, playingAt: first.playingAt },
+          wheel: { point, before: round(before), after: round(afterWheel), moved: round(before - afterWheel), chip: released.pressed },
+          next: next === null ? null : { index: next.index, scrollTopAtStart: round(next.scrollTop), scrollTopSettled: round(next.settled.scrollTop), follow: next.settled.follow },
+          pressedAgain: pressedAgain?.pressed ?? null,
+          centred: centred === null ? null : { ...centred, offset: round(centred.offset) },
+          pageDown: { onBody, chip: afterKey.pressed },
+          failed: Object.entries(parts).filter(([, ok]) => !ok).map(([name]) => name),
+          matches: Object.values(parts).every(Boolean),
+        };
+      }
+      return {
+        measured: { schemes },
+        matches: SCHEMES.every((scheme) => schemes[scheme].matches),
+        screenshots,
+      };
+    });
+
+    // 7. Following opens a collapsed section the playing line is in; collapsing that section lets go.
+    await check({
+      id: "7",
+      claim: "Following opens a collapsed section; collapsing the playing section lets go.",
+      expectation: [
+        `in each scheme, from a fresh load: a real press on the "${SECOND_SECTION}" toggle leaves it aria-expanded="false" and the card's`,
+        `button.follow-chip aria-pressed="true"; then, the recording paused at ${CROSS_FROM} s, at ${FOLLOW_RATE}x and the card's Play pressed, once playback`,
+        `crosses into that section (a line from line ${SECOND_SECTION_FIRST + 1} on becomes aria-current, read ${SETTLE_MS} ms later): the toggle is`,
+        "aria-expanded=\"true\" and that line is drawn, its top at or below the head's bottom and its bottom at or above the card's top. Then a",
+        "real press on that toggle, collapsing the section the playing line is in: the toggle is aria-expanded=\"false\" and the chip",
+        "aria-pressed=\"false\", and 1.2 s later the section is still closed",
+      ].join(" "),
+    }, async () => {
+      const schemes = {};
+      const screenshots = [];
+      for (const scheme of SCHEMES) {
+        await openNote(cdp);
+        const drawn = await useScheme(cdp, scheme);
+        const toggle = await cdp.evaluate(snippets.sectionToggleState(SECOND_SECTION));
+        await pressPoint(cdp, toggle, `the "${SECOND_SECTION}" toggle`);
+        const closed = await cdp.evaluate(snippets.sectionExpanded(SECOND_SECTION));
+        const followBefore = await cdp.evaluate(snippets.followChipState(CARD));
+        await cdp.evaluate(snippets.pauseRecordingAt(CARD, CROSS_FROM));
+        await settledTime(cdp);
+        await cdp.evaluate(snippets.choosePlayerSpeed(CARD, FOLLOW_RATE));
+        await pressAt(cdp, `${CARD} button[aria-label="Play"]`);
+        await cdp.evaluate(snippets.watchPlayingLines(SIDE_BODY, CARD, SETTLE_MS));
+        const crossed = await waited(
+          cdp,
+          `(window.__playingLines?.changes ?? []).some((change) => change.index >= ${SECOND_SECTION_FIRST} && change.settled !== null)`,
+          `a line from line ${SECOND_SECTION_FIRST + 1} on to play`,
+          15_000,
+        );
+        const record = await cdp.evaluate(snippets.playingLinesRecord(true));
+        const into = (record?.changes ?? []).find((change) => change.index >= SECOND_SECTION_FIRST && change.settled !== null) ?? null;
+        const opened = await cdp.evaluate(snippets.sectionExpanded(SECOND_SECTION));
+        const shot = `07-opened-${scheme}-1440x900.png`;
+        await cdp.screenshot(resolve(out, shot));
+        screenshots.push(shot);
+        const again = await cdp.evaluate(snippets.sectionToggleState(SECOND_SECTION));
+        await pressPoint(cdp, again, `the "${SECOND_SECTION}" toggle`);
+        const letGo = { expanded: await cdp.evaluate(snippets.sectionExpanded(SECOND_SECTION)), follow: (await cdp.evaluate(snippets.followChipState(CARD))).pressed };
+        const letGoShot = `07-let-go-${scheme}-1440x900.png`;
+        await cdp.screenshot(resolve(out, letGoShot));
+        screenshots.push(letGoShot);
+        await delay(1200);
+        const later = await cdp.evaluate(snippets.sectionExpanded(SECOND_SECTION));
+        await stopPlaying(cdp);
+        await cdp.evaluate(snippets.choosePlayerSpeed(CARD, "1"));
+        const line = into === null ? null : bandLine(into);
+        const parts = {
+          closedFirst: toggle.onToggle && closed === "false",
+          followOn: followBefore.pressed === "true",
+          crossed: crossed && into !== null,
+          opened: opened === "true",
+          inView: line !== null && line.inBand,
+          collapsedAgain: again.onToggle && letGo.expanded === "false",
+          letGo: letGo.follow === "false",
+          stayedClosed: later === "false",
+        };
+        schemes[scheme] = {
+          drawn,
+          closed,
+          followBefore: followBefore.pressed,
+          line,
+          opened,
+          letGo,
+          later,
           failed: Object.entries(parts).filter(([, ok]) => !ok).map(([name]) => name),
           matches: Object.values(parts).every(Boolean),
         };
@@ -781,7 +1110,9 @@ export async function runTranscriptColumn(options) {
         `.transcript-head's top within ${HEAD_TOLERANCE}px of the scroller's top inside its border; at 1000x720 on the Transcript tab,`,
         `.notes-main scrolled down by ${HEAD_SCROLL}px the same way, the tab's .transcript-head's top within ${HEAD_TOLERANCE}px of .notes-main's.`,
         "At 1000x720, from a fresh load with nothing played: on the Transcript tab, in each scheme, .note-mini-player is there, not hidden,",
-        "drawn and carrying the card's .player-header; after a real press on the Notes tab it is hidden and not drawn; no play() call throughout",
+        "drawn and carrying the card's .player-header and a button.follow-chip; after a real press on the Notes tab it is hidden and not drawn;",
+        "no play() call up to there. Then (in the last scheme, light) back on the Transcript tab, a real press in a line's padding plays it,",
+        "and after a real press on the Notes tab the mini card is shown, drawn and holds no button.follow-chip (nor the header)",
       ].join(" "),
     }, async () => {
       const judge = (read) => ({
@@ -822,12 +1153,27 @@ export async function runTranscriptColumn(options) {
       await waited(cdp, "document.querySelector('.note-detail [role=\"tab\"][aria-selected=\"true\"]')?.textContent.trim() === 'Notes'", "the Notes tab", 3_000);
       const onNotes = await cdp.evaluate(snippets.miniPlayerState());
       const plays = await cdp.evaluate("window.__plays ?? null");
+      // Follow belongs to the transcript: once playing, the mini card on Notes carries no chip (KNEG-448).
+      await pressAt(cdp, ".note-detail [role=\"tab\"]", "Transcript");
+      await waited(cdp, "Boolean(document.querySelector('.note-detail [role=\"tabpanel\"]:not([hidden]) .transcript-rows li'))", "the Transcript tab's lines", 3_000);
+      await pressLine(cdp, CLICK_LINE);
+      const playingNarrow = await waited(cdp, notePlaying, "the recording to play", 5_000);
+      await cdp.evaluate("document.querySelector('.notes-main').scrollTo({ top: 0, behavior: 'instant' })");
+      await pressAt(cdp, ".note-detail [role=\"tab\"]", "Notes");
+      await waited(cdp, "document.querySelector('.note-detail [role=\"tab\"][aria-selected=\"true\"]')?.textContent.trim() === 'Notes'", "the Notes tab", 3_000);
+      const notesPlaying = await cdp.evaluate(snippets.miniPlayerState());
+      const notesShot = "13-narrow-notes-playing-1000x720.png";
+      await cdp.screenshot(resolve(out, notesShot));
+      screenshots.push(notesShot);
+      await cdp.evaluate("document.querySelector('.note-detail audio')?.pause()");
       const miniShown = SCHEMES.every((scheme) => mini[scheme].tab === "Transcript" && mini[scheme].present && mini[scheme].hidden === false
-        && mini[scheme].drawn && mini[scheme].header);
+        && mini[scheme].drawn && mini[scheme].header && mini[scheme].follow);
       const miniHiddenOnNotes = onNotes.tab === "Notes" && onNotes.present && onNotes.hidden === true && !onNotes.drawn;
+      const noChipOnNotes = playingNarrow && notesPlaying.tab === "Notes" && notesPlaying.present && notesPlaying.hidden === false
+        && notesPlaying.drawn && !notesPlaying.follow && !notesPlaying.header;
       return {
-        measured: { wide, narrow, mini: { transcriptTab: mini, notesTab: onNotes, plays } },
-        matches: SCHEMES.every((scheme) => wide[scheme].matches && narrow[scheme].matches) && miniShown && miniHiddenOnNotes && plays === 0,
+        measured: { wide, narrow, mini: { transcriptTab: mini, notesTab: onNotes, plays, playingNarrow, notesTabPlaying: notesPlaying } },
+        matches: SCHEMES.every((scheme) => wide[scheme].matches && narrow[scheme].matches) && miniShown && miniHiddenOnNotes && plays === 0 && noChipOnNotes,
         screenshots,
       };
     });

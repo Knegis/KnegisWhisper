@@ -1569,18 +1569,24 @@ button.recording-skip + button.recording-skip { margin-right: 8px; }
  * The card's header line (`PlayerHeader.tsx`, KNEG-448), while the transcript is on screen: a 6px
  * square -- `--band` while the recording plays, muted while it is paused -- and who is speaking;
  * or, while lines are selected, "Play selection" with its range in the machine voice, filled at
- * rest as the card's Play is, and the button that clears the selection at the far end. 24px
- * whichever it holds, and when it holds nothing.
+ * rest as the card's Play is, and beside it the button that clears the selection. At the far end
+ * the Follow chip, a label in the machine voice: marked (`--band`, `--band-ink`) while it is on,
+ * muted on nothing while it is off, with the neutral hover. 24px whichever it holds. The name and
+ * "Play selection" give way, ellipsed, before the chip does.
  */
 .player-header { display: flex; align-items: center; gap: 8px; height: 24px; min-width: 0; white-space: nowrap; }
 .player-header-marker { flex: none; width: 6px; height: 6px; background: var(--muted); }
 .player-header-marker-playing { background: var(--band); }
 .player-header-speaker { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 12.5px; line-height: 18px; }
-button.player-header-play { flex: none; height: 24px; margin: 0; padding: 0 8px; background: var(--control); font-size: 12.5px; line-height: 24px; }
+button.player-header-play { flex: 0 1 auto; min-width: 0; height: 24px; margin: 0; padding: 0 8px; overflow: hidden; text-overflow: ellipsis; background: var(--control); font-size: 12.5px; line-height: 24px; }
 button.player-header-play:hover:not(:disabled) { background: linear-gradient(var(--control), var(--control)), var(--control); }
 .player-header-range { font: 12px/24px var(--font-mono); letter-spacing: 0.5px; }
-button.player-header-clear { flex: none; display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; margin: 0 0 0 auto; padding: 0; color: var(--muted); }
+button.player-header-clear { flex: none; display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; margin: 0; padding: 0; color: var(--muted); }
 button.player-header-clear:hover:not(:disabled) { color: var(--text); }
+button.follow-chip { flex: none; height: 22px; margin: 0 0 0 auto; padding: 0 7px; color: var(--muted); font: 11px/16px var(--font-mono); letter-spacing: 0.5px; text-transform: uppercase; }
+button.follow-chip:hover:not(:disabled) { background: var(--control); color: var(--text); }
+button.follow-chip[aria-pressed="true"],
+button.follow-chip[aria-pressed="true"]:hover:not(:disabled) { background: var(--band); color: var(--band-ink); }
 
 /*
  * The transcript beside the note, in a window 1280px wide or wider.

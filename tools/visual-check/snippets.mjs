@@ -1729,7 +1729,10 @@ export function landingRecord() {
   `);
 }
 
-/** The narrow layout's mini player: whether it is there, `hidden`, drawn, and whether it carries the card's header line. */
+/**
+ * The narrow layout's mini player: whether it is there, `hidden`, drawn, and whether it carries the
+ * card's header line and its Follow chip (KNEG-448).
+ */
 export function miniPlayerState() {
   return source(`
     const mini = document.querySelector('.note-detail .note-mini-player');
@@ -1738,7 +1741,228 @@ export function miniPlayerState() {
       hidden: mini ? mini.hidden : null,
       drawn: mini ? mini.getClientRects().length > 0 : false,
       header: Boolean(mini?.querySelector('.player-header')),
+      follow: Boolean(mini?.querySelector('button.follow-chip')),
       tab: document.querySelector('.note-detail [role="tab"][aria-selected="true"]')?.textContent.trim() ?? null,
+    };
+  `);
+}
+
+/**
+ * The Follow chip in the player card in `container` (KNEG-448): whether it is there, its
+ * `aria-pressed`, its text and how it is drawn, beside `--band`, `--band-ink` and `--muted`
+ * resolved from the root (by giving each to an element's `color`), and the centre to press it at.
+ */
+export function followChipState(container) {
+  return source(`
+    const slot = document.querySelector(${JSON.stringify(container)});
+    if (!slot) throw new Error('No ' + ${JSON.stringify(container)});
+    const resolve = (name) => {
+      const probe = document.createElement('i');
+      probe.style.color = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+      document.body.append(probe);
+      const color = getComputedStyle(probe).color;
+      probe.remove();
+      return color;
+    };
+    const chip = slot.querySelector('button.follow-chip');
+    const style = chip ? getComputedStyle(chip) : null;
+    const rect = chip ? chip.getBoundingClientRect() : null;
+    return {
+      present: Boolean(chip),
+      pressed: chip ? chip.getAttribute('aria-pressed') : null,
+      text: chip ? chip.textContent.trim() : null,
+      drawn: style ? {
+        background: style.backgroundColor,
+        color: style.color,
+        fontFamily: style.fontFamily,
+        fontSize: style.fontSize,
+        textTransform: style.textTransform,
+        radius: style.borderTopLeftRadius,
+        height: rect.height,
+      } : null,
+      point: rect ? { x: (rect.left + rect.right) / 2, y: (rect.top + rect.bottom) / 2 } : null,
+      band: resolve('--band'),
+      bandInk: resolve('--band-ink'),
+      muted: resolve('--muted'),
+    };
+  `);
+}
+
+/**
+ * Starts recording, into `window.__playingLines`, every transcript line in `scroller` that becomes
+ * the playing one (`aria-current`), read each animation frame: its index among the lines, the
+ * scroller's `scrollTop` at that frame, and -- `settle` ms later, once a scroll it set off has had
+ * time to end -- where the line stands beside the bottom of the transcript's sticky head and the
+ * top of the card in `container`, the scroller's `scrollTop` then, whether it is still playing,
+ * and the Follow chip's `aria-pressed`. A line already playing is recorded first.
+ */
+export function watchPlayingLines(scroller, container, settle) {
+  return source(`
+    const body = document.querySelector(${JSON.stringify(scroller)});
+    const card = document.querySelector(${JSON.stringify(container)});
+    if (!body || !card) throw new Error('No ' + ${JSON.stringify(scroller)} + ' with a card in ' + ${JSON.stringify(container)});
+    const record = window.__playingLines = { changes: [] };
+    const measure = (change, line) => {
+      const rect = line.getBoundingClientRect();
+      const head = body.querySelector('.transcript-head');
+      change.settled = {
+        current: line.getAttribute('aria-current') === 'true',
+        drawn: line.getClientRects().length > 0,
+        top: rect.top,
+        bottom: rect.bottom,
+        headBottom: head ? head.getBoundingClientRect().bottom : null,
+        cardTop: card.getBoundingClientRect().top,
+        scrollTop: body.scrollTop,
+        follow: card.querySelector('button.follow-chip')?.getAttribute('aria-pressed') ?? null,
+      };
+    };
+    let current = null;
+    const step = () => {
+      if (window.__playingLines !== record) return;
+      const line = body.querySelector('.transcript-rows li[aria-current="true"]');
+      if (line !== current) {
+        current = line;
+        if (line) {
+          const change = { index: [...body.querySelectorAll('.transcript-rows li')].indexOf(line), scrollTop: body.scrollTop, settled: null };
+          record.changes.push(change);
+          setTimeout(() => measure(change, line), ${JSON.stringify(settle)});
+        }
+      }
+      requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+    return true;
+  `);
+}
+
+/** What `watchPlayingLines` recorded so far; stops it with `stop`. */
+export function playingLinesRecord(stop = false) {
+  return source(`
+    const record = window.__playingLines ?? null;
+    if (${JSON.stringify(stop)}) window.__playingLines = null;
+    return record;
+  `);
+}
+
+/**
+ * The playing line in `scroller` beside the band Follow keeps it in (KNEG-448): the scroller's
+ * box inside its border, less the transcript's sticky head at the top and the card -- the note's
+ * `--player-h` plus 24px -- at the bottom. Both centres, and how far apart they are.
+ */
+export function followBandState(scroller) {
+  return source(`
+    const body = document.querySelector(${JSON.stringify(scroller)});
+    if (!body) throw new Error('No ' + ${JSON.stringify(scroller)});
+    const lines = [...body.querySelectorAll('.transcript-rows li')];
+    const line = body.querySelector('.transcript-rows li[aria-current="true"]');
+    const heads = [...body.querySelectorAll('.transcript-head')].filter((head) => head.getClientRects().length > 0);
+    const head = heads[0] ?? null;
+    const detail = document.querySelector('.note-detail');
+    const playerH = detail ? parseFloat(getComputedStyle(detail).getPropertyValue('--player-h')) || 0 : 0;
+    const top = body.getBoundingClientRect().top + body.clientTop;
+    const headHeight = head ? head.getBoundingClientRect().height : 0;
+    const band = { top: top + headHeight, bottom: top + body.clientHeight - playerH - 24 };
+    band.centre = (band.top + band.bottom) / 2;
+    const rect = line ? line.getBoundingClientRect() : null;
+    const centre = rect ? (rect.top + rect.bottom) / 2 : null;
+    return {
+      index: line ? lines.indexOf(line) : null,
+      line: rect ? { top: rect.top, bottom: rect.bottom, centre } : null,
+      band,
+      offset: centre === null ? null : centre - band.centre,
+      scrollTop: body.scrollTop,
+      headHeight,
+      playerH,
+    };
+  `);
+}
+
+/**
+ * A point over `selector`, a scroller, for a real wheel: across its middle and 40% down, and
+ * whether the element there is inside it (so not the card floating over its foot), with its
+ * `scrollTop` now.
+ */
+export function scrollerPoint(selector) {
+  return source(`
+    const element = document.querySelector(${JSON.stringify(selector)});
+    if (!element) throw new Error('No ' + ${JSON.stringify(selector)});
+    const rect = element.getBoundingClientRect();
+    const x = rect.left + rect.width / 2;
+    const y = rect.top + rect.height * 0.4;
+    const hit = document.elementFromPoint(x, y);
+    return { x, y, inside: Boolean(hit) && element.contains(hit), scrollTop: element.scrollTop };
+  `);
+}
+
+/**
+ * The section toggle titled `title` in the open note's transcript, scrolled to the middle of its
+ * scroller at once -- clear of the sticky head and of the card floating over the scroller's foot,
+ * which the toggle has no scroll margins to keep out from under -- unless it is already clear of
+ * both: its centre to press, its `aria-expanded`, and whether the toggle is what is at that point.
+ */
+export function sectionToggleState(title) {
+  return source(`
+    const toggle = [...document.querySelectorAll('.note-detail .transcript button.transcript-section-toggle')]
+      .find((button) => button.querySelector('.transcript-section-title')?.textContent === ${JSON.stringify(title)});
+    if (!toggle) throw new Error('No section toggle titled ' + ${JSON.stringify(title)});
+    const before = toggle.getBoundingClientRect();
+    if (!toggle.contains(document.elementFromPoint((before.left + before.right) / 2, (before.top + before.bottom) / 2))) {
+      toggle.scrollIntoView({ block: 'center', behavior: 'instant' });
+    }
+    const rect = toggle.getBoundingClientRect();
+    return {
+      x: (rect.left + rect.right) / 2,
+      y: (rect.top + rect.bottom) / 2,
+      expanded: toggle.getAttribute('aria-expanded'),
+      onToggle: toggle.contains(document.elementFromPoint((rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2)),
+    };
+  `);
+}
+
+/** The `aria-expanded` of the open note's section toggle titled `title`, without moving anything. */
+export function sectionExpanded(title) {
+  return source(`
+    const toggle = [...document.querySelectorAll('.note-detail .transcript button.transcript-section-toggle')]
+      .find((button) => button.querySelector('.transcript-section-title')?.textContent === ${JSON.stringify(title)});
+    return toggle ? toggle.getAttribute('aria-expanded') : null;
+  `);
+}
+
+/**
+ * Two points across the first line box of transcript line `index`'s text, for a real drag that
+ * selects some of it: 2px in from the text's start, and up to 160px along the same line box. The
+ * line is first brought into view as `linePadPoint` brings it. `onText` says whether the press
+ * point is on the line's text.
+ */
+export function lineTextDrag(index) {
+  return source(`
+    const line = document.querySelectorAll('.note-detail .transcript .transcript-rows li')[${JSON.stringify(index)}];
+    if (!line) throw new Error('No transcript line ' + ${JSON.stringify(index)});
+    line.scrollIntoView({ block: 'nearest', behavior: 'instant' });
+    const text = line.querySelector('.transcript-text');
+    if (!text) throw new Error('Line ' + ${JSON.stringify(index)} + ' has no text');
+    const range = document.createRange();
+    range.selectNodeContents(text);
+    const first = range.getClientRects()[0];
+    if (!first) throw new Error('Line ' + ${JSON.stringify(index)} + ' text is not drawn');
+    const y = first.top + first.height / 2;
+    const from = { x: first.left + 2, y };
+    const to = { x: first.left + Math.min(first.width - 2, 160), y };
+    const hit = document.elementFromPoint(from.x, from.y);
+    return { from, to, onText: Boolean(hit) && text.contains(hit), text: text.textContent };
+  `);
+}
+
+/** The page's text selection: what it reads, whether it is collapsed, and which transcript lines it reaches. */
+export function textSelectionState() {
+  return source(`
+    const selection = getSelection();
+    const lines = [...document.querySelectorAll('.note-detail .transcript .transcript-rows li')];
+    const range = selection && selection.rangeCount > 0 ? selection.getRangeAt(0) : null;
+    return {
+      text: selection ? selection.toString() : '',
+      collapsed: selection ? selection.isCollapsed : true,
+      lines: range ? lines.flatMap((line, at) => range.intersectsNode(line) ? [at] : []) : [],
     };
   `);
 }

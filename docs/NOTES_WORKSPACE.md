@@ -44,7 +44,11 @@ from it to the end; Shift selects the lines from the last one chosen, which the 
 then offers to play, and Escape or the card's Clear deselects. The lines are one tab stop, and
 the arrow keys, Home and End move between them, past untimed lines and closed sections. While
 the transcript is on screen the card names who is speaking, and in a narrower window it shows
-on the Transcript tab before anything has played. In windows 1280px or wider
+on the Transcript tab before anything has played. The card's Follow chip, on as each note
+opens, keeps the playing line in view, opening its section when it is closed; scrolling the
+transcript (a wheel, a touch, its scrollbar or a key), moving between lines with the keys, or
+closing the playing section turns it off, and pressing it centres the playing line again.
+Pressing a line, a word, Play selection or a summary reference turns it back on. In windows 1280px or wider
 a note's transcript is a column to the right of the note instead, and the Transcript tab
 is hidden; crossing that width keeps playback and the reading position. A note with no
 transcript has no column, and keeps the one-column layout at any width. **Hide

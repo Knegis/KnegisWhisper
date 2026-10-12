@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
 
+import { followBand, inBand, keyReleasesFollow, releasesFollow, type KeyPlace, type ScrollInput } from "../lib/followScroll";
 import type { NoteRecording, TranscriptRow } from "../lib/ipc";
-import { extendSelection, lineStop, navigableLines, NO_SELECTION, stepLine, type LineSelection, type TranscriptSection } from "../lib/transcriptLayout";
+import { extendSelection, lineAt, lineStop, navigableLines, NO_SELECTION, stepLine, type LineSelection, type TranscriptSection } from "../lib/transcriptLayout";
 import { wordAt, wordsMatchText } from "../lib/wordTiming";
 import { Icon } from "./Icon";
 import { scrollBehavior, TranscriptSections, type RenameTarget, type TranscriptActions } from "./TranscriptSections";
@@ -21,11 +22,27 @@ export function TranscriptHeading({ children }: { children?: ReactNode }) {
   </div>;
 }
 
+/**
+ * What scrolls `element`: its nearest ancestor that scrolls its overflow -- `.note-side-body`
+ * beside a note in a wide window, `.notes-main` under the Transcript tab below it.
+ */
+function scrollParent(element: Element): HTMLElement | null {
+  for (let parent = element.parentElement; parent !== null; parent = parent.parentElement) {
+    const { overflowY } = getComputedStyle(parent);
+    if (overflowY === "auto" || overflowY === "scroll") return parent;
+  }
+  return null;
+}
+
+/** A line to bring into view once it can be (`reveal`), and what to do once it has been. */
+type Reveal = { index: number; block: ScrollLogicalPosition; then?: (() => void) | undefined };
+
 type TranscriptPanelProps = {
   readOnly?: boolean;
   /**
    * A row to show: scrolled to, once. The owner has already selected it
-   * (`NoteWorkspace`'s `openRow`); the panel only brings it into view.
+   * (`NoteWorkspace`'s `openRow`); the panel only brings it into view, opening
+   * its section first when it is closed.
    */
   sourceRequest?: { index: number; nonce: number } | null;
   /**
@@ -43,7 +60,8 @@ type TranscriptPanelProps = {
   currentTime: number;
   playing: boolean;
   visible: boolean;
-  playInterval: (start: number, end: number | null) => void;
+  /** Plays from `start` to the end with Follow on (`NoteWorkspace`'s `playFrom`): a line or a word pressed. */
+  playFrom: (start: number) => void;
   /** The player's time now (`RecordingPlayerHandle.time`), read every animation frame while a row with words plays. */
   time: () => number | null;
   /**
@@ -55,30 +73,112 @@ type TranscriptPanelProps = {
   onSelectionChange: Dispatch<SetStateAction<LineSelection>>;
   suggestions: readonly string[];
   onRename: (speakerId: string, name: string) => Promise<void>;
+  /**
+   * Follow (KNEG-448), held by `NoteWorkspace`, whose player card has its chip: while it is on, the
+   * line that starts playing is centred in view whenever it is not already, opening its section
+   * when it is closed. Nothing moves while the recording is paused.
+   */
+  follow: boolean;
+  /**
+   * Turns Follow off: the person scrolled the transcript (a wheel, a touch, the scrollbar, a key
+   * that scrolls), moved between lines with the keys, or closed the section that is playing.
+   */
+  onReleaseFollow: () => void;
+  /** True once after the card's chip turned Follow on, when the line the player is at is to be centred. */
+  takeRecentre: () => boolean;
+  /**
+   * The line the player is at, playing or paused: the last to have started (`lastStartedLine`),
+   * which the chip and the transcript coming on screen bring back when nothing is playing.
+   */
+  currentIndex: number | null;
 };
 
 export function TranscriptPanel({
-  readOnly = false, sourceRequest, onSourceShown, rows, sections, recording, currentTime, playing, visible, playInterval, time,
-  selection, onSelectionChange, suggestions, onRename,
+  readOnly = false, sourceRequest, onSourceShown, rows, sections, recording, currentTime, playing, visible, playFrom, time,
+  selection, onSelectionChange, suggestions, onRename, follow, onReleaseFollow, takeRecentre, currentIndex,
 }: TranscriptPanelProps) {
   const idPrefix = useId();
+  const asideRef = useRef<HTMLElement>(null);
   const rowRefs = useRef(new Map<number, HTMLLIElement>());
   // The playing row's words, when it is drawn word by word.
   const wordsRef = useRef<HTMLSpanElement>(null);
   const [renaming, setRenaming] = useState<RenameTarget | null>(null);
   // Sections the reader closed, by key; every section starts open (KNEG-448).
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
-  // The line that last took focus, which holds the lines' one tab stop until a summary source or
-  // a search hit selects another (`lineStop`).
+  // The line that holds the lines' one tab stop ahead of the selection (`lineStop`): the line that
+  // last took focus, or the one the stop moved to when its section was closed. A summary source or
+  // a search hit clears it, so the stop follows the line they select.
   const [cursor, setCursor] = useState<number | null>(null);
   // The lines the arrow keys move between: the timed lines of the open sections.
   const lines = useMemo(() => navigableLines(sections, collapsed), [sections, collapsed]);
 
-  // What the lines' handlers read, so the handlers -- and the one `actions` object holding them --
-  // stay the same from render to render and never redraw a memoised line by themselves.
+  // Today's playing-row predicate (`lineAt`), and only while the recording plays.
+  const activeRow = useMemo(() => (playing ? lineAt(rows, currentTime) : null), [currentTime, playing, rows]);
+  const activeIndex = activeRow?.index ?? null;
+
+  // Where each line and turn sits, so only the section and turn holding the playing line, the tab
+  // stop or the open rename are handed it, and so a line's section can be opened to show it.
+  const places = useMemo(() => {
+    const rowsAt = new Map<number, { section: string; turn: string }>();
+    const turnsAt = new Map<string, string>();
+    for (const section of sections) {
+      for (const turn of section.turns) {
+        turnsAt.set(turn.key, section.key);
+        for (const row of turn.rows) rowsAt.set(row.index, { section: section.key, turn: turn.key });
+      }
+    }
+    return { rowsAt, turnsAt };
+  }, [sections]);
+  const activePlace = activeIndex === null ? undefined : places.rowsAt.get(activeIndex);
+  // The lines' one tab stop: the cursor, else the selection's anchor, else the playing line, else
+  // the first -- whichever is first on a timed line in an open section.
+  const stopIndex = useMemo(() => lineStop(lines, [cursor, selection.anchor, activeIndex]), [lines, cursor, selection.anchor, activeIndex]);
+  const stopPlace = stopIndex === null ? undefined : places.rowsAt.get(stopIndex);
+
+  // What the lines' handlers and the panel's listeners read, so the handlers -- and the one
+  // `actions` object holding them -- stay the same from render to render and never redraw a
+  // memoised line by themselves. Declared before every effect that reads it, so it is current there.
   const canPlay = recording !== null;
-  const latest = useRef({ rows, lines, selection, canPlay, playInterval, onSelectionChange, onRename });
-  useLayoutEffect(() => { latest.current = { rows, lines, selection, canPlay, playInterval, onSelectionChange, onRename }; });
+  const sourcePending = Boolean(sourceRequest);
+  const latest = useRef({ rows, sections, lines, collapsed, places, stopIndex, activeIndex, currentIndex, sourcePending, selection, canPlay, playFrom, onSelectionChange, onRename, follow, onReleaseFollow });
+  useLayoutEffect(() => {
+    latest.current = { rows, sections, lines, collapsed, places, stopIndex, activeIndex, currentIndex, sourcePending, selection, canPlay, playFrom, onSelectionChange, onRename, follow, onReleaseFollow };
+  });
+
+  // One way to bring a line into view (KNEG-448), for Follow, a summary source or search hit, and
+  // the arrow keys: a closed section holding it is opened first, and the scroll waits for the
+  // commit that draws it -- `scrollIntoView` on a hidden line does nothing. `then` runs once it
+  // has scrolled; a reveal that replaces one still waiting runs that one's `then` too, so a source
+  // request overtaken by Follow is still reported done rather than left to be shown again later.
+  // The lines' scroll margins (`styles.css`) keep it clear of the sticky head and the player card,
+  // so `center` centres it on the band between them.
+  const pendingReveal = useRef<Reveal | null>(null);
+  const flushReveal = useCallback(() => {
+    const pending = pendingReveal.current;
+    if (pending === null) return;
+    const line = rowRefs.current.get(pending.index);
+    if (line !== undefined && line.getClientRects().length === 0) return;
+    pendingReveal.current = null;
+    line?.scrollIntoView({ block: pending.block, behavior: scrollBehavior() });
+    pending.then?.();
+  }, []);
+  const reveal = useCallback((index: number, block: ScrollLogicalPosition, then?: () => void) => {
+    const overtaken = pendingReveal.current?.then;
+    pendingReveal.current = { index, block, then: overtaken === undefined ? then : () => { overtaken(); then?.(); } };
+    const section = latest.current.places.rowsAt.get(index)?.section;
+    if (section !== undefined && latest.current.collapsed.has(section)) {
+      setCollapsed((previous) => {
+        const next = new Set(previous);
+        next.delete(section);
+        return next;
+      });
+    } else {
+      flushReveal();
+    }
+  }, [flushReveal]);
+  // After every commit: a check of one ref, unless a reveal is waiting on the section it opened.
+  useLayoutEffect(() => { flushReveal(); });
+
   const actions = useMemo<TranscriptActions>(() => ({
     register: (index, element) => {
       if (element === null) rowRefs.current.delete(index);
@@ -86,7 +186,7 @@ export function TranscriptPanel({
     },
     wordsRef,
     choose: (row, extend) => {
-      const { rows: all, canPlay: hasRecording, playInterval: play, onSelectionChange: select } = latest.current;
+      const { rows: all, canPlay: hasRecording, playFrom: play, onSelectionChange: select } = latest.current;
       if (row.startSeconds === null) return;
       if (extend) {
         select((previous) => extendSelection(all, previous, row.index));
@@ -94,24 +194,25 @@ export function TranscriptPanel({
       }
       select({ rows: new Set([row.index]), anchor: row.index });
       // To the end: a line is where to start listening, not a clip (the owner's ruling, 2026-10-11).
-      if (hasRecording) play(row.startSeconds, null);
+      if (hasRecording) play(row.startSeconds);
     },
     playWord: (row, seconds) => {
-      const { canPlay: hasRecording, playInterval: play, onSelectionChange: select } = latest.current;
+      const { canPlay: hasRecording, playFrom: play, onSelectionChange: select } = latest.current;
       select({ rows: new Set([row.index]), anchor: row.index });
-      if (hasRecording) play(seconds, null);
+      if (hasRecording) play(seconds);
     },
     move: (row, key, extend) => {
-      const { rows: all, lines: open, onSelectionChange: select } = latest.current;
+      const { rows: all, lines: open, onSelectionChange: select, follow: following, onReleaseFollow: release } = latest.current;
       const target = stepLine(open, row.index, key);
       if (target === null) return;
       // Shift with nothing selected extends from the line focus is leaving.
       if (extend) select((previous) => extendSelection(all, previous.anchor === null ? { rows: previous.rows, anchor: row.index } : previous, target));
+      // Going through the lines by key is the person moving the transcript: Follow lets go of it.
+      if (following) release();
       const element = rowRefs.current.get(target);
       if (!element) return;
-      // Scrolled by the lines' scroll margins (`styles.css`), clear of the sticky head and the card.
       element.focus({ preventScroll: true });
-      element.scrollIntoView({ block: "nearest" });
+      reveal(target, "nearest");
     },
     clear: () => {
       const { selection: now, onSelectionChange: select } = latest.current;
@@ -123,41 +224,130 @@ export function TranscriptPanel({
     openRename: (target) => setRenaming(target),
     closeRename: (speakerId) => setRenaming((previous) => previous?.speakerId === speakerId ? null : previous),
     rename: (speakerId, name) => latest.current.onRename(speakerId, name),
-  }), []);
-  const toggleSection = useCallback((key: string) => setCollapsed((previous) => {
-    const next = new Set(previous);
-    if (next.has(key)) next.delete(key);
-    else next.add(key);
-    return next;
-  }), []);
+  }), [reveal]);
+  const toggleSection = useCallback((key: string) => {
+    const { sections: all, collapsed: closed, places: at, stopIndex: stop, activeIndex: playingLine, follow: following, onReleaseFollow: release } = latest.current;
+    if (!closed.has(key)) {
+      // Closing the section that is playing puts it away: Follow lets go rather than open it again.
+      if (following && playingLine !== null && at.rowsAt.get(playingLine)?.section === key) release();
+      // The tab stop leaves the closed section for the nearest line after it, or before it when
+      // none follows, rather than the transcript's first line. Focus stays on the toggle.
+      if (stop !== null && at.rowsAt.get(stop)?.section === key) {
+        setCursor(stepLine(navigableLines(all, new Set([...closed, key])), stop, "ArrowDown"));
+      }
+    }
+    setCollapsed((previous) => {
+      const next = new Set(previous);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
 
-  // The owner selected the row (`NoteWorkspace`'s `openRow`); here it is only brought into view,
-  // and it takes the tab stop from whichever line had focus before.
+  // The owner selected the row (`NoteWorkspace`'s `openRow`); here it is only brought into view --
+  // its section opened first -- and it takes the tab stop from whichever line had focus before.
+  // The request is reported shown only once it has been.
   useEffect(() => {
     if (!sourceRequest || !visible) return;
     if (!rows.some((item) => item.index === sourceRequest.index)) return;
     setCursor(null);
-    rowRefs.current.get(sourceRequest.index)?.scrollIntoView({ block: "nearest", behavior: scrollBehavior() });
-    onSourceShown?.();
-  }, [sourceRequest, rows, visible, onSourceShown]);
+    reveal(sourceRequest.index, "nearest", onSourceShown);
+  }, [sourceRequest, rows, visible, onSourceShown, reveal]);
 
-  const activeRow = useMemo(() => {
-    if (!playing) return null;
-    return rows.find(
-      (row) =>
-        row.startSeconds !== null &&
-        row.startSeconds <= currentTime &&
-        (row.endSeconds === null || currentTime < row.endSeconds),
-    ) ?? null;
-  }, [currentTime, playing, rows]);
+  // Whether line `index` is drawn wholly inside the band Follow keeps the playing line in
+  // (`followBand`): the scroller, less the sticky head and the card with its clearance.
+  const lineInBand = useCallback((index: number): boolean => {
+    const aside = asideRef.current;
+    const line = rowRefs.current.get(index);
+    if (!aside || !line || line.getClientRects().length === 0) return false;
+    const scroller = scrollParent(aside);
+    if (scroller === null) return true;
+    const top = scroller.getBoundingClientRect().top + scroller.clientTop;
+    const head = aside.querySelector<HTMLElement>(":scope > .transcript-head")?.offsetHeight ?? 0;
+    const card = parseFloat(getComputedStyle(aside).getPropertyValue("--player-h")) || 0;
+    const rect = line.getBoundingClientRect();
+    return inBand({ top: rect.top, bottom: rect.bottom }, followBand({ top, bottom: top + scroller.clientHeight }, head, card));
+  }, []);
 
-  // Lines and the rename form carry scroll margins (`styles.css`), so this and the source scroll
-  // above stop clear of the sticky header and of the player card floating over the column's foot.
-  useEffect(() => {
-    if (visible && activeRow !== null) {
-      rowRefs.current.get(activeRow.index)?.scrollIntoView({ block: "nearest" });
+  // Whether the panel was on screen at the last commit, so the effect below can leave the
+  // transcript's coming on screen to the one after it.
+  const shownBefore = useRef(false);
+
+  // Following (KNEG-448). When the playing line changes or Follow turns on -- not on every render
+  // -- the playing line is centred if it is out of the band; nothing moves while paused. A press of
+  // the chip, taken once, centres the line the player is at, playing or not, in view or not.
+  useLayoutEffect(() => {
+    if (!visible || !follow) return;
+    if (takeRecentre()) {
+      const target = activeIndex ?? currentIndex;
+      if (target !== null) reveal(target, "center");
+      return;
     }
-  }, [activeRow, visible]);
+    if (shownBefore.current && activeIndex !== null && !lineInBand(activeIndex)) reveal(activeIndex, "center");
+    // `currentIndex` is read as it is when one of these changes; it changing alone moves nothing.
+  }, [activeIndex, follow, visible, takeRecentre, reveal, lineInBand]);
+
+  // The transcript coming on screen -- the Transcript tab opened, or the column mounted afresh as
+  // the layout switches -- brings back the line the player is at, playing or paused, when it is out
+  // of view; not when a summary source or a search hit is about to be shown instead. Two frames
+  // on, once the card that appears with it has its height (`--player-h`, written by a
+  // ResizeObserver after layout): the scroll margins centre the line against that height.
+  useLayoutEffect(() => {
+    shownBefore.current = visible;
+    if (!visible) return;
+    let frame = requestAnimationFrame(() => {
+      frame = requestAnimationFrame(() => {
+        const { follow: following, sourcePending: showing, activeIndex: playingLine, currentIndex: at } = latest.current;
+        const target = playingLine ?? at;
+        if (following && !showing && target !== null && !lineInBand(target)) reveal(target, "center");
+      });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [visible, reveal, lineInBand]);
+
+  // When Follow last turned on, for the wheel's grace (`FOLLOW_INERTIA_MS`): never, until it does.
+  const followOnAt = useRef(Number.NEGATIVE_INFINITY);
+  const followWas = useRef(follow);
+  useLayoutEffect(() => {
+    if (follow && !followWas.current) followOnAt.current = performance.now();
+    followWas.current = follow;
+  }, [follow]);
+
+  // What counts as the person scrolling the transcript (`lib/followScroll.ts`): input events on
+  // whatever scrolls it, while it is on screen. Not `scroll` events, which Follow's own scrolls
+  // fire too. Taken off when the panel hides, unmounts, or remounts in the other layout.
+  useEffect(() => {
+    const aside = asideRef.current;
+    const scroller = visible && aside !== null ? scrollParent(aside) : null;
+    if (scroller === null) return;
+    const letGo = (input: ScrollInput) => {
+      const { follow: following, onReleaseFollow: release } = latest.current;
+      if (following && releasesFollow(input, performance.now() - followOnAt.current)) release();
+    };
+    const wheel = () => letGo("wheel");
+    const touch = () => letGo("touch");
+    // A press on the scrollbar lands on the scroller itself, to the right of its content box.
+    const press = (event: PointerEvent) => {
+      if (event.target === scroller && event.offsetX >= scroller.clientWidth) letGo("scrollbar");
+    };
+    const key = (event: KeyboardEvent) => {
+      const target = event.target;
+      const place: KeyPlace = target === document.body || target === scroller ? "page"
+        : target instanceof HTMLElement && scroller.contains(target) && !target.isContentEditable && !target.matches("input, textarea, select") ? "inside"
+        : "elsewhere";
+      if (keyReleasesFollow(event.key, place, event.defaultPrevented)) letGo("key");
+    };
+    scroller.addEventListener("wheel", wheel, { passive: true });
+    scroller.addEventListener("touchmove", touch, { passive: true });
+    scroller.addEventListener("pointerdown", press);
+    document.addEventListener("keydown", key);
+    return () => {
+      scroller.removeEventListener("wheel", wheel);
+      scroller.removeEventListener("touchmove", touch);
+      scroller.removeEventListener("pointerdown", press);
+      document.removeEventListener("keydown", key);
+    };
+  }, [visible]);
 
   // The playing row's words, when it has words that spell it (KNEG-408). Every other row --
   // notes saved before, and every engine but local Whisper -- highlights as a row, as before.
@@ -192,28 +382,8 @@ export function TranscriptPanel({
     };
   }, [activeWords, playing, visible, time]);
 
-  // Where each line and turn sits, so only the section and turn holding the playing line, the tab
-  // stop or the open rename are handed it.
-  const places = useMemo(() => {
-    const rowsAt = new Map<number, { section: string; turn: string }>();
-    const turnsAt = new Map<string, string>();
-    for (const section of sections) {
-      for (const turn of section.turns) {
-        turnsAt.set(turn.key, section.key);
-        for (const row of turn.rows) rowsAt.set(row.index, { section: section.key, turn: turn.key });
-      }
-    }
-    return { rowsAt, turnsAt };
-  }, [sections]);
-  const activeIndex = activeRow?.index ?? null;
-  const activePlace = activeIndex === null ? undefined : places.rowsAt.get(activeIndex);
-  // The lines' one tab stop: the line focus was last on, else the selection's anchor, else the
-  // playing line, else the first -- whichever is first on a timed line in an open section.
-  const stopIndex = useMemo(() => lineStop(lines, [cursor, selection.anchor, activeIndex]), [lines, cursor, selection.anchor, activeIndex]);
-  const stopPlace = stopIndex === null ? undefined : places.rowsAt.get(stopIndex);
-
   return (
-    <aside className="transcript" aria-label="Transcript">
+    <aside ref={asideRef} className="transcript" aria-label="Transcript">
       <TranscriptHeading>
         {/* Find in the transcript arrives later in KNEG-448; the button holds its place until then. */}
         <button type="button" className="transcript-find" aria-label="Find in transcript" title="Find in transcript" disabled>

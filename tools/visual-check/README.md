@@ -266,7 +266,7 @@ stylesheet reads, with `data-theme` set on the root to match. Presses are real
 pointer presses, Edge runs with `--mute-audio`, and a count of `play()` calls
 is installed before the page's own code runs. A line is pressed inside its
 left padding (`linePadPoint`), on the line itself rather than a word, after
-checking that the line is what is under that point. Ten checks so far:
+checking that the line is what is under that point. Thirteen checks so far:
 
 1. The column has a plain header and is grouped: `.transcript-head` is sticky
    at top 0 and holds one heading, "Transcript" drawn uppercase, and one
@@ -286,7 +286,9 @@ checking that the line is what is under that point. Ten checks so far:
    Back and Forward 15 seconds, a clock reading `m:ss / m:ss`, one `select`,
    and exactly two `.recording-mark` ticks centred within 1px of where the
    thumb stands at 300/690 and 600/690 (`5px + (width - 10px) x fraction` of the
-   range's box). The two schemes resolve different `--bg`. Paused at 100 s,
+   range's box). Its `button.follow-chip` reads "Follow", is
+   `aria-pressed="true"` from the start and is filled with the resolved
+   `--band`. The two schemes resolve different `--bg`. Paused at 100 s,
    Forward 15 seconds lands on 115 and Back 15 seconds on 100 (±0.1 s).
 3. Scrolled to its end, the column's last transcript line stands at or above
    the card's top, and the card floats over the scroller (its top above the
@@ -300,7 +302,28 @@ checking that the line is what is under that point. Ten checks so far:
    recording is within 0.3 s of the line's start; it is the only
    `aria-selected="true"` line; and the card's `.player-header` names
    "Jonas" beside a 6x6px marker in `--band`. Pressed again a second later:
-   one more `play()`, back at the start, still the only selected line.
+   one more `play()`, back at the start, still the only selected line. Then,
+   paused, a real drag across the line's text (`lineTextDrag`: pressed 2px
+   into its first line box, moved along it, released) leaves a text selection
+   in the line and makes no `play()` call: copying a quote does not play.
+5. Follow keeps the playing line in view: at 2x, line 25 (4:35) pressed in its
+   padding, which brings it to the band's foot, and then it and the next two
+   lines to play (`watchPlayingLines`, each read 800 ms after it starts) each
+   stand between the sticky head's bottom and the card's top, the chip still
+   pressed; the column scrolled for at least one of them.
+6. Scrolling lets go and the chip brings the line back: while line 25 plays at
+   2x, a real 400px `mouseWheel` up over `.note-side-body` turns the chip to
+   `aria-pressed="false"`, and when the next line starts the column's
+   `scrollTop` stays where the wheel left it (as it starts and 800 ms on).
+   Pressed at 1x, the chip is pressed again and, the scroll ended, the playing
+   line's centre is within ±40px of the visible band's (`followBandState`: the
+   scroller less the head's height and `--player-h` + 24px). A real PageDown
+   with focus on `<body>` turns it off again.
+7. Following opens a closed section, and closing the playing one lets go: the
+   "5:00 – 10:00" toggle pressed (closed; chip still pressed), then played from
+   295 s at 2x with the card's Play, the first line past 5:00 opens the section
+   and stands in the band; a press on that toggle while that line plays closes
+   it and turns the chip off, and it is still closed 1.2 s later.
 8. Line 6 pressed (it plays) and paused, then line 8 pressed with Shift:
    lines 6 to 8, across three turns, are selected, the Shift press plays
    nothing, and the card's header offers "Play selection (0:41–1:12)" (an en
@@ -320,8 +343,10 @@ checking that the line is what is under that point. Ten checks so far:
 13. The head stays at the top of what scrolls: `.note-side-body` scrolled
     600px puts `.transcript-head`'s top within 1px of the scroller's; at
     1000x720 on the Transcript tab, the same for `.notes-main`. There, before
-    anything has played, `.note-mini-player` is shown, with the card's header;
-    on Notes it is hidden until playback, as before. No `play()` call.
+    anything has played, `.note-mini-player` is shown, with the card's header
+    and its Follow chip; on Notes it is hidden until playback, as before. No
+    `play()` call up to there. Then a line pressed on the Transcript tab plays,
+    and back on Notes the mini card shows with no header and no chip.
 14. With `note_transcript_rows` held back 4 s (`installInvokeStub`), the column
     shows one heading, the `.transcript-head .transcript-label` "Transcript",
     over "Loading transcript and recording…", drawn as the loaded column's
@@ -336,10 +361,13 @@ Measured in headless Edge against dev fixtures, not in the Tauri window; a false
 check makes it exit 1. Skips clamped at 0 and at the end, and ticks dropped at
 the very start or end, are `tests/playerControls.test.ts`'s, not measured here;
 which line the arrow keys go to, the tab stop's choice and Shift's range are
-`tests/transcriptLayout.test.ts`'s (`stepLine`, `lineStop`, `extendSelection`).
-Not measured: Shift+Arrow, Home and End between lines, the arrow keys over a
-collapsed section, what a screen reader announces for a turn's list, and
-collapsing a section (its toggle is pressed by no check yet).
+`tests/transcriptLayout.test.ts`'s (`stepLine`, `lineStop`, `extendSelection`);
+which inputs let go of Follow, the wheel's 400 ms grace after it turns on, and
+the band are `tests/followScroll.test.ts`'s. Not measured: Shift+Arrow, Home
+and End between lines, the arrow keys over a collapsed section, what a screen
+reader announces for a turn's list, a touchpad's real inertia, and a drag of
+the scrollbar, which this Edge draws none of (`--hide-scrollbars`): those two
+are for the real window.
 
 ## Note meta
 
