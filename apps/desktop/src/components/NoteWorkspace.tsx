@@ -87,11 +87,11 @@ const MOVING = '.note-side, .note-mini-player, [role="tabpanel"][id$="-panel-tra
 
 /**
  * Where the one player is drawn. `note` is the note column -- in full over Replay, and otherwise a
- * mini player held to the foot of the note -- and is every tab's below the width, and Replay's at
- * it. `side` is the foot of the transcript column, every other tab's at the width.
+ * full player in Replay. `inline` is the narrow mini card below the stable transcript wrapper;
+ * `side` is the wide transcript column's card.
  */
-type PlayerSlot = "note" | "side";
-const playerSlotOf = (wide: boolean, tab: Tab): PlayerSlot => wide && tab !== "replay" ? "side" : "note";
+type PlayerSlot = "note" | "side" | "inline";
+const playerSlotOf = (wide: boolean, tab: Tab): PlayerSlot => tab === "replay" ? "note" : wide ? "side" : "inline";
 
 /**
  * One open note: its title and meta row, and the Notes /
@@ -205,6 +205,7 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
   // The summary pane saves on its own; the toolbar's line covers both (KNEG-398).
   const [summarySave, setSummarySave] = useState<AutosaveStatus>("idle");
   const playerRef = useRef<RecordingPlayerHandle>(null);
+  const [mediaReady, setMediaReady] = useState(false);
   const [tab, setTab] = useState<Tab>("notes");
   // The tab on screen, for `switchTab`, which reads it after waiting on a save.
   const tabNow = useRef(tab);
@@ -323,6 +324,7 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
       // moves nothing.
       flip.current = next === renderedWide.current ? null : takeFlip();
       setWindowWide(query.matches);
+      if (!next && articleRef.current?.querySelector(".transcript")?.contains(document.activeElement)) setTab("transcript");
       if (next) setTab(current => current === "transcript" ? "notes" : current);
     };
     query.addEventListener("change", change);
@@ -578,7 +580,7 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
   const recordingDetails = note.recordingDetails && <details className="recording-details" open><summary>Recording details</summary><p>{note.recordingDetails}</p></details>;
   const transcriptBody = transcriptError ? <p className="error" role="alert">{transcriptError} <button type="button" onClick={() => { void loadTranscript(); }}>Retry</button></p> : !transcript ? <p role="status">Loading transcript and recording…</p> : transcript.rows.length ?
     <TranscriptPanel readOnly={blocked !== null} sourceRequest={sourceRequest} onSourceShown={clearSource} rows={transcript.rows} sections={sections}
-      recording={transcript.recording} currentTime={currentTime} playing={playing} visible={wide || tab === "transcript"} playFrom={playFrom}
+      recording={transcript.recording} currentTime={currentTime} playing={playing} visible={wide || tab === "transcript"} wide={wide} playFrom={playFrom}
       time={playerTime} selection={selection} onSelectionChange={setSelection}
       suggestions={transcript.suggestions} onRename={renameSpeaker}
       follow={follow} onReleaseFollow={releaseFollow} takeRecentre={takeRecentre} currentIndex={currentLine?.index ?? null} />
@@ -586,18 +588,17 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
   // The panel heads itself (`TranscriptHeading`, sticky in whatever scrolls it); the column's
   // loading, error and empty lines get the same label over them, so it is there before the rows.
   const transcriptShown = !transcriptError && transcript !== null && transcript.rows.length > 0;
-  // The card's header, only while the transcript is on screen beside or under it: the column at
-  // the width (and not Replay, whose full player is in the note), or the Transcript tab below it.
-  const transcriptOnScreen = wide ? playerSlot === "side" : tab === "transcript";
+  // The header follows transcript visibility, including Replay's wide full player.
+  const transcriptOnScreen = wide || tab === "transcript";
   const header = transcriptOnScreen && transcriptShown
     ? <PlayerHeader speaker={currentLine === null ? null : currentLine.speaker ?? currentLine.speakerId} playing={playing}
-      selection={toPlay?.label ?? null} onPlaySelection={playSelection} onClearSelection={clearSelection}
+      selection={toPlay?.label ?? null} hasSelection={selection.rows.size > 0} canPlaySelection={mediaReady} onPlaySelection={playSelection} onClearSelection={clearSelection}
       follow={follow} onToggleFollow={toggleFollow} />
     : null;
-  // Drawn in one of two places (`playerSlotOf`), never both. The header is a prop, so it comes and
+  // Drawn in one of three slots (`playerSlotOf`), never more than once. The header is a prop, so it comes and
   // goes without remounting the player or moving it (KNEG-377).
   const player = transcript?.recording
-    ? <RecordingPlayer ref={playerRef} noteId={note.id} onCurrentTime={setCurrentTime} onPlayingChange={onPlayingChange} marks={marks} header={header} />
+    ? <RecordingPlayer ref={playerRef} noteId={note.id} onCurrentTime={setCurrentTime} onPlayingChange={onPlayingChange} onReadyChange={setMediaReady} marks={marks} header={header} />
     : null;
 
   return <article ref={articleRef} id={`note-detail-${note.id}`} className={wide ? "note-detail note-detail-wide" : "note-detail"} aria-label={title}>
@@ -674,10 +675,6 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
           {player && playerSlot === "note" ? <div ref={tab === "replay" ? null : observePlayer} className={tab === "replay" ? "note-full-player" : "note-mini-player"} hidden={tab === "notes" && !playbackStarted}>
             {player}
           </div> : null}
-          <section id={`note-${note.id}-panel-transcript`} role="tabpanel"
-            aria-labelledby={`note-${note.id}-tab-transcript`} hidden={tab !== "transcript"}>
-            {wide ? null : <>{recordingDetails}{disposition}{transcriptBody}</>}
-          </section>
           <section id={`note-${note.id}-panel-replay`} role="tabpanel"
             aria-labelledby={`note-${note.id}-tab-replay`} hidden={tab !== "replay"}>
             {recordingDetails}{disposition}
@@ -692,9 +689,15 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
       </div>
     </div>
     {/* No recording details here: the Replay tab still has them, and beside it they would be on screen twice. */}
-    {wide ? <div id={`note-${note.id}-side`} className="note-side">
+    <div id={wide ? `note-${note.id}-side` : `note-${note.id}-panel-transcript`}
+      role={wide ? undefined : "tabpanel"} aria-labelledby={wide ? undefined : `note-${note.id}-tab-transcript`}
+      className={wide ? "note-side" : "note-transcript-inline"} hidden={!wide && tab !== "transcript"}>
+      {!wide && <>{recordingDetails}{disposition}</>}
       <div className="note-side-body">{transcriptShown ? null : <TranscriptHeading />}{transcriptBody}</div>
       {player && playerSlot === "side" ? <div ref={observePlayer} className="note-side-player">{player}</div> : null}
+    </div>
+    {player && playerSlot === "inline" ? <div className="note-inline-player" hidden={tab === "notes" && !playbackStarted}>
+      <div ref={observePlayer} className="note-mini-player" hidden={tab === "notes" && !playbackStarted}>{player}</div>
     </div> : null}
   </article>;
 });

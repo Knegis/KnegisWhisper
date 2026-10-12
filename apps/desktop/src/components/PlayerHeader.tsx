@@ -8,6 +8,8 @@ type PlayerHeaderProps = {
   playing: boolean;
   /** The selection's "a–b" (`selectionInterval`), while two or more lines are selected; null otherwise. */
   selection: string | null;
+  hasSelection: boolean;
+  canPlaySelection: boolean;
   onPlaySelection: () => void;
   onClearSelection: () => void;
   /** Whether Follow is on: the transcript keeps the playing line in view (KNEG-448). */
@@ -24,7 +26,7 @@ type PlayerHeaderProps = {
  * whichever it shows, so the card does not change height as playback passes a line nobody is
  * known to have said.
  */
-export function PlayerHeader({ speaker, playing, selection, onPlaySelection, onClearSelection, follow, onToggleFollow }: PlayerHeaderProps) {
+export function PlayerHeader({ speaker, playing, selection, hasSelection, canPlaySelection, onPlaySelection, onClearSelection, follow, onToggleFollow }: PlayerHeaderProps) {
   const followRef = useRef<HTMLButtonElement>(null);
   // Clear goes with the selection it clears, and focus on it would drop to `<body>`: it moves first
   // to the Follow chip beside it, or to the card's Play when there is no chip (KNEG-448).
@@ -37,11 +39,8 @@ export function PlayerHeader({ speaker, playing, selection, onPlaySelection, onC
     <div className="player-header">
       {selection !== null ? (
         <>
-          <button type="button" className="player-header-play" onClick={onPlaySelection}>
+          <button type="button" disabled={!canPlaySelection} className="player-header-play" onClick={onPlaySelection}>
             Play selection <span className="player-header-range">({selection})</span>
-          </button>
-          <button type="button" className="player-header-clear" aria-label="Clear selection" title="Clear selection" onClick={clearSelection}>
-            <Icon name="close" size={14} />
           </button>
         </>
       ) : speaker !== null ? (
@@ -50,6 +49,9 @@ export function PlayerHeader({ speaker, playing, selection, onPlaySelection, onC
           <span className="player-header-speaker">{speaker}</span>
         </>
       ) : null}
+      {hasSelection && <button type="button" className="player-header-clear" aria-label="Clear selection" title="Clear selection" onClick={clearSelection}>
+        <Icon name="close" size={14} />
+      </button>}
       <button ref={followRef} type="button" className="follow-chip" aria-pressed={follow} title="Keep the playing line in view" onClick={onToggleFollow}>
         Follow
       </button>

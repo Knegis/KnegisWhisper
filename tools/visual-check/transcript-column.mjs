@@ -889,7 +889,7 @@ export async function runTranscriptColumn(options) {
         const drawn = await useScheme(cdp, scheme);
         await cdp.evaluate(snippets.choosePlayerSpeed(CARD, FOLLOW_RATE));
         const first = await played(cdp, () => pressLine(cdp, FOLLOW_LINE));
-        // Past the 400 ms a wheel is not counted after Follow turns on, and past the press's own scroll.
+        // Let the press's own reveal settle before measuring this separate wheel gesture.
         await delay(600);
         const before = await scrollSettled(cdp, SIDE_BODY);
         const point = await cdp.evaluate(snippets.scrollerPoint(SIDE_BODY));
@@ -928,6 +928,8 @@ export async function runTranscriptColumn(options) {
         const onBody = await cdp.evaluate(snippets.blurActive());
         await key(cdp, "PageDown");
         const afterKey = await cdp.evaluate(snippets.followChipState(CARD));
+        // PageDown's native animation must finish before the next distinct Follow press.
+        await scrollSettled(cdp, SIDE_BODY);
         // And here the note: PageDown scrolls the note column, not the transcript, so Follow stays on.
         let elsewhere = null;
         const offAgain = await cdp.evaluate(snippets.followChipState(CARD));

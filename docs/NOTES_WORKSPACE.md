@@ -54,9 +54,8 @@ from it to the end; on a note without one, a press only selects. Pressing the se
 plays it again rather than deselecting it. With Shift, a press or Enter selects every line from
 the last one chosen to this one and plays nothing, and with two or more selected the card offers
 **Play selection**, which stops at the last one's end, and **Clear**, which deselects them and
-leaves focus on the Follow chip. Clear is there only while two or more lines are selected; a
-single selected line is deselected with Escape while focus is on a line, as any selection can
-be. Dragging over a line's text to copy it plays nothing, and a double-click plays only on its
+leaves focus on the Follow chip. Clear is also available for a single selected line, alongside
+the current speaker. Escape while focus is on a line clears any selection. Dragging over a line's text to copy it plays nothing, and a double-click plays only on its
 first click. The lines are one tab stop across them, plus one word of the line holding
 it when that line is drawn word by word (the first, until the arrow keys move along its words).
 The stop is the line that last had focus, else the one a selection started from, else the line
@@ -65,8 +64,11 @@ The arrow keys, Home and End move between the lines, including untimed lines wit
 and skip closed sections. F2 renames the focused line's speaker; speaker names also remain
 clickable, without adding a Tab stop for every turn. Closing Rename returns focus to the line.
 
+Playback, seeking and skip controls are disabled until the recording's metadata is usable and
+again if the recording fails to load. Transcript playback requests cannot advance a failed player's clock.
+
 The player is a card: floating over the foot of the transcript column in a wide window, and in
-a narrower one held to the foot of the note, where it shows on the Transcript tab from the start
+a narrower one held below the transcript at the foot of the note, where it shows on the Transcript tab from the start
 and on Notes once something has played. While the transcript is on screen, the card names who
 is speaking (the last line to have started) and carries the **Follow** chip, on as each note
 opens. While Follow is on, a line that starts playing outside the part of the transcript
@@ -83,10 +85,9 @@ Opening Rename turns Follow off until it is explicitly enabled after the form cl
 hit turns it off while something plays. The chip is a toggle: pressed while Follow is on it
 turns it off, and pressed while off it turns it on and centres the line the player is at,
 wherever it is. Pressing a line or a word, Play selection or a summary reference turns Follow
-on too, but centres a line only when the one playing is out of view. On Replay in a wide window
-the player is Replay's own and has no chip, but the column beside it still follows playback: a
-wheel there turns Follow off with nothing on screen to say so, and pressing a line turns it back
-on.
+on too, but centres a line only when the one playing is out of view. On Replay in a wide window,
+the full player also carries the speaker/selection header and Follow chip while the transcript
+column is visible.
 
 The header's search button opens **Find** in place of the label: what is typed is marked in the
 lines, case ignored and accents kept ("mote" does not find "möte"), with a count such as 2/5,
@@ -95,11 +96,13 @@ and Shift+Enter, or the up and down buttons beside the field, move to the next a
 match, opening a closed section and centring its line. Find never selects or plays a line;
 while something plays, moving to a match turns Follow off. A playing line with matches shows
 them rather than its words until Find closes. Escape or Close ends it and clears the query.
+Ctrl+F or Cmd+F opens Find when the transcript is visible and focus is in the note workspace.
+Editable fields and dialogs keep their shortcuts; inside Find, the shortcut selects its query.
 
 In windows 1280px or wider a note's transcript is a column to the right of the note instead,
 and the Transcript tab is hidden; crossing that width keeps playback, the reading position and
-the selected lines, but draws the transcript afresh, so Find closes and closed sections open
-again. A note with no transcript has no column, and keeps the one-column layout at any width.
+the selected lines, Find/query/current match, collapsed sections and an open speaker rename,
+including its draft and focus. The transcript remains mounted as its layout changes. A note with no transcript has no column, and keeps the one-column layout at any width.
 **Hide transcript**, beside Export and More above the editor, puts the note back in the
 one-column layout with the Transcript tab, and **Show transcript** brings the column back; both
 keep playback and the reading position the same way, and the choice holds for every note until

@@ -45,6 +45,7 @@ type RecordingPlayerProps = {
   noteId: number;
   onCurrentTime: (seconds: number) => void;
   onPlayingChange: (playing: boolean) => void;
+  onReadyChange?: (ready: boolean) => void;
   /** A line above the scrubber, for whoever holds the player to fill (KNEG-448). */
   header?: ReactNode;
   /**
@@ -76,7 +77,7 @@ function mediaErrorMessage(error: MediaError | null): string {
 }
 
 export const RecordingPlayer = forwardRef<RecordingPlayerHandle, RecordingPlayerProps>(
-  function RecordingPlayer({ noteId, onCurrentTime, onPlayingChange, header = null, marks = NO_MARKS }, ref) {
+  function RecordingPlayer({ noteId, onCurrentTime, onPlayingChange, onReadyChange, header = null, marks = NO_MARKS }, ref) {
     const audioRef = useRef<HTMLAudioElement>(null);
     const intervalEndRef = useRef<number | null>(null);
     const frameRef = useRef<number | null>(null);
@@ -85,6 +86,9 @@ export const RecordingPlayer = forwardRef<RecordingPlayerHandle, RecordingPlayer
     const [duration, setDuration] = useState(0);
     const [playing, setPlaying] = useState(false);
     const [speed, setSpeed] = useState("1");
+    const readyRef = useRef(false);
+    const resumeRef = useRef<PlayerPosition | null>(null);
+    const [ready, setReady] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
     const clearIntervalPlayback = useCallback(() => {
@@ -120,9 +124,10 @@ export const RecordingPlayer = forwardRef<RecordingPlayerHandle, RecordingPlayer
 
     const play = useCallback(async (): Promise<boolean> => {
       const audio = audioRef.current;
-      if (audio === null) return false;
+      if (audio === null || !readyRef.current) return false;
       try {
         await audio.play();
+        setError(null);
         return true;
       } catch (cause) {
         setError(cause instanceof Error ? cause.message : "The recording could not be played.");
@@ -136,7 +141,7 @@ export const RecordingPlayer = forwardRef<RecordingPlayerHandle, RecordingPlayer
     // through `playInterval` since KNEG-448, so the handle no longer seeks.)
     const seekTo = useCallback((seconds: number) => {
       const audio = audioRef.current;
-      if (audio === null) return;
+      if (audio === null || !readyRef.current) return;
       const end = intervalEndRef.current;
       if (end !== null && seconds >= end) clearIntervalPlayback();
       audio.currentTime = seconds;
@@ -160,9 +165,9 @@ export const RecordingPlayer = forwardRef<RecordingPlayerHandle, RecordingPlayer
       () => ({
         playInterval: (start, end) => {
           const audio = audioRef.current;
-          if (audio === null) return;
+          if (audio === null || !readyRef.current) return;
           clearIntervalPlayback();
-          audio.currentTime = start;
+          audio.currentTime = Math.min(Math.max(start, 0), audio.duration);
           setCurrentTime(start);
           onCurrentTime(start);
           intervalEndRef.current = end;
@@ -182,6 +187,7 @@ export const RecordingPlayer = forwardRef<RecordingPlayerHandle, RecordingPlayer
           clearIntervalPlayback();
           audio.playbackRate = rate;
           setSpeed(String(rate));
+          if (!readyRef.current) { resumeRef.current = { time, end, playing: wasPlaying, rate }; return; }
           // A player that has only just mounted has not read its file's metadata yet. A seek made
           // before then holds only where the engine keeps a default start position, so it is made
           // again once the metadata is in; playback cannot begin before that.
@@ -212,7 +218,19 @@ export const RecordingPlayer = forwardRef<RecordingPlayerHandle, RecordingPlayer
         setCurrentTime(audio.currentTime);
         onCurrentTime(audio.currentTime);
       };
-      const updateDuration = () => setDuration(Number.isFinite(audio.duration) ? audio.duration : 0);
+      const updateDuration = () => {
+        const usable = !audio.error && Number.isFinite(audio.duration) && audio.duration > 0;
+        readyRef.current = usable; setReady(usable); onReadyChange?.(usable);
+        setDuration(usable ? audio.duration : 0);
+        const from = resumeRef.current;
+        if (usable && from) {
+          resumeRef.current = null;
+          audio.currentTime = Math.min(Math.max(from.time, 0), audio.duration);
+          setCurrentTime(audio.currentTime); onCurrentTime(audio.currentTime);
+          intervalEndRef.current = from.end;
+          if (from.playing) void play().then(started => { if (started) beginIntervalCheck(); });
+        }
+      };
       const handlePlay = () => {
         setPlaying(true);
         onPlayingChange(true);
@@ -222,7 +240,17 @@ export const RecordingPlayer = forwardRef<RecordingPlayerHandle, RecordingPlayer
         onPlayingChange(false);
       };
       const handleEnded = () => clearIntervalPlayback();
-      const handleError = () => setError(mediaErrorMessage(audio.error));
+      const handleEmptied = () => {
+        readyRef.current = false; setReady(false); onReadyChange?.(false);
+        setDuration(0); setCurrentTime(0); onCurrentTime(0);
+      };
+      const handleError = () => {
+        readyRef.current = false; setReady(false); onReadyChange?.(false); resumeRef.current = null;
+        audio.pause(); clearIntervalPlayback();
+        setCurrentTime(0); setDuration(0); onCurrentTime(0);
+        setError(mediaErrorMessage(audio.error));
+      };
+      updateDuration();
       audio.addEventListener("timeupdate", updateTime);
       audio.addEventListener("loadedmetadata", updateDuration);
       audio.addEventListener("durationchange", updateDuration);
@@ -230,6 +258,7 @@ export const RecordingPlayer = forwardRef<RecordingPlayerHandle, RecordingPlayer
       audio.addEventListener("pause", handlePause);
       audio.addEventListener("ended", handleEnded);
       audio.addEventListener("error", handleError);
+      audio.addEventListener("emptied", handleEmptied);
       return () => {
         clearIntervalPlayback();
         audio.pause();
@@ -240,12 +269,13 @@ export const RecordingPlayer = forwardRef<RecordingPlayerHandle, RecordingPlayer
         audio.removeEventListener("pause", handlePause);
         audio.removeEventListener("ended", handleEnded);
         audio.removeEventListener("error", handleError);
+        audio.removeEventListener("emptied", handleEmptied);
       };
-    }, [clearIntervalPlayback, onCurrentTime, onPlayingChange]);
+    }, [beginIntervalCheck, clearIntervalPlayback, onCurrentTime, onPlayingChange, onReadyChange, play]);
 
     const scrub = (next: number) => {
       const audio = audioRef.current;
-      if (audio === null) return;
+      if (audio === null || !readyRef.current) return;
       clearIntervalPlayback();
       audio.currentTime = next;
       setCurrentTime(next);
@@ -274,6 +304,7 @@ export const RecordingPlayer = forwardRef<RecordingPlayerHandle, RecordingPlayer
             </div>
           ) : null}
           <input
+            disabled={!ready}
             aria-label="Recording position"
             type="range"
             min="0"
@@ -290,6 +321,7 @@ export const RecordingPlayer = forwardRef<RecordingPlayerHandle, RecordingPlayer
         <div className="recording-controls">
           <button
             type="button"
+            disabled={!ready}
             className="recording-play"
             aria-label={playing ? "Pause" : "Play"}
             title={playing ? "Pause" : "Play"}
@@ -306,10 +338,10 @@ export const RecordingPlayer = forwardRef<RecordingPlayerHandle, RecordingPlayer
           >
             <IconFilled name={playing ? "pause" : "play"} size={16} />
           </button>
-          <button type="button" className="recording-skip" aria-label={`Back ${SKIP_SECONDS} seconds`} title={`Back ${SKIP_SECONDS} seconds`} onClick={() => skip(-SKIP_SECONDS)}>
+          <button type="button" disabled={!ready} className="recording-skip" aria-label={`Back ${SKIP_SECONDS} seconds`} title={`Back ${SKIP_SECONDS} seconds`} onClick={() => skip(-SKIP_SECONDS)}>
             −{SKIP_SECONDS}
           </button>
-          <button type="button" className="recording-skip" aria-label={`Forward ${SKIP_SECONDS} seconds`} title={`Forward ${SKIP_SECONDS} seconds`} onClick={() => skip(SKIP_SECONDS)}>
+          <button type="button" disabled={!ready} className="recording-skip" aria-label={`Forward ${SKIP_SECONDS} seconds`} title={`Forward ${SKIP_SECONDS} seconds`} onClick={() => skip(SKIP_SECONDS)}>
             +{SKIP_SECONDS}
           </button>
           <span className="recording-clock">{formatClock(currentTime)}<span className="recording-clock-total"> / {formatClock(duration)}</span></span>
@@ -329,7 +361,7 @@ export const RecordingPlayer = forwardRef<RecordingPlayerHandle, RecordingPlayer
             </select>
           </label>
         </div>
-        {error ? <p className="error">The recording could not be loaded. {error}</p> : null}
+        {error ? <p className="error">{ready ? "The recording could not be played." : "The recording could not be loaded."} {error}</p> : null}
       </div>
     );
   },

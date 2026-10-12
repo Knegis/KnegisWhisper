@@ -86,6 +86,7 @@ type TranscriptPanelProps = {
   currentTime: number;
   playing: boolean;
   visible: boolean;
+  wide?: boolean;
   /** Plays from `start` to the end with Follow on (`NoteWorkspace`'s `playFrom`): a line or a word pressed. */
   playFrom: (start: number) => void;
   /** The player's time now (`RecordingPlayerHandle.time`), read every animation frame while a row with words plays. */
@@ -125,7 +126,7 @@ type TranscriptPanelProps = {
 };
 
 export function TranscriptPanel({
-  readOnly = false, sourceRequest, onSourceShown, rows, sections, recording, currentTime, playing, visible, playFrom, time,
+  readOnly = false, sourceRequest, onSourceShown, rows, sections, recording, currentTime, playing, visible, wide = false, playFrom, time,
   selection, onSelectionChange, suggestions, onRename, follow, onReleaseFollow, takeRecentre, currentIndex,
 }: TranscriptPanelProps) {
   const idPrefix = useId();
@@ -440,6 +441,23 @@ export function TranscriptPanel({
       findButton.current?.focus({ preventScroll: true });
     }
   }, [finding]);
+  useEffect(() => {
+    if (!visible) return;
+    const workspace = asideRef.current?.closest(".note-detail");
+    if (!workspace) return;
+    const findShortcut = (event: Event) => {
+      const key = event as KeyboardEvent;
+      if (key.defaultPrevented || key.isComposing || key.altKey || key.shiftKey || !(key.ctrlKey || key.metaKey) || key.key.toLowerCase() !== "f") return;
+      const target = key.target instanceof Element ? key.target : null;
+      if (target?.closest("dialog, [role=dialog]")) return;
+      if (target !== findInput.current && target?.closest("input, textarea, select, [contenteditable=true], [role=textbox]")) return;
+      key.preventDefault();
+      if (finding) { findInput.current?.focus(); findInput.current?.select(); }
+      else setFinding(true);
+    };
+    workspace.addEventListener("keydown", findShortcut);
+    return () => workspace.removeEventListener("keydown", findShortcut);
+  }, [visible, finding]);
   // Nothing while there is no query; "No matches" while it finds nothing.
   const findCount = normaliseQuery(searched) === "" ? null : findStatus(current, matches.length);
 
@@ -555,7 +573,7 @@ export function TranscriptPanel({
       document.removeEventListener("pointerdown", pressedAnywhere, { capture: true });
       document.removeEventListener("keydown", key);
     };
-  }, [visible]);
+  }, [visible, wide]);
 
   // The playing row's words, when it has words that spell it (KNEG-408). Every other row --
   // notes saved before, and every engine but local Whisper -- highlights as a row, as before. While
