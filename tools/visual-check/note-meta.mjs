@@ -133,11 +133,15 @@ export async function runNoteMeta(options) {
     browser = await launchEdge({ ...options, out });
     cdp = await connectCdp(browser.target.webSocketDebuggerUrl);
     await cdp.send("Page.enable");
+    if (options.colorScheme) await cdp.send("Emulation.setEmulatedMedia", {
+      features: [{ name: "prefers-color-scheme", value: options.colorScheme }],
+    });
     const report = createReport({
       url: options.url,
       edgeVersion: browser.version.Browser ?? browser.version,
       fixtureBannerRemoved: true,
       timestamp: new Date().toISOString(),
+      colorScheme: options.colorScheme ?? "system",
       measurementScope: "measured in headless Edge against dev fixtures, not in the Tauri window",
     });
 

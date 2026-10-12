@@ -61,7 +61,9 @@ first click. The lines are one tab stop across them, plus one word of the line h
 it when that line is drawn word by word (the first, until the arrow keys move along its words).
 The stop is the line that last had focus, else the one a selection started from, else the line
 the player is at, playing or paused, so Tab into the transcript lands where the recording is.
-The arrow keys, Home and End move between the lines, past untimed lines and closed sections.
+The arrow keys, Home and End move between the lines, including untimed lines with a speaker,
+and skip closed sections. F2 renames the focused line's speaker; speaker names also remain
+clickable, without adding a Tab stop for every turn. Closing Rename returns focus to the line.
 
 The player is a card: floating over the foot of the transcript column in a wide window, and in
 a narrower one held to the foot of the note, where it shows on the Transcript tab from the start
@@ -72,11 +74,12 @@ between its header and the card is centred, its section opened first when it is 
 the recording is paused nothing follows. While Follow is on, the transcript coming on screen
 (the Transcript tab opened, the layout switched) also brings back the line the player is at,
 playing or paused, when it is out of view, unless a search hit or a summary reference is being
-shown. The person moving the transcript turns Follow off: a wheel (one in the first 400 ms after
-Follow turned on is taken for a touchpad's run-on), a touch moving anywhere but on the player
+shown. The person moving the transcript turns Follow off: a wheel, a touch moving anywhere but on the player
 card, a press on its scrollbar, a scrolling key with focus on a line or a button in the
 transcript or, with focus nowhere, after a press in it, the arrow keys between lines, or closing
-the section that is playing. A search
+the section that is playing. Actual scrolls also release Follow unless they belong to the app's
+reveal operation; this covers selection autoscroll, overlay scrollbars and focus reveal.
+Opening Rename turns Follow off until it is explicitly enabled after the form closes. A search
 hit turns it off while something plays. The chip is a toggle: pressed while Follow is on it
 turns it off, and pressed while off it turns it on and centres the line the player is at,
 wherever it is. Pressing a line or a word, Play selection or a summary reference turns Follow

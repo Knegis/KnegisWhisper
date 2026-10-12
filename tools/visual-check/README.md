@@ -1,5 +1,34 @@
 # Visual checks
 
+## Five backlog fixes (2026-10-12)
+
+Against an isolated worktree Vite server, the following checks use invented browser data:
+
+```powershell
+node tools/visual-check/transcript-follow-rename.mjs --url http://127.0.0.1:5195/ --port 9342 --out target/follow-rename
+node tools/visual-check/summary-setup.mjs --url http://127.0.0.1:5195/ --port 9343 --out target/summary-setup
+node tools/visual-check/trash-partial.mjs --url http://127.0.0.1:5195/ --port 9344 --out target/trash-partial
+```
+
+The first checks Follow ownership, F2 and focus restoration at 1000/1440 px in both
+themes. The second checks summary setup, explicit saving, return-to-note focus,
+manual generation with automatic generation off, and setup-read failures at
+720/1440 px in both themes. The third injects a partial purge and verifies that
+Trash refreshes after the error and that retry deletes the remainder.
+Private browser profiles are closed after each run. These are browser fixture
+measurements; native IPC and live provider/model evidence remain separate.
+
+The native summary test uses a hidden WebView, an in-memory database and a loopback
+mock provider. With the worktree Vite server on 5195, run:
+
+```powershell
+cargo test -p knegiswhisper --lib --features tauri-test summary_native_test -- --ignored --nocapture
+$env:KW_RECORDING_NATIVE_URL = "http://127.0.0.1:5195/"
+cargo test -p knegiswhisper --lib --features tauri-test recording_state_native_test -- --ignored --nocapture
+```
+
+See `docs/KNEG_FIVE_FIXES_VALIDATION.md` for the measured results and limitations.
+
 This directory is a dependency-free Node 22 measurement toolkit. It is an
 instrument, not a frontend test: it records what a particular renderer and
 window show so the orchestrator can distinguish measured evidence from a claim
@@ -432,7 +461,7 @@ check makes it exit 1. Skips clamped at 0 and at the end, and ticks dropped at
 the very start or end, are `tests/playerControls.test.ts`'s, not measured here;
 which line the arrow keys go to, the tab stop's choice and Shift's range are
 `tests/transcriptLayout.test.ts`'s (`stepLine`, `lineStop`, `extendSelection`);
-which inputs let go of Follow, the wheel's 400 ms grace after it turns on, and
+which keys let go of Follow, reveal ownership and its 150 ms inactivity fallback, and
 the band are `tests/followScroll.test.ts`'s; what a query finds (case folded,
 accents kept), where a new query starts from the match that was current, and
 which rows keep their matches' arrays across a new query (`regroupMatches`)

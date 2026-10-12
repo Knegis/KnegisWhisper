@@ -128,6 +128,7 @@ export function RenameForm({ target, suggestions, onRename, onClose }: {
 
 type LineProps = {
   row: TranscriptRow;
+  readOnly: boolean;
   selected: boolean;
   active: boolean;
   /** Whether this line holds the lines' one tab stop (`lineStop`); its words then hold one too. */
@@ -170,7 +171,7 @@ function selectsText(element: Element): boolean {
  * An untimed line is a disabled option that is never focused, selected or played. While Find
  * has matches in it, the line draws its text with them marked, in place of its words.
  */
-export const Line = memo(function Line({ row, selected, active, stop, canPlay, found, currentMatch, actions }: LineProps) {
+export const Line = memo(function Line({ row, readOnly, selected, active, stop, canPlay, found, currentMatch, actions }: LineProps) {
   const timed = row.startSeconds !== null;
   const navigable = timed || row.speakerId !== null;
   // Which word takes Tab while this line holds the stop: the one the arrow keys between words
@@ -191,8 +192,8 @@ export const Line = memo(function Line({ row, selected, active, stop, canPlay, f
       className={className}
       role="option"
       tabIndex={navigable ? (stop ? 0 : -1) : undefined}
-      aria-keyshortcuts={row.speakerId !== null ? "F2" : undefined}
-      aria-description={row.speakerId !== null ? "Press F2 to rename this speaker." : undefined}
+      aria-keyshortcuts={!readOnly && row.speakerId !== null ? "F2" : undefined}
+      aria-description={!readOnly && row.speakerId !== null ? "Press F2 to rename this speaker." : undefined}
       aria-selected={timed ? selected : false}
       aria-disabled={navigable ? undefined : true}
       aria-current={active ? "true" : undefined}
@@ -211,7 +212,7 @@ export const Line = memo(function Line({ row, selected, active, stop, canPlay, f
         if (!navigable) return;
         if (event.key === "F2" && !event.altKey && !event.ctrlKey && !event.metaKey) {
           event.preventDefault(); event.stopPropagation();
-          actions.renameLine(row.index);
+          if (!readOnly) actions.renameLine(row.index);
         } else if (timed && (event.key === "Enter" || event.key === " ")) {
           event.preventDefault();
           actions.choose(row, event.shiftKey);
@@ -343,7 +344,7 @@ export const Turn = memo(function Turn({ turn, activeIndex, stopIndex, renaming,
       <ol className="transcript-rows" role="listbox" aria-multiselectable="true" aria-labelledby={name !== null ? `${nameId} ${timeId}` : timeId}>
         {turn.rows.map((row) => {
           const matches = found.get(row.index);
-          return <Line key={row.index} row={row} selected={selected.has(row.index)} active={activeIndex === row.index}
+          return <Line key={row.index} row={row} readOnly={readOnly} selected={selected.has(row.index)} active={activeIndex === row.index}
             stop={stopIndex === row.index} canPlay={canPlay} found={matches} currentMatch={holds(matches, findCurrent) ? findCurrent : null}
             actions={actions} />;
         })}

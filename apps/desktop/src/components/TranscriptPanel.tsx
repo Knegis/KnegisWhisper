@@ -302,6 +302,8 @@ export function TranscriptPanel({
     rename: (speakerId, name) => latest.current.onRename(speakerId, name),
   }), [reveal, openRename]);
   const toggleSection = useCallback((key: string) => {
+    // Browser scroll anchoring after this app layout change belongs to the section operation.
+    appScroll.current.begin(performance.now());
     const { sections: all, collapsed: closed, places: at, stopIndex: stop, activeIndex: playingLine, follow: following, onReleaseFollow: release } = latest.current;
     if (!closed.has(key)) {
       // Closing the section that is playing puts it away: Follow lets go rather than open it again.

@@ -21,7 +21,7 @@ const key = async name => {
 const follow = () => cdp.evaluate("document.querySelector('.follow-chip')?.getAttribute('aria-pressed') === 'true'");
 const click = async selector => press(cdp, await cdp.evaluate(centerOfText(selector, null)));
 try {
-  browser = await launchEdge({ ...options, out, extraArgs: ["--mute-audio"] });
+  browser = await launchEdge({ ...options, out, extraArgs: ["--mute-audio", "--inprivate"] });
   cdp = await connectCdp(browser.target.webSocketDebuggerUrl);
   await cdp.send("Page.enable");
   for (const scheme of ["light", "dark"]) for (const width of [1000, 1440]) {
@@ -77,5 +77,5 @@ try {
   console.log(JSON.stringify({ passed: results.length, results }));
 } finally {
   if (cdp) await cdp.close();
-  if (browser) await killBrowser(browser);
+  if (browser) await killBrowser(browser.child);
 }
