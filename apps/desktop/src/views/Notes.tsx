@@ -477,10 +477,21 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
     void finished(async () => {
       const held = await getTrash();
       if (held.notes.length === 0 || !window.confirm(emptyTrashQuestion(held))) return false;
-      await emptyTrash(held.notes.map(item => item.id));
+      try {
+        await emptyTrash(held.notes.map(item => item.id));
+      } catch (cause) {
+        // Earlier per-note purges may have committed. Refresh even when the later one failed,
+        // retaining the purge error if the refresh also fails.
+        await reload().catch(() => undefined);
+        if (interactionAtStart === interaction.current && openNoteId !== null) {
+          const selected = await getNote(openNoteId).catch(() => undefined);
+          if (selected === null) await openNewest(true).catch(fail);
+        }
+        throw cause;
+      }
       const gone = (id: number | null) => held.notes.some(item => item.id === id);
       setMoved(current => (current !== null && gone(current.id) ? null : current));
-      if (gone(openNoteId)) await openNewest(true);
+      if (gone(openNoteId) && openNoteId !== null && await getNote(openNoteId) === null) await openNewest(true);
       return true;
     }).then(done => { if (done && interactionAtStart === interaction.current) focusLater("trash", from); });
   };

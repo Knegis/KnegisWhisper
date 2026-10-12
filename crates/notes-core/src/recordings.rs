@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 
 use kw_storage::StorageError;
 use serde::Serialize;
-use sqlx::{FromRow, SqlitePool};
+use sqlx::{Connection, FromRow, SqliteConnection, SqlitePool};
 use ts_rs::TS;
 
 /// The production directory; tests supply their own directory to file operations.
@@ -95,6 +95,12 @@ pub enum PurgeError {
          finish."
     )]
     NotesKept,
+    /// Earlier per-note transactions are committed; retry applies only to what remains.
+    #[error("Deletion stopped after deleting {deleted} of the requested notes. {source}")]
+    Partial {
+        deleted: u64,
+        source: Box<PurgeError>,
+    },
     #[error(transparent)]
     Storage(#[from] StorageError),
 }
@@ -150,43 +156,90 @@ pub async fn empty_trash(
     if ids.is_empty() {
         return Ok(0);
     }
-    // A JSON array for `json_each`: one bound value, however many notes.
-    let ids = format!(
-        "[{}]",
-        ids.iter().map(i64::to_string).collect::<Vec<_>>().join(",")
-    );
+    let mut connection = deletion_connection(pool)
+        .await
+        .map_err(StorageError::from)?;
+    let mut seen = std::collections::BTreeSet::new();
+    let mut deleted = 0;
+    for id in ids.iter().copied().filter(|id| seen.insert(*id)) {
+        match purge_one(connection.as_mut(), id, directory).await {
+            Ok(count) => deleted += count,
+            Err(error) if deleted > 0 => {
+                return Err(PurgeError::Partial {
+                    deleted,
+                    source: Box::new(error),
+                })
+            }
+            Err(error) => return Err(error),
+        }
+        tokio::task::yield_now().await;
+    }
+    Ok(deleted)
+}
+
+/// A private connection keeps deletion's short timeout out of the ordinary writer pool.
+/// Private in-memory databases must keep using their sole, already migrated connection.
+enum DeletionConnection {
+    Dedicated(SqliteConnection),
+    Memory(sqlx::pool::PoolConnection<sqlx::Sqlite>),
+}
+impl AsMut<SqliteConnection> for DeletionConnection {
+    fn as_mut(&mut self) -> &mut SqliteConnection {
+        match self {
+            Self::Dedicated(connection) => connection,
+            Self::Memory(connection) => connection,
+        }
+    }
+}
+
+async fn deletion_connection(pool: &SqlitePool) -> Result<DeletionConnection, sqlx::Error> {
+    let options = pool.connect_options();
+    if options.get_filename() == Path::new(":memory:") {
+        return Ok(DeletionConnection::Memory(pool.acquire().await?));
+    }
+    let options = options
+        .as_ref()
+        .clone()
+        .create_if_missing(false)
+        .busy_timeout(std::time::Duration::from_millis(100));
+    Ok(DeletionConnection::Dedicated(
+        SqliteConnection::connect_with(&options).await?,
+    ))
+}
+
+async fn purge_one(
+    connection: &mut SqliteConnection,
+    id: i64,
+    directory: &Path,
+) -> Result<u64, PurgeError> {
     let (busy, log, checkpointed): (i64, i64, i64) = sqlx::query_as("PRAGMA wal_checkpoint(FULL)")
-        .fetch_one(pool)
+        .fetch_one(&mut *connection)
         .await
         .map_err(StorageError::from)?;
     if !checkpointed_everything(busy, log, checkpointed) {
         return Err(PurgeError::NotOnDisk);
     }
-    let mut tx = pool
+    let mut tx = connection
         .begin_with("BEGIN IMMEDIATE")
         .await
         .map_err(StorageError::from)?;
-    let keys: Vec<String> = sqlx::query_scalar(
+    let key: Option<String> = sqlx::query_scalar(
         "DELETE FROM note_recordings WHERE note_id IN
-             (SELECT id FROM notes
-              WHERE trashed_at IS NOT NULL AND id IN (SELECT value FROM json_each(?)))
+             (SELECT id FROM notes WHERE trashed_at IS NOT NULL AND id=?)
          RETURNING storage_key",
     )
-    .bind(&ids)
-    .fetch_all(&mut *tx)
+    .bind(id)
+    .fetch_optional(&mut *tx)
     .await
     .map_err(StorageError::from)?;
-    let deleted = sqlx::query(
-        "DELETE FROM notes
-         WHERE trashed_at IS NOT NULL AND id IN (SELECT value FROM json_each(?))",
-    )
-    .bind(&ids)
-    .execute(&mut *tx)
-    .await
-    .map_err(StorageError::from)?
-    .rows_affected();
-    for key in &keys {
-        if let Err(error) = remove_file(directory, key).await {
+    let deleted = sqlx::query("DELETE FROM notes WHERE trashed_at IS NOT NULL AND id=?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await
+        .map_err(StorageError::from)?
+        .rows_affected();
+    if let Some(key) = key {
+        if let Err(error) = remove_file(directory, &key).await {
             tracing::warn!(storage_key = %key, error = %error, "could not delete a recording in Trash");
             tx.rollback().await.map_err(StorageError::from)?;
             return Err(PurgeError::RecordingKept);
@@ -259,8 +312,9 @@ async fn delete_attached_inner(
 ) -> Result<bool, String> {
     let failed =
         |error: sqlx::Error| format!("could not delete the recording's attachment: {error}");
+    let mut connection = deletion_connection(pool).await.map_err(failed)?;
     let (busy, log, checkpointed): (i64, i64, i64) = sqlx::query_as("PRAGMA wal_checkpoint(FULL)")
-        .fetch_one(pool)
+        .fetch_one(connection.as_mut())
         .await
         .map_err(failed)?;
     if !checkpointed_everything(busy, log, checkpointed) {
@@ -270,7 +324,11 @@ async fn delete_attached_inner(
                 .to_owned(),
         );
     }
-    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await.map_err(failed)?;
+    let mut tx = connection
+        .as_mut()
+        .begin_with("BEGIN IMMEDIATE")
+        .await
+        .map_err(failed)?;
     let key: Option<String> =
         sqlx::query_scalar("DELETE FROM note_recordings WHERE note_id = ? AND (? IS NULL OR (storage_key = ? AND EXISTS(SELECT 1 FROM notes WHERE id=note_id AND trashed_at IS NULL) AND EXISTS(SELECT 1 FROM note_recording_state s WHERE s.note_id=note_recordings.note_id AND s.storage_key=note_recordings.storage_key AND s.status IN ('delete-pending','delete-failed')))) RETURNING storage_key")
             .bind(note_id).bind(expected_key).bind(expected_key)
@@ -870,6 +928,85 @@ mod tests {
         assert!(!dir.path().join("owned.wav").exists());
     }
 
+    #[tokio::test]
+    async fn blocked_deletion_returns_promptly_without_changing_the_writer_pool_timeout() {
+        let dir = tempfile::tempdir().unwrap();
+        let (db, id) = on_disk(dir.path()).await;
+        let mut reader = SqliteConnection::connect_with(&db.pool().connect_options())
+            .await
+            .unwrap();
+        let mut held = reader.begin().await.unwrap();
+        let _: i64 = sqlx::query_scalar("SELECT count(*) FROM notes")
+            .fetch_one(&mut *held)
+            .await
+            .unwrap();
+        attach(db.pool(), id, "owned.wav", None, None)
+            .await
+            .unwrap();
+        let started = std::time::Instant::now();
+        let (deletion, writer) = tokio::join!(
+            delete_attached(db.pool(), id, dir.path(), SAYS),
+            sqlx::query("UPDATE notes SET content='concurrent save' WHERE id=?")
+                .bind(id)
+                .execute(db.pool())
+        );
+        assert!(deletion.is_err());
+        assert!(writer.is_ok());
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+        assert!(dir.path().join("owned.wav").exists());
+        let timeout: i64 = sqlx::query_scalar("PRAGMA busy_timeout")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(timeout, 5000);
+        held.rollback().await.unwrap();
+        assert_eq!(
+            delete_attached(db.pool(), id, dir.path(), SAYS).await,
+            Ok(true)
+        );
+    }
+
+    #[tokio::test]
+    async fn per_note_purges_allow_a_save_and_restore_between_transactions() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::open(&dir.path().join("notes.db")).await.unwrap();
+        let first = trashed(db.pool(), dir.path(), "First", Some("first.wav")).await;
+        let second = trashed(db.pool(), dir.path(), "Second", Some("second.wav")).await;
+        let mut connection = deletion_connection(db.pool()).await.unwrap();
+        assert_eq!(
+            purge_one(connection.as_mut(), first, dir.path())
+                .await
+                .unwrap(),
+            1
+        );
+        sqlx::query("UPDATE notes SET content='saved between purges' WHERE id=?")
+            .bind(second)
+            .execute(db.pool())
+            .await
+            .unwrap();
+        crate::trash::restore(db.pool(), second).await.unwrap();
+        assert_eq!(
+            purge_one(connection.as_mut(), second, dir.path())
+                .await
+                .unwrap(),
+            0
+        );
+        assert!(get(db.pool(), second).await.unwrap().is_some());
+        assert!(dir.path().join("second.wav").exists());
+        assert!(!dir.path().join("first.wav").exists());
+    }
+
+    #[tokio::test]
+    async fn duplicate_confirmed_ids_are_purged_once() {
+        let db = db().await;
+        let dir = tempfile::tempdir().unwrap();
+        let id = trashed(db.pool(), dir.path(), "Once", Some("once.wav")).await;
+        assert_eq!(
+            empty_trash(db.pool(), &[id, id], dir.path()).await.unwrap(),
+            1
+        );
+    }
+
     /* ----------------------------------------- deleting forever (KNEG-401) */
 
     /// A note, moved to Trash, with `key` attached and a file of that name in
@@ -993,23 +1130,25 @@ mod tests {
         let error = empty_trash(p, &[plain, locked], dir.path())
             .await
             .unwrap_err();
-        assert!(matches!(error, PurgeError::RecordingKept), "{error:?}");
+        assert!(
+            matches!(error, PurgeError::Partial { deleted: 1, .. }),
+            "{error:?}"
+        );
         assert_eq!(
             error.to_string(),
-            "A recording in Trash couldn't be deleted from this computer, so the notes are \
+            "Deletion stopped after deleting 1 of the requested notes. A recording in Trash couldn't be deleted from this computer, so the notes are \
              still in Trash. Some recordings may already have been removed. Close any app that may be using the remaining recording and try again."
         );
-        for id in [plain, locked] {
-            assert!(crate::trash::is_trashed(p, id).await.unwrap(), "{id}");
-            assert!(get(p, id).await.unwrap().is_some(), "{id}");
-        }
+        assert!(notes::get(p, plain).await.unwrap().is_none());
+        assert!(crate::trash::is_trashed(p, locked).await.unwrap());
+        assert!(get(p, locked).await.unwrap().is_some());
         assert!(dir.path().join("locked.wav").exists());
-        assert_eq!(sorted_keys(p).await, ["locked.wav", "plain.wav"]);
+        assert_eq!(sorted_keys(p).await, ["locked.wav"]);
 
         std::fs::remove_dir(dir.path().join("locked.wav")).unwrap();
         assert_eq!(
             empty_trash(p, &[plain, locked], dir.path()).await.unwrap(),
-            2
+            1
         );
         assert!(!dir.path().join("plain.wav").exists());
         assert!(storage_keys(p).await.unwrap().is_empty());
