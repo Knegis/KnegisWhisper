@@ -1878,6 +1878,57 @@ export function followBandState(scroller) {
 }
 
 /**
+ * Transcript line `index` of the open note beside the band Follow keeps lines in, inside
+ * `scroller` (`followBandState`'s band): whether it is drawn and wholly inside it (±1px), how far
+ * its centre is from the band's, and the scroller's `scrollTop`.
+ */
+export function lineBandState(scroller, index) {
+  return source(`
+    const body = document.querySelector(${JSON.stringify(scroller)});
+    const line = document.querySelectorAll('.note-detail .transcript .transcript-rows li')[${JSON.stringify(index)}];
+    if (!body || !line) throw new Error('No ' + ${JSON.stringify(scroller)} + ' or no line ' + ${JSON.stringify(index)});
+    const head = [...body.querySelectorAll('.transcript-head')].find((item) => item.getClientRects().length > 0) ?? null;
+    const detail = document.querySelector('.note-detail');
+    const playerH = detail ? parseFloat(getComputedStyle(detail).getPropertyValue('--player-h')) || 0 : 0;
+    const top = body.getBoundingClientRect().top + body.clientTop;
+    const band = { top: top + (head ? head.getBoundingClientRect().height : 0), bottom: top + body.clientHeight - playerH - 24 };
+    const rect = line.getBoundingClientRect();
+    const drawn = line.getClientRects().length > 0;
+    return {
+      drawn,
+      top: rect.top,
+      bottom: rect.bottom,
+      band,
+      inBand: drawn && rect.top >= band.top - 1 && rect.bottom <= band.bottom + 1,
+      offset: (rect.top + rect.bottom) / 2 - (band.top + band.bottom) / 2,
+      scrollTop: body.scrollTop,
+    };
+  `);
+}
+
+/**
+ * A point inside `selector` that lands on nothing a person would operate -- no button, field,
+ * link, editable text or focusable element -- found down its left edge, 6px in: for a press that
+ * only says where the person last pressed. `plain` is false when there is none.
+ */
+export function blankPoint(selector) {
+  return source(`
+    const element = document.querySelector(${JSON.stringify(selector)});
+    if (!element) throw new Error('No ' + ${JSON.stringify(selector)});
+    ${DESCRIBE}
+    const rect = element.getBoundingClientRect();
+    for (let y = rect.top + 40; y < Math.min(rect.bottom, innerHeight) - 40; y += 20) {
+      const x = rect.left + 6;
+      const hit = document.elementFromPoint(x, y);
+      if (!hit || !element.contains(hit)) continue;
+      if (hit.closest('button, input, textarea, select, a, [contenteditable], [tabindex], [role="option"]')) continue;
+      return { x, y, plain: true, hit: describe(hit).slice(0, 60) };
+    }
+    return { x: rect.left + 6, y: rect.top + 40, plain: false, hit: null };
+  `);
+}
+
+/**
  * A point over `selector`, a scroller, for a real wheel: across its middle and 40% down, and
  * whether the element there is inside it (so not the card floating over its foot), with its
  * `scrollTop` now.

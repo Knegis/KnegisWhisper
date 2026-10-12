@@ -103,6 +103,8 @@ test("every renderer snippet is syntactically valid JavaScript", () => {
     snippets.playingLinesRecord(true),
     snippets.followBandState(".notes-main"),
     snippets.scrollerPoint(".note-side .note-side-body"),
+    snippets.lineBandState(".notes-main", 3),
+    snippets.blankPoint(".note-detail .note-body"),
     snippets.sectionToggleState("5:00 – 10:00"),
     snippets.sectionExpanded("A title with \"quotes\" and a 'single' one"),
     snippets.lineTextDrag(3),

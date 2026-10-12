@@ -6,8 +6,9 @@
  * contiguous: 1, 11, 13, 14 and 16 are the column's header, sections, turns,
  * rename and hover, 2 and 3 the player card, 4, 8 and 12 the click model
  * (a press plays from a line, Shift selects a range the card offers to play,
- * one tab stop with the arrow keys between lines), and 5, 6 and 7 Follow (the
- * card's chip keeps the playing line in view until the person scrolls).
+ * one tab stop with the arrow keys between lines), and 5, 6, 7 and 17 Follow
+ * (the card's chip keeps the playing line in view until the person scrolls,
+ * and gives way to a search hit's row).
  *
  * Fixture note 106, "Roadmap review — long transcript"
  * (`apps/desktop/src/lib/devFixtures.ts`, its rows in `lib/fixtureTranscript.ts`):
@@ -128,6 +129,14 @@ const CROSS_FROM = 295;
 const SECOND_SECTION = SECTIONS[1].title;
 /** The first line of the second section: line 27, "Då går vi vidare…" (5:02). */
 const SECOND_SECTION_FIRST = SECTIONS[0].lines;
+/**
+ * Claim 17 searches for a word only line 4 says, "Bygget går igenom på alla tre plattformarna…"
+ * (0:22), with the player paused at 9:20, inside line 43 (9:20 to 9:30), far from it.
+ */
+const HIT_QUERY = "plattformarna";
+const HIT_ROW = 3;
+const HIT_FROM = 560;
+const MINI = ".note-detail .note-mini-player";
 
 /** Counts `play()` from before the app's own code runs (as `transcript-search.mjs` does). */
 const COUNT_PLAYS = `(() => {
@@ -265,6 +274,22 @@ function bandLine(change) {
     follow: at.follow,
     inBand: at.drawn && at.headBottom !== null && at.top >= at.headBottom - 0.5 && at.bottom <= at.cardTop + 0.5,
   };
+}
+
+/**
+ * Types `query` into the title bar's search and chooses the result for `title`, as
+ * `transcript-search.mjs` does: the hit selects that note's transcript row and shows it (KNEG-406).
+ */
+async function chooseSearchHit(cdp, query, title) {
+  await cdp.evaluate("(() => { const field = document.querySelector('.titlebar-search input'); field.focus(); field.select(); return true; })()");
+  await cdp.send("Input.insertText", { text: query });
+  await waitFor(cdp, "document.querySelectorAll('#titlebar-search-results [role=option]').length > 0", `results for ${query}`);
+  const chosen = await cdp.evaluate(`(() => {
+    const item = [...document.querySelectorAll('#titlebar-search-results [role=option]')].find((element) => element.textContent.includes(${JSON.stringify(title)}));
+    item?.click();
+    return Boolean(item);
+  })()`);
+  if (!chosen) throw new Error(`No search result for ${title}`);
 }
 
 /** The open note's recording, wherever its one player is drawn, is playing. */
@@ -737,8 +762,10 @@ export async function runTranscriptColumn(options) {
         "button.follow-chip goes to aria-pressed=\"false\"; at the next line to start playing, scrollTop is where the wheel left it (±1px), as",
         `the line starts and ${SETTLE_MS} ms later. Then, at 1x, a real press on the chip: it is aria-pressed="true" and, once the column has`,
         `stopped scrolling, the playing line's centre is within ±${CENTRE_TOLERANCE}px of the visible band's (followBandState: the scroller inside its`,
-        "border, less the sticky head's height at the top and --player-h + 24px at the bottom). Then, with focus moved to <body>, a real",
-        "PageDown: the chip goes to aria-pressed=\"false\"",
+        "border, less the sticky head's height at the top and --player-h + 24px at the bottom). Then a real press on the column's label",
+        "(not a control), focus moved to <body> and a real PageDown: the chip goes to aria-pressed=\"false\". Then the chip pressed on",
+        "again, a real press in the note column's left margin (blankPoint: on no control) and, with focus on <body>, a real PageDown,",
+        "which scrolls the note rather than the transcript: the chip stays aria-pressed=\"true\"",
       ].join(" "),
     }, async () => {
       const schemes = {};
@@ -782,9 +809,27 @@ export async function runTranscriptColumn(options) {
           await cdp.screenshot(resolve(out, onShot));
           screenshots.push(onShot, await cardShot(cdp, out, `06-card-follow-on-${scheme}-zoom.png`));
         }
+        // With focus on nothing, a key scrolls the scroller pressed last: here the column, by its label.
+        await pressAt(cdp, ".note-side .transcript-head .transcript-label");
         const onBody = await cdp.evaluate(snippets.blurActive());
         await key(cdp, "PageDown");
         const afterKey = await cdp.evaluate(snippets.followChipState(CARD));
+        // And here the note: PageDown scrolls the note column, not the transcript, so Follow stays on.
+        let elsewhere = null;
+        const offAgain = await cdp.evaluate(snippets.followChipState(CARD));
+        if (offAgain.point !== null) {
+          await pressPoint(cdp, offAgain.point, "the Follow chip");
+          const on = (await cdp.evaluate(snippets.followChipState(CARD))).pressed;
+          await delay(150);
+          await scrollSettled(cdp, SIDE_BODY);
+          const noteBefore = await cdp.evaluate("document.querySelector('.note-detail .note-body').scrollTop");
+          const blank = await cdp.evaluate(snippets.blankPoint(".note-detail .note-body"));
+          await pressPoint(cdp, blank, "the note column's margin");
+          const bodyFocused = await cdp.evaluate(snippets.blurActive());
+          await key(cdp, "PageDown", { settle: 400 });
+          const noteAfter = await cdp.evaluate("document.querySelector('.note-detail .note-body').scrollTop");
+          elsewhere = { on, blank, onBody: bodyFocused, chip: (await cdp.evaluate(snippets.followChipState(CARD))).pressed, noteScrolled: round(noteAfter - noteBefore) };
+        }
         await stopPlaying(cdp);
         const parts = {
           started: first.landed && first.plays === 1,
@@ -796,6 +841,7 @@ export async function runTranscriptColumn(options) {
           centred: centred !== null && centred.offset !== null && Math.abs(centred.offset) <= CENTRE_TOLERANCE,
           onBody,
           pageDownReleased: afterKey.pressed === "false",
+          noteKeyKeeps: elsewhere !== null && elsewhere.on === "true" && elsewhere.blank.plain && elsewhere.onBody && elsewhere.chip === "true",
         };
         schemes[scheme] = {
           drawn,
@@ -805,6 +851,7 @@ export async function runTranscriptColumn(options) {
           pressedAgain: pressedAgain?.pressed ?? null,
           centred: centred === null ? null : { ...centred, offset: round(centred.offset) },
           pageDown: { onBody, chip: afterKey.pressed },
+          notePageDown: elsewhere,
           failed: Object.entries(parts).filter(([, ok]) => !ok).map(([name]) => name),
           matches: Object.values(parts).every(Boolean),
         };
@@ -1274,6 +1321,68 @@ export async function runTranscriptColumn(options) {
           drawn,
           idle,
           playing,
+          failed: Object.entries(parts).filter(([, ok]) => !ok).map(([name]) => name),
+          matches: Object.values(parts).every(Boolean),
+        };
+      }
+      return {
+        measured: { schemes },
+        matches: SCHEMES.every((scheme) => schemes[scheme].matches),
+        screenshots,
+      };
+    });
+
+    // 17. A search hit that opens the Transcript tab shows its row, not the line the player is at.
+    await check({
+      id: "17",
+      claim: "A search hit that opens the Transcript tab shows its row, though Follow is on and the player is elsewhere.",
+      expectation: [
+        `in each scheme, at 1000x720 from a fresh load on the Notes tab, nothing played and the recording paused at ${HIT_FROM} s`,
+        `(inside line 43, far below): the title bar's search for "${HIT_QUERY}", and its result for "${TITLE}" chosen (as`,
+        `transcript-search.mjs chooses one). Once .notes-main has stopped scrolling: the Transcript tab is selected, line ${HIT_ROW + 1}, the one`,
+        "the hit names, is the only aria-selected=\"true\" line and is drawn wholly inside the visible band (lineBandState: .notes-main less",
+        "the sticky head and --player-h + 24px, ±1px), the mini card's Follow chip is still aria-pressed=\"true\" (paused), and no play() call",
+        "was made",
+      ].join(" "),
+    }, async () => {
+      const schemes = {};
+      const screenshots = [];
+      for (const scheme of SCHEMES) {
+        await cdp.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: scheme }] });
+        await loadNote(cdp, NARROW);
+        const drawn = await cdp.evaluate(snippets.markColorScheme(scheme));
+        await waitFor(cdp, "(document.querySelector('.note-detail audio')?.readyState ?? 0) >= 1", "the recording's metadata");
+        await cdp.evaluate(snippets.pauseRecordingAt(MINI, HIT_FROM));
+        await waitFor(cdp, `(() => { const at = ${snippets.recordingAt(MINI)}; return at.paused && !at.seeking && Math.abs(at.time - ${HIT_FROM}) < 0.01; })()`, `the recording paused at ${HIT_FROM} s`);
+        await delay(300);
+        const playsBefore = await cdp.evaluate("window.__plays ?? null");
+        await chooseSearchHit(cdp, HIT_QUERY, TITLE);
+        await waited(cdp, "document.querySelector('.note-detail [role=\"tab\"][aria-selected=\"true\"]')?.textContent.trim() === 'Transcript'", "the Transcript tab", 5_000);
+        // Past the two frames the transcript waits on coming on screen, and any scroll after them.
+        await delay(600);
+        await scrollSettled(cdp, ".notes-main");
+        const tab = await cdp.evaluate("document.querySelector('.note-detail [role=\"tab\"][aria-selected=\"true\"]')?.textContent.trim() ?? null");
+        const lines = await cdp.evaluate(snippets.lineModelState());
+        const row = await cdp.evaluate(snippets.lineBandState(".notes-main", HIT_ROW));
+        const follow = await cdp.evaluate(snippets.followChipState(MINI));
+        const plays = (await cdp.evaluate("window.__plays ?? null")) - playsBefore;
+        const shot = `17-search-hit-${scheme}-1000x720.png`;
+        await cdp.screenshot(resolve(out, shot));
+        screenshots.push(shot);
+        const parts = {
+          onTranscript: tab === "Transcript",
+          selected: JSON.stringify(lines.selected) === JSON.stringify([HIT_ROW]),
+          inView: row.inBand,
+          followOn: follow.pressed === "true",
+          noPlay: plays === 0,
+        };
+        schemes[scheme] = {
+          drawn,
+          tab,
+          selected: lines.selected,
+          row: { ...row, top: round(row.top), bottom: round(row.bottom), offset: round(row.offset), band: { top: round(row.band.top), bottom: round(row.band.bottom) } },
+          follow: follow.pressed,
+          plays,
           failed: Object.entries(parts).filter(([, ok]) => !ok).map(([name]) => name),
           matches: Object.values(parts).every(Boolean),
         };

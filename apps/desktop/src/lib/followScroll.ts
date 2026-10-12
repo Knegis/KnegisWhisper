@@ -27,9 +27,11 @@ export function releasesFollow(input: ScrollInput, sinceOn: number): boolean {
 const SCROLL_KEYS: ReadonlySet<string> = new Set(["PageUp", "PageDown", "Home", "End", "ArrowUp", "ArrowDown", " "]);
 
 /**
- * Where a key was pressed, for `keyReleasesFollow`: with focus on nothing (`<body>`) or on the
- * transcript's scroller itself (`page`); on a button, a line or a word inside the scroller
- * (`inside`); or anywhere else -- a text field, a select, the note beside the column (`elsewhere`).
+ * Where a key was pressed, for `keyReleasesFollow`: on the transcript's scroller itself, or with
+ * focus on nothing (`<body>`) when the last press was in the scroller, which is then the one the
+ * key scrolls (`page`); on a button, a line or a word inside the scroller (`inside`); or anywhere
+ * else -- a text field, a select, the note beside the column, `<body>` after a press elsewhere
+ * (`elsewhere`).
  */
 export type KeyPlace = "page" | "inside" | "elsewhere";
 

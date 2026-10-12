@@ -266,7 +266,7 @@ stylesheet reads, with `data-theme` set on the root to match. Presses are real
 pointer presses, Edge runs with `--mute-audio`, and a count of `play()` calls
 is installed before the page's own code runs. A line is pressed inside its
 left padding (`linePadPoint`), on the line itself rather than a word, after
-checking that the line is what is under that point. Thirteen checks so far:
+checking that the line is what is under that point. Fourteen checks so far:
 
 1. The column has a plain header and is grouped: `.transcript-head` is sticky
    at top 0 and holds one heading, "Transcript" drawn uppercase, and one
@@ -317,8 +317,12 @@ checking that the line is what is under that point. Thirteen checks so far:
    `scrollTop` stays where the wheel left it (as it starts and 800 ms on).
    Pressed at 1x, the chip is pressed again and, the scroll ended, the playing
    line's centre is within ±40px of the visible band's (`followBandState`: the
-   scroller less the head's height and `--player-h` + 24px). A real PageDown
-   with focus on `<body>` turns it off again.
+   scroller less the head's height and `--player-h` + 24px). After a real
+   press on the column's label, a real PageDown with focus on `<body>` turns
+   it off again. Pressed on once more, then a real press in the note column's
+   margin (`blankPoint`, on no control) and a PageDown with focus on `<body>`
+   -- a key for the note, which Chromium scrolls as the scroller pressed last
+   -- leave it on.
 7. Following opens a closed section, and closing the playing one lets go: the
    "5:00 – 10:00" toggle pressed (closed; chip still pressed), then played from
    295 s at 2x with the card's Play, the first line past 5:00 opens the section
@@ -356,6 +360,12 @@ checking that the line is what is under that point. Thirteen checks so far:
     playing gives it the resolved `--panel-hover`; played by a press in its
     padding, which also selects it, under the pointer it keeps the resolved
     `--band-wash` (playing wins over the selected `--selected`).
+17. A search hit shows its row though Follow would bring back another: at
+    1000x720 on Notes, nothing played and the recording paused at 9:20 (line
+    43), the title bar's search for "plattformarna" and its result for note
+    106 chosen open the Transcript tab with line 4 the only selected line,
+    wholly inside the visible band of `.notes-main` once it has stopped
+    scrolling (`lineBandState`), Follow still on and no `play()` call.
 
 Measured in headless Edge against dev fixtures, not in the Tauri window; a false
 check makes it exit 1. Skips clamped at 0 and at the end, and ticks dropped at

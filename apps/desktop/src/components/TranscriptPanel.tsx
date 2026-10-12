@@ -153,6 +153,8 @@ export function TranscriptPanel({
   // The lines' scroll margins (`styles.css`) keep it clear of the sticky head and the player card,
   // so `center` centres it on the band between them.
   const pendingReveal = useRef<Reveal | null>(null);
+  // How many reveals have been asked for, so a deferred one can tell that something else was shown first.
+  const reveals = useRef(0);
   const flushReveal = useCallback(() => {
     const pending = pendingReveal.current;
     if (pending === null) return;
@@ -163,6 +165,7 @@ export function TranscriptPanel({
     pending.then?.();
   }, []);
   const reveal = useCallback((index: number, block: ScrollLogicalPosition, then?: () => void) => {
+    reveals.current += 1;
     const overtaken = pendingReveal.current?.then;
     pendingReveal.current = { index, block, then: overtaken === undefined ? then : () => { overtaken(); then?.(); } };
     const section = latest.current.places.rowsAt.get(index)?.section;
@@ -292,14 +295,21 @@ export function TranscriptPanel({
   // of view; not when a summary source or a search hit is about to be shown instead. Two frames
   // on, once the card that appears with it has its height (`--player-h`, written by a
   // ResizeObserver after layout): the scroll margins centre the line against that height.
+  //
+  // Whether a source is to be shown is read now, in the commit that brought the transcript on
+  // screen: the source effect shows it, and clears the request, long before those two frames, and
+  // read then the request would be gone and the line the player is at would take its place
+  // (KNEG-406's "selected and in view"). Anything shown in the meantime wins the same way.
   useLayoutEffect(() => {
     shownBefore.current = visible;
-    if (!visible) return;
+    if (!visible || latest.current.sourcePending) return;
+    const revealsThen = reveals.current;
     let frame = requestAnimationFrame(() => {
       frame = requestAnimationFrame(() => {
         const { follow: following, sourcePending: showing, activeIndex: playingLine, currentIndex: at } = latest.current;
         const target = playingLine ?? at;
-        if (following && !showing && target !== null && !lineInBand(target)) reveal(target, "center");
+        if (!following || showing || reveals.current !== revealsThen || target === null) return;
+        if (!lineInBand(target)) reveal(target, "center");
       });
     });
     return () => cancelAnimationFrame(frame);
@@ -330,21 +340,30 @@ export function TranscriptPanel({
     const press = (event: PointerEvent) => {
       if (event.target === scroller && event.offsetX >= scroller.clientWidth) letGo("scrollbar");
     };
+    // Whether the last press anywhere landed in the transcript's scroller. With focus on nothing
+    // (`<body>`), a key scrolls the scroller pressed last, as Chromium picks it: after a press in
+    // the note column beside a wide transcript, PageDown scrolls the note, and Follow stays on.
+    let pressedHere = false;
+    const pressedAnywhere = (event: PointerEvent) => {
+      pressedHere = event.target instanceof Node && scroller.contains(event.target);
+    };
     const key = (event: KeyboardEvent) => {
       const target = event.target;
-      const place: KeyPlace = target === document.body || target === scroller ? "page"
-        : target instanceof HTMLElement && scroller.contains(target) && !target.isContentEditable && !target.matches("input, textarea, select") ? "inside"
+      const place: KeyPlace = target === scroller || (target === document.body && pressedHere) ? "page"
+        : target instanceof HTMLElement && target !== document.body && scroller.contains(target) && !target.isContentEditable && !target.matches("input, textarea, select") ? "inside"
         : "elsewhere";
       if (keyReleasesFollow(event.key, place, event.defaultPrevented)) letGo("key");
     };
     scroller.addEventListener("wheel", wheel, { passive: true });
     scroller.addEventListener("touchmove", touch, { passive: true });
     scroller.addEventListener("pointerdown", press);
+    document.addEventListener("pointerdown", pressedAnywhere, { capture: true, passive: true });
     document.addEventListener("keydown", key);
     return () => {
       scroller.removeEventListener("wheel", wheel);
       scroller.removeEventListener("touchmove", touch);
       scroller.removeEventListener("pointerdown", press);
+      document.removeEventListener("pointerdown", pressedAnywhere, { capture: true });
       document.removeEventListener("keydown", key);
     };
   }, [visible]);
