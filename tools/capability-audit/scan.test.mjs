@@ -81,7 +81,7 @@ test("the real tree is clean, and all parser inventories are live", () => {
   assert.equal(real.transparency.configFlag, true);
   // KNEG-258: the editor is mounted in exactly one place, and the window that
   // hosts it has given Tauri's own drag and drop up so the handle can drag.
-  assert.deepEqual(real.htmlDrag.sites, [{ file: "apps/desktop/src/components/NoteEditor.tsx", line: 68 }]);
+  assert.deepEqual(real.htmlDrag.sites, [{ file: "apps/desktop/src/components/NoteEditor.tsx", line: 74 }]);
   assert.deepEqual(real.htmlDrag.windows, [
     { label: "overlay", source: "apps/desktop/src-tauri/src/overlay.rs" },
     { label: "dictation-languages", source: "apps/desktop/src-tauri/src/persistent_overlay.rs" },
