@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-import { waitFor, reload, pressText as press } from "./interactions.mjs";
+import { waitFor, reload, pressText as press, press as pressPoint } from "./interactions.mjs";
 /**
  * Measures, against dev fixtures, that a transcript row local Whisper timed
  * word by word highlights the word being said as its recording plays, and
- * that clicking a word goes there (KNEG-408).
+ * that clicking a word plays from there (KNEG-408, KNEG-448).
  *
  * Fixture note 105, "Word timings" (`apps/desktop/src/lib/devFixtures.ts`):
  * row 1 has fourteen words, one every 0.65 s from 0.5 s; row 2 eleven; row 3
@@ -13,8 +13,9 @@ import { waitFor, reload, pressText as press } from "./interactions.mjs";
  * what the row holds.
  *
  * Each check starts from a fresh load at 1440x900 on Notes with note 105 open
- * from the library, its transcript in the side column. A row is played with
- * its own Play, pressed with a real pointer press so the page has the user
+ * from the library, its transcript in the side column. A row is played by a
+ * real pointer press in its left padding (`linePadPoint`), which plays it
+ * from its start since KNEG-448's click model and gives the page the user
  * activation a click gives it. Edge runs with `--mute-audio`.
  */
 import { mkdir, writeFile } from "node:fs/promises";
@@ -44,16 +45,15 @@ const SAMPLE_GAP_MS = 1200;
 const LATER_WORD = 12;
 
 const noteOpen = `(() => { const input = document.querySelector('.note-detail input[aria-label="Title"]'); return Boolean(input) && !input.disabled && input.value === ${JSON.stringify(TITLE)}; })()`;
-const playButton = (row) => `.note-side button[aria-label="Play transcript row ${row + 1}"]`;
 const playingFrom = (seconds) => `(() => { const audio = document.querySelector('audio'); return Boolean(audio) && !audio.paused && audio.readyState >= 3 && audio.currentTime >= ${seconds}; })()`;
 const rowIsCurrent = (row) => `(document.querySelectorAll('.note-detail .transcript .transcript-rows li')[${row}]?.getAttribute('aria-current') === 'true')`;
 
-
-
-
-
-/** A real pointer press at the centre of the first `selector` reading `text` (any text for `null`). */
-
+/** A real pointer press in row `row`'s left padding, on the line itself rather than a word. */
+async function pressRow(cdp, row) {
+  const point = await cdp.evaluate(snippets.linePadPoint(row));
+  if (!point.onLine) throw new Error(`row ${row + 1}'s left padding is not the row at ${JSON.stringify(point)}`);
+  await pressPoint(cdp, point);
+}
 
 /** The last word that has started by `seconds`, as `lib/wordTiming.ts`'s `wordAt` answers it. */
 function wordAt(words, seconds) {
@@ -76,9 +76,9 @@ async function openNote(cdp) {
   return cdp.evaluate(snippets.noteTranscriptRows(NOTE_ID));
 }
 
-/** Plays row `row` with its own Play and waits until the recording is `into` seconds past the row's start. */
+/** Plays row `row` with a press in its padding and waits until the recording is `into` seconds past the row's start. */
 async function playRow(cdp, rows, row, into) {
-  await press(cdp, playButton(row), null);
+  await pressRow(cdp, row);
   await waitFor(cdp, `${playingFrom(rows[row].startSeconds + into)} && ${rowIsCurrent(row)}`, `row ${row + 1} to play`);
 }
 
@@ -101,7 +101,7 @@ async function sample(cdp, words, row) {
   };
 }
 
-const SETUP_NOTE = "Each check starts from a fresh load at 1440x900 on Notes with fixture note 105 open from the library, its transcript in the side column. Rows are played with their own Play, pressed with a real CDP pointer press. Words and times come from the page's note_transcript_rows.";
+const SETUP_NOTE = "Each check starts from a fresh load at 1440x900 on Notes with fixture note 105 open from the library, its transcript in the side column. Rows are played by a real CDP pointer press in their left padding (linePadPoint), which plays a row from its start. Words and times come from the page's note_transcript_rows.";
 
 export async function runWordHighlight(options) {
   const out = resolve(options.out);
@@ -166,11 +166,11 @@ export async function runWordHighlight(options) {
     // 2. A later word clicked: the recording goes there, and that word lights.
     await check({
       id: "2",
-      claim: "Clicking a later word of the playing row moves the recording to that word's start, lights that word, keeps playing, and leaves the row's selection alone.",
+      claim: "Clicking a later word of the playing row plays on from that word's start and lights that word, and the row stays the only selected one.",
       expectation: [
-        `with row 1 playing about 1s in, a real press on "${"nästa"}" (word ${LATER_WORD + 1}):`,
+        `with row 1 playing about 1s in from a press in its padding, which selects it, a real press on "${"nästa"}" (word ${LATER_WORD + 1}):`,
         `the seek ends within ${LANDING_SECONDS}s of the word's start; 300ms later that word is lit, the recording is not paused,`,
-        "and row 1 is no more selected than before the press",
+        "and row 1 is still the only selected row",
       ].join(" "),
     }, async () => {
       const rows = await openNote(cdp);
@@ -178,6 +178,7 @@ export async function runWordHighlight(options) {
       const target = words[LATER_WORD];
       await playRow(cdp, rows, 0, 0.5);
       const before = await sample(cdp, words, 0);
+      const selectedBefore = (await cdp.evaluate(snippets.wordHighlightState())).rows.flatMap((row, at) => row.selected ? [at] : []);
       await cdp.evaluate(snippets.watchSeek());
       await press(cdp, ".note-side .transcript-word", target.text);
       await waitFor(cdp, "typeof window.__seek?.seeked === 'number'", "the seek to end", 3_000);
@@ -185,18 +186,19 @@ export async function runWordHighlight(options) {
       await delay(300);
       const after = await sample(cdp, words, 0);
       const state = await cdp.evaluate(snippets.wordHighlightState());
+      const selectedAfter = state.rows.flatMap((row, at) => row.selected ? [at] : []);
       const landing = Math.abs(seek.seeked - target.start);
       return {
         measured: {
           word: target,
-          before: { time: before.time, lit: before.litText, selected: state.rows[0].selected },
+          before: { time: before.time, lit: before.litText, selected: selectedBefore },
           seek: { seeking: seek.seeking, seeked: seek.seeked, fromStart: Math.round(landing * 1000) / 1000 },
           after,
-          selectedAfter: state.rows[0].selected,
+          selectedAfter,
         },
         matches: before.lit[0] < LATER_WORD && landing <= LANDING_SECONDS
           && after.lit.length === 1 && after.lit[0] === LATER_WORD && !after.paused
-          && state.rows[0].selected === false,
+          && JSON.stringify(selectedBefore) === "[0]" && JSON.stringify(selectedAfter) === "[0]",
       };
     });
 
@@ -204,7 +206,7 @@ export async function runWordHighlight(options) {
     await check({
       id: "3",
       claim: "A row with no word timings plays as a row: its text is drawn whole, with no word spans and nothing lit, and so is every row that is not playing.",
-      expectation: "row 3 playing (aria-current) for 1s: its drawn text is the row's text, it draws no word spans and no row lights a word; rows 1 and 2 keep their seek controls without lighting a word",
+      expectation: "row 3 playing (aria-current) for 1s: its drawn text is the row's text, it draws no word spans and no row lights a word; rows 1 and 2 keep their word controls without lighting a word",
     }, async () => {
       const rows = await openNote(cdp);
       await playRow(cdp, rows, 2, 0.3);
@@ -248,22 +250,50 @@ export async function runWordHighlight(options) {
     });
 
 
-    await check({id:"5",claim:"Keyboard words seek with a roving tab stop; pausing clears the animation highlight.",expectation:"ArrowRight advances focus, Enter seeks, and a paused player has no highlighted word."},async () => {
-      await openNote(cdp);
+    // 5. The keyboard: words are one tab stop in their line, and Enter on one plays from it.
+    await check({
+      id: "5",
+      claim: "Keyboard words have a roving tab stop and Enter plays from the focused word; pausing clears the highlight.",
+      expectation: [
+        "focus on row 1's first word, a real ArrowRight moves focus to its second word (\"allihopa\") and a real Enter plays from it:",
+        `the seek ends within ${LANDING_SECONDS}s of that word's start (watchSeek), the recording then plays, row 1 is the only selected row,`,
+        "and row 1's words hold exactly one tab stop; once a word is lit, the recording paused leaves no word lit 250ms later",
+      ].join(" "),
+    }, async () => {
+      const rows = await openNote(cdp);
+      const word = rows[0].words[1];
       await cdp.evaluate("document.querySelector('.note-side .transcript-word').focus()");
-      for (const key of ["ArrowRight","Enter"]) {
-        await cdp.send("Input.dispatchKeyEvent",{type:"keyDown",key,code:key,windowsVirtualKeyCode:key==="Enter"?13:39});
-        await cdp.send("Input.dispatchKeyEvent",{type:"keyUp",key,code:key,windowsVirtualKeyCode:key==="Enter"?13:39});
-      }
-      await delay(100);
-      const keyboard = await cdp.evaluate("({time:document.querySelector('audio').currentTime, focused:document.activeElement?.textContent, stops:document.querySelector('.note-side .transcript-text').querySelectorAll('[tabindex=\"0\"]').length})");
-      await press(cdp,playButton(0),null);
-      await waitFor(cdp,"document.querySelectorAll('.transcript-word-current').length===1","a playing word");
+      const keyPress = async (key, code) => {
+        await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key, code: key, windowsVirtualKeyCode: code });
+        await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key, code: key, windowsVirtualKeyCode: code });
+      };
+      await keyPress("ArrowRight", 39);
+      const focused = await cdp.evaluate("document.activeElement?.textContent ?? null");
+      await cdp.evaluate(snippets.watchSeek());
+      await keyPress("Enter", 13);
+      await waitFor(cdp, "typeof window.__seek?.seeked === 'number'", "the seek to end", 3_000);
+      const seek = await cdp.evaluate(snippets.seekRecord());
+      const plays = await waitFor(cdp, playingFrom(word.start), "the recording to play from the word", 5_000).then(() => true, () => false);
+      const state = await cdp.evaluate(snippets.wordHighlightState());
+      const keyboard = {
+        focused,
+        word: word.text,
+        seeked: seek.seeked,
+        fromStart: Math.round(Math.abs(seek.seeked - word.start) * 1000) / 1000,
+        plays,
+        selected: state.rows.flatMap((row, at) => row.selected ? [at] : []),
+        stops: await cdp.evaluate("document.querySelector('.note-side .transcript-text').querySelectorAll('[tabindex=\"0\"]').length"),
+      };
+      await waitFor(cdp, "document.querySelectorAll('.transcript-word-current').length===1", "a playing word");
       await cdp.evaluate("document.querySelector('audio').pause()");
-      await waitFor(cdp,"document.querySelectorAll('.transcript-word-current').length===0","pause cleanup");
+      await waitFor(cdp, "document.querySelectorAll('.transcript-word-current').length===0", "pause cleanup");
       await delay(250);
       const clean = await cdp.evaluate("document.querySelectorAll('.transcript-word-current').length===0");
-      return {measured:{keyboard,clean},matches:Math.abs(keyboard.time-1.15)<0.05 && keyboard.stops===1 && clean};
+      return {
+        measured: { keyboard, clean },
+        matches: focused === word.text && keyboard.fromStart <= LANDING_SECONDS && plays
+          && JSON.stringify(keyboard.selected) === "[0]" && keyboard.stops === 1 && clean,
+      };
     });
     const markdown = renderMarkdown(report);
     await writeFile(resolve(out, "report.json"), `${JSON.stringify(report, null, 2)}\n`);

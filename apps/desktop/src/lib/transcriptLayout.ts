@@ -85,8 +85,10 @@ function turnsOf(rows: readonly TranscriptRow[]): TranscriptTurn[] {
     let joins = false;
     if (current !== null) {
       if (row.startSeconds === null) {
-        // Nothing to split an untimed row on: it stays with the row before.
-        joins = true;
+        // No time to measure a pause by, so an untimed row stays with the row before -- unless it
+        // is someone else's: drawn under the turn's name, another speaker's line would read as
+        // said by the wrong person. It then heads a turn of its own, whose head has no time.
+        joins = key === null || key === current.key;
       } else {
         const paused = lastEnd !== null && row.startSeconds - lastEnd >= TURN_GAP_SECONDS;
         joins = key !== null && key === current.key && !paused;
@@ -108,8 +110,9 @@ function turnsOf(rows: readonly TranscriptRow[]): TranscriptTurn[] {
  * split into speaker turns. A row's block is `floor(start / block)` but never
  * earlier than the block already reached, so an out-of-order row stays where
  * it is rather than reopening an earlier section; blocks with no rows make no
- * section. Untimed rows follow the row before them (leading ones join the
- * first section). An all-untimed transcript is one titleless section.
+ * section. Untimed rows follow the row before them into its section (leading
+ * ones join the first section), and into its turn when they are unlabelled or
+ * by the same speaker. An all-untimed transcript is one titleless section.
  */
 export function transcriptSections(rows: readonly TranscriptRow[]): TranscriptSection[] {
   if (rows.length === 0) return [];
@@ -205,6 +208,90 @@ export function rangeSelection(rows: readonly TranscriptRow[], anchor: number, t
     .slice(from, to + 1)
     .filter((row) => row.startSeconds !== null)
     .map((row) => row.index);
+}
+
+/**
+ * The transcript lines a note has selected (KNEG-448): row indexes, and the
+ * one a Shift-click or Shift+Arrow extends from. Held by the note, so the
+ * player card can offer to play it.
+ */
+export type LineSelection = { rows: ReadonlySet<number>; anchor: number | null };
+
+export const NO_SELECTION: LineSelection = { rows: new Set(), anchor: null };
+
+/**
+ * A Shift-click or Shift+Arrow on `target`: every playable line from the
+ * anchor to it, the anchor kept. With no anchor -- or one no longer among the
+ * rows, after a reload -- the target alone starts a selection.
+ */
+export function extendSelection(rows: readonly TranscriptRow[], selection: LineSelection, target: number): LineSelection {
+  const picked = selection.anchor === null ? [] : rangeSelection(rows, selection.anchor, target);
+  if (selection.anchor === null || picked.length === 0) return { rows: new Set([target]), anchor: target };
+  return { rows: new Set(picked), anchor: selection.anchor };
+}
+
+/**
+ * The lines the arrow keys move between, in order: every playable line (one
+ * with a start) of the sections not collapsed. `collapsed` holds section keys.
+ */
+export function navigableLines(sections: readonly TranscriptSection[], collapsed: ReadonlySet<string>): number[] {
+  const lines: number[] = [];
+  for (const section of sections) {
+    if (collapsed.has(section.key)) continue;
+    for (const turn of section.turns) {
+      for (const row of turn.rows) {
+        if (row.startSeconds !== null) lines.push(row.index);
+      }
+    }
+  }
+  return lines;
+}
+
+export type LineKey = "ArrowUp" | "ArrowDown" | "Home" | "End";
+
+/**
+ * Where `key` moves focus from line `from` among `lines` (`navigableLines`):
+ * the next or previous one, staying put at either end, or the first or last.
+ * From a line not among them -- one whose section was just collapsed -- the
+ * nearest one in that direction, else the nearest the other way. Null only
+ * when there are no lines.
+ */
+export function stepLine(lines: readonly number[], from: number, key: LineKey): number | null {
+  const first = lines[0];
+  const last = lines[lines.length - 1];
+  if (first === undefined || last === undefined) return null;
+  if (key === "Home") return first;
+  if (key === "End") return last;
+  if (key === "ArrowDown") return lines.find((line) => line > from) ?? last;
+  for (let at = lines.length - 1; at >= 0; at -= 1) {
+    const line = lines[at]!;
+    if (line < from) return line;
+  }
+  return first;
+}
+
+/**
+ * The one line that takes Tab (KNEG-448): the first of `candidates` -- the
+ * line that last had focus, the selection's anchor, the playing line -- that
+ * is among `lines`, else the first line. A candidate in a collapsed section
+ * or without a time is passed over, so the stop is always on a line Tab can
+ * reach. Null when there are no lines.
+ */
+export function lineStop(lines: readonly number[], candidates: readonly (number | null)[]): number | null {
+  for (const candidate of candidates) {
+    if (candidate !== null && lines.includes(candidate)) return candidate;
+  }
+  return lines[0] ?? null;
+}
+
+/**
+ * Whether `a` and `b` select the same of `rows`, whatever they hold besides:
+ * a turn or a section is redrawn for a new selection only when one of its own
+ * lines changed.
+ */
+export function sameSelectionOver(rows: readonly TranscriptRow[], a: ReadonlySet<number>, b: ReadonlySet<number>): boolean {
+  if (a === b) return true;
+  return rows.every((row) => a.has(row.index) === b.has(row.index));
 }
 
 /**

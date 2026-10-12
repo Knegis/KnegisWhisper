@@ -38,12 +38,6 @@ export type RecordingPlayerHandle = {
    * by word on every animation frame (KNEG-408). `null` with no player.
    */
   time: () => number | null;
-  /**
-   * Go to `seconds`, playing on if it was playing: a word of the transcript
-   * clicked (KNEG-408). A row or selection being played still stops at its
-   * end when `seconds` is inside it, and plays on when it is past it.
-   */
-  seek: (seconds: number) => void;
   pause: () => void;
 };
 
@@ -136,9 +130,10 @@ export const RecordingPlayer = forwardRef<RecordingPlayerHandle, RecordingPlayer
       }
     }, []);
 
-    // Go to `seconds`, playing on if it was playing: a word clicked (the handle's `seek`), or the
-    // −15 / +15 buttons. A row or selection being played still stops at its end when `seconds` is
-    // inside it; a jump at or past that end clears it, so playback runs on from there.
+    // Go to `seconds`, playing on if it was playing: the −15 / +15 buttons. A selection being
+    // played still stops at its end when `seconds` is inside it; a jump at or past that end clears
+    // it, so playback runs on from there. (A word clicked in the transcript plays from the word
+    // through `playInterval` since KNEG-448, so the handle no longer seeks.)
     const seekTo = useCallback((seconds: number) => {
       const audio = audioRef.current;
       if (audio === null) return;
@@ -205,9 +200,8 @@ export const RecordingPlayer = forwardRef<RecordingPlayerHandle, RecordingPlayer
         },
         time: () => audioRef.current?.currentTime ?? null,
         pause: () => { audioRef.current?.pause(); clearIntervalPlayback(); },
-        seek: seekTo,
       }),
-      [beginIntervalCheck, clearIntervalPlayback, onCurrentTime, play, seekTo],
+      [beginIntervalCheck, clearIntervalPlayback, onCurrentTime, play],
     );
 
     useEffect(() => {

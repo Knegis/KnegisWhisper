@@ -146,6 +146,7 @@ and every `audio` element to be paused. Five checks:
    opens the Transcript tab with that row selected and in view.
 2. In the note already open, a hit for "more days" moves the selection without
    remounting the note, and choosing it again after the row was deselected
+   (a real Escape with focus on it: since KNEG-448 a click on a line plays it)
    selects it again.
 3. Dictation, then Back: the note is open on that row again.
 4. At 1440x900 the row is selected in the side column, and the Notes tab stays.
@@ -205,15 +206,16 @@ node tools/visual-check/word-highlight.mjs --url http://127.0.0.1:5191/
 
 Same options as the chip menus (the banner is always removed). It measures
 KNEG-408: a transcript row that local Whisper timed word by word marks the word
-being said as its recording plays, and a click on a word goes there. Fixture
+being said as its recording plays, and a click on a word plays from there
+(KNEG-448). Fixture
 note 105, "Word timings", is an import whose row 1 has fourteen words, one every
 0.65 s from 0.5 s, row 2 eleven, and row 3 none, as every note saved before
 KNEG-408 has none; it plays the fixtures' two-minute WAV, and Edge runs with
 `--mute-audio`. The words and times are read from the page's own
 `note_transcript_rows`. Each check starts from a fresh load at 1440x900 on Notes
 with note 105 opened from the library, its transcript in the side column, and
-plays a row with the row's own Play, pressed with a real pointer press. Four
-checks:
+plays a row with a real pointer press in the row's left padding
+(`linePadPoint`), which plays it from its start and selects it. Five checks:
 
 1. Row 1 playing, three samples 1.2s apart: one span per word, exactly one word
    lit in each, the last to have started at the recording's time (or 0.1s
@@ -221,13 +223,18 @@ checks:
    sample.
 2. A real press on a later word, "nästa" at 8.3s: the seek ends within 0.05s of
    its start (`seeked`), that word is lit 300ms later, the recording still
-   plays, and the row is not selected by the press.
+   plays, and row 1, selected by the press that played it, is still the only
+   selected row.
 3. Row 3, without words, playing: its text is drawn whole, no row draws a word
    span, and nothing is lit.
 4. Reduced motion: a word span's computed `transition-duration` is not 0s
    without the preference (the control) and 0s with `prefers-reduced-motion:
    reduce` emulated, under which two samples still light the expected word,
    the second later than the first.
+5. The keyboard: with focus on row 1's first word, a real ArrowRight moves it
+   to the second and a real Enter plays from that word (the seek ends within
+   0.05s of its start, then it plays); row 1 is the only selected row and its
+   words hold one tab stop. Paused, no word is lit 250ms later.
 
 Measured in headless Edge against dev fixtures, not in the Tauri window; a false
 check makes it exit 1. The fixtures' words are invented, evenly spaced; which
@@ -257,14 +264,17 @@ transcript in three five-minute sections starting at 0, 300 and 600 s, of 26,
 colour schemes: `prefers-color-scheme` emulated over CDP, which is what the
 stylesheet reads, with `data-theme` set on the root to match. Presses are real
 pointer presses, Edge runs with `--mute-audio`, and a count of `play()` calls
-is installed before the page's own code runs. Seven checks so far:
+is installed before the page's own code runs. A line is pressed inside its
+left padding (`linePadPoint`), on the line itself rather than a word, after
+checking that the line is what is under that point. Ten checks so far:
 
 1. The column has a plain header and is grouped: `.transcript-head` is sticky
    at top 0 and holds one heading, "Transcript" drawn uppercase, and one
    button, "Find in transcript", disabled; three section toggles, all
    expanded, titled "0:00 – 5:00", "5:00 – 10:00" and "10:00 – 11:30" and
    counting "26 lines", "19 lines" and "9 lines"; 41 turn heads, each with a
-   6x6px marker; 54 lines. Over `.note-side .transcript` and everything in
+   6x6px marker; 54 lines; no per-line Play (`.transcript-play`) anywhere in
+   `.note-side`. Over `.note-side .transcript` and everything in
    it, every element but a control (`button`, `input`, `select`, `textarea`,
    `mark`, `.transcript-word`) has square corners, and nothing is heavier
    than 400.
@@ -285,29 +295,51 @@ is installed before the page's own code runs. Seven checks so far:
    scrolls to as it plays (`aria-current`, in the last section) has its bottom
    at or above the card's top and its top at or below the sticky head's
    bottom.
+4. A press on line 4 (Jonas, 22 s) makes exactly one `play()` call; on the
+   first animation frame playing after its seek (`watchLanding`) the
+   recording is within 0.3 s of the line's start; it is the only
+   `aria-selected="true"` line; and the card's `.player-header` names
+   "Jonas" beside a 6x6px marker in `--band`. Pressed again a second later:
+   one more `play()`, back at the start, still the only selected line.
+8. Line 6 pressed (it plays) and paused, then line 8 pressed with Shift:
+   lines 6 to 8, across three turns, are selected, the Shift press plays
+   nothing, and the card's header offers "Play selection (0:41–1:12)" (an en
+   dash) and "Clear selection". Pressed at 2x, it pauses within 0.25 s of
+   line 8's end. A real Escape with focus on line 8 then leaves nothing
+   selected, and the header names a speaker again.
 11. A real press on Jonas's name in a turn head opens one
     `form.transcript-rename` inside that same `.transcript-turn`, focus in its
     field; no `play()` call, and no line's `aria-selected` changes. Escape
     closes it.
+12. One line has `tabindex="0"`. From a press on the column's label, real Tabs
+    walk through the transcript and out (into the card) landing on that line
+    and no other. Three ArrowDowns from it focus the next three lines; from
+    line 39, ArrowDown skips the untimed line 40 and lands on 41, which then
+    holds the only stop; Enter there makes one `play()` call, plays from
+    within 0.3 s of its start and selects it alone.
 13. The head stays at the top of what scrolls: `.note-side-body` scrolled
     600px puts `.transcript-head`'s top within 1px of the scroller's; at
-    1000x720 on the Transcript tab, the same for `.notes-main`.
+    1000x720 on the Transcript tab, the same for `.notes-main`. There, before
+    anything has played, `.note-mini-player` is shown, with the card's header;
+    on Notes it is hidden until playback, as before. No `play()` call.
 14. With `note_transcript_rows` held back 4 s (`installInvokeStub`), the column
     shows one heading, the `.transcript-head .transcript-label` "Transcript",
     over "Loading transcript and recording…", drawn as the loaded column's
     label is (case, face, size, colour, the head's height and the label's
     left).
-16. A real pointer on a line that is not playing gives it the resolved
-    `--panel-hover`; played with its own Play, under the pointer it keeps the
-    resolved `--band-wash`.
+16. From a fresh load in each scheme, a real pointer on a line that is not
+    playing gives it the resolved `--panel-hover`; played by a press in its
+    padding, which also selects it, under the pointer it keeps the resolved
+    `--band-wash` (playing wins over the selected `--selected`).
 
 Measured in headless Edge against dev fixtures, not in the Tauri window; a false
 check makes it exit 1. Skips clamped at 0 and at the end, and ticks dropped at
-the very start or end, are `tests/playerControls.test.ts`'s, not measured here.
-Not measured: keyboard selection across turns (each turn is its own listbox, and
-Enter, Space and Shift act per line as before), what a screen reader announces
-for a turn's list, and collapsing a section (its toggle is pressed by no check
-yet).
+the very start or end, are `tests/playerControls.test.ts`'s, not measured here;
+which line the arrow keys go to, the tab stop's choice and Shift's range are
+`tests/transcriptLayout.test.ts`'s (`stepLine`, `lineStop`, `extendSelection`).
+Not measured: Shift+Arrow, Home and End between lines, the arrow keys over a
+collapsed section, what a screen reader announces for a turn's list, and
+collapsing a section (its toggle is pressed by no check yet).
 
 ## Note meta
 
@@ -575,10 +607,11 @@ otherwise. Five checks:
 4. Stop and save: "Saved as a note (31 min). The recording was deleted; the
    transcript is in the note." Its Learn more is "Note N." and no path.
 5. The saved note, opened from Recent, on Replay: no `audio`, no
-   `.recording-player`, no `.transcript-play`, its two transcript rows, and
-   the recording details "The recording was deleted after transcribing
-   (Settings › Meetings)." The same steps with it off find a player and two
-   row Play buttons, so the probe sees them where they are.
+   `.recording-player`, no line that plays when pressed
+   (`.transcript-line-playable`, `playableLines` in `noteRecordingState`), its
+   two transcript rows, and the recording details "The recording was deleted
+   after transcribing (Settings › Meetings)." The same steps with it off find
+   a player and two playable lines, so the probe sees them where they are.
 
 Measured in headless Edge against dev fixtures, not in the Tauri window; a
 false check makes it exit 1. Rust's side -- the attachment and the file

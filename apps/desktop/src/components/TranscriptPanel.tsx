@@ -1,10 +1,9 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
 
 import type { NoteRecording, TranscriptRow } from "../lib/ipc";
-import type { TranscriptSection } from "../lib/transcriptLayout";
+import { extendSelection, lineStop, navigableLines, NO_SELECTION, stepLine, type LineSelection, type TranscriptSection } from "../lib/transcriptLayout";
 import { wordAt, wordsMatchText } from "../lib/wordTiming";
 import { Icon } from "./Icon";
-import { formatClock } from "./RecordingPlayer";
 import { scrollBehavior, TranscriptSections, type RenameTarget, type TranscriptActions } from "./TranscriptSections";
 
 const CURRENT_WORD = "transcript-word-current";
@@ -24,13 +23,17 @@ export function TranscriptHeading({ children }: { children?: ReactNode }) {
 
 type TranscriptPanelProps = {
   readOnly?: boolean;
+  /**
+   * A row to show: scrolled to, once. The owner has already selected it
+   * (`NoteWorkspace`'s `openRow`); the panel only brings it into view.
+   */
   sourceRequest?: { index: number; nonce: number } | null;
   /**
-   * Called once `sourceRequest` has been shown (its row selected and scrolled
-   * to), so the owner can clear it. A request that stayed set would be
-   * applied again by a panel mounted afresh -- a wide window moving the
-   * transcript into its column -- or by new rows after a speaker rename,
-   * and would select an old summary source nobody just asked for.
+   * Called once `sourceRequest` has been shown, so the owner can clear it. A
+   * request that stayed set would be applied again by a panel mounted afresh
+   * -- a wide window moving the transcript into its column -- or by new rows
+   * after a speaker rename, and would scroll to an old summary source nobody
+   * just asked for.
    */
   onSourceShown?: () => void;
   rows: TranscriptRow[];
@@ -43,58 +46,80 @@ type TranscriptPanelProps = {
   playInterval: (start: number, end: number | null) => void;
   /** The player's time now (`RecordingPlayerHandle.time`), read every animation frame while a row with words plays. */
   time: () => number | null;
-  /** Go to a clicked word's start (`RecordingPlayerHandle.seek`). */
-  seek: (seconds: number) => void;
+  /**
+   * The note's selected lines (KNEG-448). Held by `NoteWorkspace`, whose player card offers to
+   * play them and to clear them; a line's click, Shift-click, Shift+Arrow and Escape change them
+   * through `onSelectionChange`.
+   */
+  selection: LineSelection;
+  onSelectionChange: Dispatch<SetStateAction<LineSelection>>;
   suggestions: readonly string[];
   onRename: (speakerId: string, name: string) => Promise<void>;
 };
 
-type Selection = { selected: ReadonlySet<number>; anchor: number | null };
-
-/**
- * The click model as it has been: a click on a selected line clears the selection, Shift with an
- * anchor selects every timed line between the two, and anything else selects the one line and
- * makes it the anchor. Untimed lines are never selected.
- */
-function nextSelection(previous: Selection, row: TranscriptRow, shift: boolean, rows: readonly TranscriptRow[]): Selection {
-  if (!shift && previous.selected.has(row.index)) return { selected: new Set(), anchor: null };
-  if (shift && previous.anchor !== null) {
-    const from = Math.min(previous.anchor, row.index);
-    const to = Math.max(previous.anchor, row.index);
-    return {
-      selected: new Set(rows.filter((candidate) => candidate.index >= from && candidate.index <= to && candidate.startSeconds !== null).map((candidate) => candidate.index)),
-      anchor: previous.anchor,
-    };
-  }
-  return { selected: new Set([row.index]), anchor: row.index };
-}
-
-export function TranscriptPanel({ readOnly = false, sourceRequest, onSourceShown, rows, sections, recording, currentTime, playing, visible, playInterval, time, seek, suggestions, onRename }: TranscriptPanelProps) {
+export function TranscriptPanel({
+  readOnly = false, sourceRequest, onSourceShown, rows, sections, recording, currentTime, playing, visible, playInterval, time,
+  selection, onSelectionChange, suggestions, onRename,
+}: TranscriptPanelProps) {
   const idPrefix = useId();
   const rowRefs = useRef(new Map<number, HTMLLIElement>());
   // The playing row's words, when it is drawn word by word.
   const wordsRef = useRef<HTMLSpanElement>(null);
-  const [selection, setSelection] = useState<Selection>(() => ({ selected: new Set(), anchor: null }));
   const [renaming, setRenaming] = useState<RenameTarget | null>(null);
   // Sections the reader closed, by key; every section starts open (KNEG-448).
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
+  // The line that last took focus, which holds the lines' one tab stop until a summary source or
+  // a search hit selects another (`lineStop`).
+  const [cursor, setCursor] = useState<number | null>(null);
+  // The lines the arrow keys move between: the timed lines of the open sections.
+  const lines = useMemo(() => navigableLines(sections, collapsed), [sections, collapsed]);
 
   // What the lines' handlers read, so the handlers -- and the one `actions` object holding them --
   // stay the same from render to render and never redraw a memoised line by themselves.
-  const latest = useRef({ rows, playInterval, seek, onRename });
-  useLayoutEffect(() => { latest.current = { rows, playInterval, seek, onRename }; });
+  const canPlay = recording !== null;
+  const latest = useRef({ rows, lines, selection, canPlay, playInterval, onSelectionChange, onRename });
+  useLayoutEffect(() => { latest.current = { rows, lines, selection, canPlay, playInterval, onSelectionChange, onRename }; });
   const actions = useMemo<TranscriptActions>(() => ({
     register: (index, element) => {
       if (element === null) rowRefs.current.delete(index);
       else rowRefs.current.set(index, element);
     },
     wordsRef,
-    select: (row, shift) => {
+    choose: (row, extend) => {
+      const { rows: all, canPlay: hasRecording, playInterval: play, onSelectionChange: select } = latest.current;
       if (row.startSeconds === null) return;
-      setSelection((previous) => nextSelection(previous, row, shift, latest.current.rows));
+      if (extend) {
+        select((previous) => extendSelection(all, previous, row.index));
+        return;
+      }
+      select({ rows: new Set([row.index]), anchor: row.index });
+      // To the end: a line is where to start listening, not a clip (the owner's ruling, 2026-10-11).
+      if (hasRecording) play(row.startSeconds, null);
     },
-    play: (start, end) => latest.current.playInterval(start, end),
-    seek: (seconds) => latest.current.seek(seconds),
+    playWord: (row, seconds) => {
+      const { canPlay: hasRecording, playInterval: play, onSelectionChange: select } = latest.current;
+      select({ rows: new Set([row.index]), anchor: row.index });
+      if (hasRecording) play(seconds, null);
+    },
+    move: (row, key, extend) => {
+      const { rows: all, lines: open, onSelectionChange: select } = latest.current;
+      const target = stepLine(open, row.index, key);
+      if (target === null) return;
+      // Shift with nothing selected extends from the line focus is leaving.
+      if (extend) select((previous) => extendSelection(all, previous.anchor === null ? { rows: previous.rows, anchor: row.index } : previous, target));
+      const element = rowRefs.current.get(target);
+      if (!element) return;
+      // Scrolled by the lines' scroll margins (`styles.css`), clear of the sticky head and the card.
+      element.focus({ preventScroll: true });
+      element.scrollIntoView({ block: "nearest" });
+    },
+    clear: () => {
+      const { selection: now, onSelectionChange: select } = latest.current;
+      if (now.rows.size === 0 && now.anchor === null) return false;
+      select(NO_SELECTION);
+      return true;
+    },
+    focused: (index) => setCursor(index),
     openRename: (target) => setRenaming(target),
     closeRename: (speakerId) => setRenaming((previous) => previous?.speakerId === speakerId ? null : previous),
     rename: (speakerId, name) => latest.current.onRename(speakerId, name),
@@ -106,12 +131,13 @@ export function TranscriptPanel({ readOnly = false, sourceRequest, onSourceShown
     return next;
   }), []);
 
+  // The owner selected the row (`NoteWorkspace`'s `openRow`); here it is only brought into view,
+  // and it takes the tab stop from whichever line had focus before.
   useEffect(() => {
     if (!sourceRequest || !visible) return;
-    const row = rows.find(item => item.index === sourceRequest.index);
-    if (!row) return;
-    setSelection({ selected: new Set([row.index]), anchor: row.index });
-    rowRefs.current.get(row.index)?.scrollIntoView({ block: "nearest", behavior: scrollBehavior() });
+    if (!rows.some((item) => item.index === sourceRequest.index)) return;
+    setCursor(null);
+    rowRefs.current.get(sourceRequest.index)?.scrollIntoView({ block: "nearest", behavior: scrollBehavior() });
     onSourceShown?.();
   }, [sourceRequest, rows, visible, onSourceShown]);
 
@@ -166,8 +192,8 @@ export function TranscriptPanel({ readOnly = false, sourceRequest, onSourceShown
     };
   }, [activeWords, playing, visible, time]);
 
-  // Where each line and turn sits, so only the section and turn holding the playing line, or the
-  // open rename, are handed it.
+  // Where each line and turn sits, so only the section and turn holding the playing line, the tab
+  // stop or the open rename are handed it.
   const places = useMemo(() => {
     const rowsAt = new Map<number, { section: string; turn: string }>();
     const turnsAt = new Map<string, string>();
@@ -181,14 +207,10 @@ export function TranscriptPanel({ readOnly = false, sourceRequest, onSourceShown
   }, [sections]);
   const activeIndex = activeRow?.index ?? null;
   const activePlace = activeIndex === null ? undefined : places.rowsAt.get(activeIndex);
-
-  const playableSelected = useMemo(
-    () => rows.filter((row) => selection.selected.has(row.index) && row.startSeconds !== null),
-    [rows, selection.selected],
-  );
-  const selectionStart = playableSelected[0]?.startSeconds ?? null;
-  const selectionEnd = playableSelected.at(-1)?.endSeconds ?? null;
-  const shownEnd = selectionEnd ?? recording?.durationSeconds ?? selectionStart;
+  // The lines' one tab stop: the line focus was last on, else the selection's anchor, else the
+  // playing line, else the first -- whichever is first on a timed line in an open section.
+  const stopIndex = useMemo(() => lineStop(lines, [cursor, selection.anchor, activeIndex]), [lines, cursor, selection.anchor, activeIndex]);
+  const stopPlace = stopIndex === null ? undefined : places.rowsAt.get(stopIndex);
 
   return (
     <aside className="transcript" aria-label="Transcript">
@@ -198,14 +220,6 @@ export function TranscriptPanel({ readOnly = false, sourceRequest, onSourceShown
           <Icon name="search" size={16} />
         </button>
       </TranscriptHeading>
-      {recording && selectionStart !== null && shownEnd !== null ? (
-        <button
-          type="button"
-          onClick={() => playInterval(selectionStart, selectionEnd)}
-        >
-          Play selection ({formatClock(selectionStart)}–{formatClock(shownEnd)})
-        </button>
-      ) : null}
       <TranscriptSections
         sections={sections}
         collapsed={collapsed}
@@ -213,12 +227,15 @@ export function TranscriptPanel({ readOnly = false, sourceRequest, onSourceShown
         activeIndex={activeIndex}
         activeSection={activePlace?.section ?? null}
         activeTurn={activePlace?.turn ?? null}
+        stopIndex={stopIndex}
+        stopSection={stopPlace?.section ?? null}
+        stopTurn={stopPlace?.turn ?? null}
         renaming={renaming}
         renamingSection={renaming === null ? null : places.turnsAt.get(renaming.turnKey) ?? null}
         idPrefix={idPrefix}
-        selected={selection.selected}
+        selected={selection.rows}
         readOnly={readOnly}
-        canPlay={recording !== null}
+        canPlay={canPlay}
         suggestions={suggestions}
         actions={actions}
       />

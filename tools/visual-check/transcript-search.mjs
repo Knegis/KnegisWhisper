@@ -157,7 +157,12 @@ export async function runTranscriptSearch(options) {
     await titleSearch(cdp, "more days");
     await chooseTitleHit(cdp, "Weekly sync");
     const moved = await cdp.evaluate(OPEN);
-    await cdp.evaluate(`[...document.querySelectorAll('.transcript-row-current[aria-selected="true"]')].find((row) => row.getClientRects().length > 0)?.click()`);
+    // Deselected by hand with Escape on the selected line: a click on a line plays it since
+    // KNEG-448, and only Escape (or the player card's Clear) deselects.
+    await cdp.evaluate(`[...document.querySelectorAll('.transcript-row-current[aria-selected="true"]')].find((row) => row.getClientRects().length > 0)?.focus()`);
+    for (const type of ["keyDown", "keyUp"]) {
+      await cdp.send("Input.dispatchKeyEvent", { type, key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+    }
     await delay(200);
     const cleared = await cdp.evaluate(OPEN);
     await titleSearch(cdp, "more days");
@@ -168,7 +173,7 @@ export async function runTranscriptSearch(options) {
       id: "2",
       claim: "In the note already open, another hit moves the selection to its row without remounting the note, and the same hit chosen again selects its row again.",
       measured: { moved, cleared, again, playback: playback2 },
-      expectation: "\"more days\" row selected with the note element unchanged; none selected after a click on it; selected again; 0 plays, every audio paused",
+      expectation: "\"more days\" row selected with the note element unchanged; none selected after a real Escape with focus on it; selected again; 0 plays, every audio paused",
       matches: moved.marked && moved.selected.length === 1 && moved.selected[0].text.includes("two more days")
         && cleared.selected.length === 0
         && again.selected.length === 1 && again.selected[0].text.includes("two more days")

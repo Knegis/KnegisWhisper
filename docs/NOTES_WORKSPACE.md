@@ -39,7 +39,12 @@ this copies literal speech and available speaker labels without changing the sou
 
 Transcript shows the original rows and playback actions, grouped into speaker turns and, when
 the transcript spans more than one, collapsible time sections, under a header that stays in
-view as it scrolls (KNEG-448). In windows 1280px or wider
+view as it scrolls (KNEG-448). Pressing a line, or Enter or Space on it, selects it and plays
+from it to the end; Shift selects the lines from the last one chosen, which the player card
+then offers to play, and Escape or the card's Clear deselects. The lines are one tab stop, and
+the arrow keys, Home and End move between them, past untimed lines and closed sections. While
+the transcript is on screen the card names who is speaking, and in a narrower window it shows
+on the Transcript tab before anything has played. In windows 1280px or wider
 a note's transcript is a column to the right of the note instead, and the Transcript tab
 is hidden; crossing that width keeps playback and the reading position. A note with no
 transcript has no column, and keeps the one-column layout at any width. **Hide
@@ -61,9 +66,9 @@ title bar's list toggle reopens it. Tabs wrap when necessary.
 
 A row that local Whisper timed word by word (KNEG-408) -- a media import, or a
 meeting's whole-recording pass, on a Whisper engine -- is drawn word by word while
-it plays, and the word being said is marked. Clicking a word plays from it; a row
-or selection played with its Play button still stops at its end when the word is
-inside it. Every other row is marked as a whole row, as before: notes saved before
+it plays, and the word being said is marked. Clicking a word selects its line and
+plays from the word to the end, so a selection being played no longer stops at its
+end (KNEG-448). Every other row is marked as a whole row, as before: notes saved before
 word timings were kept, Parakeet, cloud providers and live captions, and a row whose
 text no longer matches its words. With reduced motion asked for, the mark jumps
 from word to word instead of fading. How far the mark sits from the sound on a real

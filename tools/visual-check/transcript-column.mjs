@@ -4,7 +4,9 @@
  * wide window as the M6 redesign draws it (KNEG-448). The claims arrive with
  * the tasks that make them true, so the ids are the plan's and are not
  * contiguous: 1, 11, 13, 14 and 16 are the column's header, sections, turns,
- * rename and hover, and 2 and 3 the player card.
+ * rename and hover, 2 and 3 the player card, and 4, 8 and 12 the click model
+ * (a press plays from a line, Shift selects a range the card offers to play,
+ * one tab stop with the arrow keys between lines).
  *
  * Fixture note 106, "Roadmap review — long transcript"
  * (`apps/desktop/src/lib/devFixtures.ts`, its rows in `lib/fixtureTranscript.ts`):
@@ -81,6 +83,29 @@ const HOVER_LINE = 1;
 const LOADING = "Loading transcript and recording…";
 /** How long claim 14 holds `note_transcript_rows` back. */
 const ROWS_DELAY_MS = 4000;
+const NOTE_ID = 106;
+/** Claim 4 presses line 4, "Bygget går igenom…" (22 to 30 s, Jonas's turn), which has no word timings. */
+const CLICK_LINE = 3;
+const CLICK_SPEAKER = "Jonas";
+/** How far from a line's start the recording may be once it plays from it. */
+const LANDING_TOLERANCE = 0.3;
+/** Claim 8 selects lines 6 to 8, across three turns: Jonas 41–50 s, Maja 53–60 s, Speaker 3 63–72 s. */
+const RANGE_FROM = 5;
+const RANGE_TO = 7;
+const RANGE_LINES = [5, 6, 7];
+/** How far from the selection's end its playback may stop. */
+const STOP_TOLERANCE = 0.25;
+/** Claim 8 plays its selection at this speed, so the 31 s it spans take about 16. */
+const RANGE_RATE = "2";
+/** Note 106's one untimed line (line 40, Maja's "Det är i alla fall…") and the lines either side of it. */
+const BEFORE_UNTIMED = 38;
+const UNTIMED = 39;
+const AFTER_UNTIMED = 40;
+/** How many Tabs claim 12 may press walking through the transcript: it holds 3 toggles, 41 turn names and the line stops. */
+const TAB_LIMIT = 150;
+/** CDP's modifier bit for Shift. */
+const SHIFT = 8;
+const KEY_CODES = { Escape: 27, Enter: 13, Tab: 9, ArrowDown: 40, ArrowUp: 38 };
 
 /** Counts `play()` from before the app's own code runs (as `transcript-search.mjs` does). */
 const COUNT_PLAYS = `(() => {
@@ -148,12 +173,66 @@ async function hover(cdp, point) {
   await delay(150);
 }
 
-/** A real key press: Escape. */
-async function escape(cdp) {
-  const base = { key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 };
+/** A real key press of `name` (one of `KEY_CODES`), with CDP's `modifiers`, then `settle` ms. */
+async function key(cdp, name, { modifiers = 0, settle = 150 } = {}) {
+  const base = { key: name, code: name, windowsVirtualKeyCode: KEY_CODES[name], modifiers };
   await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", ...base });
   await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", ...base });
-  await delay(150);
+  await delay(settle);
+}
+
+/** A real key press: Escape. */
+async function escape(cdp) {
+  await key(cdp, "Escape");
+}
+
+/** The time as the card's clock and the selection's label write it, m:ss (`lib/clock.ts`). */
+const clock = (seconds) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, "0")}`;
+
+/** Whether the card's recording is playing. */
+const playingNow = `(() => { const audio = document.querySelector(${JSON.stringify(`${CARD} audio`)}); return Boolean(audio) && !audio.paused && audio.readyState >= 3; })()`;
+
+/** Moves focus to transcript line `index` from the page, as a step before a real key press. */
+const focusLine = (index) => `(() => { const line = document.querySelectorAll('.note-detail .transcript .transcript-rows li')[${index}]; line?.focus(); return document.activeElement === line; })()`;
+
+/** A real press in line `index`'s left padding (`linePadPoint`), which must land on the line itself and on screen. */
+async function pressLine(cdp, index, modifiers = 0) {
+  const point = await cdp.evaluate(snippets.linePadPoint(index));
+  if (!point.onLine) throw new Error(`line ${index + 1}'s left padding is not the line at ${JSON.stringify(point)}`);
+  const size = await cdp.evaluate("({ width: innerWidth, height: innerHeight })");
+  if (point.x < 0 || point.y < 0 || point.x > size.width || point.y > size.height) {
+    throw new Error(`line ${index + 1} is off screen at ${JSON.stringify(point)}`);
+  }
+  await press(cdp, point, { modifiers });
+  return point;
+}
+
+/**
+ * Runs `act` -- a press or a key that should play from somewhere -- and says what it did: how
+ * many `play()` calls it made, where the recording landed once it played (`watchLanding`), and
+ * the lines afterwards.
+ */
+async function played(cdp, act) {
+  const before = await cdp.evaluate("window.__plays ?? null");
+  await cdp.evaluate(snippets.watchLanding(CARD));
+  await act();
+  const landed = await waited(cdp, "(window.__landing?.playingAt ?? null) !== null", "the recording to play", 5_000);
+  const landing = await cdp.evaluate(snippets.landingRecord());
+  const after = await cdp.evaluate("window.__plays ?? null");
+  return {
+    landed,
+    seeked: round(landing?.seeked ?? null),
+    playingAt: round(landing?.playingAt ?? null),
+    plays: typeof before === "number" && typeof after === "number" ? after - before : null,
+    lines: await cdp.evaluate(snippets.lineModelState()),
+  };
+}
+
+/** A zoomed screenshot of the card in `CARD`, `name`d, at 3x. */
+async function cardShot(cdp, out, name) {
+  const card = await cdp.evaluate(`(() => { const rect = document.querySelector(${JSON.stringify(CARD)}).getBoundingClientRect(); return { left: rect.left, top: rect.top, width: rect.width, height: rect.height }; })()`);
+  await cdp.screenshot(resolve(out, name), { clip: { x: card.left - INSET, y: card.top - INSET, width: card.width + 2 * INSET, height: card.height + 2 * INSET }, scale: 3 });
+  return name;
 }
 
 /** Pauses whatever plays in the card and waits for no line to be the playing one. */
@@ -232,6 +311,7 @@ function judgeColumn(state) {
     turns: state.markers.length === TURNS,
     markers: state.markers.length > 0 && state.markers.every((marker) => marker !== null && near(marker.width, MARKER, 0.01) && near(marker.height, MARKER, 0.01)),
     lines: state.lines === LINES,
+    noRowPlays: state.rowPlays === 0,
     corners: state.rounded.length === 0,
     weight: state.heavy.length === 0,
   };
@@ -282,7 +362,8 @@ export async function runTranscriptColumn(options) {
         "(case-insensitive) and drawn uppercase, and exactly one button, aria-label \"Find in transcript\", disabled; exactly",
         `${SECTIONS.length} button.transcript-section-toggle, each aria-expanded="true", titled ${SECTIONS.map((section) => `"${section.title}"`).join(", ")}`,
         `and counting ${SECTIONS.map((section) => `"${section.lines} lines"`).join(", ")} (transcriptSections(longTranscriptRows()));`,
-        `${TURNS} .transcript-turn-head, each with a ${MARKER}x${MARKER}px .transcript-turn-marker; ${LINES} lines; over .note-side .transcript`,
+        `${TURNS} .transcript-turn-head, each with a ${MARKER}x${MARKER}px .transcript-turn-marker; ${LINES} lines; no .transcript-play`,
+        "(a per-line Play button) anywhere in .note-side; over .note-side .transcript",
         "and every element in it except controls (button, input, select, textarea, mark, .transcript-word), every computed",
         "corner radius 0px; and over all of it no computed font-weight above 400",
       ].join(" "),
@@ -430,6 +511,137 @@ export async function runTranscriptColumn(options) {
       };
     });
 
+    // 4. A press on a line plays from its start, selects it alone, and names its speaker on the card.
+    await check({
+      id: "4",
+      claim: "Clicking a line plays from its start.",
+      expectation: [
+        `in each scheme, from a fresh load with nothing played: a real press in line ${CLICK_LINE + 1}'s left padding (linePadPoint: on the line`,
+        `itself, not a word) makes exactly 1 play() call; once the recording plays (the first animation frame playing after its seek) it is`,
+        `within ${LANDING_TOLERANCE}s of the line's start; that line is the only aria-selected="true" line; and the card's .player-header`,
+        `names "${CLICK_SPEAKER}", the line's speaker, beside its 6x6px marker in the resolved --band. Pressed again about 1s later: exactly 1`,
+        `more play() call, the recording back within ${LANDING_TOLERANCE}s of the line's start and playing, and that line still the only one selected`,
+      ].join(" "),
+    }, async () => {
+      const schemes = {};
+      const screenshots = [];
+      for (const scheme of SCHEMES) {
+        await openNote(cdp);
+        const drawn = await useScheme(cdp, scheme);
+        const rows = await cdp.evaluate(snippets.noteTranscriptRows(NOTE_ID));
+        const start = rows[CLICK_LINE].startSeconds;
+        const first = await played(cdp, () => pressLine(cdp, CLICK_LINE));
+        const header = await cdp.evaluate(snippets.cardHeaderState(CARD));
+        const shot = `04-click-${scheme}-1440x900.png`;
+        await cdp.screenshot(resolve(out, shot));
+        screenshots.push(shot, await cardShot(cdp, out, `04-card-speaker-${scheme}-zoom.png`));
+        await delay(1000);
+        const second = await played(cdp, () => pressLine(cdp, CLICK_LINE));
+        await stopPlaying(cdp);
+        const only = (lines) => JSON.stringify(lines.selected) === JSON.stringify([CLICK_LINE]);
+        const parts = {
+          onePlay: first.plays === 1,
+          landed: first.landed && near(first.playingAt, start, LANDING_TOLERANCE),
+          onlySelected: only(first.lines),
+          speaker: header.speaker === CLICK_SPEAKER,
+          marker: header.marker !== null && near(header.marker.width, MARKER, 0.01) && near(header.marker.height, MARKER, 0.01) && header.marker.fill === header.band,
+          againPlays: second.plays === 1,
+          againLanded: second.landed && near(second.playingAt, start, LANDING_TOLERANCE),
+          stillSelected: only(second.lines),
+        };
+        schemes[scheme] = {
+          drawn,
+          start,
+          first,
+          header,
+          second,
+          failed: Object.entries(parts).filter(([, ok]) => !ok).map(([name]) => name),
+          matches: Object.values(parts).every(Boolean),
+        };
+      }
+      return {
+        measured: { schemes },
+        matches: SCHEMES.every((scheme) => schemes[scheme].matches),
+        screenshots,
+      };
+    });
+
+    // 8. Shift selects a range of lines, which the card offers to play; Escape on a line clears it.
+    await check({
+      id: "8",
+      claim: "Shift-click selects a range, and the card offers to play it.",
+      expectation: [
+        `in each scheme, from a fresh load: line ${RANGE_FROM + 1} pressed in its padding (it plays) and paused, then line ${RANGE_TO + 1}, two playable lines`,
+        `later, pressed with Shift held: exactly lines ${RANGE_LINES.map((line) => line + 1).join(", ")} are aria-selected="true", the Shift press makes no play() call,`,
+        "and the card's .player-header holds a button reading \"Play selection (a–c)\" -- line 6's start to line 8's end, an en dash between --",
+        `and a "Clear selection" button. That button pressed, with the speed at ${RANGE_RATE}x: the recording plays and pauses within ${STOP_TOLERANCE}s of`,
+        `line ${RANGE_TO + 1}'s end. Then, with focus on line ${RANGE_TO + 1}, a real Escape leaves no line selected and the header names a speaker again,`,
+        "with no Play selection button",
+      ].join(" "),
+    }, async () => {
+      const schemes = {};
+      const screenshots = [];
+      for (const scheme of SCHEMES) {
+        await openNote(cdp);
+        const drawn = await useScheme(cdp, scheme);
+        const rows = await cdp.evaluate(snippets.noteTranscriptRows(NOTE_ID));
+        const from = rows[RANGE_FROM];
+        const to = rows[RANGE_TO];
+        const label = `Play selection (${clock(from.startSeconds)}–${clock(to.endSeconds)})`;
+        const first = await played(cdp, () => pressLine(cdp, RANGE_FROM));
+        await stopPlaying(cdp);
+        const playsBefore = await cdp.evaluate("window.__plays ?? null");
+        await pressLine(cdp, RANGE_TO, SHIFT);
+        const ranged = await cdp.evaluate(snippets.lineModelState());
+        const offered = await cdp.evaluate(snippets.cardHeaderState(CARD));
+        const shiftPlays = (await cdp.evaluate("window.__plays ?? null")) - playsBefore;
+        const shot = `08-selection-${scheme}-1440x900.png`;
+        await cdp.screenshot(resolve(out, shot));
+        screenshots.push(shot, await cardShot(cdp, out, `08-card-selection-${scheme}-zoom.png`));
+        let stopped = null;
+        if (offered.playSelection !== null) {
+          await cdp.evaluate(snippets.choosePlayerSpeed(CARD, RANGE_RATE));
+          await pressAt(cdp, `${CARD} button.player-header-play`);
+          const started = await waited(cdp, playingNow, "the selection to play", 5_000);
+          const span = (to.endSeconds - from.startSeconds) / Number(RANGE_RATE);
+          const ended = started && await waited(cdp, `document.querySelector(${JSON.stringify(`${CARD} audio`)}).paused`, "the selection to stop", span * 1000 + 8_000);
+          const at = await cdp.evaluate(snippets.recordingAt(CARD));
+          stopped = { started, ended, time: round(at.time), fromEnd: round(at.time - to.endSeconds) };
+          await cdp.evaluate(snippets.choosePlayerSpeed(CARD, "1"));
+        }
+        const focused = await cdp.evaluate(focusLine(RANGE_TO));
+        await escape(cdp);
+        const cleared = await cdp.evaluate(snippets.lineModelState());
+        const back = await cdp.evaluate(snippets.cardHeaderState(CARD));
+        const parts = {
+          firstPlayed: first.landed && first.plays === 1,
+          threeSelected: JSON.stringify(ranged.selected) === JSON.stringify(RANGE_LINES),
+          noPlayOnShift: shiftPlays === 0,
+          offered: offered.playSelection === label && offered.clear === "Clear selection",
+          stoppedAtEnd: stopped !== null && stopped.started && stopped.ended && Math.abs(stopped.fromEnd) <= STOP_TOLERANCE,
+          escapeOnLine: focused,
+          cleared: cleared.selected.length === 0,
+          speakerBack: back.playSelection === null && back.speaker !== null,
+        };
+        schemes[scheme] = {
+          drawn,
+          label,
+          first: { landed: first.landed, plays: first.plays, playingAt: first.playingAt },
+          ranged: { selected: ranged.selected, shiftPlays },
+          offered,
+          stopped,
+          afterEscape: { focusedFirst: focused, selected: cleared.selected, header: back },
+          failed: Object.entries(parts).filter(([, ok]) => !ok).map(([name]) => name),
+          matches: Object.values(parts).every(Boolean),
+        };
+      }
+      return {
+        measured: { schemes },
+        matches: SCHEMES.every((scheme) => schemes[scheme].matches),
+        screenshots,
+      };
+    });
+
     // 11. A turn's name opens the rename form under that turn, and nothing else happens.
     await check({
       id: "11",
@@ -482,14 +694,94 @@ export async function runTranscriptColumn(options) {
       };
     });
 
+    // 12. The lines are one tab stop, and the arrow keys move between them.
+    await check({
+      id: "12",
+      claim: "One tab stop, and the arrow keys move between lines.",
+      expectation: [
+        "in each scheme, from a fresh load with nothing selected or played: exactly one transcript line has tabindex=\"0\"; after a real press",
+        `on the column's label, real Tabs (at most ${TAB_LIMIT}) walk into the transcript and out of it, and the only line focus lands on is`,
+        "that one. From it, three real ArrowDowns focus the next three lines in turn. With focus on line",
+        `${BEFORE_UNTIMED + 1}, the line before note 106's untimed line ${UNTIMED + 1}, one ArrowDown focuses line ${AFTER_UNTIMED + 1}, which then holds the only tab stop.`,
+        `A real Enter there makes exactly 1 play() call, the recording plays from within ${LANDING_TOLERANCE}s of that line's start, and it is the only selected line`,
+      ].join(" "),
+    }, async () => {
+      const schemes = {};
+      const screenshots = [];
+      for (const scheme of SCHEMES) {
+        await openNote(cdp);
+        const drawn = await useScheme(cdp, scheme);
+        const rows = await cdp.evaluate(snippets.noteTranscriptRows(NOTE_ID));
+        const initial = await cdp.evaluate(snippets.lineModelState());
+        await pressAt(cdp, ".note-side .transcript-head .transcript-label");
+        const walk = [];
+        let entered = false;
+        let left = false;
+        for (let step = 0; step < TAB_LIMIT; step += 1) {
+          await key(cdp, "Tab", { settle: 30 });
+          const place = await cdp.evaluate(snippets.focusPlace());
+          walk.push(place);
+          if (place.inTranscript) entered = true;
+          else if (entered) { left = true; break; }
+        }
+        const tabbedLines = walk.filter((place) => place.line >= 0).map((place) => place.line);
+        const stop = initial.stops[0] ?? null;
+        const steps = [];
+        if (stop !== null) {
+          await cdp.evaluate(focusLine(stop));
+          for (let step = 0; step < 3; step += 1) {
+            await key(cdp, "ArrowDown");
+            steps.push((await cdp.evaluate(snippets.lineModelState())).focused);
+          }
+        }
+        const onBefore = await cdp.evaluate(focusLine(BEFORE_UNTIMED));
+        await key(cdp, "ArrowDown");
+        const past = await cdp.evaluate(snippets.lineModelState());
+        const shot = `12-arrow-${scheme}-1440x900.png`;
+        await cdp.screenshot(resolve(out, shot));
+        screenshots.push(shot);
+        const entered12 = await played(cdp, () => key(cdp, "Enter"));
+        await stopPlaying(cdp);
+        const parts = {
+          oneStop: initial.stops.length === 1,
+          walked: entered && left,
+          oneLineByTab: tabbedLines.length === 1 && tabbedLines[0] === stop,
+          lineByLine: stop !== null && JSON.stringify(steps) === JSON.stringify([stop + 1, stop + 2, stop + 3]),
+          untimed: rows[UNTIMED].startSeconds === null && onBefore && past.focused === AFTER_UNTIMED
+            && JSON.stringify(past.stops) === JSON.stringify([AFTER_UNTIMED]),
+          enterPlays: entered12.plays === 1 && entered12.landed && near(entered12.playingAt, rows[AFTER_UNTIMED].startSeconds, LANDING_TOLERANCE)
+            && JSON.stringify(entered12.lines.selected) === JSON.stringify([AFTER_UNTIMED]),
+        };
+        schemes[scheme] = {
+          drawn,
+          initialStops: initial.stops,
+          tabs: walk.length,
+          tabbedLines,
+          walk: walk.map((place) => place.element),
+          arrowSteps: steps,
+          pastUntimed: { focused: past.focused, stops: past.stops, untimedStart: rows[UNTIMED].startSeconds },
+          enter: { plays: entered12.plays, landed: entered12.landed, playingAt: entered12.playingAt, start: rows[AFTER_UNTIMED].startSeconds, selected: entered12.lines.selected },
+          failed: Object.entries(parts).filter(([, ok]) => !ok).map(([name]) => name),
+          matches: Object.values(parts).every(Boolean),
+        };
+      }
+      return {
+        measured: { schemes },
+        matches: SCHEMES.every((scheme) => schemes[scheme].matches),
+        screenshots,
+      };
+    });
+
     // 13. The header stays at the top of whatever scrolls the transcript, in both layouts.
     await check({
       id: "13",
-      claim: "The header stays in view while the transcript scrolls (both layouts).",
+      claim: "The header stays in view while the transcript scrolls (both layouts), and in a narrow window the mini card shows before playback on the Transcript tab.",
       expectation: [
         `in each scheme: at 1440x900, .note-side-body scrolled down by ${HEAD_SCROLL}px (from 0, and it moves the full ${HEAD_SCROLL}px),`,
         `.transcript-head's top within ${HEAD_TOLERANCE}px of the scroller's top inside its border; at 1000x720 on the Transcript tab,`,
-        `.notes-main scrolled down by ${HEAD_SCROLL}px the same way, the tab's .transcript-head's top within ${HEAD_TOLERANCE}px of .notes-main's`,
+        `.notes-main scrolled down by ${HEAD_SCROLL}px the same way, the tab's .transcript-head's top within ${HEAD_TOLERANCE}px of .notes-main's.`,
+        "At 1000x720, from a fresh load with nothing played: on the Transcript tab, in each scheme, .note-mini-player is there, not hidden,",
+        "drawn and carrying the card's .player-header; after a real press on the Notes tab it is hidden and not drawn; no play() call throughout",
       ].join(" "),
     }, async () => {
       const judge = (read) => ({
@@ -512,17 +804,30 @@ export async function runTranscriptColumn(options) {
         screenshots.push(shot);
       }
       await openNarrowTranscript(cdp);
+      const mini = {};
       for (const scheme of SCHEMES) {
         const drawn = await useScheme(cdp, scheme);
         await cdp.evaluate("document.querySelector('.notes-main').scrollTo({ top: 0, behavior: 'instant' })");
+        mini[scheme] = await cdp.evaluate(snippets.miniPlayerState());
+        const topShot = `13-narrow-top-${scheme}-1000x720.png`;
+        await cdp.screenshot(resolve(out, topShot));
         narrow[scheme] = { drawn, ...judge(await cdp.evaluate(snippets.scrollAndReadHead(".notes-main", HEAD_SCROLL))) };
         const shot = `13-narrow-scrolled-${scheme}-1000x720.png`;
         await cdp.screenshot(resolve(out, shot));
-        screenshots.push(shot);
+        screenshots.push(topShot, shot);
       }
+      // Back to the top, where the tabs are.
+      await cdp.evaluate("document.querySelector('.notes-main').scrollTo({ top: 0, behavior: 'instant' })");
+      await pressAt(cdp, ".note-detail [role=\"tab\"]", "Notes");
+      await waited(cdp, "document.querySelector('.note-detail [role=\"tab\"][aria-selected=\"true\"]')?.textContent.trim() === 'Notes'", "the Notes tab", 3_000);
+      const onNotes = await cdp.evaluate(snippets.miniPlayerState());
+      const plays = await cdp.evaluate("window.__plays ?? null");
+      const miniShown = SCHEMES.every((scheme) => mini[scheme].tab === "Transcript" && mini[scheme].present && mini[scheme].hidden === false
+        && mini[scheme].drawn && mini[scheme].header);
+      const miniHiddenOnNotes = onNotes.tab === "Notes" && onNotes.present && onNotes.hidden === true && !onNotes.drawn;
       return {
-        measured: { wide, narrow },
-        matches: SCHEMES.every((scheme) => wide[scheme].matches && narrow[scheme].matches),
+        measured: { wide, narrow, mini: { transcriptTab: mini, notesTab: onNotes, plays } },
+        matches: SCHEMES.every((scheme) => wide[scheme].matches && narrow[scheme].matches) && miniShown && miniHiddenOnNotes && plays === 0,
         screenshots,
       };
     });
@@ -582,16 +887,18 @@ export async function runTranscriptColumn(options) {
       id: "16",
       claim: "Hover is a neutral fill; the playing line keeps its wash.",
       expectation: [
-        `in each scheme, nothing playing: a real pointer moved onto line ${HOVER_LINE + 1} (inside its left padding) leaves it :hover, not`,
-        "aria-current, with a computed background equal to the resolved --panel-hover; then that line played with its own",
-        `button.transcript-play ("Play transcript row ${HOVER_LINE + 1}") and the pointer moved onto it again: aria-current, :hover, and its`,
-        "computed background equal to the resolved --band-wash; the two tokens resolve differently",
+        `in each scheme, from a fresh load with nothing playing or selected: a real pointer moved onto line ${HOVER_LINE + 1} (inside its left`,
+        "padding) leaves it :hover, not aria-current, with a computed background equal to the resolved --panel-hover; then that line",
+        "played by a real press in its left padding (linePadPoint), which also selects it, and the pointer moved onto it again:",
+        "aria-current, :hover, and its computed background equal to the resolved --band-wash, not the selected line's --selected;",
+        "the two tokens resolve differently",
       ].join(" "),
     }, async () => {
-      await openNote(cdp);
       const schemes = {};
       const screenshots = [];
       for (const scheme of SCHEMES) {
+        // A fresh load each time: the press below leaves the line selected, and a selected line is not hovered.
+        await openNote(cdp);
         const drawn = await useScheme(cdp, scheme);
         await stopPlaying(cdp);
         const at = await cdp.evaluate(snippets.lineHoverState(HOVER_LINE));
@@ -600,7 +907,7 @@ export async function runTranscriptColumn(options) {
         const idleShot = `16-hover-${scheme}-1440x900.png`;
         await cdp.screenshot(resolve(out, idleShot));
         screenshots.push(idleShot);
-        await pressAt(cdp, `.note-side button[aria-label="Play transcript row ${HOVER_LINE + 1}"]`);
+        await pressLine(cdp, HOVER_LINE);
         const started = await waited(cdp, `document.querySelectorAll('.note-side .transcript-rows li')[${HOVER_LINE}]?.getAttribute('aria-current') === 'true'`, "the line to play", 5_000);
         const again = await cdp.evaluate(snippets.lineHoverState(HOVER_LINE));
         await hover(cdp, again.point);

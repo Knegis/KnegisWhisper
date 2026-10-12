@@ -2,7 +2,7 @@ import { Fragment, memo, useEffect, useId, useRef, useState, type FormEvent, typ
 
 import type { TranscriptRow } from "../lib/ipc";
 import { normaliseSpeakerName, renameHeading, suggestionsFor } from "../lib/speakerNames";
-import type { TranscriptSection, TranscriptTurn } from "../lib/transcriptLayout";
+import { sameSelectionOver, type LineKey, type TranscriptSection, type TranscriptTurn } from "../lib/transcriptLayout";
 import { message } from "../lib/useRefresh";
 import { wordsMatchText } from "../lib/wordTiming";
 import { Icon } from "./Icon";
@@ -16,11 +16,14 @@ import { formatClock } from "./RecordingPlayer";
  *
  * A transcript can run to well over a thousand lines, and playback renders the
  * panel four times a second. So `TranscriptSections`, `Section`, `Turn` and
- * `Line` are memoised, the panel hands `activeIndex` only to the section and
- * turn that hold the playing line (null to the rest), and every handler arrives
- * in one `TranscriptActions` object the panel makes once. A `timeupdate` that
- * does not move the playing line redraws only the panel around this; one that
- * does redraws the two sections, two turns and two lines it moved between.
+ * `Line` are memoised, the panel hands `activeIndex` and the tab stop only to
+ * the section and turn that hold them (null to the rest), and every handler
+ * arrives in one `TranscriptActions` object the panel makes once. A
+ * `timeupdate` that does not move the playing line redraws only the panel
+ * around this; one that does redraws the two sections, two turns and two lines
+ * it moved between. The selection is the note's one set of row indexes, so a
+ * section or a turn compares it by its own lines only (`sameSelectionOver`): a
+ * click redraws the turns whose lines it selected or deselected, not the rest.
  */
 
 /** Scrolls jump rather than glide when the person asked for less motion. */
@@ -41,9 +44,20 @@ export type TranscriptActions = {
   register: (index: number, element: HTMLLIElement | null) => void;
   /** The playing line's `.transcript-text`, whose words the panel lights frame by frame (KNEG-408). */
   wordsRef: RefObject<HTMLSpanElement | null>;
-  select: (row: TranscriptRow, shift: boolean) => void;
-  play: (start: number, end: number | null) => void;
-  seek: (seconds: number) => void;
+  /**
+   * A click, Enter or Space on a line. With `extend` (Shift held), the lines from the anchor to it
+   * are selected and nothing plays; otherwise it alone is selected, and plays from its start to
+   * the end when the note has a recording.
+   */
+  choose: (row: TranscriptRow, extend: boolean) => void;
+  /** A click, Enter or Space on a word: its line alone selected, and played from the word. */
+  playWord: (row: TranscriptRow, seconds: number) => void;
+  /** An arrow key, Home or End on a line: focus moves to another line; with `extend`, the selection goes with it. */
+  move: (row: TranscriptRow, key: LineKey, extend: boolean) => void;
+  /** Escape on a line: the selection cleared. False when there was none, so the key goes on. */
+  clear: () => boolean;
+  /** A line, or a word in it, took focus, and so holds the lines' one tab stop. */
+  focused: (index: number) => void;
   openRename: (target: RenameTarget) => void;
   closeRename: (speakerId: string) => void;
   rename: (speakerId: string, name: string) => Promise<void>;
@@ -107,67 +121,95 @@ type LineProps = {
   row: TranscriptRow;
   selected: boolean;
   active: boolean;
-  /** Whether the note has a recording to play: each timed line gets Play, and its words when it has them. */
+  /** Whether this line holds the lines' one tab stop (`lineStop`); its words then hold one too. */
+  stop: boolean;
+  /** Whether the note has a recording to play: a timed line then plays when pressed, and its words when it has them. */
   canPlay: boolean;
   actions: TranscriptActions;
 };
 
+/** The keys that move between lines; inside a line's words, Home and End move between words instead. */
+const LINE_KEYS: ReadonlySet<string> = new Set<LineKey>(["ArrowUp", "ArrowDown", "Home", "End"]);
+const WORD_KEYS: ReadonlySet<string> = new Set(["ArrowLeft", "ArrowRight", "Home", "End"]);
+
 /**
- * One line: an option of its turn's listbox, selected by a click, Enter or Space (Shift extends),
- * each timed line a tab stop. An untimed line is a disabled option with no tab stop. Play floats
- * at the end of its first line, so the text below it runs the full width.
+ * One line: an option of its turn's listbox (KNEG-448). A click, Enter or Space selects it alone and
+ * plays from its start to the end; with Shift, the lines from the anchor to it are selected and
+ * nothing plays. Pressed again, it plays from its start again: only Escape clears a selection. The
+ * lines are one tab stop between them, and the arrow keys, Home and End move from line to line.
+ * An untimed line is a disabled option that is never focused, selected or played.
  */
-export const Line = memo(function Line({ row, selected, active, canPlay, actions }: LineProps) {
-  const playable = row.startSeconds !== null;
-  const className = ["transcript-line", playable ? null : "transcript-row-muted", selected || active ? "transcript-row-current" : null]
-    .filter(Boolean).join(" ");
+export const Line = memo(function Line({ row, selected, active, stop, canPlay, actions }: LineProps) {
+  const timed = row.startSeconds !== null;
+  // Which word takes Tab while this line holds the stop: the one the arrow keys between words
+  // last left focus on, the first until then.
+  const [wordStop, setWordStop] = useState(0);
+  const className = [
+    "transcript-line",
+    timed ? null : "transcript-row-muted",
+    canPlay && timed ? "transcript-line-playable" : null,
+    selected ? "transcript-line-selected" : null,
+    active ? "transcript-line-playing" : null,
+    // Unstyled; the visual checks find the selected and the playing line by it.
+    selected || active ? "transcript-row-current" : null,
+  ].filter(Boolean).join(" ");
   return (
     <li
       ref={(element) => { actions.register(row.index, element); }}
       className={className}
       role="option"
-      tabIndex={playable ? 0 : undefined}
-      aria-selected={playable ? selected : false}
-      aria-disabled={playable ? undefined : true}
+      tabIndex={timed ? (stop ? 0 : -1) : undefined}
+      aria-selected={timed ? selected : false}
+      aria-disabled={timed ? undefined : true}
       aria-current={active ? "true" : undefined}
-      onClick={(event) => actions.select(row, event.shiftKey)}
+      onFocus={() => { if (timed) actions.focused(row.index); }}
+      // A Shift-press would also drag a text selection over every line up to this one.
+      onMouseDown={(event) => { if (timed && event.shiftKey) event.preventDefault(); }}
+      onClick={(event) => {
+        if (!timed) return;
+        // Focus, which the Shift-press above kept from moving.
+        if (event.shiftKey) event.currentTarget.focus({ preventScroll: true });
+        actions.choose(row, event.shiftKey);
+      }}
       onKeyDown={(event) => {
-        if (!playable || (event.key !== "Enter" && event.key !== " ")) return;
-        event.preventDefault();
-        actions.select(row, event.shiftKey);
+        if (!timed) return;
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          actions.choose(row, event.shiftKey);
+        } else if (LINE_KEYS.has(event.key)) {
+          event.preventDefault();
+          actions.move(row, event.key as LineKey, event.shiftKey);
+        } else if (event.key === "Escape" && actions.clear()) {
+          event.preventDefault();
+          event.stopPropagation();
+        }
       }}
     >
-      {canPlay && playable ? (
-        <button
-          type="button"
-          className="transcript-play"
-          aria-label={`Play transcript row ${row.index + 1}`}
-          onClick={(event) => {
-            event.stopPropagation();
-            if (row.startSeconds !== null) actions.play(row.startSeconds, row.endSeconds);
-          }}
-        >
-          Play
-        </button>
-      ) : null}
       {canPlay && wordsMatchText(row.words, row.text) && row.words.length > 0 ? (
-        // Word by word while it plays. A click on a word goes there, and only there: the
-        // line's own click would select or deselect it.
+        // Word by word while it plays. A click on a word selects its line and plays from the word;
+        // with Shift it is a Shift-click on the line.
         <span className="transcript-text" ref={active ? actions.wordsRef : undefined}>
           {row.words.map((word, at) => (
             <Fragment key={at}>
               {at > 0 ? " " : null}
-              <span className="transcript-word" role="button" aria-label={`Seek to ${word.text}`} tabIndex={at === 0 ? 0 : -1}
-                onFocus={event => { const siblings = event.currentTarget.closest(".transcript-text")?.querySelectorAll<HTMLElement>(".transcript-word"); siblings?.forEach(element => { element.tabIndex = element === event.currentTarget ? 0 : -1; }); }}
+              <span className="transcript-word" role="button" aria-label={`Play from ${word.text}`} tabIndex={stop && at === wordStop ? 0 : -1}
+                onFocus={() => setWordStop(at)}
                 onKeyDown={event => {
-                  if (event.key === "Enter" || event.key === " ") { event.preventDefault(); event.stopPropagation(); actions.seek(word.start); }
-                  else if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
+                  if ((event.key === "Enter" || event.key === " ") && !event.shiftKey) {
+                    event.preventDefault(); event.stopPropagation();
+                    actions.playWord(row, word.start);
+                  } else if (WORD_KEYS.has(event.key)) {
                     event.preventDefault(); event.stopPropagation();
                     const siblings = [...(event.currentTarget.closest(".transcript-text")?.querySelectorAll<HTMLElement>(".transcript-word") ?? [])];
                     const next = event.key === "Home" ? 0 : event.key === "End" ? siblings.length - 1 : Math.max(0, Math.min(siblings.length - 1, at + (event.key === "ArrowRight" ? 1 : -1)));
                     siblings[next]?.focus();
                   }
-                }} onClick={(event) => { event.stopPropagation(); actions.seek(word.start); }}>{word.text}</span>
+                }}
+                onClick={(event) => {
+                  if (event.shiftKey) return;
+                  event.stopPropagation();
+                  actions.playWord(row, word.start);
+                }}>{word.text}</span>
             </Fragment>
           ))}
         </span>
@@ -178,9 +220,21 @@ export const Line = memo(function Line({ row, selected, active, canPlay, actions
   );
 });
 
+/**
+ * Whether a turn or a section would draw the same: every prop identical but `selected`, the note's
+ * whole selection, which only has to select the same of `turns`' lines, the ones being drawn.
+ */
+function sameDrawing<P extends { selected: ReadonlySet<number> }>(previous: P, next: P, turns: readonly TranscriptTurn[]): boolean {
+  for (const key of Object.keys(next) as (keyof P)[]) {
+    if (key !== "selected" && !Object.is(previous[key], next[key])) return false;
+  }
+  return turns.every((turn) => sameSelectionOver(turn.rows, previous.selected, next.selected));
+}
+
 /** What every turn is drawn with, whichever section it is in. */
 type Shared = {
   idPrefix: string;
+  /** The note's selected rows, all of them: a turn or section compares only its own (`sameDrawing`). */
   selected: ReadonlySet<number>;
   readOnly: boolean;
   canPlay: boolean;
@@ -192,6 +246,8 @@ type TurnProps = Shared & {
   turn: TranscriptTurn;
   /** The playing line's index when it is in this turn; null otherwise. */
   activeIndex: number | null;
+  /** The index of the line holding the tab stop when it is in this turn; null otherwise. */
+  stopIndex: number | null;
   /** The rename when its name was pressed in this turn; null otherwise. */
   renaming: RenameTarget | null;
 };
@@ -202,7 +258,7 @@ type TurnProps = Shared & {
  * the turn starts. A turn with no speaker shows only the square and the time. The rename form
  * opens between the head and the lines. The lines are a listbox named by who and when.
  */
-export const Turn = memo(function Turn({ turn, activeIndex, renaming, idPrefix, selected, readOnly, canPlay, suggestions, actions }: TurnProps) {
+export const Turn = memo(function Turn({ turn, activeIndex, stopIndex, renaming, idPrefix, selected, readOnly, canPlay, suggestions, actions }: TurnProps) {
   const nameId = `${idPrefix}-${turn.key}-name`;
   const timeId = `${idPrefix}-${turn.key}-time`;
   const speakerId = turn.speakerId;
@@ -225,24 +281,28 @@ export const Turn = memo(function Turn({ turn, activeIndex, renaming, idPrefix, 
       ) : null}
       <ol className="transcript-rows" role="listbox" aria-multiselectable="true" aria-labelledby={name !== null ? `${nameId} ${timeId}` : timeId}>
         {turn.rows.map((row) => (
-          <Line key={row.index} row={row} selected={selected.has(row.index)} active={activeIndex === row.index} canPlay={canPlay} actions={actions} />
+          <Line key={row.index} row={row} selected={selected.has(row.index)} active={activeIndex === row.index}
+            stop={stopIndex === row.index} canPlay={canPlay} actions={actions} />
         ))}
       </ol>
     </div>
   );
-});
+}, (previous, next) => sameDrawing(previous, next, [next.turn]));
 
 type Placed = {
   activeIndex: number | null;
   activeTurn: string | null;
+  stopIndex: number | null;
+  stopTurn: string | null;
   renaming: RenameTarget | null;
 };
 
-/** A section's turns, each told whether it holds the playing line or the open rename. */
-function turnsOf(turns: readonly TranscriptTurn[], { activeIndex, activeTurn, renaming }: Placed, shared: Shared) {
+/** A section's turns, each told whether it holds the playing line, the tab stop or the open rename. */
+function turnsOf(turns: readonly TranscriptTurn[], { activeIndex, activeTurn, stopIndex, stopTurn, renaming }: Placed, shared: Shared) {
   return turns.map((turn) => (
     <Turn key={turn.key} turn={turn} {...shared}
       activeIndex={turn.key === activeTurn ? activeIndex : null}
+      stopIndex={turn.key === stopTurn ? stopIndex : null}
       renaming={renaming !== null && renaming.turnKey === turn.key ? renaming : null} />
   ));
 }
@@ -259,24 +319,29 @@ type SectionProps = Shared & Placed & {
  * has -- over its turns. Closed, the turns stay rendered and `hidden`, so the lines keep their
  * place in the document.
  */
-export const Section = memo(function Section({ section, open, onToggle, activeIndex, activeTurn, renaming, ...shared }: SectionProps) {
+export const Section = memo(function Section({ section, open, onToggle, activeIndex, activeTurn, stopIndex, stopTurn, renaming, ...shared }: SectionProps) {
   const bodyId = `${shared.idPrefix}-${section.key}`;
   const titleId = `${bodyId}-title`;
   return (
     <section className={activeIndex === null ? "transcript-section" : "transcript-section transcript-section-playing"} aria-labelledby={titleId}>
       <h3 className="transcript-section-head">
-        <button type="button" className="transcript-section-toggle" aria-expanded={open} aria-controls={bodyId} onClick={() => onToggle(section.key)}>
+        <button type="button" className="transcript-section-toggle" aria-expanded={open} aria-controls={bodyId} onClick={(event) => {
+          // WKWebView does not focus a pressed button: focus left on a line this closes would be
+          // left on a hidden line. Taken here, it stays on the toggle (KNEG-448).
+          event.currentTarget.focus();
+          onToggle(section.key);
+        }}>
           <Icon name={open ? "chevronDown" : "chevronRight"} size={12} />
           <span className="transcript-section-title" id={titleId}>{section.title}</span>
           <span className="transcript-section-count">{section.lineCount} {section.lineCount === 1 ? "line" : "lines"}</span>
         </button>
       </h3>
       <div id={bodyId} className="transcript-section-body" hidden={!open}>
-        {turnsOf(section.turns, { activeIndex, activeTurn, renaming }, shared)}
+        {turnsOf(section.turns, { activeIndex, activeTurn, stopIndex, stopTurn, renaming }, shared)}
       </div>
     </section>
   );
-});
+}, (previous, next) => sameDrawing(previous, next, next.section.turns));
 
 type SectionsProps = Shared & {
   sections: readonly TranscriptSection[];
@@ -285,6 +350,9 @@ type SectionsProps = Shared & {
   activeIndex: number | null;
   activeSection: string | null;
   activeTurn: string | null;
+  stopIndex: number | null;
+  stopSection: string | null;
+  stopTurn: string | null;
   renaming: RenameTarget | null;
   renamingSection: string | null;
 };
@@ -294,15 +362,17 @@ type SectionsProps = Shared & {
  * header over them.
  */
 export const TranscriptSections = memo(function TranscriptSections({
-  sections, collapsed, onToggle, activeIndex, activeSection, activeTurn, renaming, renamingSection, ...shared
+  sections, collapsed, onToggle, activeIndex, activeSection, activeTurn, stopIndex, stopSection, stopTurn, renaming, renamingSection, ...shared
 }: SectionsProps) {
   const only = sections.length === 1 ? sections[0] : undefined;
-  if (only !== undefined) return <>{turnsOf(only.turns, { activeIndex, activeTurn, renaming }, shared)}</>;
+  if (only !== undefined) return <>{turnsOf(only.turns, { activeIndex, activeTurn, stopIndex, stopTurn, renaming }, shared)}</>;
   return <>
     {sections.map((section) => (
       <Section key={section.key} section={section} open={!collapsed.has(section.key)} onToggle={onToggle} {...shared}
         activeIndex={section.key === activeSection ? activeIndex : null}
         activeTurn={section.key === activeSection ? activeTurn : null}
+        stopIndex={section.key === stopSection ? stopIndex : null}
+        stopTurn={section.key === stopSection ? stopTurn : null}
         renaming={section.key === renamingSection ? renaming : null} />
     ))}
   </>;

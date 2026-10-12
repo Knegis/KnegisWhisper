@@ -289,11 +289,11 @@ export async function runMeetingRecordings(options) {
 
     await check({
       id: "5",
-      claim: "The note a meeting saved with the switch on keeps its transcript and has no player: Replay has no audio and no row has Play, and its details say the recording was deleted.",
+      claim: "The note a meeting saved with the switch on keeps its transcript and has no player: Replay has no audio and no line plays when pressed, and its details say the recording was deleted.",
       expectation: [
-        `on: the note "${NAME}" opened from Recent, Replay selected: 0 audio, 0 .recording-player, 0 .transcript-play, 2 transcript rows,`,
+        `on: the note "${NAME}" opened from Recent, Replay selected: 0 audio, 0 .recording-player, 0 .transcript-line-playable, 2 transcript rows,`,
         `recording details "${DETAILS}" and the "no recording attached" block;`,
-        "off, the same steps: 1 or more audio and 2 .transcript-play, so the probe sees a player where there is one",
+        "off, the same steps: 1 or more audio and 2 .transcript-line-playable, so the probe sees playable lines where there are some",
       ].join(" "),
     }, async () => {
       await fresh(cdp, { on: true });
@@ -313,9 +313,9 @@ export async function runMeetingRecordings(options) {
       return {
         measured: { on, off },
         matches: on.title === NAME && on.tab === "Replay"
-          && on.audios === 0 && on.players === 0 && on.rowPlays === 0 && on.rows.length === 2
+          && on.audios === 0 && on.players === 0 && on.playableLines === 0 && on.rows.length === 2
           && on.disposition.includes(DETAILS) && on.noRecording.length === 1
-          && off.audios >= 1 && off.rowPlays === 2 && off.rows.length === 2 && off.noRecording.length === 0,
+          && off.audios >= 1 && off.playableLines === 2 && off.rows.length === 2 && off.noRecording.length === 0,
         screenshots: [shot, offShot],
         note: "The off run is the control: the same probe on a note whose recording the fixtures attached.",
       };
