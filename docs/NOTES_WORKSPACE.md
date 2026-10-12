@@ -37,7 +37,9 @@ Notes opens by default, with personal Markdown notes first and an independently
 editable AI summary below. An empty personal note offers **Start from transcript**;
 this copies literal speech and available speaker labels without changing the source.
 
-Transcript shows the original rows and playback actions. In windows 1280px or wider
+Transcript shows the original rows and playback actions, grouped into speaker turns and, when
+the transcript spans more than one, collapsible time sections, under a header that stays in
+view as it scrolls (KNEG-448). In windows 1280px or wider
 a note's transcript is a column to the right of the note instead, and the Transcript tab
 is hidden; crossing that width keeps playback and the reading position. A note with no
 transcript has no column, and keeps the one-column layout at any width. **Hide

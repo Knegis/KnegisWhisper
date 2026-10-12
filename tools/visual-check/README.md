@@ -247,16 +247,27 @@ node tools/visual-check/transcript-column.mjs --url http://127.0.0.1:5191/
 Same options as the chip menus (the banner is always removed). It measures
 KNEG-448, the transcript column beside a note as the M6 redesign draws it, and
 grows as the redesign lands: the ids are the plan's, so they are not
-contiguous yet. Fixture note 106, "Roadmap review — long transcript"
+contiguous. Fixture note 106, "Roadmap review — long transcript"
 (`devFixtures.ts`, its rows in `apps/desktop/src/lib/fixtureTranscript.ts`), has
 a 690 s recording, which the fixtures serve as a WAV of that length, and a
-transcript in three five-minute sections starting at 0, 300 and 600 s. Each
-check starts from a fresh load at 1440x900 on Notes with note 106 opened from
-the library, and measures in both colour schemes: `prefers-color-scheme`
-emulated over CDP, which is what the stylesheet reads, with `data-theme` set on
-the root to match. Presses are real pointer presses, and Edge runs with
-`--mute-audio`. Two checks so far:
+transcript in three five-minute sections starting at 0, 300 and 600 s, of 26,
+19 and 9 lines in 19, 14 and 8 turns (`transcriptSections`, pinned in
+`tests/fixtureTranscript.test.ts`). Each check starts from a fresh load at
+1440x900 on Notes with note 106 opened from the library, and measures in both
+colour schemes: `prefers-color-scheme` emulated over CDP, which is what the
+stylesheet reads, with `data-theme` set on the root to match. Presses are real
+pointer presses, Edge runs with `--mute-audio`, and a count of `play()` calls
+is installed before the page's own code runs. Seven checks so far:
 
+1. The column has a plain header and is grouped: `.transcript-head` is sticky
+   at top 0 and holds one heading, "Transcript" drawn uppercase, and one
+   button, "Find in transcript", disabled; three section toggles, all
+   expanded, titled "0:00 – 5:00", "5:00 – 10:00" and "10:00 – 11:30" and
+   counting "26 lines", "19 lines" and "9 lines"; 41 turn heads, each with a
+   6x6px marker; 54 lines. Over `.note-side .transcript` and everything in
+   it, every element but a control (`button`, `input`, `select`, `textarea`,
+   `mark`, `.transcript-word`) has square corners, and nothing is heavier
+   than 400.
 2. The player is a card floating in the column: `.note-side-player` 12px
    (±0.5) in from the column's left, right and bottom edges (its padding box,
    inside the left rule), a 1px solid `--rule` border, a 4px radius and `--bg`
@@ -269,11 +280,34 @@ the root to match. Presses are real pointer presses, and Edge runs with
    Forward 15 seconds lands on 115 and Back 15 seconds on 100 (±0.1 s).
 3. Scrolled to its end, the column's last transcript line stands at or above
    the card's top, and the card floats over the scroller (its top above the
-   scroller's bottom), so there is a line it could hide.
+   scroller's bottom), so there is a line it could hide. Then, from the top,
+   paused at 650 s and played with the card's Play: the line the column
+   scrolls to as it plays (`aria-current`, in the last section) has its bottom
+   at or above the card's top and its top at or below the sticky head's
+   bottom.
+11. A real press on Jonas's name in a turn head opens one
+    `form.transcript-rename` inside that same `.transcript-turn`, focus in its
+    field; no `play()` call, and no line's `aria-selected` changes. Escape
+    closes it.
+13. The head stays at the top of what scrolls: `.note-side-body` scrolled
+    600px puts `.transcript-head`'s top within 1px of the scroller's; at
+    1000x720 on the Transcript tab, the same for `.notes-main`.
+14. With `note_transcript_rows` held back 4 s (`installInvokeStub`), the column
+    shows one heading, the `.transcript-head .transcript-label` "Transcript",
+    over "Loading transcript and recording…", drawn as the loaded column's
+    label is (case, face, size, colour, the head's height and the label's
+    left).
+16. A real pointer on a line that is not playing gives it the resolved
+    `--panel-hover`; played with its own Play, under the pointer it keeps the
+    resolved `--band-wash`.
 
 Measured in headless Edge against dev fixtures, not in the Tauri window; a false
 check makes it exit 1. Skips clamped at 0 and at the end, and ticks dropped at
 the very start or end, are `tests/playerControls.test.ts`'s, not measured here.
+Not measured: keyboard selection across turns (each turn is its own listbox, and
+Enter, Space and Shift act per line as before), what a screen reader announces
+for a turn's list, and collapsing a section (its toggle is pressed by no check
+yet).
 
 ## Note meta
 

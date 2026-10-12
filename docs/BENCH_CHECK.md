@@ -74,8 +74,8 @@ Every gate passes on the merged tree. Nothing below has been clicked by a person
 ### Still unchecked, and needs a person at the machine
 
 1. **Open a diarised note** (for example *DemoMeeting*, 2026-09-03) on the Transcript tab: each
-   `Speaker N` label is a dotted-underlined button; pressing it opens "Name for Speaker N" above
-   the list with the input focused; the row is not selected by that press.
+   turn's `Speaker N` name is a dotted-underlined button; pressing it opens "Name for Speaker N"
+   under that turn's name with the input focused; no line is selected by that press.
 2. **Type a name and Save:** every row of that speaker shows the name; Export in each format shows
    it; the summary's Generate, run afterwards, uses it.
 3. **Remove name** restores `Speaker N`; Escape and Cancel close the form without a change.

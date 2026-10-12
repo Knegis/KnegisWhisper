@@ -1372,6 +1372,224 @@ export function lastLineState() {
   `);
 }
 
+/**
+ * The line playing in the transcript column (`aria-current`), as the column
+ * scrolled it into view: its box beside the card's top and the bottom of the
+ * column's sticky head (the scroller's top when it has none), and how far the
+ * column had to scroll to show it.
+ */
+export function playingLineState() {
+  return source(`
+    const body = document.querySelector('.note-side .note-side-body');
+    const card = document.querySelector('.note-side .note-side-player');
+    if (!body || !card) throw new Error('No transcript column with a player');
+    const line = body.querySelector('.transcript-rows li[aria-current="true"]');
+    const head = body.querySelector('.transcript-head');
+    const scroller = body.getBoundingClientRect();
+    const rect = line?.getBoundingClientRect() ?? null;
+    return {
+      index: line ? [...body.querySelectorAll('.transcript-rows li')].indexOf(line) : null,
+      text: line?.querySelector('.transcript-text')?.textContent ?? null,
+      top: rect?.top ?? null,
+      bottom: rect?.bottom ?? null,
+      clearTop: head ? head.getBoundingClientRect().bottom : scroller.top + body.clientTop,
+      cardTop: card.getBoundingClientRect().top,
+      scrollTop: body.scrollTop,
+      playerH: document.querySelector('.note-detail')?.style.getPropertyValue('--player-h') || null,
+    };
+  `);
+}
+
+/** An element as a short selector-like string for a report: its tag, its classes, and its text when short. */
+const DESCRIBE = `const describe = (element) => {
+      const classes = typeof element.className === 'string' && element.className.trim() ? '.' + element.className.trim().split(/\\s+/).join('.') : '';
+      const text = (element.textContent ?? '').trim();
+      return element.tagName.toLowerCase() + classes + (text && text.length <= 24 ? ' "' + text + '"' : '');
+    };`;
+
+/**
+ * The transcript beside a note, grouped as the M6 redesign draws it
+ * (KNEG-448): its sticky head (the headings and buttons in it, its position),
+ * each section toggle's state, title and count, the 6px marker of each turn,
+ * and -- over the panel's `aside` and everything in it -- any element with a
+ * rounded corner other than a control (a button, an input, a select, a
+ * textarea, a mark or a word), and any computed weight above 400.
+ */
+export function transcriptColumnState() {
+  return source(`
+    ${DESCRIBE}
+    const aside = document.querySelector('.note-side .transcript');
+    if (!aside) throw new Error('No transcript in the column');
+    const head = aside.querySelector('.transcript-head');
+    const headStyle = head ? getComputedStyle(head) : null;
+    const corners = ['TopLeft', 'TopRight', 'BottomRight', 'BottomLeft'];
+    const rounded = [];
+    const heavy = [];
+    for (const element of [aside, ...aside.querySelectorAll('*')]) {
+      const style = getComputedStyle(element);
+      if (!element.matches('button, input, select, textarea, mark, .transcript-word')) {
+        const radii = corners.map((corner) => style['border' + corner + 'Radius']);
+        if (radii.some((radius) => radius !== '0px')) rounded.push(describe(element) + ' ' + radii.join(' '));
+      }
+      if (Number(style.fontWeight) > 400) heavy.push(describe(element) + ' ' + style.fontWeight);
+    }
+    return {
+      head: head ? {
+        position: headStyle.position,
+        top: headStyle.top,
+        headings: [...head.querySelectorAll('h1, h2, h3, h4, h5, h6, [role="heading"]')].map((heading) => ({
+          text: heading.textContent.trim(),
+          drawn: getComputedStyle(heading).textTransform,
+        })),
+        buttons: [...head.querySelectorAll('button')].map((button) => ({
+          label: button.getAttribute('aria-label'),
+          disabled: button.disabled,
+        })),
+      } : null,
+      toggles: [...aside.querySelectorAll('button.transcript-section-toggle')].map((button) => ({
+        expanded: button.getAttribute('aria-expanded'),
+        title: button.querySelector('.transcript-section-title')?.textContent ?? null,
+        count: button.querySelector('.transcript-section-count')?.textContent ?? null,
+        height: button.getBoundingClientRect().height,
+      })),
+      markers: [...aside.querySelectorAll('.transcript-turn-head')].map((turnHead) => {
+        const marker = turnHead.querySelector('.transcript-turn-marker');
+        if (!marker) return null;
+        const rect = marker.getBoundingClientRect();
+        return { width: rect.width, height: rect.height };
+      }),
+      lines: aside.querySelectorAll('.transcript-rows li').length,
+      rounded,
+      heavy,
+    };
+  `);
+}
+
+/**
+ * Scrolls `scroller` down by `by` pixels at once, then reads where the open
+ * note's transcript head stands against the scroller's top edge (inside its
+ * border, where a sticky head sticks).
+ */
+export function scrollAndReadHead(scroller, by) {
+  return source(`
+    const element = document.querySelector(${JSON.stringify(scroller)});
+    if (!element) throw new Error('No ' + ${JSON.stringify(scroller)});
+    const before = element.scrollTop;
+    element.scrollBy({ top: ${JSON.stringify(by)}, behavior: 'instant' });
+    const heads = [...document.querySelectorAll('.note-detail .transcript .transcript-head')].filter((head) => head.getClientRects().length > 0);
+    const head = heads[0] ?? null;
+    return {
+      before,
+      after: element.scrollTop,
+      scrollerTop: element.getBoundingClientRect().top + element.clientTop,
+      headTop: head ? head.getBoundingClientRect().top : null,
+      heads: heads.length,
+      position: head ? getComputedStyle(head).position : null,
+    };
+  `);
+}
+
+/**
+ * The transcript column's label and status line, and how the label is drawn,
+ * for the column before and after its rows arrive.
+ */
+export function columnLabelState() {
+  return source(`
+    const side = document.querySelector('.note-side');
+    if (!side) throw new Error('No transcript column');
+    const label = side.querySelector('.transcript-head .transcript-label');
+    const head = label?.closest('.transcript-head') ?? null;
+    const style = label ? getComputedStyle(label) : null;
+    return {
+      label: label?.textContent ?? null,
+      drawn: style ? { textTransform: style.textTransform, fontFamily: style.fontFamily, fontSize: style.fontSize, color: style.color } : null,
+      head: head ? { height: head.getBoundingClientRect().height, left: label.getBoundingClientRect().left - side.getBoundingClientRect().left } : null,
+      status: side.querySelector('[role="status"]')?.textContent ?? null,
+      lines: side.querySelectorAll('.transcript-rows li').length,
+      headings: [...side.querySelectorAll('h1, h2, h3, h4, h5, h6')].map((heading) => heading.textContent.trim()),
+    };
+  `);
+}
+
+/** Every transcript line's `aria-selected` in the open note, in stored order. */
+export function lineSelection() {
+  return source(`
+    return [...document.querySelectorAll('.note-detail .transcript .transcript-rows li')].map((line) => line.getAttribute('aria-selected'));
+  `);
+}
+
+/**
+ * Marks the first `button.transcript-speaker` in the column reading `name`
+ * with `data-probe`, so the turn it belongs to can be found again after it is
+ * pressed, and returns its centre.
+ */
+export function markSpeakerButton(name) {
+  return source(`
+    const button = [...document.querySelectorAll('.note-side button.transcript-speaker')]
+      .find((item) => item.textContent.trim() === ${JSON.stringify(name)});
+    if (!button) throw new Error('No speaker button reads ' + ${JSON.stringify(name)});
+    document.querySelectorAll('[data-probe="rename"]').forEach((item) => item.removeAttribute('data-probe'));
+    button.dataset.probe = 'rename';
+    const rect = button.getBoundingClientRect();
+    return { x: (rect.left + rect.right) / 2, y: (rect.top + rect.bottom) / 2, label: button.getAttribute('aria-label') };
+  `);
+}
+
+/**
+ * The open rename form beside the speaker button `markSpeakerButton` marked:
+ * whether it sits in that button's `.transcript-turn`, what it is a child of,
+ * and whether focus is in its text field.
+ */
+export function renameFormState() {
+  return source(`
+    const button = document.querySelector('[data-probe="rename"]');
+    const forms = [...document.querySelectorAll('.note-detail form.transcript-rename')];
+    const form = forms[0] ?? null;
+    const turn = button?.closest('.transcript-turn') ?? null;
+    const input = form?.querySelector('input[type="text"]') ?? null;
+    const active = document.activeElement;
+    return {
+      forms: forms.length,
+      label: form?.getAttribute('aria-label') ?? null,
+      inPressedTurn: Boolean(form && turn && turn.contains(form)),
+      parent: form ? [form.parentElement.tagName.toLowerCase(), ...form.parentElement.classList].join('.') : null,
+      focusInInput: Boolean(input) && active === input,
+      focused: active ? [active.tagName.toLowerCase(), ...active.classList].join('.') : null,
+    };
+  `);
+}
+
+/**
+ * Line `index` of the column: a point inside its left padding (on the line,
+ * off its text, words and buttons), whether it is the playing line, and its
+ * computed background beside `--panel-hover` and `--band-wash` resolved from
+ * the root (by giving each to an element's `color`).
+ */
+export function lineHoverState(index) {
+  return source(`
+    const line = document.querySelectorAll('.note-side .transcript .transcript-rows li')[${JSON.stringify(index)}];
+    if (!line) throw new Error('No line ' + ${JSON.stringify(index)});
+    const resolve = (name) => {
+      const probe = document.createElement('i');
+      probe.style.color = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+      document.body.append(probe);
+      const color = getComputedStyle(probe).color;
+      probe.remove();
+      return color;
+    };
+    const rect = line.getBoundingClientRect();
+    return {
+      point: { x: rect.left + 8, y: rect.top + rect.height / 2 },
+      text: line.querySelector('.transcript-text')?.textContent ?? null,
+      current: line.getAttribute('aria-current') === 'true',
+      hovered: line.matches(':hover'),
+      background: getComputedStyle(line).backgroundColor,
+      panelHover: resolve('--panel-hover'),
+      bandWash: resolve('--band-wash'),
+    };
+  `);
+}
+
 /* ------------------------------------------------------------ level meters */
 
 /**

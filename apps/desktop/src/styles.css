@@ -1354,8 +1354,9 @@ button.marked:hover:not(:disabled) {
   margin-top: 0;
 }
 
+/* "Play selection", under the sticky head, inset as the lines are. */
 .transcript > button {
-  margin: 0.5rem 0 0;
+  margin: 0 20px 8px;
 }
 
 .transcript-rows {
@@ -1410,31 +1411,65 @@ button.transcript-speaker:focus-visible {
   color: var(--text);
 }
 
-/* The global button hover fill would turn an inline label into a separate box. */
-.transcript-rows button.transcript-speaker:hover:not(:disabled) { background: none; }
-
 /*
- * `TranscriptPanel`'s rows -- a note's Transcript tab, and its column in a
- * wide window -- as the canvas draws them: who and when on one line, the
- * speaker in the text colour and the time in the machine voice, muted, and
- * what was said underneath. Scoped to `.transcript`, the panel's own `aside`,
- * because the meeting window's live rows share `.transcript-rows` and keep
- * the grid above.
+ * `TranscriptPanel` -- a note's Transcript tab, and its column in a wide window -- as the M6
+ * canvas draws it (KNEG-448): a sticky head, then time sections, speaker turns and lines. Scoped
+ * to `.transcript`, the panel's own `aside`, because the meeting window's live rows share
+ * `.transcript-rows`, `.transcript-clock` and `.transcript-speaker` and keep the grid above.
  *
- * The selected or playing row is `--band-wash` behind unchanged text, its
- * time in `--band-text`, the text-safe blue. It was a solid `--band` fill
- * with every part of the row in `--band-ink`.
+ * The head is the column's label in the machine voice, and the Find button, sticky at the top of
+ * whatever scrolls the transcript: `.note-side-body` beside the note, on `--panel`, or
+ * `.notes-main` under the Transcript tab, on `--bg`. It stands over the lines (z-index 1) and under
+ * the player card (2) and the mini player (3). `NoteWorkspace` also draws it alone over the
+ * column's loading, error and empty lines, outside any `.transcript`, so its rules are not scoped.
+ *
+ * A section is a 36px header with a `--rule` above it: the chevron, the range in the machine voice
+ * (`--band-text` while it holds the playing line), and its count, muted, at the far end; hovering
+ * it is a panel row's `--panel-hover`. A turn is a head -- a 6px square, `--muted`, `--band` while
+ * one of its lines plays; the speaker at 13px in the text colour; the time in the machine voice at
+ * 11px, muted -- over its lines, which run the full width at 14.5/22 with Play floated at the end
+ * of the first. A hovered line is `--panel-hover`; the selected or playing line is `--band-wash`
+ * behind unchanged text, and keeps it under the pointer. An untimed line is muted and not hovered.
+ *
+ * Lines and the rename form stop a scroll 60px below the scroller's top, clear of the 52px head,
+ * and the card's height plus 24px above its bottom (`--player-h`, which `NoteWorkspace.tsx` keeps
+ * on the article), clear of the card floating over the column's foot or the mini player held to
+ * the note's.
  */
-.transcript .transcript-rows li { display: flex; flex-direction: column; align-items: stretch; gap: 2px; padding: 10px 12px; }
-.transcript-row-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
-.transcript .transcript-speaker { font-size: 13px; line-height: 18px; color: var(--text); }
-.transcript .transcript-row-muted .transcript-speaker { color: var(--muted); }
-.transcript .transcript-clock { font-size: 12px; line-height: 16px; color: var(--muted); }
-.transcript-text { font-size: 14.5px; line-height: 22px; overflow-wrap: anywhere; }
-button.transcript-play { height: 24px; margin: 0 0 0 auto; padding: 0 8px; border-radius: 2px; color: var(--muted); font-size: 12.5px; line-height: 18px; }
+.transcript-head { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 8px; height: 52px; margin: 0; padding: 0 20px; background: var(--bg); font: 12px/16px var(--font-mono); letter-spacing: .5px; text-transform: uppercase; color: var(--muted); }
+.note-side .transcript-head { background: var(--panel); }
+.transcript-label { flex: 1; min-width: 0; margin: 0; font: inherit; letter-spacing: inherit; text-transform: inherit; color: inherit; }
+/* 6px into the head's padding, so the glyph rather than the button's box ends where the lines' text does. */
+button.transcript-find { flex: none; display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; margin: 0 -6px 0 0; padding: 0; color: var(--muted); }
+/* `section` and `h3` carry the settings screens' margins and `--surface` fill. */
+.transcript .transcript-section { margin: 0; background: transparent; }
+.transcript .transcript-section-head { margin: 0; font: inherit; }
+.transcript button.transcript-section-toggle { display: flex; align-items: center; gap: 8px; width: 100%; height: 36px; margin: 0; padding: 0 20px; border-top: 1px solid var(--rule); border-radius: 0; color: var(--text); text-align: left; font: 12px/16px var(--font-mono); letter-spacing: .5px; }
+.transcript button.transcript-section-toggle:hover:not(:disabled) { background: var(--panel-hover); }
+/* Full width inside a scroller, which would clip a ring drawn outside it. */
+.transcript button.transcript-section-toggle:focus-visible { outline-offset: -2px; }
+.transcript-section-toggle > .icon { color: var(--muted); }
+.transcript-section-title { flex: 1; min-width: 0; }
+.transcript-section-playing .transcript-section-title { color: var(--band-text); }
+.transcript-section-count { flex: none; font-size: 11px; color: var(--muted); }
+.transcript-turn { padding: 8px 0 4px; }
+.transcript-turn-head { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 0 20px 2px; }
+.transcript-turn-marker { flex: none; width: 6px; height: 6px; background: var(--muted); }
+.transcript-turn-playing .transcript-turn-marker { background: var(--band); }
+.transcript .transcript-turn-head .transcript-speaker { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 13px; line-height: 18px; color: var(--text); }
+/* The global button hover fill would turn the name into a separate box. */
+.transcript button.transcript-speaker:hover:not(:disabled) { background: none; }
+.transcript .transcript-turn-head .transcript-clock { flex: none; font-size: 11px; line-height: 16px; color: var(--muted); }
+/* One list per turn, each as tall as its lines: the global rows scroll in a 32rem box of their own. */
+.transcript .transcript-rows { max-height: none; overflow: visible; margin: 0; }
+.transcript .transcript-rows li { display: flow-root; padding: 3px 20px; scroll-margin-top: 60px; scroll-margin-bottom: calc(var(--player-h, 0px) + 24px); }
+.transcript .transcript-line:not(.transcript-row-current, [aria-disabled="true"]):hover { background: var(--panel-hover); }
+/* An untimed line cannot be selected or played; the shared rows' pointer would say it could. */
+.transcript .transcript-rows li[aria-disabled="true"] { cursor: default; }
+.transcript-text { display: block; font-size: 14.5px; line-height: 22px; overflow-wrap: anywhere; }
+button.transcript-play { float: right; height: 22px; margin: 0 0 0 8px; padding: 0 6px; border-radius: 2px; color: var(--muted); font-size: 12.5px; line-height: 22px; }
 button.transcript-play:hover:not(:disabled) { color: var(--text); }
 .transcript-row-current { background: var(--band-wash); }
-.transcript .transcript-row-current .transcript-clock { color: var(--band-text); }
 
 /*
  * A playing row with word timings (KNEG-408) is drawn word by word, and the
@@ -1467,6 +1502,8 @@ button.transcript-play:hover:not(:disabled) { color: var(--text); }
 .transcript-rename button { margin-top: 0; }
 /* Errors stay below the controls so they do not squeeze the field. */
 .transcript-rename .error { flex-basis: 100%; }
+/* Under the head of the turn whose name was pressed, inset as its lines are (KNEG-448). */
+.transcript .transcript-rename { margin: 4px 20px 8px; scroll-margin-top: 60px; scroll-margin-bottom: calc(var(--player-h, 0px) + 24px); }
 
 /*
  * The recording player (`RecordingPlayer.tsx`) as the M6 canvas draws it
@@ -1549,17 +1586,12 @@ button.recording-skip + button.recording-skip { margin-right: 8px; }
 .note-detail-wide { flex: 1; min-height: 0; grid-template-columns: minmax(0, 1fr) 340px; }
 .note-detail-wide > .note-body { min-height: 0; overflow-y: auto; }
 .note-side { position: relative; display: flex; flex-direction: column; min-height: 0; background: var(--panel); border-left: 1px solid var(--rule); }
-.note-side-label { flex: none; display: flex; align-items: center; height: 52px; margin: 0; padding: 0 20px; font: 12px/16px var(--font-mono); letter-spacing: .5px; text-transform: uppercase; color: var(--muted); }
 /* Ends a card's height and 24px under its last line, so scrolled to the end that line stands 12px
  * clear of the card's top. `--player-h` is the card's own height, which `NoteWorkspace.tsx` keeps
- * on the article. */
+ * on the article. The column's label is the transcript's own sticky head (`.transcript-head`). */
 .note-side-body { flex: 1; min-height: 0; overflow-y: auto; padding-bottom: calc(var(--player-h, 0px) + 24px); }
 .note-side-body > p { margin: 0 20px; }
-.note-side-body .transcript > button { margin: 0 20px 8px; }
-.note-side-body .transcript-rename { margin: 0 20px 12px; }
-.note-side-body .transcript-rename input { min-width: 0; flex: 1 1 10rem; }
-.note-side-body .transcript-rows { max-height: none; margin: 0; }
-.note-side-body .transcript .transcript-rows li { padding: 10px 20px; }
+.note-side .transcript-rename input { min-width: 0; flex: 1 1 10rem; }
 /* The player floats over the foot of the column as a card, 12px in from the column's sides and
  * bottom, the transcript scrolling on under it (KNEG-448). Over the column's scrollbar too: the
  * card is the column's width less its insets, as the canvas draws it. */
@@ -2713,8 +2745,8 @@ button.note-people-add:hover:not(:disabled), button.note-people-add[aria-expande
 .recording-player input[type="range"]:disabled::-webkit-slider-thumb { background: var(--muted); }
 .recording-details { margin-bottom: 1rem; color: var(--muted); }
 .recording-details p { white-space: pre-wrap; overflow-wrap: anywhere; }
-/* The Transcript tab's rows pull out by their own padding, so their text lines up with the title's. */
-.note-workspace .transcript-rows { max-height: none; margin: 0.25rem -12px 0; }
+/* The Transcript tab's transcript pulls out 12px each side, so its head, hovers and washes reach past the note's text; its lines, inset 20px, start 8px inside the title's edge. */
+.note-workspace .transcript { margin-inline: -12px; }
 .start-from-transcript { margin-bottom: 1rem; }
 .note-workspace .note-editor, .note-workspace .note-editor .milkdown .ProseMirror { min-height: 12rem; }
 

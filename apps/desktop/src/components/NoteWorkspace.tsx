@@ -13,7 +13,7 @@ import { NoteEditor } from "./NoteEditor";
 import { NotePeople } from "./NotePeople";
 import { SummaryPane, type SummaryPaneHandle } from "./SummaryPane";
 import { RecordingPlayer, type PlayerPosition, type RecordingPlayerHandle } from "./RecordingPlayer";
-import { TranscriptPanel } from "./TranscriptPanel";
+import { TranscriptHeading, TranscriptPanel } from "./TranscriptPanel";
 
 export type NoteWorkspaceHandle = { flush: () => Promise<void> };
 const TABS = ["notes", "transcript", "replay"] as const;
@@ -424,8 +424,14 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
     }
   }, [note.id]);
   useEffect(() => { void loadTranscript(); }, [loadTranscript]);
-  // Where the player ticks its scrubber: every section start after the first (KNEG-448). Computed
-  // once per rows, so a render for playback, four a second, hands the player the same array.
+  const renameSpeaker = useCallback(async (speakerId: string, name: string) => {
+    await renameNoteSpeaker(note.id, speakerId, name);
+    // Rust resolves display names for both rows and export; reload those rows after each edit.
+    await loadTranscript(true);
+  }, [note.id, loadTranscript]);
+  // The transcript's sections and turns, which the column draws, and where the player ticks its
+  // scrubber: every section start after the first (KNEG-448). Computed once per rows, so a render
+  // for playback, four a second, hands the panel and the player the same arrays.
   const transcriptRows = transcript?.rows;
   const sections = useMemo(() => transcriptSections(transcriptRows ?? []), [transcriptRows]);
   const marks = useMemo(() => sectionMarks(sections), [sections]);
@@ -519,15 +525,14 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
   const disposition = dispositionLine && <div className="recording-disposition" role="status"><p>{dispositionLine}</p>{recordingState?.error && <p>{recordingState.error}</p>}{recordingState?.canRetry && <button type="button" disabled={blocked !== null || retryingDeletion} onClick={() => { void retryDeletion(); }}>{retryingDeletion ? "Retrying deletion…" : "Retry deletion"}</button>}</div>;
   const recordingDetails = note.recordingDetails && <details className="recording-details" open><summary>Recording details</summary><p>{note.recordingDetails}</p></details>;
   const transcriptBody = transcriptError ? <p className="error" role="alert">{transcriptError} <button type="button" onClick={() => { void loadTranscript(); }}>Retry</button></p> : !transcript ? <p role="status">Loading transcript and recording…</p> : transcript.rows.length ?
-    <TranscriptPanel readOnly={blocked !== null} sourceRequest={sourceRequest} onSourceShown={clearSource} rows={transcript.rows}
+    <TranscriptPanel readOnly={blocked !== null} sourceRequest={sourceRequest} onSourceShown={clearSource} rows={transcript.rows} sections={sections}
       recording={transcript.recording} currentTime={currentTime} playing={playing} visible={wide || tab === "transcript"} playInterval={playInterval}
       time={playerTime} seek={seek}
-      suggestions={transcript.suggestions} onRename={async (speakerId, name) => {
-        await renameNoteSpeaker(note.id, speakerId, name);
-        // Rust resolves display names for both rows and export; reload those rows after each edit.
-        await loadTranscript(true);
-      }} />
+      suggestions={transcript.suggestions} onRename={renameSpeaker} />
     : <p className="muted">This note has no transcript.</p>;
+  // The panel heads itself (`TranscriptHeading`, sticky in whatever scrolls it); the column's
+  // loading, error and empty lines get the same label over them, so it is there before the rows.
+  const transcriptShown = !transcriptError && transcript !== null && transcript.rows.length > 0;
   // Drawn in one of two places (`playerSlotOf`), never both.
   const player = transcript?.recording
     ? <RecordingPlayer ref={playerRef} noteId={note.id} onCurrentTime={setCurrentTime} onPlayingChange={onPlayingChange} marks={marks} />
@@ -621,8 +626,7 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
     </div>
     {/* No recording details here: the Replay tab still has them, and beside it they would be on screen twice. */}
     {wide ? <div id={`note-${note.id}-side`} className="note-side">
-      <h2 className="note-side-label">Transcript</h2>
-      <div className="note-side-body">{transcriptBody}</div>
+      <div className="note-side-body">{transcriptShown ? null : <TranscriptHeading />}{transcriptBody}</div>
       {player && playerSlot === "side" ? <div ref={observePlayer} className="note-side-player">{player}</div> : null}
     </div> : null}
   </article>;

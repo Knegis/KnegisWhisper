@@ -18,6 +18,15 @@ test("the long fixture note makes three titled sections", () => {
   );
 });
 
+// `tools/visual-check/transcript-column.mjs` (claim 1) counts these on the page; pinned here so a
+// change to the fixture fails in node, against the source, before it fails in the browser.
+test("the long fixture note's sections hold 26, 19 and 9 lines in 19, 14 and 8 turns", () => {
+  const sections = transcriptSections(rows);
+  assert.deepEqual(sections.map((section) => section.lineCount), [26, 19, 9]);
+  assert.deepEqual(sections.map((section) => section.turns.length), [19, 14, 8]);
+  assert.equal(rows.length, 54);
+});
+
 test("the rows agree with the stored segments", () => {
   assert.equal(rows.length, LONG_TRANSCRIPT_SEGMENTS.length);
   rows.forEach((row, at) => {

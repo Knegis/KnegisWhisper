@@ -1,16 +1,25 @@
-import { Fragment, useEffect, useId, useMemo, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import type { NoteRecording, TranscriptRow } from "../lib/ipc";
-import { normaliseSpeakerName, renameHeading, suggestionsFor } from "../lib/speakerNames";
-import { message } from "../lib/useRefresh";
+import type { TranscriptSection } from "../lib/transcriptLayout";
 import { wordAt, wordsMatchText } from "../lib/wordTiming";
+import { Icon } from "./Icon";
 import { formatClock } from "./RecordingPlayer";
+import { scrollBehavior, TranscriptSections, type RenameTarget, type TranscriptActions } from "./TranscriptSections";
 
 const CURRENT_WORD = "transcript-word-current";
 
-/** Scrolls jump rather than glide when the person asked for less motion. */
-function scrollBehavior(): ScrollBehavior {
-  return typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
+/**
+ * The transcript's label, in the machine voice, at the top of whatever scrolls it: the column
+ * beside a note in a wide window, or `.notes-main` under the Transcript tab (KNEG-448). The panel
+ * draws it with its Find button; `NoteWorkspace` draws it alone over the column's loading, error
+ * and empty lines, so the column is labelled the same before its rows arrive.
+ */
+export function TranscriptHeading({ children }: { children?: ReactNode }) {
+  return <div className="transcript-head">
+    <h2 className="transcript-label">Transcript</h2>
+    {children}
+  </div>;
 }
 
 type TranscriptPanelProps = {
@@ -25,6 +34,8 @@ type TranscriptPanelProps = {
    */
   onSourceShown?: () => void;
   rows: TranscriptRow[];
+  /** `rows` grouped into sections and turns (`transcriptSections`), computed once per rows by the owner. */
+  sections: readonly TranscriptSection[];
   recording: NoteRecording | null;
   currentTime: number;
   playing: boolean;
@@ -38,69 +49,68 @@ type TranscriptPanelProps = {
   onRename: (speakerId: string, name: string) => Promise<void>;
 };
 
-type RenameTarget = { speakerId: string; current: string };
+type Selection = { selected: ReadonlySet<number>; anchor: number | null };
 
-function RenameForm({ target, suggestions, onRename, onClose }: {
-  target: RenameTarget;
-  suggestions: readonly string[];
-  onRename: TranscriptPanelProps["onRename"];
-  onClose: (speakerId: string) => void;
-}) {
-  const [value, setValue] = useState(target.current);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const datalistId = useId();
-  const heading = renameHeading(target.current);
-
-  const submitName = async (name: string) => {
-    if (saving) return;
-    setSaving(true);
-    setError(null);
-    try {
-      await onRename(target.speakerId, name);
-      onClose(target.speakerId);
-    } catch (cause) {
-      setError(message(cause));
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const onSubmit = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    void submitName(normaliseSpeakerName(value));
-  };
-
-  return <form className="transcript-rename" aria-label={heading} onSubmit={onSubmit}>
-    <label htmlFor={`${datalistId}-name`}>{heading}</label>
-    <input id={`${datalistId}-name`} type="text" list={datalistId} autoFocus maxLength={100}
-      value={value} onChange={event => setValue(event.target.value)} onKeyDown={event => {
-        if (event.key === "Escape") { event.preventDefault(); onClose(target.speakerId); }
-      }} />
-    <datalist id={datalistId}>
-      {suggestionsFor(target.current, suggestions).map(name => <option key={name} value={name} />)}
-    </datalist>
-    <button type="submit" disabled={saving || normaliseSpeakerName(value) === normaliseSpeakerName(target.current)}>Save</button>
-    <button type="button" disabled={saving} onClick={() => { void submitName(""); }}>Remove name</button>
-    <button type="button" disabled={saving} onClick={() => onClose(target.speakerId)}>Cancel</button>
-    {error && <p className="error" role="alert">{error}</p>}
-  </form>;
+/**
+ * The click model as it has been: a click on a selected line clears the selection, Shift with an
+ * anchor selects every timed line between the two, and anything else selects the one line and
+ * makes it the anchor. Untimed lines are never selected.
+ */
+function nextSelection(previous: Selection, row: TranscriptRow, shift: boolean, rows: readonly TranscriptRow[]): Selection {
+  if (!shift && previous.selected.has(row.index)) return { selected: new Set(), anchor: null };
+  if (shift && previous.anchor !== null) {
+    const from = Math.min(previous.anchor, row.index);
+    const to = Math.max(previous.anchor, row.index);
+    return {
+      selected: new Set(rows.filter((candidate) => candidate.index >= from && candidate.index <= to && candidate.startSeconds !== null).map((candidate) => candidate.index)),
+      anchor: previous.anchor,
+    };
+  }
+  return { selected: new Set([row.index]), anchor: row.index };
 }
 
-export function TranscriptPanel({ readOnly = false, sourceRequest, onSourceShown, rows, recording, currentTime, playing, visible, playInterval, time, seek, suggestions, onRename }: TranscriptPanelProps) {
+export function TranscriptPanel({ readOnly = false, sourceRequest, onSourceShown, rows, sections, recording, currentTime, playing, visible, playInterval, time, seek, suggestions, onRename }: TranscriptPanelProps) {
+  const idPrefix = useId();
   const rowRefs = useRef(new Map<number, HTMLLIElement>());
   // The playing row's words, when it is drawn word by word.
   const wordsRef = useRef<HTMLSpanElement>(null);
-  const [selected, setSelected] = useState<Set<number>>(() => new Set());
-  const [anchor, setAnchor] = useState<number | null>(null);
+  const [selection, setSelection] = useState<Selection>(() => ({ selected: new Set(), anchor: null }));
   const [renaming, setRenaming] = useState<RenameTarget | null>(null);
-  const closeRename = (speakerId: string) => setRenaming(previous => previous?.speakerId === speakerId ? null : previous);
+  // Sections the reader closed, by key; every section starts open (KNEG-448).
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
+
+  // What the lines' handlers read, so the handlers -- and the one `actions` object holding them --
+  // stay the same from render to render and never redraw a memoised line by themselves.
+  const latest = useRef({ rows, playInterval, seek, onRename });
+  useLayoutEffect(() => { latest.current = { rows, playInterval, seek, onRename }; });
+  const actions = useMemo<TranscriptActions>(() => ({
+    register: (index, element) => {
+      if (element === null) rowRefs.current.delete(index);
+      else rowRefs.current.set(index, element);
+    },
+    wordsRef,
+    select: (row, shift) => {
+      if (row.startSeconds === null) return;
+      setSelection((previous) => nextSelection(previous, row, shift, latest.current.rows));
+    },
+    play: (start, end) => latest.current.playInterval(start, end),
+    seek: (seconds) => latest.current.seek(seconds),
+    openRename: (target) => setRenaming(target),
+    closeRename: (speakerId) => setRenaming((previous) => previous?.speakerId === speakerId ? null : previous),
+    rename: (speakerId, name) => latest.current.onRename(speakerId, name),
+  }), []);
+  const toggleSection = useCallback((key: string) => setCollapsed((previous) => {
+    const next = new Set(previous);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    return next;
+  }), []);
 
   useEffect(() => {
     if (!sourceRequest || !visible) return;
     const row = rows.find(item => item.index === sourceRequest.index);
     if (!row) return;
-    setSelected(new Set([row.index])); setAnchor(row.index);
+    setSelection({ selected: new Set([row.index]), anchor: row.index });
     rowRefs.current.get(row.index)?.scrollIntoView({ block: "nearest", behavior: scrollBehavior() });
     onSourceShown?.();
   }, [sourceRequest, rows, visible, onSourceShown]);
@@ -115,6 +125,8 @@ export function TranscriptPanel({ readOnly = false, sourceRequest, onSourceShown
     ) ?? null;
   }, [currentTime, playing, rows]);
 
+  // Lines and the rename form carry scroll margins (`styles.css`), so this and the source scroll
+  // above stop clear of the sticky header and of the player card floating over the column's foot.
   useEffect(() => {
     if (visible && activeRow !== null) {
       rowRefs.current.get(activeRow.index)?.scrollIntoView({ block: "nearest" });
@@ -154,42 +166,38 @@ export function TranscriptPanel({ readOnly = false, sourceRequest, onSourceShown
     };
   }, [activeWords, playing, visible, time]);
 
-  const playableSelected = rows.filter((row) => selected.has(row.index) && row.startSeconds !== null);
+  // Where each line and turn sits, so only the section and turn holding the playing line, or the
+  // open rename, are handed it.
+  const places = useMemo(() => {
+    const rowsAt = new Map<number, { section: string; turn: string }>();
+    const turnsAt = new Map<string, string>();
+    for (const section of sections) {
+      for (const turn of section.turns) {
+        turnsAt.set(turn.key, section.key);
+        for (const row of turn.rows) rowsAt.set(row.index, { section: section.key, turn: turn.key });
+      }
+    }
+    return { rowsAt, turnsAt };
+  }, [sections]);
+  const activeIndex = activeRow?.index ?? null;
+  const activePlace = activeIndex === null ? undefined : places.rowsAt.get(activeIndex);
+
+  const playableSelected = useMemo(
+    () => rows.filter((row) => selection.selected.has(row.index) && row.startSeconds !== null),
+    [rows, selection.selected],
+  );
   const selectionStart = playableSelected[0]?.startSeconds ?? null;
   const selectionEnd = playableSelected.at(-1)?.endSeconds ?? null;
   const shownEnd = selectionEnd ?? recording?.durationSeconds ?? selectionStart;
 
-  const selectRow = (row: TranscriptRow, shift: boolean) => {
-    const start = row.startSeconds;
-    if (start === null) return;
-    if (!shift && selected.has(row.index)) {
-      setSelected(new Set());
-      setAnchor(null);
-      return;
-    }
-    if (shift && anchor !== null) {
-      const from = Math.min(anchor, row.index);
-      const to = Math.max(anchor, row.index);
-      setSelected(
-        new Set(
-          rows
-            .filter(
-              (candidate) =>
-                candidate.index >= from &&
-                candidate.index <= to &&
-                candidate.startSeconds !== null,
-            )
-            .map((candidate) => candidate.index),
-        ),
-      );
-      return;
-    }
-    setSelected(new Set([row.index]));
-    setAnchor(row.index);
-  };
-
   return (
     <aside className="transcript" aria-label="Transcript">
+      <TranscriptHeading>
+        {/* Find in the transcript arrives later in KNEG-448; the button holds its place until then. */}
+        <button type="button" className="transcript-find" aria-label="Find in transcript" title="Find in transcript" disabled>
+          <Icon name="search" size={16} />
+        </button>
+      </TranscriptHeading>
       {recording && selectionStart !== null && shownEnd !== null ? (
         <button
           type="button"
@@ -198,103 +206,22 @@ export function TranscriptPanel({ readOnly = false, sourceRequest, onSourceShown
           Play selection ({formatClock(selectionStart)}–{formatClock(shownEnd)})
         </button>
       ) : null}
-      {!readOnly && renaming && (
-        // Changing the target must re-seed the field and clear any error from the previous speaker.
-        <RenameForm key={renaming.speakerId} target={renaming} suggestions={suggestions} onRename={onRename} onClose={closeRename} />
-      )}
-      <ol
-        className="transcript-rows"
-        role="listbox"
-        aria-multiselectable="true"
-      >
-        {rows.map((row) => {
-          const playable = row.startSeconds !== null;
-          const isSelected = selected.has(row.index);
-          const isActive = activeRow?.index === row.index;
-          const speakerId = row.speakerId;
-          return (
-            <li
-              key={row.index}
-              ref={(element) => {
-                if (element === null) rowRefs.current.delete(row.index);
-                else rowRefs.current.set(row.index, element);
-              }}
-              className={`${playable ? "" : "transcript-row-muted"} ${
-                isSelected || isActive ? "transcript-row-current" : ""
-              }`}
-              tabIndex={playable ? 0 : undefined}
-              role={playable ? "option" : undefined}
-              aria-selected={playable ? isSelected : undefined}
-              aria-current={isActive ? "true" : undefined}
-              onClick={(event) => selectRow(row, event.shiftKey)}
-              onKeyDown={(event) => {
-                if (!playable || (event.key !== "Enter" && event.key !== " ")) return;
-                event.preventDefault();
-                selectRow(row, event.shiftKey);
-              }}
-            >
-              {/* Who and when on one line, what was said under it. Play sits at the end of the
-                  first line, so a row's text starts at the same x whether it can be played or not. */}
-              <span className="transcript-row-head">
-                {speakerId !== null ? (
-                  <button type="button" className="transcript-speaker" disabled={readOnly} aria-label={`Rename ${row.speaker ?? speakerId}`}
-                    onClick={event => {
-                      // The label sits inside a selectable option; its click must not toggle the row.
-                      event.stopPropagation();
-                      setRenaming({ speakerId, current: row.speaker ?? speakerId });
-                    }}
-                    onKeyDown={event => {
-                      // The option selects on Enter and Space, so keep those keys on this control.
-                      if (event.key === "Enter" || event.key === " ") event.stopPropagation();
-                    }}>{row.speaker ?? speakerId}</button>
-                ) : row.speaker ? <span className="transcript-speaker">{row.speaker}</span> : null}
-                <span className="transcript-clock">
-                  {row.startSeconds !== null ? formatClock(row.startSeconds) : "—"}
-                </span>
-                {recording && playable ? (
-                  <button
-                    type="button"
-                    className="transcript-play"
-                    aria-label={`Play transcript row ${row.index + 1}`}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      if (row.startSeconds !== null) {
-                        playInterval(row.startSeconds, row.endSeconds);
-                      }
-                    }}
-                  >
-                    Play
-                  </button>
-                ) : null}
-              </span>
-              {recording && wordsMatchText(row.words, row.text) && row.words.length > 0 ? (
-                // Word by word while it plays. A click on a word goes there, and only there: the
-                // row's own click would select or deselect it.
-                <span className="transcript-text" ref={isActive ? wordsRef : undefined}>
-                  {row.words.map((word, at) => (
-                    <Fragment key={at}>
-                      {at > 0 ? " " : null}
-                      <span className="transcript-word" role="button" aria-label={`Seek to ${word.text}`} tabIndex={at === 0 ? 0 : -1}
-                        onFocus={event => { const siblings = event.currentTarget.closest(".transcript-text")?.querySelectorAll<HTMLElement>(".transcript-word"); siblings?.forEach(element => { element.tabIndex = element === event.currentTarget ? 0 : -1; }); }}
-                        onKeyDown={event => {
-                          if (event.key === "Enter" || event.key === " ") { event.preventDefault(); event.stopPropagation(); seek(word.start); }
-                          else if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
-                            event.preventDefault(); event.stopPropagation();
-                            const siblings = [...(event.currentTarget.closest(".transcript-text")?.querySelectorAll<HTMLElement>(".transcript-word") ?? [])];
-                            const next = event.key === "Home" ? 0 : event.key === "End" ? siblings.length - 1 : Math.max(0, Math.min(siblings.length - 1, at + (event.key === "ArrowRight" ? 1 : -1)));
-                            siblings[next]?.focus();
-                          }
-                        }} onClick={(event) => { event.stopPropagation(); seek(word.start); }}>{word.text}</span>
-                    </Fragment>
-                  ))}
-                </span>
-              ) : (
-                <span className="transcript-text">{row.text}</span>
-              )}
-            </li>
-          );
-        })}
-      </ol>
+      <TranscriptSections
+        sections={sections}
+        collapsed={collapsed}
+        onToggle={toggleSection}
+        activeIndex={activeIndex}
+        activeSection={activePlace?.section ?? null}
+        activeTurn={activePlace?.turn ?? null}
+        renaming={renaming}
+        renamingSection={renaming === null ? null : places.turnsAt.get(renaming.turnKey) ?? null}
+        idPrefix={idPrefix}
+        selected={selection.selected}
+        readOnly={readOnly}
+        canPlay={recording !== null}
+        suggestions={suggestions}
+        actions={actions}
+      />
     </aside>
   );
 }
