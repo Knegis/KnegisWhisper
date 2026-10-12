@@ -390,19 +390,26 @@ checks:
 15. A meeting of 1,500 lines plays without a long task. `invoke` is wrapped,
     as `follow-ups.mjs` wraps it (`injectLongTranscript`), so note 106's
     `note_transcript_rows` answers 1,500 rows: 5 s apart from 0 s, three
-    speakers in turns of 1 to 4 lines, every tenth row from row 3 timed word by
+    speakers in turns of 1 to 4 lines, every tenth row from row 1 timed word by
     word. The column draws 1,500 lines in 13 sections of 10 minutes (the last
-    "2:00:00 – 2:05:00") and 600 turns. Line 3 (10 s, word-timed) pressed in
-    its padding plays it, the card's select sets 2x, and for 6 s a
-    `PerformanceObserver` for `longtask` (not buffered) records every long task
-    while every `timeupdate` records the rate, the playing line and the chip:
-    2x throughout, Follow on throughout, at least one line change, and no long
-    task of 100 ms or more. Reported, not judged: the time from the rows being
-    handed back to the column's first frame, the long tasks of that mount, and
-    how many components React rendered for one `timeupdate` within a line
-    (`rendersForOneTimeupdate`, read from React's fibers: a component that
-    rendered has a props object or hooks it did not have before). The
-    recording is still the 690 s one, so only the first 138 lines can play.
+    "2:00:00 – 2:05:00") and 600 turns. From the column's top, line 61 (300 s,
+    word-timed) pressed in its padding, which brings it to the foot of the
+    visible band, plays it; the card's select sets 2x; and for 6 s a
+    `PerformanceObserver` for `longtask` (not buffered, and registered only
+    where `PerformanceObserver.supportedEntryTypes` has `longtask`) records
+    every long task while every `timeupdate` records the rate, the playing
+    line, the chip and `.note-side-body`'s `scrollTop`: 2x throughout, Follow
+    on throughout, at least one line change, `scrollTop` moved inside the
+    window with nobody touching the column (Follow scrolled to the next line,
+    which started below the band), and no long task of 100 ms or more. Then a
+    120 ms task run on purpose must be reported by the same observer, so a
+    window with none is believed. Reported, not judged: the time from the rows
+    being handed back to the column's first frame, the long tasks of that
+    mount, and how many components React rendered for one `timeupdate` within
+    a line and for one across a line change (`rendersForOneTimeupdate`, read
+    from React's fibers: a component that rendered has a props object or hooks
+    it did not have before). The recording is still the 690 s one, so only the
+    first 138 lines can play.
 16. From a fresh load in each scheme, a real pointer on a line that is not
     playing gives it the resolved `--panel-hover`; played by a press in its
     padding, which also selects it, under the pointer it keeps the resolved
@@ -432,17 +439,21 @@ real inertia, and a drag of the scrollbar, which this Edge draws none of
 (`--hide-scrollbars`): those two are for the real window. Claim 15 is Vite's
 development build, where React's StrictMode renders every component twice, in
 headless Edge: it says nothing of CPU, or of a production build in WebView2 or
-WKWebView, and its 6 s start at line 3, already in view, so Follow scrolls
-nothing inside them.
+WKWebView.
 
 Run on 2026-10-12 against the `transcript-m6` branch (its Vite on 5197):
-17/17 in both schemes. Claim 15 measured 0 long tasks in the 6 s at 2x in
-each scheme, across lines 3 to 5; the column's first frame came 0.28 s (dark)
-and 0.32 s (light) after the rows were handed back, in two long tasks of up to
-256 ms and 291 ms; and one `timeupdate` rendered the workspace, the player, its
-header and the panel, and none of the 13 sections, 600 turns or 1,500 lines.
-Across a line change the same count, taken by a one-off probe, read the
-sections' wrapper, 1 section, 2 turns and 2 lines, so it does see a render.
+17/17 in both schemes. In that run claim 15 played lines 61 to 63, and Follow
+scrolled `.note-side-body` 387px (2884 to 3271) inside the 6 s, in each
+scheme. Long tasks while playing: none in dark, and one of 56 ms in light,
+2.7 s in, as line 62 started and Follow scrolled to it; the 120 ms control was
+seen in both. Two runs of the claim alone gave none and none, and none and two
+(54 and 53 ms in light), so the longest while playing was 56 ms. The column's
+first frame came 0.41 s (dark) and 0.44 s (light) after the rows were handed
+back, in two and three long tasks of up to 375 ms and 382 ms (0.17–0.44 s and
+up to 390 ms over the three runs). One `timeupdate` within a line rendered the
+workspace, the player, its header and the panel, and none of the 13 sections,
+600 turns or 1,500 lines; one across a line change also rendered the sections'
+wrapper, 1 section, 1 or 2 turns and 2 lines, so the count does see a render.
 
 ## Note meta
 

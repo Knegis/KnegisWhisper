@@ -169,13 +169,21 @@ const RELIGHT_MS = 500;
  */
 const LONG_ROWS = 1500;
 const LONG_SECTIONS = 13;
-/** Claim 15 presses line 3 (10 s), the first of the rows timed word by word, so the word loop runs too. */
-const LONG_LINE = 2;
+/**
+ * Claim 15 presses line 61 (300 s), timed word by word, so the word loop runs too. From the top
+ * of the column the press brings it to the foot of the visible band, so the next line (305 s)
+ * starts below the band and Follow has to scroll to it inside the watched window.
+ */
+const LONG_LINE = 60;
 const LONG_RATE = "2";
 /** How long claim 15 watches for long tasks while the long meeting plays. */
 const LONG_WATCH_MS = 6000;
 /** The longest a task may run while it plays: the Long Tasks API reports tasks over 50 ms; one over 100 ms is a visible stall. */
 const LONG_TASK_LIMIT = 100;
+/** The task claim 15 runs on purpose after the window, which its observer must report, so a window with none is believed. */
+const LONG_CONTROL_MS = 120;
+/** How many one-timeupdate render counts claim 15 takes at most, looking for one within a line and one across a line change. */
+const RENDER_SAMPLES = 20;
 
 /** Counts `play()` from before the app's own code runs (as `transcript-search.mjs` does). */
 const COUNT_PLAYS = `(() => {
@@ -1601,14 +1609,18 @@ export async function runTranscriptColumn(options) {
       claim: "With 1,500 lines, playback makes no long frame.",
       expectation: [
         `in each scheme: note 106's note_transcript_rows answered with ${LONG_ROWS} rows (injectLongTranscript: 5 s apart from 0 s, three speakers in`,
-        "turns of 1 to 4 lines, every tenth row from row 3 timed word by word), opened at 1440x900, the column draws",
+        "turns of 1 to 4 lines, every tenth row from row 1 timed word by word), opened at 1440x900, the column draws",
         `${LONG_ROWS} lines in ${LONG_SECTIONS} sections. The time from the rows being handed back to the column's first frame is reported, not judged.`,
-        `Line ${LONG_LINE + 1} (10 s, word-timed) pressed in its padding plays it (1 play() call, from within ${LANDING_TOLERANCE}s of its start) with the card's`,
-        `Follow chip aria-pressed="true"; the speed set to ${LONG_RATE}x with the card's select; then for ${LONG_WATCH_MS / 1000} s a PerformanceObserver for`,
-        "longtask (not buffered) and every timeupdate's rate, playing line and chip are recorded: every timeupdate at",
-        `${LONG_RATE}x with the chip pressed, at least two playing lines seen (a line change inside the window), and the longest long`,
-        `task under ${LONG_TASK_LIMIT} ms (none at all counts as 0). How many long tasks, the longest, and how many of the note's components React`,
-        "rendered for one timeupdate within a line (rendersForOneTimeupdate, read from its fibers) are reported",
+        `From the column's top, line ${LONG_LINE + 1} (300 s, word-timed) pressed in its padding -- which brings it to the foot of the visible band --`,
+        `plays it (1 play() call, from within ${LANDING_TOLERANCE}s of its start) with the card's Follow chip aria-pressed="true"; the speed set to`,
+        `${LONG_RATE}x with the card's select; then for ${LONG_WATCH_MS / 1000} s a PerformanceObserver for longtask (not buffered, and only where`,
+        "PerformanceObserver.supportedEntryTypes has \"longtask\") and, at every timeupdate, the rate, the playing line, the chip and",
+        ".note-side-body's scrollTop are recorded: every timeupdate at",
+        `${LONG_RATE}x with the chip pressed, at least two playing lines seen, scrollTop moved inside the window with nobody touching the`,
+        `column (Follow scrolled to a line that started below the band), and the longest long task under ${LONG_TASK_LIMIT} ms. After the window a`,
+        `task of ${LONG_CONTROL_MS} ms run on purpose must be reported by the same observer, so none in the window is believed. Reported, not`,
+        "judged: how many long tasks and the longest, and how many of the note's components React rendered for one timeupdate within a",
+        "line and for one across a line change (rendersForOneTimeupdate, read from its fibers)",
       ].join(" "),
     }, async () => {
       const schemes = {};
@@ -1639,35 +1651,47 @@ export async function runTranscriptColumn(options) {
         const mountTasks = load.resolvedAt === null || load.paintedAt === null ? []
           : load.loadTasks.filter((task) => task.start + task.duration >= load.resolvedAt && task.start <= load.paintedAt);
         await delay(250);
+        await cdp.evaluate(`document.querySelector(${JSON.stringify(SIDE_BODY)}).scrollTo({ top: 0, behavior: 'instant' })`);
         const first = await played(cdp, () => pressLine(cdp, LONG_LINE));
         const rows = await cdp.evaluate(snippets.noteTranscriptRows(NOTE_ID));
         const followFirst = (await cdp.evaluate(snippets.followChipState(CARD))).pressed;
         await cdp.evaluate(snippets.choosePlayerSpeed(CARD, LONG_RATE));
-        await cdp.evaluate(snippets.watchLongTasks(CARD));
+        const watching = await cdp.evaluate(snippets.watchLongTasks(CARD, SIDE_BODY));
         await delay(LONG_WATCH_MS);
-        const watch = await cdp.evaluate(snippets.longTasksRecord());
+        const watch = watching.supported ? await cdp.evaluate(snippets.longTasksRecord(LONG_CONTROL_MS)) : null;
         const shot = `15-long-playing-${scheme}-1440x900.png`;
         await cdp.screenshot(resolve(out, shot));
         screenshots.push(shot);
-        // One timeupdate inside a line, so the count is of a render that moves nothing.
-        let renders = null;
-        for (let attempt = 0; attempt < 3; attempt += 1) {
-          renders = await cdp.evaluate(snippets.rendersForOneTimeupdate(CARD));
-          if (renders.updates === 1 && renders.lineBefore === renders.lineAfter) break;
+        // One timeupdate inside a line, a render that moves nothing, and one across a line change,
+        // which shows the count sees a render when there is one.
+        let within = null;
+        let across = null;
+        for (let attempt = 0; attempt < RENDER_SAMPLES && (within === null || across === null); attempt += 1) {
+          const sample = await cdp.evaluate(snippets.rendersForOneTimeupdate(CARD));
+          if (sample.updates !== 1) continue;
+          if (sample.lineBefore === sample.lineAfter) within ??= sample;
+          else across ??= sample;
         }
         await stopPlaying(cdp);
         await cdp.evaluate(snippets.choosePlayerSpeed(CARD, "1"));
-        const tasks = watch.tasks;
+        const updates = watch?.updates ?? [];
+        const tasks = watch?.tasks ?? [];
         const longest = tasks.reduce((most, task) => Math.max(most, task.duration), 0);
-        const linesSeen = [...new Set(watch.updates.map((update) => update.line).filter((line) => line !== null))];
+        const controlLongest = (watch?.control ?? []).reduce((most, task) => Math.max(most, task.duration), 0);
+        const linesSeen = [...new Set(updates.map((update) => update.line).filter((line) => line !== null))];
+        const scrollTops = updates.map((update) => update.scrollTop);
+        const scrolled = scrollTops.length > 0 ? Math.max(...scrollTops) - Math.min(...scrollTops) : 0;
         const parts = {
           injected: injected?.installed === true && injected.rows === LONG_ROWS && load.resolvedAt !== null,
           laidOut: laidOut.lines === LONG_ROWS && laidOut.sections === LONG_SECTIONS,
           started: first.landed && first.plays === 1 && near(first.playingAt, rows[LONG_LINE].startSeconds, LANDING_TOLERANCE),
-          followOn: followFirst === "true" && watch.updates.length > 0 && watch.updates.every((update) => update.follow === "true"),
-          fast: watch.updates.length > 0 && watch.updates.every((update) => update.rate === Number(LONG_RATE)),
+          observed: watching.supported === true && watch !== null,
+          control: controlLongest >= LONG_TASK_LIMIT,
+          followOn: followFirst === "true" && updates.length > 0 && updates.every((update) => update.follow === "true"),
+          fast: updates.length > 0 && updates.every((update) => update.rate === Number(LONG_RATE)),
           lineChanged: linesSeen.length >= 2,
-          noLongFrame: longest < LONG_TASK_LIMIT,
+          followScrolled: scrolled > 1,
+          noLongFrame: watch !== null && longest < LONG_TASK_LIMIT,
         };
         schemes[scheme] = {
           drawn,
@@ -1682,16 +1706,20 @@ export async function runTranscriptColumn(options) {
           },
           first: { plays: first.plays, landed: first.landed, playingAt: first.playingAt, start: rows[LONG_LINE].startSeconds },
           playback: {
-            watchedMs: round(watch.endedAt - watch.startedAt),
-            timeupdates: watch.updates.length,
-            from: round(watch.updates[0]?.time ?? null),
-            to: round(watch.updates.at(-1)?.time ?? null),
+            observing: watching.supported,
+            watchedMs: watch === null ? null : round(watch.endedAt - watch.startedAt),
+            timeupdates: updates.length,
+            from: round(updates[0]?.time ?? null),
+            to: round(updates.at(-1)?.time ?? null),
             linesSeen,
+            scrollTops: [...new Set(scrollTops.map(round))],
+            scrolledPx: round(scrolled),
             longTasks: tasks.length,
             longestMs: round(longest),
             tasks: tasks.map((task) => ({ start: round(task.start - watch.startedAt), duration: round(task.duration) })),
+            controlMs: round(controlLongest),
           },
-          renders,
+          renders: { within, across },
           failed: Object.entries(parts).filter(([, ok]) => !ok).map(([name]) => name),
           matches: Object.values(parts).every(Boolean),
         };

@@ -102,9 +102,10 @@ type TranscriptPanelProps = {
   /**
    * Follow (KNEG-448), held by `NoteWorkspace`, whose player card has its chip: while it is on, the
    * line that starts playing is centred in view whenever it is not already, opening its section
-   * when it is closed. Nothing follows while the recording is paused; the chip pressed
-   * (`takeRecentre`), or the transcript coming on screen, still brings back the line the player
-   * is at (`currentIndex`).
+   * when it is closed. Nothing follows while the recording is paused; the chip turning it on
+   * (`takeRecentre`), or the transcript coming on screen while it is on, still brings back the
+   * line the player is at (`currentIndex`). The chip is a toggle: pressed while on, it turns
+   * Follow off.
    */
   follow: boolean;
   /**

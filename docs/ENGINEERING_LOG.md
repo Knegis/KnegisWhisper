@@ -71,14 +71,16 @@ what each costs if it is wrong. Each was read against the code as it is now.
   lets go.
 - Collapsing the section of the playing line turns Follow off; collapsing it while paused does
   not. If wrong: Follow reopens a section the person closed while paused, once Play is pressed.
-- Only the chip forces a centre: it centres the line the player is at, in view or not. A line or
-  word press, Play selection and a summary reference turn Follow on and centre only a line that
-  is out of the band, so a pressed line does not move from under the pointer. If wrong: a line
-  pressed near the band's edge stays there rather than coming to the middle.
-- The transcript coming on screen (the Transcript tab, a layout switch) brings back the line the
-  player is at only when it is out of the band, two frames later once the card has its height,
-  and not while a search hit or summary reference is being shown (4506567). If wrong: the owner
-  wanted that line centred whenever the transcript comes on screen, in view or not.
+- The chip is a toggle: pressed while Follow is on it turns it off; pressed while off it turns
+  it on, and only that press forces a centre, of the line the player is at, in view or not. A
+  line or word press, Play selection and a summary reference turn Follow on and centre only a
+  line that is out of the band, so a pressed line does not move from under the pointer. If
+  wrong: a line pressed near the band's edge stays there rather than coming to the middle.
+- While Follow is on, the transcript coming on screen (the Transcript tab, a layout switch)
+  brings back the line the player is at only when it is out of the band, two frames later once
+  the card has its height, and not while a search hit or summary reference is being shown
+  (4506567); with Follow off it moves nothing. If wrong: the owner wanted that line centred
+  whenever the transcript comes on screen, in view or not.
 - A search hit turns Follow off only while playing; a Find step does the same. A summary
   reference turns Follow on and plays its interval. If wrong: a search hit while paused leaves
   Follow on, so Play scrolls from the hit back to the player's line.
@@ -119,9 +121,10 @@ what each costs if it is wrong. Each was read against the code as it is now.
   and floats over the scrollbar's lowest ~90px, as the canvas draws it. The unplayed track is
   `.recording-scrubber::before`, so the ticks sit unbroken under the range. If wrong: the card
   hides the bottom of the column's scrollbar.
-- The skip buttons and the range are not disabled after a recording fails to load; a tick under
-  a disabled range is hidden by CSS though the code never disables it. If wrong: see the open
-  question below.
+- The code never disables the range or the skip buttons, so they stay live after a recording
+  fails to load. A CSS rule would hide the ticks under a disabled range, but it never applies
+  today. Whether to disable them on error is an open question below. If wrong: a failed
+  recording's controls go on taking presses that do nothing useful.
 - Fixture note 106 has a 690 s recording, served as a WAV of that length (a soft beep each
   second), and is dated 2026-08-19 12:00, not the plan's 2026-08-12, so 105 stays the oldest and
   101 the newest. Its unnamed speaker is "Speaker 3" (`speaker_2`), as Rust's `rows()` names one.
@@ -136,17 +139,21 @@ what each costs if it is wrong. Each was read against the code as it is now.
 - Process: the stale capability pin was fixed as its own commit first (27dfcf2), since it failed
   the tools gate on `dev`. If wrong: a trivial conflict if `dev` fixes it the same way.
 
-**Claim 15, measured** (`transcript-column.mjs`, da2a9dd). 1,500 rows injected in place of note
-106's (13 sections, 600 turns, 150 lines with words), in headless Edge on Vite's development
-build, where React's StrictMode renders twice. From the rows being handed back to the column's
-first frame: 0.28 s dark and 0.32 s light, in two long tasks of up to 256 ms and 291 ms (two
-earlier runs of the claim: 0.17–0.28 s). Then 6 s at 2x from line 3, across two line changes
-with Follow on: 0 long tasks in both schemes. One `timeupdate` within a line renders the
+**Claim 15, measured** (`transcript-column.mjs`: added in da2a9dd, and in the fix round after
+4811a88 started from line 61 so that Follow has to scroll, with the long-task observer guarded
+and checked by a control). 1,500 rows injected in place of note 106's (13 sections, 600 turns,
+150 lines with words), in headless Edge on Vite's development build, where React's StrictMode
+renders twice. Line 61 (300 s), pressed from the column's top, sits at the band's foot, so line
+62 starts below it: in every run Follow scrolled the column 387px inside the 6 s at 2x. Long
+tasks while playing, over three runs in both schemes: none in four of the six, one of 56 ms, and
+two of 54 and 53 ms, the longest 56 ms, under the 100 ms limit; the one of 56 ms came as line 62
+started and Follow scrolled. A 120 ms task run on purpose after each window was seen every time,
+so "none" means none. From the rows being handed back to the column's first frame: 0.17–0.44 s,
+in two or three long tasks of up to 390 ms. One `timeupdate` within a line renders the
 workspace, the player, its header and the panel, and none of the 13 sections, 600 turns or
-1,500 lines (read from React's fibers; across a line change the same count reads 1 section, 2
-turns and 2 lines). A probe beyond the claim played from line 61, at the band's foot, so Follow
-centred the next line inside the 6 s: 0 long tasks again. Not measured: CPU, a production
-build, the real window.
+1,500 lines; one across a line change also renders the sections' wrapper, 1 section, 1 or 2
+turns and 2 lines. Both counts are read from React's fibers by the claim itself and reported,
+not judged. Not measured: CPU, a production build, the real window.
 
 **Not verified headless; going to KNEG-378.**
 - The real Tauri window with an hour-plus real meeting: CPU while playing, Follow with touchpad
@@ -164,8 +171,9 @@ build, the real window.
 - 41 Rename buttons and 3 section toggles on note 106 are tab stops, so getting past its
   transcript takes about 44 Tabs. One option: F2 on a line renames that turn's speaker, and the
   buttons leave the tab order.
-- The skip buttons and the range stay live after a recording fails to load (+15 four times
-  reads "1:00 / 0:00").
+- Should the range and the skip buttons be disabled when a recording fails to load? Today the
+  code never disables them, so they stay live (+15 four times reads "1:00 / 0:00"), and the CSS
+  rule that would hide the ticks under a disabled range never applies.
 - Collapsing the current line's section while paused leaves Follow on, so Play opens it again.
 - Tab focus, or a text-drag selection, doesn't release Follow: the focused control or the quote
   can be scrolled away at the next line change.

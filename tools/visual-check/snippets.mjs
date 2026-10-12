@@ -2127,8 +2127,9 @@ export function findLineState(index) {
  * as `follow-ups.mjs` wraps it, so `note_transcript_rows` for `id` answers `count` rows made here,
  * and every other call goes on to the fixtures. The rows start 5 s apart from 0 s and each lasts
  * its 5 s; three diarised speakers ("Maja", "Jonas" and the unnamed "Speaker 3", as note 106 names
- * them) take turns of 1, 2, 3 and 4 lines in rotation; and every tenth row, from row 2 (10 s) on,
- * is timed word by word as local Whisper times it, its words spelling its text. Run before the
+ * them) take turns of 1, 2, 3 and 4 lines in rotation; and every tenth row, from the first on
+ * (0 s, 50 s, … 300 s, …), is timed word by word as local Whisper times it, its words spelling its
+ * text. Run before the
  * note opens. `window.__longTranscript` records, with `performance.now()`, when the rows are
  * handed back (`resolvedAt`), when the first of them is in the column (`shownAt`, a
  * MutationObserver's callback after React's commit) and the next animation frame (`frameAt`, the
@@ -2164,17 +2165,19 @@ export function injectLongTranscript(id, count) {
       left -= 1;
       const start = index * 5;
       const text = sayings[index % sayings.length];
-      const words = index % 10 === 2
+      const words = index % 10 === 0
         ? text.split(' ').map((word, at) => ({ text: word, start: Math.round((start + 0.2 + at * 0.4) * 100) / 100, end: Math.round((start + 0.2 + at * 0.4 + 0.32) * 100) / 100 }))
         : [];
       rows.push({ index, startSeconds: start, endSeconds: start + 5, speaker: speakers[speaker][1], speakerId: speakers[speaker][0], text, words });
     }
-    const record = window.__longTranscript = { id, count, resolvedAt: null, shownAt: null, frameAt: null, paintedAt: null, loadTasks: [] };
-    const loadObserver = new PerformanceObserver((list) => {
+    // Long tasks are reported only where the browser has the entry type; without it, nothing is observed rather than 0.
+    const observing = typeof PerformanceObserver === 'function' && (PerformanceObserver.supportedEntryTypes ?? []).includes('longtask');
+    const record = window.__longTranscript = { id, count, observing, resolvedAt: null, shownAt: null, frameAt: null, paintedAt: null, loadTasks: [] };
+    const loadObserver = observing ? new PerformanceObserver((list) => {
       for (const entry of list.getEntries()) record.loadTasks.push({ start: entry.startTime, duration: entry.duration });
-    });
-    loadObserver.observe({ type: 'longtask', buffered: false });
-    record.stop = () => loadObserver.disconnect();
+    }) : null;
+    loadObserver?.observe({ type: 'longtask', buffered: false });
+    record.stop = () => loadObserver?.disconnect();
     const shown = new MutationObserver(() => {
       if (record.shownAt !== null || !document.querySelector('.note-side .transcript-rows li')) return;
       record.shownAt = performance.now();
@@ -2203,22 +2206,27 @@ export function longTranscriptLoad() {
     const record = window.__longTranscript;
     if (!record) throw new Error('No long transcript was injected');
     record.stop();
-    const { id, count, resolvedAt, shownAt, frameAt, paintedAt, loadTasks } = record;
-    return { id, count, resolvedAt, shownAt, frameAt, paintedAt, loadTasks };
+    const { id, count, observing, resolvedAt, shownAt, frameAt, paintedAt, loadTasks } = record;
+    return { id, count, observing, resolvedAt, shownAt, frameAt, paintedAt, loadTasks };
   `);
 }
 
 /**
  * Starts recording, into `window.__longTasks`, every long task from now (a `PerformanceObserver`
  * for `longtask`, not buffered, so nothing from before counts), and at each `timeupdate` of the
- * recording in `container` its time, its rate and the playing line (`aria-current`) -- read as
- * the event fires, so it is the line of the render before -- with the Follow chip's
- * `aria-pressed`.
+ * recording in `container` its time, its rate, the playing line (`aria-current`) -- read as the
+ * event fires, so it is the line of the render before -- the Follow chip's `aria-pressed`, and
+ * `scroller`'s `scrollTop`. Resolves `{ supported: false }`, observing nothing, where the browser
+ * has no `longtask` entries (`PerformanceObserver.supportedEntryTypes`), so a count of none is
+ * never read from an observer that was never registered.
  */
-export function watchLongTasks(container) {
+export function watchLongTasks(container, scroller) {
   return source(`
     const audio = document.querySelector(${JSON.stringify(`${container} audio`)});
-    if (!audio) throw new Error('No recording in ' + ${JSON.stringify(container)});
+    const body = document.querySelector(${JSON.stringify(scroller)});
+    if (!audio || !body) throw new Error('No recording in ' + ${JSON.stringify(container)} + ' or no ' + ${JSON.stringify(scroller)});
+    const supported = typeof PerformanceObserver === 'function' && (PerformanceObserver.supportedEntryTypes ?? []).includes('longtask');
+    if (!supported) return { supported: false };
     const lines = [...document.querySelectorAll('.note-detail .transcript .transcript-rows li')];
     const record = window.__longTasks = { startedAt: performance.now(), tasks: [], updates: [] };
     const observer = new PerformanceObserver((list) => {
@@ -2233,22 +2241,46 @@ export function watchLongTasks(container) {
         rate: audio.playbackRate,
         line: line ? lines.indexOf(line) : null,
         follow: document.querySelector(${JSON.stringify(`${container} button.follow-chip`)})?.getAttribute('aria-pressed') ?? null,
+        scrollTop: body.scrollTop,
       });
     };
     audio.addEventListener('timeupdate', update);
-    record.stop = () => { observer.disconnect(); audio.removeEventListener('timeupdate', update); };
-    return true;
+    record.observer = observer;
+    record.stopUpdates = () => audio.removeEventListener('timeupdate', update);
+    return { supported: true };
   `);
 }
 
-/** What `watchLongTasks` recorded, stopped. */
-export function longTasksRecord() {
+/**
+ * What `watchLongTasks` recorded, then a control, then stopped. The watched window ends now
+ * (`endedAt`); one task in the page then runs `controlMs` ms on purpose, and the observer must
+ * report it -- tasks from then on are the control's, not the window's -- so a window with no long
+ * task was watched by an observer that does see one.
+ */
+export function longTasksRecord(controlMs = 120) {
   return source(`
     const record = window.__longTasks;
     if (!record) throw new Error('No long-task watch was started');
-    record.stop();
-    window.__longTasks = null;
-    return { startedAt: record.startedAt, endedAt: performance.now(), tasks: record.tasks, updates: record.updates };
+    record.stopUpdates();
+    const endedAt = performance.now();
+    return (async () => {
+      await new Promise((done) => setTimeout(() => {
+        const from = performance.now();
+        while (performance.now() - from < ${JSON.stringify(controlMs)}) { /* the control's long task */ }
+        done();
+      }, 0));
+      await new Promise((done) => setTimeout(done, 300));
+      for (const entry of record.observer.takeRecords()) record.tasks.push({ start: entry.startTime, duration: entry.duration });
+      record.observer.disconnect();
+      window.__longTasks = null;
+      return {
+        startedAt: record.startedAt,
+        endedAt,
+        tasks: record.tasks.filter((task) => task.start < endedAt),
+        control: record.tasks.filter((task) => task.start >= endedAt),
+        updates: record.updates,
+      };
+    })();
   `);
 }
 

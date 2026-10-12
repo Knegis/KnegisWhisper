@@ -63,18 +63,20 @@ and on Notes once something has played. While the transcript is on screen, the c
 is speaking (the last line to have started) and carries the **Follow** chip, on as each note
 opens. While Follow is on, a line that starts playing outside the part of the transcript
 between its header and the card is centred, its section opened first when it is closed; while
-the recording is paused nothing follows. The transcript coming on screen (the Transcript tab
-opened, the layout switched) brings back the line the player is at, playing or paused, when it
-is out of view, unless a search hit or a summary reference is being shown. The person moving
-the transcript turns Follow off: a wheel (one in the first 400 ms after Follow turned on is
-taken for a touchpad's run-on), a touch, a press on its scrollbar, a scrolling key with focus on
-a line or a button in the transcript or, with focus nowhere, after a press in it, the arrow keys
-between lines, or closing the section that is playing. A search hit turns it off while something plays. Pressing
-the chip turns Follow on and centres the line the player is at, wherever it is; pressing a line
-or a word, Play selection or a summary reference turns it on too, but centres a line only when
-the one playing is out of view. On Replay in a wide window the player is Replay's own and has
-no chip, but the column beside it still follows playback: a wheel there turns Follow off with
-nothing on screen to say so, and pressing a line turns it back on.
+the recording is paused nothing follows. While Follow is on, the transcript coming on screen
+(the Transcript tab opened, the layout switched) also brings back the line the player is at,
+playing or paused, when it is out of view, unless a search hit or a summary reference is being
+shown. The person moving the transcript turns Follow off: a wheel (one in the first 400 ms after
+Follow turned on is taken for a touchpad's run-on), a touch, a press on its scrollbar, a
+scrolling key with focus on a line or a button in the transcript or, with focus nowhere, after
+a press in it, the arrow keys between lines, or closing the section that is playing. A search
+hit turns it off while something plays. The chip is a toggle: pressed while Follow is on it
+turns it off, and pressed while off it turns it on and centres the line the player is at,
+wherever it is. Pressing a line or a word, Play selection or a summary reference turns Follow
+on too, but centres a line only when the one playing is out of view. On Replay in a wide window
+the player is Replay's own and has no chip, but the column beside it still follows playback: a
+wheel there turns Follow off with nothing on screen to say so, and pressing a line turns it back
+on.
 
 The header's search button opens **Find** in place of the label: what is typed is marked in the
 lines, case ignored and accents kept ("mote" does not find "möte"), with a count such as 2/5,
@@ -382,7 +384,7 @@ fixtures, not in the Tauri window: `tools/visual-check/transcript-column.mjs`, s
 in both schemes at 1440x900 and 1000x720 (the README's Transcript column section), with the
 sections, turns, selection, Find and Follow decisions unit-tested in `transcriptLayout`,
 `transcriptFind`, `followScroll` and `playerControls`. Its claim 15 played a meeting of 1,500
-lines with no long task. The two smokes above need the native app: `notes-smoke` presses the
+lines, Follow scrolling the column to the playing line, with no long task. The two smokes above need the native app: `notes-smoke` presses the
 player's Play by its new class (`.recording-play`), and `summary-smoke` finds the line a
 source selected by `.transcript-row-current`, which the selected line keeps; neither has been
 run since, and both are on KNEG-378 with the real-window checks of the column.
