@@ -39,7 +39,7 @@ const NOTE_104 = "A deliberately long title that exists so the notes list can be
 const HERE = "Transcribed on this computer";
 const BY_OPENAI = "Transcribed by OpenAI";
 /** The fixtures' default meeting provider, Deepgram, sends audio off this computer. */
-const CAPTIONED = "Transcribed on this computer · live captions by Deepgram";
+const CAPTIONED = "Transcribed on this computer · live captions by Deepgram Realtime";
 /** Rust's `note_title` for a meeting given no name. */
 const UNNAMED = /^Meeting — \d{4}-\d{2}-\d{2} \d{2}:\d{2}$/;
 
