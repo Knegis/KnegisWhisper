@@ -1468,12 +1468,19 @@ button.transcript-play:hover:not(:disabled) { color: var(--text); }
 /* Errors stay below the controls so they do not squeeze the field. */
 .transcript-rename .error { flex-basis: 100%; }
 
-.recording-player {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.5rem;
-}
+/*
+ * The recording player (`RecordingPlayer.tsx`) as the M6 canvas draws it
+ * (KNEG-448): whatever header line its holder gives it, the scrubber across
+ * the full width with a tick where each transcript section after the first
+ * starts, and one row of controls under it -- a 34px play/pause filled
+ * `--control`, -15 and +15 in the machine voice, the clock with its total
+ * muted, and the speed at the far end. The same in all three places a note
+ * draws its one player; the card around it belongs to the slot
+ * (`.note-side-player` below, `.note-mini-player` near the end). The range's
+ * own look -- the played part and the thumb -- is near the end too, after the
+ * generic `input` fill it has to override.
+ */
+.recording-player { display: flex; flex-direction: column; min-width: 0; }
 
 .recording-audio,
 .sr-only {
@@ -1485,15 +1492,38 @@ button.transcript-play:hover:not(:disabled) { color: var(--text); }
   white-space: nowrap;
 }
 
-.recording-player input[type="range"] {
-  min-width: 7rem;
-  flex: 1 1 8rem;
-}
+/* The range's 18px box sits 6px under a header and 4px over the controls; with no header the
+ * card's own padding is the gap above it. */
+.recording-scrubber { position: relative; margin: 6px 0 4px; }
+.recording-audio + .recording-scrubber { margin-top: 0; }
+/* The unplayed track, drawn here rather than by the range so that a tick can stand on it and still
+ * be under the played part and the thumb, which the range draws over both. */
+.recording-scrubber::before { content: ""; position: absolute; left: 0; right: 0; top: calc(50% - 1px); height: 2px; background: var(--rule); }
+.recording-marks { position: absolute; inset: 0; pointer-events: none; }
+/* At the thumb's own mapping (`5px + (100% - 10px) * fraction`), so a tick is where the thumb
+ * stands at that time. */
+.recording-mark { position: absolute; top: calc(50% - 4px); left: calc(5px + (100% - 10px) * var(--at, 0)); width: 1px; height: 8px; transform: translateX(-50%); background: var(--muted); }
+/* A range that cannot be moved has no times to point at. */
+.recording-scrubber:has(> input:disabled) .recording-marks { display: none; }
 
-.recording-player .error {
-  flex-basis: 100%;
-  margin: 0;
-}
+/* Wraps rather than overflows in a slot too narrow for one row. The column's card, 291px inside,
+ * holds even an hour-long clock, "1:02:03 / 1:31:04", on one (measured headless, KNEG-448). */
+.recording-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; min-height: 36px; }
+/* `margin: 0` against the generic button's `.75rem` top margin, which held Play 11px low. */
+.recording-controls button { flex: none; margin: 0; }
+button.recording-play { display: flex; align-items: center; justify-content: center; width: 34px; height: 34px; margin: 0 6px 0 0; padding: 0; background: var(--control); }
+/* Filled at rest, so its hover is the same neutral wash laid twice: darker in both schemes. */
+button.recording-play:hover:not(:disabled) { background: linear-gradient(var(--control), var(--control)), var(--control); }
+button.recording-skip { height: 30px; padding: 0 6px; font: 12px/16px var(--font-mono); letter-spacing: 0.5px; }
+button.recording-skip + button.recording-skip { margin-right: 8px; }
+.recording-controls .recording-clock { font-size: 12px; white-space: nowrap; }
+.recording-clock-total { color: var(--muted); }
+.recording-speed { display: flex; margin-left: auto; }
+/* `align-items` for `appearance: base-select`, which lays the select out as a flex box whose value
+ * would otherwise sit at its top; a native select centres its value itself. */
+.recording-speed select { align-items: center; height: 30px; padding: 0 6px; border-radius: 2px; font: 12px/16px var(--font-mono); letter-spacing: 0.5px; }
+
+.recording-player .error { margin: 4px 0 0; }
 
 /*
  * The transcript beside the note, in a window 1280px wide or wider.
@@ -1504,9 +1534,9 @@ button.transcript-play:hover:not(:disabled) { color: var(--text); }
  * it holds and the reader has not hidden the column (the note's Hide
  * transcript), adds `.note-detail-wide` to the article: `minmax(0, 1fr) 340px`,
  * with the transcript taken out of its tab into a `--panel` column behind a
- * left rule, the Transcript tab hidden, and the player at the foot of that
- * column -- or, while Replay is open, in full over it in the note column, as
- * below the width. The note and the column each scroll on their own there,
+ * left rule, the Transcript tab hidden, and the player a card floating at the
+ * foot of that column -- or, while Replay is open, in full over it in the note
+ * column, as below the width. The note and the column each scroll on their own there,
  * so the article is exactly as tall as `.notes-main` and neither of them is.
  *
  * Why 1280: beside the 68px rail, the card's 10px of margin and border and
@@ -1518,16 +1548,22 @@ button.transcript-play:hover:not(:disabled) { color: var(--text); }
 .note-detail { display: grid; grid-template-columns: minmax(0, 1fr); flex: none; }
 .note-detail-wide { flex: 1; min-height: 0; grid-template-columns: minmax(0, 1fr) 340px; }
 .note-detail-wide > .note-body { min-height: 0; overflow-y: auto; }
-.note-side { display: flex; flex-direction: column; min-height: 0; background: var(--panel); border-left: 1px solid var(--rule); }
+.note-side { position: relative; display: flex; flex-direction: column; min-height: 0; background: var(--panel); border-left: 1px solid var(--rule); }
 .note-side-label { flex: none; display: flex; align-items: center; height: 52px; margin: 0; padding: 0 20px; font: 12px/16px var(--font-mono); letter-spacing: .5px; text-transform: uppercase; color: var(--muted); }
-.note-side-body { flex: 1; min-height: 0; overflow-y: auto; }
+/* Ends a card's height and 24px under its last line, so scrolled to the end that line stands 12px
+ * clear of the card's top. `--player-h` is the card's own height, which `NoteWorkspace.tsx` keeps
+ * on the article. */
+.note-side-body { flex: 1; min-height: 0; overflow-y: auto; padding-bottom: calc(var(--player-h, 0px) + 24px); }
 .note-side-body > p { margin: 0 20px; }
 .note-side-body .transcript > button { margin: 0 20px 8px; }
 .note-side-body .transcript-rename { margin: 0 20px 12px; }
 .note-side-body .transcript-rename input { min-width: 0; flex: 1 1 10rem; }
 .note-side-body .transcript-rows { max-height: none; margin: 0; }
 .note-side-body .transcript .transcript-rows li { padding: 10px 20px; }
-.note-side-player { flex: none; padding: 12px 16px; border-top: 1px solid var(--rule); background: var(--bg); }
+/* The player floats over the foot of the column as a card, 12px in from the column's sides and
+ * bottom, the transcript scrolling on under it (KNEG-448). Over the column's scrollbar too: the
+ * card is the column's width less its insets, as the canvas draws it. */
+.note-side-player { position: absolute; left: 12px; right: 12px; bottom: 12px; z-index: 2; padding: 10px 10px 8px 12px; border: 1px solid var(--rule); border-radius: 4px; background: var(--bg); box-shadow: var(--card-shadow); }
 
 /*
  * Several controls on one settings row lay out across, not down.
@@ -2650,11 +2686,11 @@ button.note-people-add:hover:not(:disabled), button.note-people-add[aria-expande
 .note-workspace [hidden], .note-workspace > [hidden] { display: none; }
 /* The note owns a single player, whichever view is open: in full above Replay, and otherwise a mini
  * player held to the foot of the note once playback has started. A wide window keeps it in full above
- * Replay, and otherwise moves it to the foot of the transcript column (`.note-side-player`, above). */
-.note-mini-player { position: sticky; bottom: 0; grid-row: 3; padding: .75rem; background: var(--surface); border: 1px solid var(--faint); border-radius: 4px; z-index: 3; }
+ * Replay, and otherwise moves it to the foot of the transcript column (`.note-side-player`, above).
+ * The mini player is the same card as the column's (KNEG-448), held to the foot of the note rather
+ * than floated: a `--rule` edge, the card corner, the page colour and `--card-shadow`. */
+.note-mini-player { position: sticky; bottom: 0; grid-row: 3; padding: 10px 10px 8px 12px; background: var(--bg); border: 1px solid var(--rule); border-radius: 4px; box-shadow: var(--card-shadow); z-index: 3; }
 .note-full-player { grid-row: 1; }
-.recording-player { flex-wrap: wrap; }
-.recording-player input[type="range"] { min-width: 5rem; }
 /*
  * The position slider, drawn to the Kit rather than by the platform: the platform's thumb is a round
  * knob, rounder than anything the Kit allows but the recording dot. A 2px `--rule` track with the
@@ -2664,12 +2700,16 @@ button.note-people-add:hover:not(:disabled), button.note-people-add[aria-expande
  * focus ring is the generic `input:focus-visible` one around that box. Here rather than beside the
  * rule above: the generic `input` fill further up would otherwise draw a box behind the track.
  * Disabled, the played part and the thumb go to `--muted`.
+ *
+ * The range draws only the played part: past it the track is transparent, and the `--rule` line
+ * showing through is `.recording-scrubber::before`, under the section ticks (KNEG-448). Drawn
+ * opaque here, the track would cut every tick in two.
  */
-.recording-player input[type="range"] { appearance: none; -webkit-appearance: none; height: 18px; margin: 0; padding: 0; border: 0; border-radius: 0; background: transparent; cursor: pointer; }
-.recording-player input[type="range"]::-webkit-slider-runnable-track { height: 2px; border-radius: 0; background: linear-gradient(to right, var(--band) calc(5px + (100% - 10px) * var(--played, 0)), var(--rule) 0); }
+.recording-player input[type="range"] { appearance: none; -webkit-appearance: none; position: relative; display: block; width: 100%; height: 18px; margin: 0; padding: 0; border: 0; border-radius: 0; background: transparent; cursor: pointer; }
+.recording-player input[type="range"]::-webkit-slider-runnable-track { height: 2px; border-radius: 0; background: linear-gradient(to right, var(--band) calc(5px + (100% - 10px) * var(--played, 0)), transparent 0); }
 .recording-player input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 10px; height: 10px; margin-top: -4px; border: 0; border-radius: 0; background: var(--band); }
 .recording-player input[type="range"]:disabled { cursor: default; }
-.recording-player input[type="range"]:disabled::-webkit-slider-runnable-track { background: linear-gradient(to right, var(--muted) calc(5px + (100% - 10px) * var(--played, 0)), var(--rule) 0); }
+.recording-player input[type="range"]:disabled::-webkit-slider-runnable-track { background: linear-gradient(to right, var(--muted) calc(5px + (100% - 10px) * var(--played, 0)), transparent 0); }
 .recording-player input[type="range"]:disabled::-webkit-slider-thumb { background: var(--muted); }
 .recording-details { margin-bottom: 1rem; color: var(--muted); }
 .recording-details p { white-space: pre-wrap; overflow-wrap: anywhere; }

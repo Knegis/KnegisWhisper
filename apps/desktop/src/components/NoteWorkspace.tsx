@@ -6,6 +6,7 @@ import { workspaceSaveText } from "../lib/saveStatus";
 import { transcriptToMarkdown } from "../lib/noteBody";
 import { timeOfDay } from "../lib/dayGroups";
 import { hasStoredTranscript, noteMeta } from "../lib/noteMeta";
+import { sectionMarks, transcriptSections } from "../lib/transcriptLayout";
 import { message } from "../lib/useRefresh";
 import { Icon } from "./Icon";
 import { NoteEditor } from "./NoteEditor";
@@ -423,6 +424,28 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
     }
   }, [note.id]);
   useEffect(() => { void loadTranscript(); }, [loadTranscript]);
+  // Where the player ticks its scrubber: every section start after the first (KNEG-448). Computed
+  // once per rows, so a render for playback, four a second, hands the player the same array.
+  const transcriptRows = transcript?.rows;
+  const sections = useMemo(() => transcriptSections(transcriptRows ?? []), [transcriptRows]);
+  const marks = useMemo(() => sectionMarks(sections), [sections]);
+  // The card's height as `--player-h` on the article, for the transcript beside or under it to
+  // keep its last line clear of the card (KNEG-448). Written straight onto the element rather
+  // than into state, so a resize renders nothing and cannot move the player (KNEG-377). Attached
+  // only to the slot holding the floating card -- the column's foot, or the mini player -- and
+  // the variable goes with that slot.
+  const observePlayer = useCallback((slot: HTMLDivElement | null) => {
+    if (slot === null) return;
+    const observer = new ResizeObserver(([entry]) => {
+      const height = entry?.borderBoxSize[0]?.blockSize ?? slot.offsetHeight;
+      articleRef.current?.style.setProperty("--player-h", `${height}px`);
+    });
+    observer.observe(slot, { box: "border-box" });
+    return () => {
+      observer.disconnect();
+      articleRef.current?.style.removeProperty("--player-h");
+    };
+  }, []);
   const attachRecording = async () => {
     if (attachmentPending.current) return;
     attachmentPending.current = true; setAttaching(true); setAttachmentError(null);
@@ -507,7 +530,7 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
     : <p className="muted">This note has no transcript.</p>;
   // Drawn in one of two places (`playerSlotOf`), never both.
   const player = transcript?.recording
-    ? <RecordingPlayer ref={playerRef} noteId={note.id} onCurrentTime={setCurrentTime} onPlayingChange={onPlayingChange} compact={tab !== "replay"} />
+    ? <RecordingPlayer ref={playerRef} noteId={note.id} onCurrentTime={setCurrentTime} onPlayingChange={onPlayingChange} marks={marks} />
     : null;
 
   return <article ref={articleRef} id={`note-detail-${note.id}`} className={wide ? "note-detail note-detail-wide" : "note-detail"} aria-label={title}>
@@ -575,7 +598,8 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
             <h2 className="note-section-heading">AI summary</h2>
             <SummaryPane readOnly={blocked !== null} ref={summaryRef} noteId={note.id} visible={tab === "notes"} onSource={index => { void showSource(index); }} onSaveStatus={setSummarySave} />
           </section>
-          {player && playerSlot === "note" ? <div className={tab === "replay" ? "note-full-player" : "note-mini-player"} hidden={tab !== "replay" && !playbackStarted}>
+          {/* The ref changes with the tab, the element does not: Replay's full player is not a card. */}
+          {player && playerSlot === "note" ? <div ref={tab === "replay" ? null : observePlayer} className={tab === "replay" ? "note-full-player" : "note-mini-player"} hidden={tab !== "replay" && !playbackStarted}>
             {player}
           </div> : null}
           <section id={`note-${note.id}-panel-transcript`} role="tabpanel"
@@ -599,7 +623,7 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
     {wide ? <div id={`note-${note.id}-side`} className="note-side">
       <h2 className="note-side-label">Transcript</h2>
       <div className="note-side-body">{transcriptBody}</div>
-      {player && playerSlot === "side" ? <div className="note-side-player">{player}</div> : null}
+      {player && playerSlot === "side" ? <div ref={observePlayer} className="note-side-player">{player}</div> : null}
     </div> : null}
   </article>;
 });

@@ -167,11 +167,13 @@ node tools/visual-check/note-playback.mjs --url http://127.0.0.1:5191/
 
 Same options as the chip menus (the banner is always removed). It measures
 KNEG-412: a note's one player keeps playing, from where it was and at its
-speed, when the note moves it. The fixtures answer the player's `recording` URL with a two-minute WAV, a soft
+speed, when the note moves it. The fixtures answer the player's `recording` URL with a WAV as long as the
+note's recording (two minutes for 101), a soft
 beep once a second (`apps/desktop/src/lib/fixtureWav.ts`), for every note that
 has a recording (`servePlayableRecordings` in `devFixtures.ts`), and Edge runs
 with `--mute-audio`. Each check starts from a fresh load at 1440x900 on Notes,
-fixture note 101 open and playing from the transcript column at 1.5x, Play
+fixture note 101 open and playing from the transcript column at 1.5x, the
+player card's Play (`button[aria-label="Play"]`, an icon since KNEG-448)
 pressed with a real pointer press (`Input.dispatchMouseEvent`) so the page has
 the sticky user activation a click gives it; no autoplay flag is needed. A 50ms
 timer in the page samples every `audio` (`startPlaybackSampler` in
@@ -235,6 +237,43 @@ none, is covered by `cargo test` (`transcript.rs`, `local.rs`, `speech.rs`,
 all by the ignored `crates/transcription-core/tests/word_timings.rs`. Not
 measured: how far the mark is from the sound on a real recording, and scrolling
 or CPU on an hour-long note.
+
+## Transcript column
+
+```powershell
+node tools/visual-check/transcript-column.mjs --url http://127.0.0.1:5191/
+```
+
+Same options as the chip menus (the banner is always removed). It measures
+KNEG-448, the transcript column beside a note as the M6 redesign draws it, and
+grows as the redesign lands: the ids are the plan's, so they are not
+contiguous yet. Fixture note 106, "Roadmap review — long transcript"
+(`devFixtures.ts`, its rows in `apps/desktop/src/lib/fixtureTranscript.ts`), has
+a 690 s recording, which the fixtures serve as a WAV of that length, and a
+transcript in three five-minute sections starting at 0, 300 and 600 s. Each
+check starts from a fresh load at 1440x900 on Notes with note 106 opened from
+the library, and measures in both colour schemes: `prefers-color-scheme`
+emulated over CDP, which is what the stylesheet reads, with `data-theme` set on
+the root to match. Presses are real pointer presses, and Edge runs with
+`--mute-audio`. Two checks so far:
+
+2. The player is a card floating in the column: `.note-side-player` 12px
+   (±0.5) in from the column's left, right and bottom edges (its padding box,
+   inside the left rule), a 1px solid `--rule` border, a 4px radius and `--bg`
+   behind it, colours compared with the tokens resolved from the root. It holds
+   a 34x34 `button[aria-label="Play"]` centred on its controls row (±0.5px),
+   Back and Forward 15 seconds, a clock reading `m:ss / m:ss`, one `select`,
+   and exactly two `.recording-mark` ticks centred within 1px of where the
+   thumb stands at 300/690 and 600/690 (`5px + (width - 10px) x fraction` of the
+   range's box). The two schemes resolve different `--bg`. Paused at 100 s,
+   Forward 15 seconds lands on 115 and Back 15 seconds on 100 (±0.1 s).
+3. Scrolled to its end, the column's last transcript line stands at or above
+   the card's top, and the card floats over the scroller (its top above the
+   scroller's bottom), so there is a line it could hide.
+
+Measured in headless Edge against dev fixtures, not in the Tauri window; a false
+check makes it exit 1. Skips clamped at 0 and at the end, and ticks dropped at
+the very start or end, are `tests/playerControls.test.ts`'s, not measured here.
 
 ## Note meta
 

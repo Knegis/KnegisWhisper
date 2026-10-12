@@ -1220,6 +1220,158 @@ export function seekRecord() {
   `);
 }
 
+/* ------------------------------------------------------- transcript column */
+
+/**
+ * Marks the root with `data-theme` for `scheme`, beside the emulated
+ * `prefers-color-scheme` a check sets over CDP. The stylesheet reads only the
+ * media query (`styles.css`, `@media (prefers-color-scheme: light)`); the
+ * attribute is set so a rule keyed on it later would see the same scheme.
+ * Returns which scheme the page is now drawing.
+ */
+export function markColorScheme(scheme) {
+  return source(`
+    document.documentElement.dataset.theme = ${JSON.stringify(scheme)};
+    return matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  `);
+}
+
+/**
+ * The transcript column's player card (KNEG-448). Its box against the
+ * column's padding box -- inside the column's left rule, which is the
+ * column's own edge, not the card's to clear -- its border, corners and
+ * background beside the resolved `--rule` and `--bg` (a token's value is
+ * resolved by giving it to an element's `color`, so `#2e2e33` and
+ * `rgb(46, 46, 51)` compare equal), the controls it holds, and where each
+ * section mark's centre sits beside where the range's thumb would at that
+ * fraction: `5px + (width - 10px) * fraction` of the range's box, the
+ * mapping `styles.css` draws the thumb and the played part with.
+ */
+export function playerCardState() {
+  return source(`
+    const side = document.querySelector('.note-side');
+    const card = side?.querySelector('.note-side-player');
+    if (!side || !card) throw new Error('No player in the transcript column');
+    const resolve = (value) => {
+      const probe = document.createElement('i');
+      probe.style.color = value;
+      document.body.append(probe);
+      const color = getComputedStyle(probe).color;
+      probe.remove();
+      return color;
+    };
+    const root = getComputedStyle(document.documentElement);
+    const raw = (name) => root.getPropertyValue(name).trim();
+    const box = (element) => {
+      if (!element) return null;
+      const rect = element.getBoundingClientRect();
+      return { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
+    };
+    const outer = side.getBoundingClientRect();
+    const left = outer.left + side.clientLeft;
+    const inner = { left, right: left + side.clientWidth, bottom: outer.top + side.clientTop + side.clientHeight };
+    const rect = card.getBoundingClientRect();
+    const style = getComputedStyle(card);
+    const sides = ['Top', 'Right', 'Bottom', 'Left'];
+    const corners = ['TopLeft', 'TopRight', 'BottomRight', 'BottomLeft'];
+    const play = card.querySelector('button[aria-label="Play"]');
+    const row = card.querySelector('.recording-controls');
+    const range = card.querySelector('input[type="range"]');
+    const audio = card.querySelector('audio');
+    return {
+      scheme: matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light',
+      dataTheme: document.documentElement.dataset.theme ?? null,
+      inset: { left: rect.left - inner.left, right: inner.right - rect.right, bottom: inner.bottom - rect.bottom },
+      card: box(card),
+      position: style.position,
+      borderWidths: sides.map((name) => style['border' + name + 'Width']),
+      borderStyles: sides.map((name) => style['border' + name + 'Style']),
+      borderColors: sides.map((name) => style['border' + name + 'Color']),
+      radii: corners.map((name) => style['border' + name + 'Radius']),
+      background: style.backgroundColor,
+      tokens: { rule: raw('--rule'), bg: raw('--bg') },
+      resolved: { rule: resolve(raw('--rule')), bg: resolve(raw('--bg')) },
+      play: box(play),
+      playMarginTop: play ? getComputedStyle(play).marginTop : null,
+      controls: box(row),
+      back: Boolean(card.querySelector('button[aria-label="Back 15 seconds"]')),
+      forward: Boolean(card.querySelector('button[aria-label="Forward 15 seconds"]')),
+      clock: card.querySelector('.recording-clock')?.textContent ?? null,
+      selects: card.querySelectorAll('select').length,
+      range: box(range),
+      marks: [...card.querySelectorAll('.recording-mark')].map((mark) => {
+        const at = mark.getBoundingClientRect();
+        return { centre: (at.left + at.right) / 2, width: at.width, height: at.height, color: getComputedStyle(mark).backgroundColor };
+      }),
+      duration: audio && Number.isFinite(audio.duration) ? audio.duration : null,
+    };
+  `);
+}
+
+/**
+ * Pauses the recording in `container` and puts it at `seconds`, as a check's
+ * starting point; the seek's end is for the check to wait on
+ * (`recordingAt`).
+ */
+export function pauseRecordingAt(container, seconds) {
+  return source(`
+    const audio = document.querySelector(${JSON.stringify(`${container} audio`)});
+    if (!audio) throw new Error('No recording in ' + ${JSON.stringify(container)});
+    audio.pause();
+    audio.currentTime = ${JSON.stringify(seconds)};
+    return true;
+  `);
+}
+
+/** The recording in `container`: its time, whether it is paused, and whether a seek is under way. */
+export function recordingAt(container) {
+  return source(`
+    const audio = document.querySelector(${JSON.stringify(`${container} audio`)});
+    if (!audio) throw new Error('No recording in ' + ${JSON.stringify(container)});
+    return { time: audio.currentTime, paused: audio.paused, seeking: audio.seeking };
+  `);
+}
+
+/** Scrolls the transcript column to its end at once, not smoothly, and says how far that was. */
+export function scrollSideToEnd() {
+  return source(`
+    const body = document.querySelector('.note-side .note-side-body');
+    if (!body) throw new Error('No transcript column');
+    body.scrollTo({ top: body.scrollHeight, behavior: 'instant' });
+    return { scrollTop: body.scrollTop, maxScroll: body.scrollHeight - body.clientHeight };
+  `);
+}
+
+/**
+ * The transcript column at the end of its scroll: the last transcript line's
+ * bottom, the card's top, the scroller's own box, whether the column is at
+ * the end of its scroll, and the `--player-h` the note carries beside the
+ * card's own height.
+ */
+export function lastLineState() {
+  return source(`
+    const body = document.querySelector('.note-side .note-side-body');
+    const card = document.querySelector('.note-side .note-side-player');
+    if (!body || !card) throw new Error('No transcript column with a player');
+    const lines = body.querySelectorAll('.transcript-rows li');
+    const last = lines[lines.length - 1];
+    if (!last) throw new Error('The transcript column has no lines');
+    const scroller = body.getBoundingClientRect();
+    return {
+      lines: lines.length,
+      lastText: last.querySelector('.transcript-text')?.textContent ?? last.textContent,
+      lastBottom: last.getBoundingClientRect().bottom,
+      cardTop: card.getBoundingClientRect().top,
+      cardHeight: card.offsetHeight,
+      scroller: { top: scroller.top, bottom: scroller.bottom },
+      scrollTop: body.scrollTop,
+      maxScroll: body.scrollHeight - body.clientHeight,
+      paddingBottom: getComputedStyle(body).paddingBottom,
+      playerH: document.querySelector('.note-detail')?.style.getPropertyValue('--player-h') || null,
+    };
+  `);
+}
+
 /* ------------------------------------------------------------ level meters */
 
 /**
