@@ -2,25 +2,29 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   CARD_CLEARANCE,
-  FOLLOW_INERTIA_MS,
+  APP_SCROLL_IDLE_MS,
+  ScrollOwnership,
   followBand,
   inBand,
   keyReleasesFollow,
-  releasesFollow,
 } from "../src/lib/followScroll.js";
 
-test("a wheel within FOLLOW_INERTIA_MS of Follow turning on is the flick before it; after that it lets go", () => {
-  assert.equal(FOLLOW_INERTIA_MS, 400);
-  assert.equal(releasesFollow("wheel", 0), false);
-  assert.equal(releasesFollow("wheel", FOLLOW_INERTIA_MS - 1), false);
-  assert.equal(releasesFollow("wheel", FOLLOW_INERTIA_MS), true);
-  assert.equal(releasesFollow("wheel", Number.POSITIVE_INFINITY), true);
+test("only a reveal owns scrolls, renewed until 150 ms of inactivity", () => {
+  const ownership = new ScrollOwnership();
+  assert.equal(ownership.scroll(0), false);
+  ownership.begin(10);
+  assert.equal(ownership.scroll(100), true);
+  assert.equal(ownership.scroll(200), true);
+  assert.equal(ownership.scroll(200 + APP_SCROLL_IDLE_MS), false);
 });
 
-test("a touch moving, a press on the scrollbar or a scrolling key lets go at once", () => {
-  for (const input of ["touch", "scrollbar", "key"] as const) {
-    assert.equal(releasesFollow(input, 0), true, input);
-  }
+test("scrollend or user input ends a reveal immediately, including during its glide", () => {
+  const ownership = new ScrollOwnership();
+  ownership.begin(10);
+  ownership.end();
+  assert.equal(ownership.scroll(11), false);
+  ownership.begin(20);
+  assert.equal(ownership.scroll(21), true);
 });
 
 test("with focus on the page or the scroller, every scrolling key lets go, and no other key does", () => {

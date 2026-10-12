@@ -1,6 +1,6 @@
 import { useCallback, useDeferredValue, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
 
-import { followBand, inBand, keyReleasesFollow, releasesFollow, type Band, type KeyPlace, type ScrollInput } from "../lib/followScroll";
+import { followBand, inBand, keyReleasesFollow, ScrollOwnership, type Band, type KeyPlace } from "../lib/followScroll";
 import type { NoteRecording, TranscriptRow } from "../lib/ipc";
 import { findMatches, findStatus, firstMatchWhere, matchFrom, normaliseQuery, regroupMatches, rowOrder, sameMatches, stepMatch, type FindMatch } from "../lib/transcriptFind";
 import { extendSelection, lineAt, lineStop, navigableLines, NO_SELECTION, stepLine, type LineSelection, type TranscriptSection } from "../lib/transcriptLayout";
@@ -130,6 +130,7 @@ export function TranscriptPanel({
 }: TranscriptPanelProps) {
   const idPrefix = useId();
   const asideRef = useRef<HTMLElement>(null);
+  const appScroll = useRef(new ScrollOwnership());
   const rowRefs = useRef(new Map<number, HTMLLIElement>());
   // The playing row's words, when it is drawn word by word.
   const wordsRef = useRef<HTMLSpanElement>(null);
@@ -195,7 +196,10 @@ export function TranscriptPanel({
     const line = rowRefs.current.get(pending.index);
     if (line !== undefined && line.getClientRects().length === 0) return;
     pendingReveal.current = null;
-    line?.scrollIntoView({ block: pending.block, behavior: pending.behavior ?? scrollBehavior() });
+    if (line !== undefined) {
+      appScroll.current.begin(performance.now());
+      line.scrollIntoView({ block: pending.block, behavior: pending.behavior ?? scrollBehavior() });
+    }
     pending.then?.();
   }, []);
   const reveal = useCallback((index: number, block: ScrollLogicalPosition, then?: () => void, behavior?: ScrollBehavior) => {
@@ -258,7 +262,11 @@ export function TranscriptPanel({
       return true;
     },
     focused: (index) => setCursor(index),
-    openRename: (target) => setRenaming(target),
+    openRename: (target) => {
+      appScroll.current.end();
+      latest.current.onReleaseFollow();
+      setRenaming(target);
+    },
     closeRename: (speakerId) => setRenaming((previous) => previous?.speakerId === speakerId ? null : previous),
     rename: (speakerId, name) => latest.current.onRename(speakerId, name),
   }), [reveal]);
@@ -411,6 +419,7 @@ export function TranscriptPanel({
   // the chip, taken once, centres the line the player is at, playing or not, in view or not.
   useLayoutEffect(() => {
     if (!visible || !follow) return;
+    if (renaming !== null) { onReleaseFollow(); return; }
     if (takeRecentre()) {
       const target = activeIndex ?? currentIndex;
       if (target !== null) reveal(target, "center");
@@ -418,7 +427,7 @@ export function TranscriptPanel({
     }
     if (shownBefore.current && activeIndex !== null && !lineInBand(activeIndex)) reveal(activeIndex, "center");
     // `currentIndex` is read as it is when one of these changes; it changing alone moves nothing.
-  }, [activeIndex, follow, visible, takeRecentre, reveal, lineInBand]);
+  }, [activeIndex, follow, visible, takeRecentre, reveal, lineInBand, renaming, onReleaseFollow]);
 
   // The transcript coming on screen -- the Transcript tab opened, or the column mounted afresh as
   // the layout switches -- brings back the line the player is at, playing or paused, when it is out
@@ -438,20 +447,14 @@ export function TranscriptPanel({
       frame = requestAnimationFrame(() => {
         const { follow: following, sourcePending: showing, activeIndex: playingLine, currentIndex: at } = latest.current;
         const target = playingLine ?? at;
-        if (!following || showing || reveals.current !== revealsThen || target === null) return;
+        if (!following || showing || renaming !== null || reveals.current !== revealsThen || target === null) return;
         if (!lineInBand(target)) reveal(target, "center");
       });
     });
     return () => cancelAnimationFrame(frame);
-  }, [visible, reveal, lineInBand]);
+  }, [visible, reveal, lineInBand, renaming]);
 
   // When Follow last turned on, for the wheel's grace (`FOLLOW_INERTIA_MS`): never, until it does.
-  const followOnAt = useRef(Number.NEGATIVE_INFINITY);
-  const followWas = useRef(follow);
-  useLayoutEffect(() => {
-    if (follow && !followWas.current) followOnAt.current = performance.now();
-    followWas.current = follow;
-  }, [follow]);
 
   // What counts as the person scrolling the transcript (`lib/followScroll.ts`): input events on
   // whatever scrolls it, while it is on screen. Not `scroll` events, which Follow's own scrolls
@@ -460,20 +463,28 @@ export function TranscriptPanel({
     const aside = asideRef.current;
     const scroller = visible && aside !== null ? scrollParent(aside) : null;
     if (scroller === null) return;
-    const letGo = (input: ScrollInput) => {
+    const letGo = () => {
+      appScroll.current.end();
       const { follow: following, onReleaseFollow: release } = latest.current;
-      if (following && releasesFollow(input, performance.now() - followOnAt.current)) release();
+      if (following) release();
     };
-    const wheel = () => letGo("wheel");
+    const scroll = () => { if (!appScroll.current.scroll(performance.now())) letGo(); };
+    const scrollEnd = () => appScroll.current.end();
+    const wheel = () => letGo();
     // A touch on the player card scrubs or presses it rather than scrolling the transcript: below
     // 1280px the mini card is inside `.notes-main`, the scroller listened on here (KNEG-448).
     const touch = (event: TouchEvent) => {
       if (event.target instanceof Element && event.target.closest(".recording-player") !== null) return;
-      letGo("touch");
+      letGo();
     };
     // A press on the scrollbar lands on the scroller itself, to the right of its content box.
     const press = (event: PointerEvent) => {
-      if (event.target === scroller && event.offsetX >= scroller.clientWidth) letGo("scrollbar");
+      // Middle-button autoscroll, overlay scrollbars and selection dragging all start with a
+      // pointer press. Player controls are not a request to move the transcript.
+      if (event.target instanceof Element && !event.target.closest(".recording-player")) {
+        appScroll.current.end();
+        if (event.button === 1 || (event.target === scroller && event.offsetX >= scroller.clientWidth)) letGo();
+      }
     };
     // Whether the last press anywhere landed in the transcript's scroller. With focus on nothing
     // (`<body>`), a key scrolls the scroller pressed last, as Chromium picks it: after a press in
@@ -487,14 +498,24 @@ export function TranscriptPanel({
       const place: KeyPlace = target === scroller || (target === document.body && pressedHere) ? "page"
         : target instanceof HTMLElement && target !== document.body && scroller.contains(target) && !target.isContentEditable && !target.matches("input, textarea, select") ? "inside"
         : "elsewhere";
-      if (keyReleasesFollow(event.key, place, event.defaultPrevented)) letGo("key");
+      if (keyReleasesFollow(event.key, place, event.defaultPrevented)) letGo();
     };
+    const focused = (event: FocusEvent) => {
+      if (event.target instanceof Element && event.target.matches("button, input, textarea, select") && !event.target.closest(".recording-player")) appScroll.current.end();
+    };
+    scroller.addEventListener("scroll", scroll, { passive: true });
+    scroller.addEventListener("scrollend", scrollEnd);
+    scroller.addEventListener("focusin", focused);
     scroller.addEventListener("wheel", wheel, { passive: true });
     scroller.addEventListener("touchmove", touch, { passive: true });
     scroller.addEventListener("pointerdown", press);
     document.addEventListener("pointerdown", pressedAnywhere, { capture: true, passive: true });
     document.addEventListener("keydown", key);
     return () => {
+      appScroll.current.end();
+      scroller.removeEventListener("scroll", scroll);
+      scroller.removeEventListener("scrollend", scrollEnd);
+      scroller.removeEventListener("focusin", focused);
       scroller.removeEventListener("wheel", wheel);
       scroller.removeEventListener("touchmove", touch);
       scroller.removeEventListener("pointerdown", press);

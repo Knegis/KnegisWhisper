@@ -3,24 +3,23 @@
  * person scrolling the transcript turns it off, and the player card's Follow chip turns it back on
  * -- the owner's choice of 2026-10-11.
  *
- * What counts as the person scrolling is an input event -- a wheel, a touch moving, a press on
- * the scrollbar, a key that scrolls -- never a `scroll` event, which the transcript's own
- * `scrollIntoView` fires too. The decisions are here, pure, so they are testable without a DOM;
- * `TranscriptPanel` listens for the events and measures the boxes.
+ * Every scroll counts unless it belongs to the app's reveal operation. Input interrupts that
+ * operation immediately; scrollend or 150 ms without a scroll ends it too (KNEG-454).
  */
 
-/**
- * How long after Follow turns on a wheel is still taken for the flick before it -- a touchpad
- * goes on sending wheel events for a while after the fingers lift -- rather than a new scroll.
- */
-export const FOLLOW_INERTIA_MS = 400;
+/** Fallback for browsers without scrollend, including reveals that move nothing. */
+export const APP_SCROLL_IDLE_MS = 150;
 
-/** The person's inputs that scroll the transcript. */
-export type ScrollInput = "wheel" | "touch" | "scrollbar" | "key";
-
-/** Whether `input`, `sinceOn` ms after Follow last turned on, turns it off. */
-export function releasesFollow(input: ScrollInput, sinceOn: number): boolean {
-  return input !== "wheel" || sinceOn >= FOLLOW_INERTIA_MS;
+/** Ownership of one app reveal. A clock is supplied by the caller, so interrupted glides are testable. */
+export class ScrollOwnership {
+  private until = Number.NEGATIVE_INFINITY;
+  begin(now: number): void { this.until = now + APP_SCROLL_IDLE_MS; }
+  scroll(now: number): boolean {
+    if (now >= this.until) return false;
+    this.until = now + APP_SCROLL_IDLE_MS;
+    return true;
+  }
+  end(): void { this.until = Number.NEGATIVE_INFINITY; }
 }
 
 /** The keys that scroll a scroller when nothing else takes them. Left and Right do not move the transcript, which never scrolls sideways. */
