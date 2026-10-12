@@ -135,6 +135,9 @@ export function TranscriptPanel({
   // The playing row's words, when it is drawn word by word.
   const wordsRef = useRef<HTMLSpanElement>(null);
   const [renaming, setRenaming] = useState<RenameTarget | null>(null);
+  const renameOpen = useRef<RenameTarget | null>(null);
+  const renameOrigin = useRef<number | null>(null);
+  const returnRenameFocus = useRef(false);
   // Sections the reader closed, by key; every section starts open (KNEG-448).
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
   // The line that holds the lines' one tab stop ahead of the selection (`lineStop`): the line that
@@ -175,9 +178,9 @@ export function TranscriptPanel({
   // memoised line by themselves. Declared before every effect that reads it, so it is current there.
   const canPlay = recording !== null;
   const sourcePending = Boolean(sourceRequest);
-  const latest = useRef({ rows, sections, lines, collapsed, places, stopIndex, activeIndex, currentIndex, sourcePending, selection, canPlay, playFrom, onSelectionChange, onRename, follow, onReleaseFollow, playing });
+  const latest = useRef({ readOnly, rows, sections, lines, collapsed, places, stopIndex, activeIndex, currentIndex, sourcePending, selection, canPlay, playFrom, onSelectionChange, onRename, follow, onReleaseFollow, playing });
   useLayoutEffect(() => {
-    latest.current = { rows, sections, lines, collapsed, places, stopIndex, activeIndex, currentIndex, sourcePending, selection, canPlay, playFrom, onSelectionChange, onRename, follow, onReleaseFollow, playing };
+    latest.current = { readOnly, rows, sections, lines, collapsed, places, stopIndex, activeIndex, currentIndex, sourcePending, selection, canPlay, playFrom, onSelectionChange, onRename, follow, onReleaseFollow, playing };
   });
 
   // One way to bring a line into view (KNEG-448), for Follow, a summary source or search hit, and
@@ -220,6 +223,28 @@ export function TranscriptPanel({
   // After every commit: a check of one ref, unless a reveal is waiting on the section it opened.
   useLayoutEffect(() => { flushReveal(); });
 
+  const openRename = useCallback((target: RenameTarget, origin?: number) => {
+    if (latest.current.readOnly) return;
+    const turn = latest.current.sections.flatMap(section => section.turns).find(item => item.key === target.turnKey);
+    const stop = latest.current.stopIndex;
+    renameOrigin.current = origin ?? (turn?.rows.some(row => row.index === stop) ? stop : turn?.rows[0]?.index ?? null);
+    renameOpen.current = target;
+    appScroll.current.end();
+    latest.current.onReleaseFollow();
+    setRenaming(target);
+  }, []);
+
+  useLayoutEffect(() => {
+    if (renaming !== null || !returnRenameFocus.current) return;
+    returnRenameFocus.current = false;
+    const origin = renameOrigin.current;
+    if (origin === null) return;
+    const target = latest.current.lines.includes(origin) ? origin : stepLine(latest.current.lines, origin, "ArrowDown");
+    if (target === null) return;
+    rowRefs.current.get(target)?.focus({ preventScroll: true });
+    reveal(target, "nearest");
+  }, [renaming, reveal]);
+
   const actions = useMemo<TranscriptActions>(() => ({
     register: (index, element) => {
       if (element === null) rowRefs.current.delete(index);
@@ -247,7 +272,7 @@ export function TranscriptPanel({
       const target = stepLine(open, row.index, key);
       if (target === null) return;
       // Shift with nothing selected extends from the line focus is leaving.
-      if (extend) select((previous) => extendSelection(all, previous.anchor === null ? { rows: previous.rows, anchor: row.index } : previous, target));
+      if (extend && all.some(item => item.index === target && item.startSeconds !== null)) select((previous) => extendSelection(all, previous.anchor === null ? { rows: previous.rows, anchor: row.index } : previous, target));
       // Going through the lines by key is the person moving the transcript: Follow lets go of it.
       if (following) release();
       const element = rowRefs.current.get(target);
@@ -262,14 +287,20 @@ export function TranscriptPanel({
       return true;
     },
     focused: (index) => setCursor(index),
-    openRename: (target) => {
-      appScroll.current.end();
-      latest.current.onReleaseFollow();
-      setRenaming(target);
+    openRename,
+    renameLine: (index) => {
+      const turn = latest.current.sections.flatMap(section => section.turns).find(item => item.rows.some(row => row.index === index));
+      if (turn?.speakerId == null) return;
+      openRename({ turnKey: turn.key, speakerId: turn.speakerId, current: turn.speaker ?? turn.speakerId }, index);
     },
-    closeRename: (speakerId) => setRenaming((previous) => previous?.speakerId === speakerId ? null : previous),
+    closeRename: (speakerId) => {
+      if (renameOpen.current?.speakerId !== speakerId) return;
+      renameOpen.current = null;
+      returnRenameFocus.current = true;
+      setRenaming(null);
+    },
     rename: (speakerId, name) => latest.current.onRename(speakerId, name),
-  }), [reveal]);
+  }), [reveal, openRename]);
   const toggleSection = useCallback((key: string) => {
     const { sections: all, collapsed: closed, places: at, stopIndex: stop, activeIndex: playingLine, follow: following, onReleaseFollow: release } = latest.current;
     if (!closed.has(key)) {

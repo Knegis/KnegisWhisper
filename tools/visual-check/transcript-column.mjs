@@ -695,6 +695,8 @@ export async function runTranscriptColumn(options) {
         await cdp.evaluate(`document.querySelector(${JSON.stringify(SIDE_BODY)}).scrollTo({ top: 0, behavior: 'instant' })`);
         await cdp.evaluate(snippets.pauseRecordingAt(CARD, PLAY_FROM));
         await settledTime(cdp);
+        // The setup scroll releases Follow (KNEG-454); restore it before measuring playback.
+        if ((await cdp.evaluate(snippets.followChipState(CARD))).pressed !== "true") await pressAt(cdp, `${CARD} .follow-chip`);
         await pressAt(cdp, `${CARD} button[aria-label="Play"]`);
         const started = await waited(cdp, "Boolean(document.querySelector('.note-side .transcript-rows li[aria-current=\"true\"]'))", "a line to play", 5_000);
         await delay(700);
@@ -996,6 +998,8 @@ export async function runTranscriptColumn(options) {
         const toggle = await cdp.evaluate(snippets.sectionToggleState(SECOND_SECTION));
         await pressPoint(cdp, toggle, `the "${SECOND_SECTION}" toggle`);
         const closed = await cdp.evaluate(snippets.sectionExpanded(SECOND_SECTION));
+        // Bringing this off-screen toggle into view was user scrolling in the probe.
+        if ((await cdp.evaluate(snippets.followChipState(CARD))).pressed !== "true") await pressAt(cdp, `${CARD} .follow-chip`);
         const followBefore = await cdp.evaluate(snippets.followChipState(CARD));
         await cdp.evaluate(snippets.pauseRecordingAt(CARD, CROSS_FROM));
         await settledTime(cdp);
@@ -1280,7 +1284,7 @@ export async function runTranscriptColumn(options) {
           closed: !closedBar.bar && (closedBar.label ?? "").toLowerCase() === "transcript" && closedBar.findButton?.focused === true && closedBar.marks === 0,
           noPlay: plays === 0,
           noSelection: lines.selected.length === 0,
-          followKept: follow === "true",
+          followKept: follow === "false", // This probe explicitly scrolled back to the top before Find.
         };
         schemes[scheme] = {
           drawn,
@@ -1484,6 +1488,7 @@ export async function runTranscriptColumn(options) {
         const onBefore = await cdp.evaluate(focusLine(BEFORE_UNTIMED));
         await key(cdp, "ArrowDown");
         const past = await cdp.evaluate(snippets.lineModelState());
+        await key(cdp, "ArrowDown"); // Untimed speaker line is reachable for F2; the next timed line plays.
         const shot = `12-arrow-${scheme}-1440x900.png`;
         await cdp.screenshot(resolve(out, shot));
         screenshots.push(shot);
@@ -1507,8 +1512,8 @@ export async function runTranscriptColumn(options) {
           walked: entered && left,
           oneLineByTab: tabbedLines.length === 1 && tabbedLines[0] === stop,
           lineByLine: stop !== null && JSON.stringify(steps) === JSON.stringify([stop + 1, stop + 2, stop + 3]),
-          untimed: rows[UNTIMED].startSeconds === null && onBefore && past.focused === AFTER_UNTIMED
-            && JSON.stringify(past.stops) === JSON.stringify([AFTER_UNTIMED]),
+          untimed: rows[UNTIMED].startSeconds === null && onBefore && past.focused === UNTIMED
+            && JSON.stringify(past.stops) === JSON.stringify([UNTIMED]),
           enterPlays: entered12.plays === 1 && entered12.landed && near(entered12.playingAt, rows[AFTER_UNTIMED].startSeconds, LANDING_TOLERANCE)
             && JSON.stringify(entered12.lines.selected) === JSON.stringify([AFTER_UNTIMED]),
           pausedAt: pausedTime.paused && near(pausedTime.time, PAUSED_AT, 0.01),

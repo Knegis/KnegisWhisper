@@ -240,7 +240,7 @@ export function navigableLines(sections: readonly TranscriptSection[], collapsed
     if (collapsed.has(section.key)) continue;
     for (const turn of section.turns) {
       for (const row of turn.rows) {
-        if (row.startSeconds !== null) lines.push(row.index);
+        if (row.startSeconds !== null || row.speakerId !== null) lines.push(row.index);
       }
     }
   }

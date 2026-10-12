@@ -257,6 +257,13 @@ test("lineCount counts every row in the section", () => {
   assert.deepEqual(sections.map((s) => s.lineCount), [4, 2]);
 });
 
+test("untimed speaker lines remain reachable for keyboard renaming without becoming playable", () => {
+  const rows = [row(0, null, null, { speakerId: "a" }), row(1, null, null), row(2, 0, 5)];
+  assert.deepEqual(navigableLines(transcriptSections(rows), new Set()), [0, 2]);
+  assert.deepEqual(rangeSelection(rows, 0, 2), [2]);
+  assert.equal(lineAt(rows, 0)?.index, 2);
+});
+
 test("sectionMarks are the starts after the first; one section gives none", () => {
   const rows = [row(0, 0, 10), row(1, 310, 320), row(2, 910, 920)];
   const sections = transcriptSections(rows);

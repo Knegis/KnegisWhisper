@@ -67,6 +67,7 @@ export type TranscriptActions = {
   /** A line, or a word in it, took focus, and so holds the lines' one tab stop. */
   focused: (index: number) => void;
   openRename: (target: RenameTarget) => void;
+  renameLine: (index: number) => void;
   closeRename: (speakerId: string) => void;
   rename: (speakerId: string, name: string) => Promise<void>;
 };
@@ -171,6 +172,7 @@ function selectsText(element: Element): boolean {
  */
 export const Line = memo(function Line({ row, selected, active, stop, canPlay, found, currentMatch, actions }: LineProps) {
   const timed = row.startSeconds !== null;
+  const navigable = timed || row.speakerId !== null;
   // Which word takes Tab while this line holds the stop: the one the arrow keys between words
   // last left focus on, the first until then.
   const [wordStop, setWordStop] = useState(0);
@@ -188,11 +190,13 @@ export const Line = memo(function Line({ row, selected, active, stop, canPlay, f
       ref={(element) => { actions.register(row.index, element); }}
       className={className}
       role="option"
-      tabIndex={timed ? (stop ? 0 : -1) : undefined}
+      tabIndex={navigable ? (stop ? 0 : -1) : undefined}
+      aria-keyshortcuts={row.speakerId !== null ? "F2" : undefined}
+      aria-description={row.speakerId !== null ? "Press F2 to rename this speaker." : undefined}
       aria-selected={timed ? selected : false}
-      aria-disabled={timed ? undefined : true}
+      aria-disabled={navigable ? undefined : true}
       aria-current={active ? "true" : undefined}
-      onFocus={() => { if (timed) actions.focused(row.index); }}
+      onFocus={() => { if (navigable) actions.focused(row.index); }}
       // A Shift-press would also drag a text selection over every line up to this one.
       onMouseDown={(event) => { if (timed && event.shiftKey) event.preventDefault(); }}
       onClick={(event) => {
@@ -204,8 +208,11 @@ export const Line = memo(function Line({ row, selected, active, stop, canPlay, f
         actions.choose(row, event.shiftKey);
       }}
       onKeyDown={(event) => {
-        if (!timed) return;
-        if (event.key === "Enter" || event.key === " ") {
+        if (!navigable) return;
+        if (event.key === "F2" && !event.altKey && !event.ctrlKey && !event.metaKey) {
+          event.preventDefault(); event.stopPropagation();
+          actions.renameLine(row.index);
+        } else if (timed && (event.key === "Enter" || event.key === " ")) {
           event.preventDefault();
           actions.choose(row, event.shiftKey);
         } else if (LINE_KEYS.has(event.key)) {
@@ -322,7 +329,7 @@ export const Turn = memo(function Turn({ turn, activeIndex, stopIndex, renaming,
       <div className="transcript-turn-head">
         <span className="transcript-turn-marker" aria-hidden="true" />
         {speakerId !== null ? (
-          <button type="button" className="transcript-speaker" disabled={readOnly} aria-label={`Rename ${name ?? speakerId}`}
+          <button type="button" tabIndex={-1} className="transcript-speaker" disabled={readOnly} aria-label={`Rename ${name ?? speakerId}`}
             onClick={() => actions.openRename({ turnKey: turn.key, speakerId, current: name ?? speakerId })}>
             <span id={nameId}>{name}</span>
           </button>
