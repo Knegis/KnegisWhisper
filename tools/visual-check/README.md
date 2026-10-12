@@ -266,11 +266,11 @@ stylesheet reads, with `data-theme` set on the root to match. Presses are real
 pointer presses, Edge runs with `--mute-audio`, and a count of `play()` calls
 is installed before the page's own code runs. A line is pressed inside its
 left padding (`linePadPoint`), on the line itself rather than a word, after
-checking that the line is what is under that point. Fourteen checks so far:
+checking that the line is what is under that point. Sixteen checks so far:
 
 1. The column has a plain header and is grouped: `.transcript-head` is sticky
    at top 0 and holds one heading, "Transcript" drawn uppercase, and one
-   button, "Find in transcript", disabled; three section toggles, all
+   button, "Find in transcript", enabled; three section toggles, all
    expanded, titled "0:00 – 5:00", "5:00 – 10:00" and "10:00 – 11:30" and
    counting "26 lines", "19 lines" and "9 lines"; 41 turn heads, each with a
    6x6px marker; 54 lines; no per-line Play (`.transcript-play`) anywhere in
@@ -334,6 +334,28 @@ checking that the line is what is under that point. Fourteen checks so far:
    dash) and "Clear selection". Pressed at 2x, it pauses within 0.25 s of
    line 8's end. A real Escape with focus on line 8 then leaves nothing
    selected, and the header names a speaker again.
+9. Find in this transcript: with "5:00 – 10:00" closed and the column back at
+   its top, a real press on the head's Find button puts a `[role="search"]`
+   bar in the label's place, the head still 52px, with focus in its
+   `input[aria-label="Find in transcript"]` and buttons "Previous match",
+   "Next match" and "Close find". "möte" typed with real key events shows
+   "1/3" (`aria-hidden`; its `role=status` says "Match 1 of 3") and three
+   `mark.transcript-match`, in lines 22, 45 ("Mötet") and 50; the current one,
+   in line 22 and inside the visible band once the column stops scrolling, is
+   the resolved `--band` behind `--band-ink`, the others `--band-wash` behind
+   `--band-text`, underlined. Enter: "2/3", the closed section opened and line
+   45 inside the band; Shift+Enter: "1/3" again. Cleared with Backspaces,
+   "MÖTE" finds 3 and "mote" 1 (in "remote", line 43). Focus stays in the
+   field and the Follow chip stays on (nothing plays). Escape brings the label
+   back with focus on the Find button and no mark left; no `play()` call and
+   no line selected throughout.
+10. A playing line that matches shows its marks, not its words: line 50
+    (10:41, timed word by word) pressed at 0.75x plays with one word lit;
+    Find opened and "möte" typed, the line, still playing, holds marks, no
+    `.transcript-word` and no lit word anywhere, and the step to the first
+    match has turned Follow off. Escape: within 500 ms, still playing (the
+    recording's time later than before), the line draws its words again with
+    exactly one lit and no mark; no `play()` call from the Find press on.
 11. A real press on Jonas's name in a turn head opens one
     `form.transcript-rename` inside that same `.transcript-turn`, focus in its
     field; no `play()` call, and no line's `aria-selected` changes. Escape
@@ -373,11 +395,16 @@ the very start or end, are `tests/playerControls.test.ts`'s, not measured here;
 which line the arrow keys go to, the tab stop's choice and Shift's range are
 `tests/transcriptLayout.test.ts`'s (`stepLine`, `lineStop`, `extendSelection`);
 which inputs let go of Follow, the wheel's 400 ms grace after it turns on, and
-the band are `tests/followScroll.test.ts`'s. Not measured: Shift+Arrow, Home
-and End between lines, the arrow keys over a collapsed section, what a screen
-reader announces for a turn's list, a touchpad's real inertia, and a drag of
-the scrollbar, which this Edge draws none of (`--hide-scrollbars`): those two
-are for the real window.
+the band are `tests/followScroll.test.ts`'s; what a query finds (case folded,
+accents kept), where a new query starts from the match that was current, and
+which rows keep their matches' arrays across a new query (`regroupMatches`)
+are `tests/transcriptFind.test.ts`'s. Not measured: the Previous and Next
+buttons by pointer (Enter and Shift+Enter are), Find's first match when the
+column is scrolled into the transcript rather than at its top, Shift+Arrow,
+Home and End between lines, the arrow keys over a collapsed section, what a
+screen reader announces for a turn's list or the find count, a touchpad's
+real inertia, and a drag of the scrollbar, which this Edge draws none of
+(`--hide-scrollbars`): those two are for the real window.
 
 ## Note meta
 

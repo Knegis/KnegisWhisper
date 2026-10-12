@@ -2,6 +2,7 @@ import { Fragment, memo, useEffect, useId, useRef, useState, type FormEvent, typ
 
 import type { TranscriptRow } from "../lib/ipc";
 import { normaliseSpeakerName, renameHeading, suggestionsFor } from "../lib/speakerNames";
+import { sameMatchesOver, textParts, type FindMatch } from "../lib/transcriptFind";
 import { sameProps, sameSelectionOver, type LineKey, type TranscriptSection, type TranscriptTurn } from "../lib/transcriptLayout";
 import { message } from "../lib/useRefresh";
 import { wordsMatchText } from "../lib/wordTiming";
@@ -24,6 +25,10 @@ import { formatClock } from "./RecordingPlayer";
  * it moved between. The selection is the note's one set of row indexes, so a
  * section or a turn compares it by its own lines only (`sameSelectionOver`): a
  * click redraws the turns whose lines it selected or deselected, not the rest.
+ * Find's matches are the same (`sameMatchesOver`): one map of each row's
+ * matches, whose arrays stay the same while a row's matches do
+ * (`regroupMatches`), so a new query redraws only the lines it changed, and a
+ * step between matches only the two lines it moved between.
  */
 
 /** Scrolls jump rather than glide when the person asked for less motion. */
@@ -128,6 +133,10 @@ type LineProps = {
   stop: boolean;
   /** Whether the note has a recording to play: a timed line then plays when pressed, and its words when it has them. */
   canPlay: boolean;
+  /** Find's matches in this line, while Find is open and finds any here (KNEG-448); the same array while they are the same. */
+  found: readonly FindMatch[] | undefined;
+  /** The current Find match's ordinal when it is in this line; null otherwise. */
+  currentMatch: number | null;
   actions: TranscriptActions;
 };
 
@@ -155,9 +164,10 @@ function selectsText(element: Element): boolean {
  * click that ends a text selection in the line -- a drag over its text, or the second click of a
  * double-click on a word -- does nothing, so a quote can be copied without starting playback. The
  * lines are one tab stop between them, and the arrow keys, Home and End move from line to line.
- * An untimed line is a disabled option that is never focused, selected or played.
+ * An untimed line is a disabled option that is never focused, selected or played. While Find
+ * has matches in it, the line draws its text with them marked, in place of its words.
  */
-export const Line = memo(function Line({ row, selected, active, stop, canPlay, actions }: LineProps) {
+export const Line = memo(function Line({ row, selected, active, stop, canPlay, found, currentMatch, actions }: LineProps) {
   const timed = row.startSeconds !== null;
   // Which word takes Tab while this line holds the stop: the one the arrow keys between words
   // last left focus on, the first until then.
@@ -205,7 +215,16 @@ export const Line = memo(function Line({ row, selected, active, stop, canPlay, a
         }
       }}
     >
-      {canPlay && wordsMatchText(row.words, row.text) && row.words.length > 0 ? (
+      {found !== undefined && found.length > 0 ? (
+        // Find's matches, marked in the line's text (KNEG-448): the current one filled, the rest
+        // washed and underlined. Its words are not drawn while it has matches, so the panel lights
+        // none of them (`activeWords`), and draws them again once Find closes or stops matching here.
+        <span className="transcript-text">
+          {textParts(row.text, found).map((part, at) => part.ordinal === null ? <Fragment key={at}>{part.text}</Fragment> : (
+            <mark key={at} className={part.ordinal === currentMatch ? "transcript-match transcript-match-current" : "transcript-match"}>{part.text}</mark>
+          ))}
+        </span>
+      ) : canPlay && wordsMatchText(row.words, row.text) && row.words.length > 0 ? (
         // Word by word while it plays. A click on a word selects its line and plays from the word;
         // with Shift it is a Shift-click on the line.
         <span className="transcript-text" ref={active ? actions.wordsRef : undefined}>
@@ -244,10 +263,12 @@ export const Line = memo(function Line({ row, selected, active, stop, canPlay, a
 /**
  * Whether a turn or a section would draw the same: every prop either side has identical
  * (`sameProps`) but `selected`, the note's whole selection, which only has to select the same of
- * `turns`' lines, the ones being drawn.
+ * `turns`' lines, the ones being drawn, and `found`, Find's matches in every row, which only has
+ * to give those lines the same matches.
  */
-function sameDrawing<P extends { selected: ReadonlySet<number> }>(previous: P, next: P, turns: readonly TranscriptTurn[]): boolean {
-  return sameProps(previous, next, ["selected"]) && turns.every((turn) => sameSelectionOver(turn.rows, previous.selected, next.selected));
+function sameDrawing<P extends Pick<Shared, "selected" | "found">>(previous: P, next: P, turns: readonly TranscriptTurn[]): boolean {
+  return sameProps(previous, next, ["selected", "found"]) && turns.every((turn) => sameSelectionOver(turn.rows, previous.selected, next.selected)
+    && sameMatchesOver(turn.rows, previous.found, next.found));
 }
 
 /** What every turn is drawn with, whichever section it is in. */
@@ -255,6 +276,11 @@ type Shared = {
   idPrefix: string;
   /** The note's selected rows, all of them: a turn or section compares only its own (`sameDrawing`). */
   selected: ReadonlySet<number>;
+  /**
+   * Find's matches by row, every row that has any (`regroupMatches`; empty while Find is closed):
+   * a turn or a section compares only its own lines' (`sameDrawing`).
+   */
+  found: ReadonlyMap<number, readonly FindMatch[]>;
   readOnly: boolean;
   canPlay: boolean;
   suggestions: readonly string[];
@@ -269,7 +295,14 @@ type TurnProps = Shared & {
   stopIndex: number | null;
   /** The rename when its name was pressed in this turn; null otherwise. */
   renaming: RenameTarget | null;
+  /** The current Find match's ordinal when it is in one of this turn's lines; null otherwise. */
+  findCurrent: number | null;
 };
+
+/** Whether `found`, a line's matches, holds the match numbered `ordinal`. */
+function holds(found: readonly FindMatch[] | undefined, ordinal: number | null): boolean {
+  return ordinal !== null && found !== undefined && found.some((match) => match.ordinal === ordinal);
+}
 
 /**
  * One speaker's run of lines: a 6px square (`--band` while one of them plays), the name -- the
@@ -277,7 +310,7 @@ type TurnProps = Shared & {
  * the turn starts. A turn with no speaker shows only the square and the time. The rename form
  * opens between the head and the lines. The lines are a listbox named by who and when.
  */
-export const Turn = memo(function Turn({ turn, activeIndex, stopIndex, renaming, idPrefix, selected, readOnly, canPlay, suggestions, actions }: TurnProps) {
+export const Turn = memo(function Turn({ turn, activeIndex, stopIndex, renaming, findCurrent, idPrefix, selected, found, readOnly, canPlay, suggestions, actions }: TurnProps) {
   const nameId = `${idPrefix}-${turn.key}-name`;
   const timeId = `${idPrefix}-${turn.key}-time`;
   const speakerId = turn.speakerId;
@@ -299,10 +332,12 @@ export const Turn = memo(function Turn({ turn, activeIndex, stopIndex, renaming,
         <RenameForm key={renaming.speakerId} target={renaming} suggestions={suggestions} onRename={actions.rename} onClose={actions.closeRename} />
       ) : null}
       <ol className="transcript-rows" role="listbox" aria-multiselectable="true" aria-labelledby={name !== null ? `${nameId} ${timeId}` : timeId}>
-        {turn.rows.map((row) => (
-          <Line key={row.index} row={row} selected={selected.has(row.index)} active={activeIndex === row.index}
-            stop={stopIndex === row.index} canPlay={canPlay} actions={actions} />
-        ))}
+        {turn.rows.map((row) => {
+          const matches = found.get(row.index);
+          return <Line key={row.index} row={row} selected={selected.has(row.index)} active={activeIndex === row.index}
+            stop={stopIndex === row.index} canPlay={canPlay} found={matches} currentMatch={holds(matches, findCurrent) ? findCurrent : null}
+            actions={actions} />;
+        })}
       </ol>
     </div>
   );
@@ -314,15 +349,19 @@ type Placed = {
   stopIndex: number | null;
   stopTurn: string | null;
   renaming: RenameTarget | null;
+  /** The current Find match's ordinal, and the turn it is in. */
+  findCurrent: number | null;
+  findTurn: string | null;
 };
 
-/** A section's turns, each told whether it holds the playing line, the tab stop or the open rename. */
-function turnsOf(turns: readonly TranscriptTurn[], { activeIndex, activeTurn, stopIndex, stopTurn, renaming }: Placed, shared: Shared) {
+/** A section's turns, each told whether it holds the playing line, the tab stop, the open rename or the current match. */
+function turnsOf(turns: readonly TranscriptTurn[], { activeIndex, activeTurn, stopIndex, stopTurn, renaming, findCurrent, findTurn }: Placed, shared: Shared) {
   return turns.map((turn) => (
     <Turn key={turn.key} turn={turn} {...shared}
       activeIndex={turn.key === activeTurn ? activeIndex : null}
       stopIndex={turn.key === stopTurn ? stopIndex : null}
-      renaming={renaming !== null && renaming.turnKey === turn.key ? renaming : null} />
+      renaming={renaming !== null && renaming.turnKey === turn.key ? renaming : null}
+      findCurrent={turn.key === findTurn ? findCurrent : null} />
   ));
 }
 
@@ -338,7 +377,7 @@ type SectionProps = Shared & Placed & {
  * has -- over its turns. Closed, the turns stay rendered and `hidden`, so the lines keep their
  * place in the document.
  */
-export const Section = memo(function Section({ section, open, onToggle, activeIndex, activeTurn, stopIndex, stopTurn, renaming, ...shared }: SectionProps) {
+export const Section = memo(function Section({ section, open, onToggle, activeIndex, activeTurn, stopIndex, stopTurn, renaming, findCurrent, findTurn, ...shared }: SectionProps) {
   const bodyId = `${shared.idPrefix}-${section.key}`;
   const titleId = `${bodyId}-title`;
   return (
@@ -356,7 +395,7 @@ export const Section = memo(function Section({ section, open, onToggle, activeIn
         </button>
       </h3>
       <div id={bodyId} className="transcript-section-body" hidden={!open}>
-        {turnsOf(section.turns, { activeIndex, activeTurn, stopIndex, stopTurn, renaming }, shared)}
+        {turnsOf(section.turns, { activeIndex, activeTurn, stopIndex, stopTurn, renaming, findCurrent, findTurn }, shared)}
       </div>
     </section>
   );
@@ -374,6 +413,10 @@ type SectionsProps = Shared & {
   stopTurn: string | null;
   renaming: RenameTarget | null;
   renamingSection: string | null;
+  /** The current Find match's ordinal, and the section and turn it is in; null while there is none. */
+  findCurrent: number | null;
+  findSection: string | null;
+  findTurn: string | null;
 };
 
 /**
@@ -381,10 +424,11 @@ type SectionsProps = Shared & {
  * header over them.
  */
 export const TranscriptSections = memo(function TranscriptSections({
-  sections, collapsed, onToggle, activeIndex, activeSection, activeTurn, stopIndex, stopSection, stopTurn, renaming, renamingSection, ...shared
+  sections, collapsed, onToggle, activeIndex, activeSection, activeTurn, stopIndex, stopSection, stopTurn, renaming, renamingSection,
+  findCurrent, findSection, findTurn, ...shared
 }: SectionsProps) {
   const only = sections.length === 1 ? sections[0] : undefined;
-  if (only !== undefined) return <>{turnsOf(only.turns, { activeIndex, activeTurn, stopIndex, stopTurn, renaming }, shared)}</>;
+  if (only !== undefined) return <>{turnsOf(only.turns, { activeIndex, activeTurn, stopIndex, stopTurn, renaming, findCurrent, findTurn }, shared)}</>;
   return <>
     {sections.map((section) => (
       <Section key={section.key} section={section} open={!collapsed.has(section.key)} onToggle={onToggle} {...shared}
@@ -392,7 +436,9 @@ export const TranscriptSections = memo(function TranscriptSections({
         activeTurn={section.key === activeSection ? activeTurn : null}
         stopIndex={section.key === stopSection ? stopIndex : null}
         stopTurn={section.key === stopSection ? stopTurn : null}
-        renaming={section.key === renamingSection ? renaming : null} />
+        renaming={section.key === renamingSection ? renaming : null}
+        findCurrent={section.key === findSection ? findCurrent : null}
+        findTurn={section.key === findSection ? findTurn : null} />
     ))}
   </>;
 });

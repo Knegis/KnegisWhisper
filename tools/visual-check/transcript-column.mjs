@@ -6,9 +6,12 @@
  * contiguous: 1, 11, 13, 14 and 16 are the column's header, sections, turns,
  * rename and hover, 2 and 3 the player card, 4, 8 and 12 the click model
  * (a press plays from a line, Shift selects a range the card offers to play,
- * one tab stop with the arrow keys between lines), and 5, 6, 7 and 17 Follow
+ * one tab stop with the arrow keys between lines), 5, 6, 7 and 17 Follow
  * (the card's chip keeps the playing line in view until the person scrolls,
- * and gives way to a search hit's row).
+ * and gives way to a search hit's row), and 9 and 10 Find in this transcript
+ * (the head's search button opens a find bar that marks the matches and moves
+ * between them without playing; a playing line that matches shows its marks
+ * rather than its words).
  *
  * Fixture note 106, "Roadmap review — long transcript"
  * (`apps/desktop/src/lib/devFixtures.ts`, its rows in `lib/fixtureTranscript.ts`):
@@ -107,7 +110,7 @@ const AFTER_UNTIMED = 40;
 const TAB_LIMIT = 150;
 /** CDP's modifier bit for Shift. */
 const SHIFT = 8;
-const KEY_CODES = { Escape: 27, Enter: 13, Tab: 9, ArrowDown: 40, ArrowUp: 38, PageDown: 34 };
+const KEY_CODES = { Escape: 27, Enter: 13, Tab: 9, ArrowDown: 40, ArrowUp: 38, PageDown: 34, Backspace: 8 };
 /**
  * Claims 5 and 6 start playback with a press on line 25, "Den tar jag, jag har skrivit om hälften."
  * (Jonas, 4:35 to 4:45), the second-last line of the first section. The press brings it to the
@@ -137,6 +140,23 @@ const HIT_QUERY = "plattformarna";
 const HIT_ROW = 3;
 const HIT_FROM = 560;
 const MINI = ".note-detail .note-mini-player";
+const FIND_BUTTON = ".note-side .transcript-head button.transcript-find";
+/**
+ * What claims 9 and 10 find (`lib/fixtureTranscript.ts`, counted in `tests/fixtureTranscript.test.ts`):
+ * "möte" is in line 22 (3:56, the first section), in "Mötet" in line 45 (9:42, the second) and in
+ * line 50 (10:41, the third, timed word by word); "mote" is only in "remote", in line 43 (9:20).
+ */
+const FIND_QUERY = "möte";
+const FIND_UPPER = "MÖTE";
+const FIND_BARE = "mote";
+const FIND_LINES = [21, 44, 49];
+const FIND_BARE_LINES = [42];
+const FIND_BUTTONS = ["Previous match", "Next match", "Close find"];
+/** Claim 10 plays line 50, "Perfekt, då ses vi nästa möte…" (10:41, about 5 s of words), at this speed, so it is still playing when Find closes. */
+const FIND_PLAYING = 49;
+const FIND_RATE = "0.75";
+/** How soon after Find closes claim 10 expects one of the playing line's words lit again. */
+const RELIGHT_MS = 500;
 
 /** Counts `play()` from before the app's own code runs (as `transcript-search.mjs` does). */
 const COUNT_PLAYS = `(() => {
@@ -216,6 +236,26 @@ async function key(cdp, name, { modifiers = 0, settle = 150 } = {}) {
 async function escape(cdp) {
   await key(cdp, "Escape");
 }
+
+/** Real key presses that type `text` into whatever has focus, a character at a time, as a keyboard does. */
+async function typeKeys(cdp, text, settle = 40) {
+  for (const character of text) {
+    await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key: character, text: character, unmodifiedText: character });
+    await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: character });
+    await delay(settle);
+  }
+}
+
+/** Real Backspaces, `count` of them, into whatever has focus. */
+async function backspaces(cdp, count) {
+  for (let at = 0; at < count; at += 1) await key(cdp, "Backspace", { settle: 40 });
+}
+
+/** Whether the open find bar's count shows `shown`, for a wait: the field's query is searched a moment after it is typed. */
+const findShows = (shown) => `(${snippets.findBarState()}).shown === ${JSON.stringify(shown)}`;
+
+/** The lines a `findMarksState` read has marks in, each once, in order. */
+const markLines = (state) => [...new Set(state.marks.map((mark) => mark.line))];
 
 /** A real wheel at `point`, `deltaY` pixels (negative scrolls up), after moving the pointer there. */
 async function wheel(cdp, point, deltaY) {
@@ -414,7 +454,7 @@ function judgeColumn(state) {
     sticky: head !== null && head.position === "sticky" && head.top === "0px",
     heading: head !== null && head.headings.length === 1 && head.headings[0].text.toLowerCase() === "transcript"
       && head.headings[0].drawn === "uppercase",
-    find: head !== null && head.buttons.length === 1 && head.buttons[0].label === "Find in transcript" && head.buttons[0].disabled === true,
+    find: head !== null && head.buttons.length === 1 && head.buttons[0].label === "Find in transcript" && head.buttons[0].disabled === false,
     sections: state.toggles.length === SECTIONS.length && state.toggles.every((toggle, at) => toggle.expanded === "true"
       && toggle.title === SECTIONS[at].title && toggle.count === `${SECTIONS[at].lines} lines`),
     turns: state.markers.length === TURNS,
@@ -468,7 +508,7 @@ export async function runTranscriptColumn(options) {
       claim: "The column has a plain header and is grouped into sections and turns.",
       expectation: [
         "in each scheme: .transcript-head is position: sticky at top 0px and holds exactly one heading, reading \"Transcript\"",
-        "(case-insensitive) and drawn uppercase, and exactly one button, aria-label \"Find in transcript\", disabled; exactly",
+        "(case-insensitive) and drawn uppercase, and exactly one button, aria-label \"Find in transcript\", enabled; exactly",
         `${SECTIONS.length} button.transcript-section-toggle, each aria-expanded="true", titled ${SECTIONS.map((section) => `"${section.title}"`).join(", ")}`,
         `and counting ${SECTIONS.map((section) => `"${section.lines} lines"`).join(", ")} (transcriptSections(longTranscriptRows()));`,
         `${TURNS} .transcript-turn-head, each with a ${MARKER}x${MARKER}px .transcript-turn-marker; ${LINES} lines; no .transcript-play`,
@@ -1007,6 +1047,224 @@ export async function runTranscriptColumn(options) {
           offered,
           stopped,
           afterEscape: { focusedFirst: focused, selected: cleared.selected, header: back },
+          failed: Object.entries(parts).filter(([, ok]) => !ok).map(([name]) => name),
+          matches: Object.values(parts).every(Boolean),
+        };
+      }
+      return {
+        measured: { schemes },
+        matches: SCHEMES.every((scheme) => schemes[scheme].matches),
+        screenshots,
+      };
+    });
+
+    // 9. Find in this transcript: marks, a count, steps that open a closed section, and no playback.
+    await check({
+      id: "9",
+      claim: "Find highlights matches, moves between them, and never plays.",
+      expectation: [
+        `in each scheme, from a fresh load: a real press on the "${SECOND_SECTION}" toggle leaves it aria-expanded="false"; the column`,
+        "scrolled back to its top (typing starts from the line at the top of the visible band). A real press on the head's",
+        "button.transcript-find puts a [role=\"search\"] bar in the head in place of the label, the head as tall as before, holding",
+        `an input[aria-label="Find in transcript"] with focus and buttons labelled ${FIND_BUTTONS.map((label) => `"${label}"`).join(", ")}.`,
+        `"${FIND_QUERY}" typed with real key events: the bar's .transcript-find-count shows "1/3" (aria-hidden) and its role=status`,
+        `says "Match 1 of 3"; exactly 3 mark.transcript-match, in lines ${FIND_LINES.map((line) => line + 1).join(", ")}, exactly one of them`,
+        `.transcript-match-current, in line ${FIND_LINES[0] + 1}, which (once the column has stopped scrolling) is wholly inside the visible`,
+        "band; the current one's computed background is the resolved --band and its colour",
+        "--band-ink, the others' background --band-wash and colour --band-text, underlined. A real Enter: \"2/3\", the",
+        `"${SECOND_SECTION}" toggle aria-expanded="true", the current mark in line ${FIND_LINES[1] + 1}, and that line, once the column has`,
+        "stopped scrolling, wholly inside the visible band (lineBandState: the scroller less the head and --player-h + 24px, ±1px).",
+        `A real Shift+Enter: "1/3", the current mark back in line ${FIND_LINES[0] + 1}. The field cleared with real Backspaces and`,
+        `"${FIND_UPPER}" typed: 3 matches ("n/3", 3 marks); cleared and "${FIND_BARE}" typed: "1/1", its one mark in line ${FIND_BARE_LINES[0] + 1}`,
+        "(\"remote\"). Focus in the field after every step, and the card's Follow chip still aria-pressed=\"true\" (nothing plays).",
+        "A real Escape: the head shows the label again and no bar, focus is on button.transcript-find, and no mark.transcript-match",
+        "remains. No play() call and no line selected throughout",
+      ].join(" "),
+    }, async () => {
+      const schemes = {};
+      const screenshots = [];
+      for (const scheme of SCHEMES) {
+        await openNote(cdp);
+        const drawn = await useScheme(cdp, scheme);
+        const playsBefore = await cdp.evaluate("window.__plays ?? null");
+        const toggle = await cdp.evaluate(snippets.sectionToggleState(SECOND_SECTION));
+        await pressPoint(cdp, toggle, `the "${SECOND_SECTION}" toggle`);
+        const closed = await cdp.evaluate(snippets.sectionExpanded(SECOND_SECTION));
+        await cdp.evaluate(`document.querySelector(${JSON.stringify(SIDE_BODY)}).scrollTo({ top: 0, behavior: 'instant' })`);
+        const before = await cdp.evaluate(snippets.findBarState());
+        await pressPoint(cdp, await cdp.evaluate(snippets.centerOfText(FIND_BUTTON, null)), "the Find button");
+        const opened = await cdp.evaluate(snippets.findBarState());
+        await typeKeys(cdp, FIND_QUERY);
+        const counted = await waited(cdp, findShows("1/3"), "the count 1/3", 3_000);
+        await scrollSettled(cdp, SIDE_BODY);
+        const typed = await cdp.evaluate(snippets.findBarState());
+        const marks = await cdp.evaluate(snippets.findMarksState());
+        const typedLine = marks.marks.find((mark) => mark.current)?.line ?? null;
+        const typedBand = typedLine === null ? null : await cdp.evaluate(snippets.lineBandState(SIDE_BODY, typedLine));
+        const shot = `09-find-${scheme}-1440x900.png`;
+        await cdp.screenshot(resolve(out, shot));
+        screenshots.push(shot);
+
+        await key(cdp, "Enter");
+        const stepped = await waited(cdp, findShows("2/3"), "the count 2/3", 3_000);
+        await scrollSettled(cdp, SIDE_BODY);
+        const next = await cdp.evaluate(snippets.findBarState());
+        const nextExpanded = await cdp.evaluate(snippets.sectionExpanded(SECOND_SECTION));
+        const nextMarks = await cdp.evaluate(snippets.findMarksState());
+        const nextLine = nextMarks.marks.find((mark) => mark.current)?.line ?? null;
+        const nextBand = nextLine === null ? null : await cdp.evaluate(snippets.lineBandState(SIDE_BODY, nextLine));
+        const nextShot = `09-find-next-${scheme}-1440x900.png`;
+        await cdp.screenshot(resolve(out, nextShot));
+        screenshots.push(nextShot);
+
+        await key(cdp, "Enter", { modifiers: SHIFT });
+        const steppedBack = await waited(cdp, findShows("1/3"), "the count 1/3 again", 3_000);
+        const back = await cdp.evaluate(snippets.findBarState());
+        const backMarks = await cdp.evaluate(snippets.findMarksState());
+
+        await backspaces(cdp, FIND_QUERY.length);
+        await typeKeys(cdp, FIND_UPPER);
+        await waited(cdp, `/\\/3$/.test((${snippets.findBarState()}).shown ?? '')`, "three matches", 3_000);
+        const upper = await cdp.evaluate(snippets.findBarState());
+
+        await backspaces(cdp, FIND_UPPER.length);
+        await typeKeys(cdp, FIND_BARE);
+        await waited(cdp, findShows("1/1"), "the count 1/1", 3_000);
+        const bare = await cdp.evaluate(snippets.findBarState());
+        const bareMarks = await cdp.evaluate(snippets.findMarksState());
+        // Nothing plays, so going between matches leaves Follow as it was (the owner's ruling: only while playing).
+        const follow = (await cdp.evaluate(snippets.followChipState(CARD))).pressed;
+
+        await escape(cdp);
+        const closedBar = await cdp.evaluate(snippets.findBarState());
+        const lines = await cdp.evaluate(snippets.lineModelState());
+        const plays = (await cdp.evaluate("window.__plays ?? null")) - playsBefore;
+
+        const current = marks.marks.filter((mark) => mark.current);
+        const others = marks.marks.filter((mark) => !mark.current);
+        const parts = {
+          closedFirst: toggle.onToggle && closed === "false",
+          labelFirst: !before.bar && (before.label ?? "").toLowerCase() === "transcript" && before.findButton?.disabled === false,
+          opened: opened.bar && opened.label === null && opened.input?.label === "Find in transcript" && opened.input.focused
+            && JSON.stringify(opened.buttons) === JSON.stringify(FIND_BUTTONS) && near(opened.height, before.height, 0.5),
+          counted: counted && typed.shown === "1/3" && typed.shownHidden === true && typed.spoken === "Match 1 of 3" && typed.input?.focused === true,
+          marks: marks.marks.length === FIND_LINES.length && JSON.stringify(markLines(marks)) === JSON.stringify(FIND_LINES),
+          currentFirst: current.length === 1 && current[0].line === FIND_LINES[0],
+          typedInView: typedBand !== null && typedBand.inBand,
+          currentColours: current.length === 1 && current[0].background === marks.band && current[0].color === marks.bandInk,
+          otherColours: others.length === FIND_LINES.length - 1
+            && others.every((mark) => mark.background === marks.bandWash && mark.color === marks.bandText && mark.decoration.includes("underline")),
+          next: stepped && next.shown === "2/3" && next.input?.focused === true && nextLine === FIND_LINES[1],
+          opensSection: nextExpanded === "true",
+          inView: nextBand !== null && nextBand.inBand,
+          back: steppedBack && back.shown === "1/3" && back.input?.focused === true
+            && backMarks.marks.find((mark) => mark.current)?.line === FIND_LINES[0],
+          caseFolded: /\/3$/.test(upper.shown ?? "") && upper.marks === FIND_LINES.length,
+          accentsKept: bare.shown === "1/1" && JSON.stringify(markLines(bareMarks)) === JSON.stringify(FIND_BARE_LINES),
+          closed: !closedBar.bar && (closedBar.label ?? "").toLowerCase() === "transcript" && closedBar.findButton?.focused === true && closedBar.marks === 0,
+          noPlay: plays === 0,
+          noSelection: lines.selected.length === 0,
+          followKept: follow === "true",
+        };
+        schemes[scheme] = {
+          drawn,
+          closed,
+          typedBand: typedBand === null ? null : { line: typedLine, inBand: typedBand.inBand, top: round(typedBand.top), bottom: round(typedBand.bottom), scrollTop: round(typedBand.scrollTop) },
+          follow,
+          before: { bar: before.bar, label: before.label, findButton: before.findButton, height: before.height },
+          opened,
+          typed,
+          marks,
+          next: { ...next, expanded: nextExpanded, currentLine: nextLine, band: nextBand === null ? null : { inBand: nextBand.inBand, top: round(nextBand.top), bottom: round(nextBand.bottom), band: { top: round(nextBand.band.top), bottom: round(nextBand.band.bottom) } } },
+          back: { shown: back.shown, spoken: back.spoken, focused: back.input?.focused ?? null, currentLine: backMarks.marks.find((mark) => mark.current)?.line ?? null },
+          upper: { value: upper.input?.value ?? null, shown: upper.shown, spoken: upper.spoken, marks: upper.marks },
+          bare: { value: bare.input?.value ?? null, shown: bare.shown, spoken: bare.spoken, lines: markLines(bareMarks) },
+          afterEscape: { bar: closedBar.bar, label: closedBar.label, focus: closedBar.focus, findButton: closedBar.findButton, marks: closedBar.marks },
+          plays,
+          selected: lines.selected,
+          failed: Object.entries(parts).filter(([, ok]) => !ok).map(([name]) => name),
+          matches: Object.values(parts).every(Boolean),
+        };
+      }
+      return {
+        measured: { schemes },
+        matches: SCHEMES.every((scheme) => schemes[scheme].matches),
+        screenshots,
+      };
+    });
+
+    // 10. A playing line that matches shows its marks, not its words, until Find closes.
+    await check({
+      id: "10",
+      claim: "A playing line that matches drops its word highlight while Find is open.",
+      expectation: [
+        `in each scheme, from a fresh load, at ${FIND_RATE}x: line ${FIND_PLAYING + 1} (10:41, word-timed) pressed in its padding plays it (1 play() call) with`,
+        "the card's Follow chip aria-pressed=\"true\", and exactly one of its .transcript-word is lit (.transcript-word-current). A real press",
+        `on button.transcript-find and "${FIND_QUERY}" typed with real key events: that line, still the playing one, holds mark.transcript-match`,
+        "elements and no .transcript-word, and no .transcript-word-current exists in the transcript; going to the first match was a",
+        "Find step while playing, so the chip is aria-pressed=\"false\". A real Escape: within",
+        `${RELIGHT_MS} ms, while it still plays (the recording's time later than before Find opened), that line draws its words again with`,
+        "exactly one lit, the only lit word in the transcript, and no mark; no play() call from the Find press to then",
+      ].join(" "),
+    }, async () => {
+      const schemes = {};
+      const screenshots = [];
+      for (const scheme of SCHEMES) {
+        await openNote(cdp);
+        const drawn = await useScheme(cdp, scheme);
+        await cdp.evaluate(snippets.choosePlayerSpeed(CARD, FIND_RATE));
+        const lineState = snippets.findLineState(FIND_PLAYING);
+        const first = await played(cdp, () => pressLine(cdp, FIND_PLAYING));
+        const litFirst = await waited(cdp, `(${lineState}).lit.length === 1`, "one of the line's words lit", 3_000);
+        const before = await cdp.evaluate(lineState);
+        const follow = (await cdp.evaluate(snippets.followChipState(CARD))).pressed;
+        const playsBefore = await cdp.evaluate("window.__plays ?? null");
+        await pressPoint(cdp, await cdp.evaluate(snippets.centerOfText(FIND_BUTTON, null)), "the Find button");
+        await typeKeys(cdp, FIND_QUERY);
+        const marked = await waited(cdp, `(${lineState}).marks > 0`, "marks in the playing line", 3_000);
+        const during = await cdp.evaluate(lineState);
+        const bar = await cdp.evaluate(snippets.findBarState());
+        // Going to the first match while the line plays is a Find step: Follow lets go (the owner's ruling).
+        const followAfter = (await cdp.evaluate(snippets.followChipState(CARD))).pressed;
+        // The step may have centred another line's match; the playing line is brought back for the picture only.
+        await cdp.evaluate(`document.querySelectorAll('.note-detail .transcript .transcript-rows li')[${FIND_PLAYING}].scrollIntoView({ block: 'center', behavior: 'instant' })`);
+        const shot = `10-find-playing-${scheme}-1440x900.png`;
+        await cdp.screenshot(resolve(out, shot));
+        screenshots.push(shot);
+        await key(cdp, "Escape", { settle: 0 });
+        const closedAt = Date.now();
+        const relit = await waited(cdp, `(() => { const line = ${lineState}; return line.lit.length === 1 && line.litAnywhere === 1; })()`, "one word lit again", RELIGHT_MS);
+        const relitMs = Date.now() - closedAt;
+        const after = await cdp.evaluate(lineState);
+        const stillPlaying = await cdp.evaluate(playingNow);
+        const findPlays = (await cdp.evaluate("window.__plays ?? null")) - playsBefore;
+        const afterShot = `10-find-closed-${scheme}-1440x900.png`;
+        await cdp.screenshot(resolve(out, afterShot));
+        screenshots.push(afterShot);
+        await stopPlaying(cdp);
+        await cdp.evaluate(snippets.choosePlayerSpeed(CARD, "1"));
+        const parts = {
+          started: first.landed && first.plays === 1,
+          litFirst: litFirst && before.playing && before.words > 0 && before.lit.length === 1,
+          followOn: follow === "true",
+          marked: marked && during.playing && during.marks > 0 && during.words === 0 && during.litAnywhere === 0,
+          relit: relit && after.playing && after.lit.length === 1 && after.litAnywhere === 1 && after.marks === 0,
+          stillPlaying: stillPlaying && typeof after.time === "number" && typeof before.time === "number" && after.time > before.time,
+          findNoPlay: findPlays === 0,
+          findStepLetsGo: followAfter === "false",
+        };
+        schemes[scheme] = {
+          drawn,
+          first: { plays: first.plays, landed: first.landed, playingAt: first.playingAt },
+          follow,
+          followAfter,
+          findPlays,
+          before,
+          during,
+          bar: { shown: bar.shown, spoken: bar.spoken, focus: bar.focus },
+          relitMs,
+          after,
+          stillPlaying,
           failed: Object.entries(parts).filter(([, ok]) => !ok).map(([name]) => name),
           matches: Object.values(parts).every(Boolean),
         };

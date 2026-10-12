@@ -2018,6 +2018,107 @@ export function textSelectionState() {
   `);
 }
 
+/**
+ * The open note's transcript head while Find may be open (KNEG-448): whether it holds the find bar
+ * (`[role="search"]`) or the label, the bar's field -- its `aria-label`, its value and whether it
+ * has focus -- the count it shows (and whether that is hidden from assistive technology), what its
+ * `role="status"` says, the labels of the bar's buttons, and what has focus, described: the Find
+ * button, when the head shows it, is told apart. Also how many `mark.transcript-match` the
+ * transcript holds.
+ */
+export function findBarState() {
+  return source(`
+    ${DESCRIBE}
+    const heads = [...document.querySelectorAll('.note-detail .transcript > .transcript-head')].filter((head) => head.getClientRects().length > 0);
+    const head = heads[0] ?? null;
+    if (!head) throw new Error('No transcript head on screen');
+    const bar = head.querySelector('[role="search"]');
+    const input = bar ? bar.querySelector('input') : null;
+    const count = bar ? bar.querySelector('.transcript-find-count') : null;
+    const status = bar ? bar.querySelector('[role="status"]') : null;
+    const findButton = head.querySelector('button.transcript-find');
+    const active = document.activeElement;
+    return {
+      bar: Boolean(bar),
+      height: head.getBoundingClientRect().height,
+      label: head.querySelector('.transcript-label')?.textContent.trim() ?? null,
+      input: input ? { label: input.getAttribute('aria-label'), value: input.value, focused: active === input } : null,
+      shown: count ? count.textContent : null,
+      shownHidden: count ? count.closest('[aria-hidden="true"]') !== null : null,
+      spoken: status ? status.textContent : null,
+      buttons: bar ? [...bar.querySelectorAll('button')].map((button) => button.getAttribute('aria-label')) : [],
+      findButton: findButton ? { label: findButton.getAttribute('aria-label'), disabled: findButton.disabled, focused: active === findButton } : null,
+      focus: active && active !== document.body ? describe(active).slice(0, 80) : 'body',
+      marks: document.querySelectorAll('.note-detail .transcript mark.transcript-match').length,
+    };
+  `);
+}
+
+/**
+ * Every Find mark in the open note's transcript (KNEG-448): its text, whether it is the current
+ * one (`transcript-match-current`), the line it is in (its index among every line, and whether
+ * that line is the playing one), and its computed background, colour and text decoration, beside
+ * `--band`, `--band-ink`, `--band-wash` and `--band-text` resolved from the root (a token given
+ * to a probe's `color`, so equal colours compare equal however they were written).
+ */
+export function findMarksState() {
+  return source(`
+    const resolve = (name) => {
+      const probe = document.createElement('i');
+      probe.style.color = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+      document.body.append(probe);
+      const color = getComputedStyle(probe).color;
+      probe.remove();
+      return color;
+    };
+    const lines = [...document.querySelectorAll('.note-detail .transcript .transcript-rows li')];
+    const marks = [...document.querySelectorAll('.note-detail .transcript mark.transcript-match')];
+    return {
+      marks: marks.map((mark) => {
+        const style = getComputedStyle(mark);
+        const line = mark.closest('li');
+        return {
+          text: mark.textContent,
+          current: mark.classList.contains('transcript-match-current'),
+          line: lines.indexOf(line),
+          playing: line?.getAttribute('aria-current') === 'true',
+          background: style.backgroundColor,
+          color: style.color,
+          decoration: style.textDecorationLine,
+          radius: style.borderTopLeftRadius,
+        };
+      }),
+      band: resolve('--band'),
+      bandInk: resolve('--band-ink'),
+      bandWash: resolve('--band-wash'),
+      bandText: resolve('--band-text'),
+    };
+  `);
+}
+
+/**
+ * Transcript line `index` of the open note as Find and the word highlight leave it (KNEG-448),
+ * with the recording's time, in one read: whether it is the playing line, how many Find marks and
+ * word spans it draws, which of its words are lit, and how many words are lit anywhere in the
+ * transcript.
+ */
+export function findLineState(index) {
+  return source(`
+    const line = document.querySelectorAll('.note-detail .transcript .transcript-rows li')[${JSON.stringify(index)}];
+    if (!line) throw new Error('No transcript line ' + ${JSON.stringify(index)});
+    const words = [...line.querySelectorAll('.transcript-word')];
+    return {
+      time: document.querySelector('.note-detail audio')?.currentTime ?? null,
+      playing: line.getAttribute('aria-current') === 'true',
+      text: line.querySelector('.transcript-text')?.textContent ?? null,
+      marks: line.querySelectorAll('mark.transcript-match').length,
+      words: words.length,
+      lit: words.flatMap((word, at) => word.classList.contains('transcript-word-current') ? [at] : []),
+      litAnywhere: document.querySelectorAll('.note-detail .transcript .transcript-word-current').length,
+    };
+  `);
+}
+
 /* ------------------------------------------------------------ level meters */
 
 /**

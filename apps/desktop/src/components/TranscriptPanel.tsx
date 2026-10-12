@@ -1,23 +1,29 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
+import { useCallback, useDeferredValue, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
 
-import { followBand, inBand, keyReleasesFollow, releasesFollow, type KeyPlace, type ScrollInput } from "../lib/followScroll";
+import { followBand, inBand, keyReleasesFollow, releasesFollow, type Band, type KeyPlace, type ScrollInput } from "../lib/followScroll";
 import type { NoteRecording, TranscriptRow } from "../lib/ipc";
+import { findMatches, findStatus, firstMatchWhere, matchFrom, normaliseQuery, regroupMatches, rowOrder, sameMatches, stepMatch, type FindMatch } from "../lib/transcriptFind";
 import { extendSelection, lineAt, lineStop, navigableLines, NO_SELECTION, stepLine, type LineSelection, type TranscriptSection } from "../lib/transcriptLayout";
 import { wordAt, wordsMatchText } from "../lib/wordTiming";
 import { Icon } from "./Icon";
+import { TranscriptFindBar } from "./TranscriptFindBar";
 import { scrollBehavior, TranscriptSections, type RenameTarget, type TranscriptActions } from "./TranscriptSections";
 
 const CURRENT_WORD = "transcript-word-current";
+/** What Find has while it is closed or finds nothing: one list and one map, so nothing redraws for a new empty one. */
+const NO_MATCHES: readonly FindMatch[] = [];
+const NOTHING_FOUND: ReadonlyMap<number, readonly FindMatch[]> = new Map();
 
 /**
  * The transcript's label, in the machine voice, at the top of whatever scrolls it: the column
  * beside a note in a wide window, or `.notes-main` under the Transcript tab (KNEG-448). The panel
- * draws it with its Find button; `NoteWorkspace` draws it alone over the column's loading, error
- * and empty lines, so the column is labelled the same before its rows arrive.
+ * draws it with its Find button, and without the label while Find is open in its place;
+ * `NoteWorkspace` draws it alone over the column's loading, error and empty lines, so the column
+ * is labelled the same before its rows arrive.
  */
-export function TranscriptHeading({ children }: { children?: ReactNode }) {
+export function TranscriptHeading({ children, labelled = true }: { children?: ReactNode; labelled?: boolean }) {
   return <div className="transcript-head">
-    <h2 className="transcript-label">Transcript</h2>
+    {labelled ? <h2 className="transcript-label">Transcript</h2> : null}
     {children}
   </div>;
 }
@@ -34,8 +40,28 @@ function scrollParent(element: Element): HTMLElement | null {
   return null;
 }
 
-/** A line to bring into view once it can be (`reveal`), and what to do once it has been. */
-type Reveal = { index: number; block: ScrollLogicalPosition; then?: (() => void) | undefined };
+/**
+ * The band of `aside`'s scroller Follow keeps the playing line in (`followBand`): the scroller
+ * inside its border, less the sticky head and the card with its clearance. Null when nothing
+ * scrolls the panel.
+ */
+function visibleBand(aside: HTMLElement): Band | null {
+  const scroller = scrollParent(aside);
+  if (scroller === null) return null;
+  const top = scroller.getBoundingClientRect().top + scroller.clientTop;
+  const head = aside.querySelector<HTMLElement>(":scope > .transcript-head")?.offsetHeight ?? 0;
+  const card = parseFloat(getComputedStyle(aside).getPropertyValue("--player-h")) || 0;
+  return followBand({ top, bottom: top + scroller.clientHeight }, head, card);
+}
+
+/**
+ * A line to bring into view once it can be (`reveal`), and what to do once it has been; with
+ * `behavior`, scrolled that way rather than as `scrollBehavior` says.
+ */
+type Reveal = { index: number; block: ScrollLogicalPosition; then?: (() => void) | undefined; behavior?: ScrollBehavior | undefined };
+
+/** The Find match gone to last (KNEG-448): its ordinal in `matches`, the list of the query it was found for. */
+type FindPosition = { matches: readonly FindMatch[]; ordinal: number };
 
 type TranscriptPanelProps = {
   readOnly?: boolean;
@@ -140,9 +166,9 @@ export function TranscriptPanel({
   // memoised line by themselves. Declared before every effect that reads it, so it is current there.
   const canPlay = recording !== null;
   const sourcePending = Boolean(sourceRequest);
-  const latest = useRef({ rows, sections, lines, collapsed, places, stopIndex, activeIndex, currentIndex, sourcePending, selection, canPlay, playFrom, onSelectionChange, onRename, follow, onReleaseFollow });
+  const latest = useRef({ rows, sections, lines, collapsed, places, stopIndex, activeIndex, currentIndex, sourcePending, selection, canPlay, playFrom, onSelectionChange, onRename, follow, onReleaseFollow, playing });
   useLayoutEffect(() => {
-    latest.current = { rows, sections, lines, collapsed, places, stopIndex, activeIndex, currentIndex, sourcePending, selection, canPlay, playFrom, onSelectionChange, onRename, follow, onReleaseFollow };
+    latest.current = { rows, sections, lines, collapsed, places, stopIndex, activeIndex, currentIndex, sourcePending, selection, canPlay, playFrom, onSelectionChange, onRename, follow, onReleaseFollow, playing };
   });
 
   // One way to bring a line into view (KNEG-448), for Follow, a summary source or search hit, and
@@ -161,13 +187,13 @@ export function TranscriptPanel({
     const line = rowRefs.current.get(pending.index);
     if (line !== undefined && line.getClientRects().length === 0) return;
     pendingReveal.current = null;
-    line?.scrollIntoView({ block: pending.block, behavior: scrollBehavior() });
+    line?.scrollIntoView({ block: pending.block, behavior: pending.behavior ?? scrollBehavior() });
     pending.then?.();
   }, []);
-  const reveal = useCallback((index: number, block: ScrollLogicalPosition, then?: () => void) => {
+  const reveal = useCallback((index: number, block: ScrollLogicalPosition, then?: () => void, behavior?: ScrollBehavior) => {
     reveals.current += 1;
     const overtaken = pendingReveal.current?.then;
-    pendingReveal.current = { index, block, then: overtaken === undefined ? then : () => { overtaken(); then?.(); } };
+    pendingReveal.current = { index, block, then: overtaken === undefined ? then : () => { overtaken(); then?.(); }, behavior };
     const section = latest.current.places.rowsAt.get(index)?.section;
     if (section !== undefined && latest.current.collapsed.has(section)) {
       setCollapsed((previous) => {
@@ -263,14 +289,110 @@ export function TranscriptPanel({
     const aside = asideRef.current;
     const line = rowRefs.current.get(index);
     if (!aside || !line || line.getClientRects().length === 0) return false;
-    const scroller = scrollParent(aside);
-    if (scroller === null) return true;
-    const top = scroller.getBoundingClientRect().top + scroller.clientTop;
-    const head = aside.querySelector<HTMLElement>(":scope > .transcript-head")?.offsetHeight ?? 0;
-    const card = parseFloat(getComputedStyle(aside).getPropertyValue("--player-h")) || 0;
+    const band = visibleBand(aside);
+    if (band === null) return true;
     const rect = line.getBoundingClientRect();
-    return inBand({ top: rect.top, bottom: rect.bottom }, followBand({ top, bottom: top + scroller.clientHeight }, head, card));
+    return inBand({ top: rect.top, bottom: rect.bottom }, band);
   }, []);
+
+  // Find in this transcript (KNEG-448): the head's search button opens a bar in its label's place.
+  // The query is searched a moment after it is typed (`useDeferredValue`), so typing stays quick in
+  // a long transcript, and the lines are drawn with what it found, row by row.
+  const [finding, setFinding] = useState(false);
+  const [query, setQuery] = useState("");
+  const searched = useDeferredValue(query);
+  // The matches drawn now, kept when a new query finds the same ("MÖTE" after "möte", a space
+  // typed after a word), so nothing is redrawn and the current match stays.
+  const drawnMatches = useRef(NO_MATCHES);
+  const matches = useMemo(() => {
+    const next = finding ? findMatches(rows, searched) : NO_MATCHES;
+    return sameMatches(drawnMatches.current, next) ? drawnMatches.current : next;
+  }, [finding, rows, searched]);
+  useLayoutEffect(() => { drawnMatches.current = matches; }, [matches]);
+  // The same by row, so a new query keeps a line's matches -- and so the line -- when they are the
+  // same (`regroupMatches`), and a playback render keeps them all.
+  const drawnFound = useRef(NOTHING_FOUND);
+  const found = useMemo(() => regroupMatches(drawnFound.current, matches), [matches]);
+  useLayoutEffect(() => { drawnFound.current = found; }, [found]);
+  const order = useMemo(() => rowOrder(rows), [rows]);
+  // The match gone to last. The current match is it while it is one of these matches; for a new
+  // query's matches, the first from it on (`matchFrom`), which the effect below then goes to --
+  // worked out here, so the line it is in is drawn with it at once rather than first without it.
+  // Until a query has gone to a match there is none.
+  const [position, setPosition] = useState<FindPosition | null>(null);
+  const was = position === null ? undefined : position.matches[position.ordinal];
+  const current = position !== null && position.matches === matches ? position.ordinal
+    : was !== undefined ? matchFrom(matches, order, was) : null;
+  const currentMatch = current === null ? undefined : matches[current];
+  const findPlace = currentMatch === undefined ? undefined : places.rowsAt.get(currentMatch.row);
+  const findInput = useRef<HTMLInputElement>(null);
+  const findButton = useRef<HTMLButtonElement>(null);
+  // Set as Find closes, so the Find button takes focus back once it is drawn again.
+  const refocusFind = useRef(false);
+
+  // Goes to match `ordinal` of `list`: its line brought to the middle of the band, its section
+  // opened first. Nothing is selected or played, and focus stays where it is, in the field. While
+  // something plays, going to a match is the person moving the transcript, so Follow lets go.
+  const goToMatch = useCallback((list: readonly FindMatch[], ordinal: number, behavior?: ScrollBehavior) => {
+    const match = list[ordinal];
+    if (match === undefined) return;
+    setPosition({ matches: list, ordinal });
+    const { playing: now, follow: following, onReleaseFollow: release } = latest.current;
+    if (now && following) release();
+    reveal(match.row, "center", undefined, behavior);
+  }, [reveal]);
+
+  // A new query goes to its first match at or after where the reader is: the match that was
+  // current, when there was one, so a letter more or less keeps to the same place; otherwise the
+  // line at the top of the visible band (the first match whose line reaches below the band's top,
+  // or whose section's header does while the section is closed), and the first match when none is
+  // that far on. A letter added that still finds the same match moves nothing. The line jumps
+  // there rather than gliding: a key typed while the glide runs stops it where it is -- in headless
+  // Edge, typing "möte" left the glide to its first match 10px from where it began, with no other
+  // scroll asked for. Believed, not traced: the browser bringing the field's caret into view.
+  useLayoutEffect(() => {
+    if (matches.length === 0) return;
+    let start: number | null;
+    if (was !== undefined) {
+      start = current;
+    } else {
+      const aside = asideRef.current;
+      const band = aside === null ? null : visibleBand(aside);
+      start = band === null ? 0 : firstMatchWhere(matches, (match) => {
+        const line = rowRefs.current.get(match.row);
+        const box = line === undefined ? null : line.getClientRects().length > 0 ? line : line.closest(".transcript-section");
+        return box !== null && box.getBoundingClientRect().bottom > band.top;
+      }) ?? 0;
+    }
+    const next = start === null ? undefined : matches[start];
+    if (start === null || next === undefined) return;
+    if (was !== undefined && next.row === was.row && next.start === was.start) setPosition({ matches, ordinal: start });
+    else goToMatch(matches, start, "instant");
+    // `was` and `current` are read as they are when the matches change; they changing alone moves nothing.
+  }, [matches, goToMatch]);
+
+  // Enter, Shift+Enter, Previous and Next: the next or the previous match, round from the last to the first.
+  const stepFind = (direction: 1 | -1) => {
+    const next = stepMatch(current, matches.length, direction);
+    if (next !== null) goToMatch(matches, next);
+  };
+  const closeFind = () => {
+    refocusFind.current = true;
+    setFinding(false);
+    setQuery("");
+    setPosition(null);
+  };
+  // The field takes focus as the bar opens; the Find button takes it back as the bar closes.
+  useLayoutEffect(() => {
+    if (finding) {
+      findInput.current?.focus({ preventScroll: true });
+    } else if (refocusFind.current) {
+      refocusFind.current = false;
+      findButton.current?.focus({ preventScroll: true });
+    }
+  }, [finding]);
+  // Nothing while there is no query; "No matches" while it finds nothing.
+  const findCount = normaliseQuery(searched) === "" ? null : findStatus(current, matches.length);
 
   // Whether the panel was on screen at the last commit, so the effect below can leave the
   // transcript's coming on screen to the one after it.
@@ -369,10 +491,14 @@ export function TranscriptPanel({
   }, [visible]);
 
   // The playing row's words, when it has words that spell it (KNEG-408). Every other row --
-  // notes saved before, and every engine but local Whisper -- highlights as a row, as before.
+  // notes saved before, and every engine but local Whisper -- highlights as a row, as before. While
+  // Find has matches in the playing row, the row draws them in place of its words (KNEG-448), so
+  // there are none to light: the loop below stops, and starts again on the words drawn afresh once
+  // Find closes or stops finding anything in the row.
+  const activeFound = activeRow !== null && found.has(activeRow.index);
   const activeWords = useMemo(
-    () => (activeRow !== null && wordsMatchText(activeRow.words, activeRow.text) ? activeRow.words : null),
-    [activeRow],
+    () => (activeRow !== null && !activeFound && wordsMatchText(activeRow.words, activeRow.text) ? activeRow.words : null),
+    [activeRow, activeFound],
   );
 
   // Which word is being said moves faster than `timeupdate` (four a second) and the row's React
@@ -403,11 +529,16 @@ export function TranscriptPanel({
 
   return (
     <aside ref={asideRef} className="transcript" aria-label="Transcript">
-      <TranscriptHeading>
-        {/* Find in the transcript arrives later in KNEG-448; the button holds its place until then. */}
-        <button type="button" className="transcript-find" aria-label="Find in transcript" title="Find in transcript" disabled>
-          <Icon name="search" size={16} />
-        </button>
+      <TranscriptHeading labelled={!finding}>
+        {finding ? (
+          <TranscriptFindBar inputRef={findInput} query={query} onQuery={setQuery} status={findCount}
+            canStep={matches.length > 0} onStep={stepFind} onClose={closeFind} />
+        ) : (
+          <button ref={findButton} type="button" className="transcript-find" aria-label="Find in transcript" title="Find in transcript"
+            onClick={() => setFinding(true)}>
+            <Icon name="search" size={16} />
+          </button>
+        )}
       </TranscriptHeading>
       <TranscriptSections
         sections={sections}
@@ -423,6 +554,10 @@ export function TranscriptPanel({
         renamingSection={renaming === null ? null : places.turnsAt.get(renaming.turnKey) ?? null}
         idPrefix={idPrefix}
         selected={selection.rows}
+        found={found}
+        findCurrent={current}
+        findSection={findPlace?.section ?? null}
+        findTurn={findPlace?.turn ?? null}
         readOnly={readOnly}
         canPlay={canPlay}
         suggestions={suggestions}

@@ -48,7 +48,13 @@ on the Transcript tab before anything has played. The card's Follow chip, on as 
 opens, keeps the playing line in view, opening its section when it is closed; scrolling the
 transcript (a wheel, a touch, its scrollbar or a key), moving between lines with the keys, or
 closing the playing section turns it off, and pressing it centres the playing line again.
-Pressing a line, a word, Play selection or a summary reference turns it back on. In windows 1280px or wider
+Pressing a line, a word, Play selection or a summary reference turns it back on. The header's
+search button opens **Find** in place of the label: what is typed is marked in the lines, case
+ignored and accents kept ("mote" does not find "möte"), with a count such as 2/5; typing goes to
+the first match from the reader's place, and Enter, Shift+Enter or the arrows move between
+matches, opening a closed section and bringing the line into view. Find never selects or plays a
+line; while something plays, moving to a match turns Follow off. A playing line with matches
+shows them rather than its words until Find closes. Escape or Close ends it. In windows 1280px or wider
 a note's transcript is a column to the right of the note instead, and the Transcript tab
 is hidden; crossing that width keeps playback and the reading position. A note with no
 transcript has no column, and keeps the one-column layout at any width. **Hide

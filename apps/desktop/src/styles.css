@@ -1412,7 +1412,8 @@ button.transcript-speaker:focus-visible {
  * to `.transcript`, the panel's own `aside`, because the meeting window's live rows share
  * `.transcript-rows`, `.transcript-clock` and `.transcript-speaker` and keep the grid above.
  *
- * The head is the column's label in the machine voice, and the Find button, sticky at the top of
+ * The head is the column's label in the machine voice, and the Find button (or, while Find is
+ * open, the find bar in their place, below), sticky at the top of
  * whatever scrolls the transcript: `.note-side-body` beside the note, on `--panel`, or
  * `.notes-main` under the Transcript tab, on `--bg`. It stands over the lines (z-index 1) and under
  * the player card (2) and the mini player (3). `NoteWorkspace` also draws it alone over the
@@ -1439,6 +1440,23 @@ button.transcript-speaker:focus-visible {
 .transcript-label { flex: 1; min-width: 0; margin: 0; font: inherit; letter-spacing: inherit; text-transform: inherit; color: inherit; }
 /* 6px into the head's padding, so the glyph rather than the button's box ends where the lines' text does. */
 button.transcript-find { flex: none; display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; margin: 0 -6px 0 0; padding: 0; color: var(--muted); }
+/*
+ * Find in this transcript (KNEG-448), in the head in place of the label while it is open, at the
+ * head's 52px: a field as a settings page draws one -- a 1px `--edge`, the 2px corner, the page's
+ * `--bg` -- with the search icon and the count in it, the count in the machine voice and muted,
+ * then Previous, Next and Close, 28px, transparent, with the neutral hover every button has. The
+ * field's ring is the box's, not the bare input's inside it. Not uppercase: the head's case is
+ * for its label, and the query and the status read as written. Close ends where the Find button
+ * did, 6px into the head's padding.
+ */
+.transcript-findbar { flex: 1; min-width: 0; display: flex; align-items: center; gap: 2px; margin: 0 -6px 0 0; letter-spacing: normal; text-transform: none; }
+.transcript-find-field { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; height: 28px; margin: 0 4px 0 0; padding: 0 8px; border: 1px solid var(--edge); border-radius: 2px; background: var(--bg); color: var(--muted); cursor: text; }
+.transcript-find-field:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+.transcript-find-field > .icon { flex: none; }
+/* Over the unscoped field rules, which fill and pad every input and ring it on focus. */
+.transcript .transcript-find-field input.transcript-find-input { flex: 1; min-width: 0; height: 26px; margin: 0; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--text); font: 13px/18px var(--font-sans); outline: none; }
+.transcript-find-count { flex: none; font: 12px/16px var(--font-mono); letter-spacing: .5px; color: var(--muted); }
+button.transcript-find-step { flex: none; display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; margin: 0; padding: 0; color: var(--muted); }
 /* `section` and `h3` carry the settings screens' margins and `--surface` fill. */
 .transcript .transcript-section { margin: 0; background: transparent; }
 .transcript .transcript-section-head { margin: 0; font: inherit; }
@@ -1489,6 +1507,16 @@ button.transcript-find { flex: none; display: flex; align-items: center; justify
 .transcript-word:hover { text-decoration: underline; text-underline-offset: 3px; }
 .transcript-word-current { background: var(--band); color: var(--band-ink); box-shadow: 0 0 0 2px var(--band); }
 @media (prefers-reduced-motion: reduce) { .transcript-word { transition: none; } }
+
+/*
+ * Find's matches (KNEG-448), drawn in place of a line's words while Find is open. The current one
+ * is marked as the word being said is: `--band` with `--band-ink`, widened by its shadow without
+ * moving a letter. The rest are `--band-wash` with `--band-text`, and underlined, because on the
+ * playing line, whose fill is the same wash, the wash alone would not show. The `mark` element's
+ * own yellow is replaced; corners are a control's 2px.
+ */
+.transcript mark.transcript-match { padding: 0; border-radius: 2px; background: var(--band-wash); color: var(--band-text); text-decoration: underline; text-underline-offset: 3px; }
+.transcript mark.transcript-match-current { background: var(--band); color: var(--band-ink); text-decoration: none; box-shadow: 0 0 0 2px var(--band); }
 
 /* Wrap on narrow notes while keeping the field and actions beside their label when space permits. */
 .transcript-rename {
