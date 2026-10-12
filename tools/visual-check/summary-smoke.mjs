@@ -2,7 +2,7 @@
 // This test creates synthetic notes and changes summary settings in that profile.
 // Start Vite on 5183 and WebView2 CDP on 9337, then run:
 // node tools/visual-check/summary-smoke.mjs --isolated-profile
-// Assumes the default 1000x720 window: at 1280px and wider the Transcript tab is hidden by design, and a summary source link (`showSource`, components/NoteWorkspace.tsx) shows the row in the transcript side column instead, so the final Transcript-tab assertions fail there.
+// Assumes the default 1000x720 window: at 1280px and wider the Transcript tab is hidden by design, and a summary source link (`showSource`, components/NoteWorkspace.tsx) shows the row in the transcript side column instead, so the final Transcript-tab assertion fails there. The selected row is looked for in the note's transcript wherever it is drawn (KNEG-448).
 if (!process.argv.includes('--isolated-profile')) throw Error('Use --isolated-profile only after starting the disposable test instance.');
 import {createServer} from 'node:http';
 import assert from 'node:assert/strict';
@@ -55,7 +55,7 @@ try{
  await cdp.evaluate(`document.querySelector('.summary-pane a[href^="#summary-source-"]').click()`);
  await new Promise(r=>setTimeout(r,200));
  assert.equal(await cdp.evaluate(`document.querySelector('[role="tab"][aria-selected="true"]').textContent`), 'Transcript');
- assert.ok(await cdp.evaluate(`document.querySelector('[role="tabpanel"]:not([hidden]) .transcript-row-current') !== null`));
+ assert.ok(await cdp.evaluate(`document.querySelector('.note-detail .transcript .transcript-row-current') !== null`));
  await cdp.screenshot('target/summary-smoke/summary.png');
  await writeFile('target/summary-smoke/report.json',JSON.stringify({native:true,syntheticProvider:true,id,requests,tests:['automatic meeting enqueue','hierarchical long transcript','source references','editable separate summary','failed regeneration preserves edits','cancel','native Notes summary section'],text},null,2));
  console.log(JSON.stringify({id,requests,status:'passed'}));

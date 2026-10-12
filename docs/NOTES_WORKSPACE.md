@@ -51,11 +51,17 @@ turn.
 
 With a recording, pressing a line, or Enter or Space on it, selects that line alone and plays
 from it to the end; on a note without one, a press only selects. Pressing the selected line
-plays it again: only Escape on a line, or the player card's Clear, deselects. With Shift, a press
-or Enter selects every line from the last one chosen to this one and plays nothing, and with two
-or more selected the card offers **Play selection**, which stops at the last one's end. Dragging over a line's text to copy it plays
-nothing, and a double-click plays only on its first click. The lines are one tab stop, and the
-arrow keys, Home and End move between them, past untimed lines and closed sections.
+plays it again rather than deselecting it. With Shift, a press or Enter selects every line from
+the last one chosen to this one and plays nothing, and with two or more selected the card offers
+**Play selection**, which stops at the last one's end, and **Clear**, which deselects them and
+leaves focus on the Follow chip. Clear is there only while two or more lines are selected; a
+single selected line is deselected with Escape while focus is on a line, as any selection can
+be. Dragging over a line's text to copy it plays nothing, and a double-click plays only on its
+first click. The lines are one tab stop across them, plus one word of the line holding
+it when that line is drawn word by word (the first, until the arrow keys move along its words).
+The stop is the line that last had focus, else the one a selection started from, else the line
+the player is at, playing or paused, so Tab into the transcript lands where the recording is.
+The arrow keys, Home and End move between the lines, past untimed lines and closed sections.
 
 The player is a card: floating over the foot of the transcript column in a wide window, and in
 a narrower one held to the foot of the note, where it shows on the Transcript tab from the start
@@ -67,9 +73,10 @@ the recording is paused nothing follows. While Follow is on, the transcript comi
 (the Transcript tab opened, the layout switched) also brings back the line the player is at,
 playing or paused, when it is out of view, unless a search hit or a summary reference is being
 shown. The person moving the transcript turns Follow off: a wheel (one in the first 400 ms after
-Follow turned on is taken for a touchpad's run-on), a touch, a press on its scrollbar, a
-scrolling key with focus on a line or a button in the transcript or, with focus nowhere, after
-a press in it, the arrow keys between lines, or closing the section that is playing. A search
+Follow turned on is taken for a touchpad's run-on), a touch moving anywhere but on the player
+card, a press on its scrollbar, a scrolling key with focus on a line or a button in the
+transcript or, with focus nowhere, after a press in it, the arrow keys between lines, or closing
+the section that is playing. A search
 hit turns it off while something plays. The chip is a toggle: pressed while Follow is on it
 turns it off, and pressed while off it turns it on and centres the line the player is at,
 wherever it is. Pressing a line or a word, Play selection or a summary reference turns Follow
@@ -386,8 +393,9 @@ sections, turns, selection, Find and Follow decisions unit-tested in `transcript
 `transcriptFind`, `followScroll` and `playerControls`. Its claim 15 played a meeting of 1,500
 lines, Follow scrolling the column to the playing line, with no long task. The two smokes above need the native app: `notes-smoke` presses the
 player's Play by its new class (`.recording-play`), and `summary-smoke` finds the line a
-source selected by `.transcript-row-current`, which the selected line keeps; neither has been
-run since, and both are on KNEG-378 with the real-window checks of the column.
+source selected by `.transcript-row-current`, which the selected line keeps, in the note's
+transcript in either layout; neither has been run since, and both are on KNEG-378 with the
+real-window checks of the column.
 
 Native file-dialog attachment/cancellation was not exercised in this pass. macOS,
 Linux, hosted CI and release validation remain unverified. Synthetic audio/provider

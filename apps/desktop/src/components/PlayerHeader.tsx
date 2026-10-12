@@ -1,3 +1,5 @@
+import { useRef, type MouseEvent } from "react";
+
 import { Icon } from "./Icon";
 
 type PlayerHeaderProps = {
@@ -23,6 +25,14 @@ type PlayerHeaderProps = {
  * known to have said.
  */
 export function PlayerHeader({ speaker, playing, selection, onPlaySelection, onClearSelection, follow, onToggleFollow }: PlayerHeaderProps) {
+  const followRef = useRef<HTMLButtonElement>(null);
+  // Clear goes with the selection it clears, and focus on it would drop to `<body>`: it moves first
+  // to the Follow chip beside it, or to the card's Play when there is no chip (KNEG-448).
+  const clearSelection = (event: MouseEvent<HTMLButtonElement>) => {
+    const next = followRef.current ?? event.currentTarget.closest(".recording-player")?.querySelector<HTMLElement>(".recording-play") ?? null;
+    next?.focus();
+    onClearSelection();
+  };
   return (
     <div className="player-header">
       {selection !== null ? (
@@ -30,7 +40,7 @@ export function PlayerHeader({ speaker, playing, selection, onPlaySelection, onC
           <button type="button" className="player-header-play" onClick={onPlaySelection}>
             Play selection <span className="player-header-range">({selection})</span>
           </button>
-          <button type="button" className="player-header-clear" aria-label="Clear selection" title="Clear selection" onClick={onClearSelection}>
+          <button type="button" className="player-header-clear" aria-label="Clear selection" title="Clear selection" onClick={clearSelection}>
             <Icon name="close" size={14} />
           </button>
         </>
@@ -40,7 +50,7 @@ export function PlayerHeader({ speaker, playing, selection, onPlaySelection, onC
           <span className="player-header-speaker">{speaker}</span>
         </>
       ) : null}
-      <button type="button" className="follow-chip" aria-pressed={follow} title="Keep the playing line in view" onClick={onToggleFollow}>
+      <button ref={followRef} type="button" className="follow-chip" aria-pressed={follow} title="Keep the playing line in view" onClick={onToggleFollow}>
         Follow
       </button>
     </div>

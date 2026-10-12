@@ -19,7 +19,7 @@ const rows = (...texts: string[]) => texts.map((text, index) => ({ index, text }
 
 test("normaliseQuery composes, trims and collapses whitespace", () => {
   assert.equal(normaliseQuery("  a \t\n b  "), "a b");
-  assert.equal(normaliseQuery("ä"), "ä");
+  assert.equal(normaliseQuery("a\u0308"), "ä");
   assert.equal(normaliseQuery("   "), "");
 });
 
@@ -44,7 +44,7 @@ test("matches do not overlap: aa in aaaa gives 2", () => {
 });
 
 test("a decomposed query finds composed text", () => {
-  assert.equal(findMatches(rows("här"), "här").length, 1);
+  assert.equal(findMatches(rows("här"), "ha\u0308r").length, 1);
 });
 
 test("empty or blank query finds nothing", () => {
@@ -58,18 +58,18 @@ test("whitespace in the query is collapsed", () => {
 
 test("expanding case folds stay in bounds (İ)", () => {
   const text = "İstanbul";
-  for (const q of ["i", "stanbul", "̇", "i̇"]) {
+  for (const q of ["i", "stanbul", "\u0307", "i\u0307"]) {
     for (const x of findMatches(rows(text), q)) {
       assert.ok(0 <= x.start && x.start < x.end && x.end <= text.length, q);
     }
   }
   assert.deepEqual(findMatches(rows(text), "stanbul"), [{ row: 0, start: 1, end: 8, ordinal: 0 }]);
   // The folded form of the whole İ maps back to the whole İ.
-  assert.deepEqual(findMatches(rows(text), "i̇stanbul"), [{ row: 0, start: 0, end: 8, ordinal: 0 }]);
+  assert.deepEqual(findMatches(rows(text), "i\u0307stanbul"), [{ row: 0, start: 0, end: 8, ordinal: 0 }]);
 });
 
 test("a match that begins inside an expansion widens to the whole code point", () => {
-  assert.deepEqual(findMatches(rows("xİy"), "̇"), [{ row: 0, start: 1, end: 2, ordinal: 0 }]);
+  assert.deepEqual(findMatches(rows("xİy"), "\u0307"), [{ row: 0, start: 1, end: 2, ordinal: 0 }]);
 });
 
 test("ß is matched as itself and stays in bounds", () => {
@@ -136,7 +136,7 @@ test("textParts has no empty parts and handles no matches and whole-text matches
     { text: "ab", ordinal: 1 },
   ]);
   const text = "İx";
-  const parts = textParts(text, findMatches(rows(text), "i̇"));
+  const parts = textParts(text, findMatches(rows(text), "i\u0307"));
   assert.equal(parts.map((p) => p.text).join(""), text);
   assert.ok(parts.every((p) => p.text.length > 0));
 });

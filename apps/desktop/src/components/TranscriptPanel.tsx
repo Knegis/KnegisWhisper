@@ -109,15 +109,17 @@ type TranscriptPanelProps = {
    */
   follow: boolean;
   /**
-   * Turns Follow off: the person scrolled the transcript (a wheel, a touch, the scrollbar, a key
-   * that scrolls), moved between lines with the keys, or closed the section that is playing.
+   * Turns Follow off: the person scrolled the transcript (a wheel, a touch anywhere but the player
+   * card, the scrollbar, a key that scrolls), moved between lines with the keys, or closed the
+   * section that is playing.
    */
   onReleaseFollow: () => void;
   /** True once after the card's chip turned Follow on, when the line the player is at is to be centred. */
   takeRecentre: () => boolean;
   /**
    * The line the player is at, playing or paused: the last to have started (`lastStartedLine`),
-   * which the chip and the transcript coming on screen bring back when nothing is playing.
+   * which the chip and the transcript coming on screen bring back when nothing is playing, and
+   * which holds the lines' tab stop when no line has had focus and nothing is selected.
    */
   currentIndex: number | null;
 };
@@ -159,9 +161,12 @@ export function TranscriptPanel({
     return { rowsAt, turnsAt };
   }, [sections]);
   const activePlace = activeIndex === null ? undefined : places.rowsAt.get(activeIndex);
-  // The lines' one tab stop: the cursor, else the selection's anchor, else the playing line, else
-  // the first -- whichever is first on a timed line in an open section.
-  const stopIndex = useMemo(() => lineStop(lines, [cursor, selection.anchor, activeIndex]), [lines, cursor, selection.anchor, activeIndex]);
+  // The lines' one tab stop: the cursor, else the selection's anchor, else the line the player is
+  // at (`currentIndex`), else the first -- whichever is first on a timed line in an open section.
+  // The line the player is at holds through the gaps between lines and while paused, so someone
+  // tabbing in then lands where the recording is rather than on line 1, and the stop does not
+  // move -- redrawing the first section and turn -- at every gap.
+  const stopIndex = useMemo(() => lineStop(lines, [cursor, selection.anchor, currentIndex]), [lines, cursor, selection.anchor, currentIndex]);
   const stopPlace = stopIndex === null ? undefined : places.rowsAt.get(stopIndex);
 
   // What the lines' handlers and the panel's listeners read, so the handlers -- and the one
@@ -460,7 +465,12 @@ export function TranscriptPanel({
       if (following && releasesFollow(input, performance.now() - followOnAt.current)) release();
     };
     const wheel = () => letGo("wheel");
-    const touch = () => letGo("touch");
+    // A touch on the player card scrubs or presses it rather than scrolling the transcript: below
+    // 1280px the mini card is inside `.notes-main`, the scroller listened on here (KNEG-448).
+    const touch = (event: TouchEvent) => {
+      if (event.target instanceof Element && event.target.closest(".recording-player") !== null) return;
+      letGo("touch");
+    };
     // A press on the scrollbar lands on the scroller itself, to the right of its content box.
     const press = (event: PointerEvent) => {
       if (event.target === scroller && event.offsetX >= scroller.clientWidth) letGo("scrollbar");

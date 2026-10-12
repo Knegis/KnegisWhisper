@@ -338,7 +338,10 @@ checks:
    nothing, and the card's header offers "Play selection (0:41–1:12)" (an en
    dash) and "Clear selection". Pressed at 2x, it pauses within 0.25 s of
    line 8's end. A real Escape with focus on line 8 then leaves nothing
-   selected, and the header names a speaker again.
+   selected, and the header names a speaker again. Lines 6 and 8 pressed with
+   Shift select lines 6 to 8 again without playing (Escape left no anchor),
+   and a real press on "Clear selection" leaves nothing selected, no Clear
+   button, and focus on the card's Follow chip rather than `<body>`.
 9. Find in this transcript: with "5:00 – 10:00" closed and the column back at
    its top, a real press on the head's Find button puts a `[role="search"]`
    bar in the label's place, the head still 52px, with focus in its
@@ -374,7 +377,10 @@ checks:
     and no other. Three ArrowDowns from it focus the next three lines; from
     line 39, ArrowDown skips the untimed line 40 and lands on 41, which then
     holds the only stop; Enter there makes one `play()` call, plays from
-    within 0.3 s of its start and selects it alone.
+    within 0.3 s of its start and selects it alone. Then, from a fresh load
+    with nothing selected or focused and the recording paused at 9:25 (inside
+    line 43), no line is playing and line 43, the line the player is at, holds
+    the only stop: Tabs from the label land on it and no other line.
 13. The head stays at the top of what scrolls: `.note-side-body` scrolled
     600px puts `.transcript-head`'s top within 1px of the scroller's; at
     1000x720 on the Transcript tab, the same for `.notes-main`. There, before
@@ -454,6 +460,11 @@ up to 390 ms over the three runs). One `timeupdate` within a line rendered the
 workspace, the player, its header and the panel, and none of the 13 sections,
 600 turns or 1,500 lines; one across a line change also rendered the sections'
 wrapper, 1 section, 1 or 2 turns and 2 lines, so the count does see a render.
+Run again the same day after the final review's fixes, with claims 8 and 12
+extended (both measured false before the fixes): 17/17 in both schemes, claim
+15 scrolling 387px with no long task while playing in either scheme and the
+same render counts (none of the sections, turns or lines within a line; 1
+section, 2 turns and 2 lines across a line change).
 
 ## Note meta
 

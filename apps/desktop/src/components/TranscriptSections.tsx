@@ -160,10 +160,12 @@ function selectsText(element: Element): boolean {
 /**
  * One line: an option of its turn's listbox (KNEG-448). A click, Enter or Space selects it alone and
  * plays from its start to the end; with Shift, the lines from the anchor to it are selected and
- * nothing plays. Pressed again, it plays from its start again: only Escape clears a selection. A
+ * nothing plays. Pressed again, it plays from its start again rather than deselecting: Escape on a
+ * line clears the selection, as the card's Clear does while two or more lines are selected. A
  * click that ends a text selection in the line -- a drag over its text, or the second click of a
  * double-click on a word -- does nothing, so a quote can be copied without starting playback. The
- * lines are one tab stop between them, and the arrow keys, Home and End move from line to line.
+ * lines are one tab stop between them, plus one of its words when the line holding it is drawn
+ * word by word, and the arrow keys, Home and End move from line to line.
  * An untimed line is a disabled option that is never focused, selected or played. While Find
  * has matches in it, the line draws its text with them marked, in place of its words.
  */
@@ -375,13 +377,14 @@ type SectionProps = Shared & Placed & {
  * A time section: a 36px header that opens and closes it -- the chevron, the range it covers, in
  * the machine voice and in `--band-text` while it holds the playing line, and how many lines it
  * has -- over its turns. Closed, the turns stay rendered and `hidden`, so the lines keep their
- * place in the document.
+ * place in the document. A group named by its range, not a region: a labelled `<section>` is a
+ * landmark, and a two-hour meeting would add thirteen of them to the page's landmarks.
  */
 export const Section = memo(function Section({ section, open, onToggle, activeIndex, activeTurn, stopIndex, stopTurn, renaming, findCurrent, findTurn, ...shared }: SectionProps) {
   const bodyId = `${shared.idPrefix}-${section.key}`;
   const titleId = `${bodyId}-title`;
   return (
-    <section className={activeIndex === null ? "transcript-section" : "transcript-section transcript-section-playing"} aria-labelledby={titleId}>
+    <section className={activeIndex === null ? "transcript-section" : "transcript-section transcript-section-playing"} role="group" aria-labelledby={titleId}>
       <h3 className="transcript-section-head">
         <button type="button" className="transcript-section-toggle" aria-expanded={open} aria-controls={bodyId} onClick={(event) => {
           // WKWebView does not focus a pressed button: focus left on a line this closes would be

@@ -109,6 +109,13 @@ const UNTIMED = 39;
 const AFTER_UNTIMED = 40;
 /** How many Tabs claim 12 may press walking through the transcript: it holds 3 toggles, 41 turn names and the line stops. */
 const TAB_LIMIT = 150;
+/**
+ * Claim 12 then pauses the recording here, inside line 43 (9:20 to 9:30, in the second section),
+ * from a fresh load with nothing selected or focused: the tab stop is the line at the player's
+ * time (`lastStartedLine`), not line 1.
+ */
+const PAUSED_AT = 565;
+const PAUSED_LINE = 42;
 /** CDP's modifier bit for Shift. */
 const SHIFT = 8;
 const KEY_CODES = { Escape: 27, Enter: 13, Tab: 9, ArrowDown: 40, ArrowUp: 38, PageDown: 34, Backspace: 8 };
@@ -386,6 +393,25 @@ const clock = (seconds) => `${Math.floor(seconds / 60)}:${String(Math.floor(seco
 
 /** Whether the card's recording is playing. */
 const playingNow = `(() => { const audio = document.querySelector(${JSON.stringify(`${CARD} audio`)}); return Boolean(audio) && !audio.paused && audio.readyState >= 3; })()`;
+
+/**
+ * From a real press on the column's label, real Tabs (at most `TAB_LIMIT`) into the transcript and
+ * out of it: every place focus landed, whether it entered and left, and the lines it landed on.
+ */
+async function tabThrough(cdp) {
+  await pressAt(cdp, ".note-side .transcript-head .transcript-label");
+  const walk = [];
+  let entered = false;
+  let left = false;
+  for (let step = 0; step < TAB_LIMIT; step += 1) {
+    await key(cdp, "Tab", { settle: 30 });
+    const place = await cdp.evaluate(snippets.focusPlace());
+    walk.push(place);
+    if (place.inTranscript) entered = true;
+    else if (entered) { left = true; break; }
+  }
+  return { walk, entered, left, lines: walk.filter((place) => place.line >= 0).map((place) => place.line) };
+}
 
 /** Moves focus to transcript line `index` from the page, as a step before a real key press. */
 const focusLine = (index) => `(() => { const line = document.querySelectorAll('.note-detail .transcript .transcript-rows li')[${index}]; line?.focus(); return document.activeElement === line; })()`;
@@ -1038,7 +1064,9 @@ export async function runTranscriptColumn(options) {
         "and the card's .player-header holds a button reading \"Play selection (a–c)\" -- line 6's start to line 8's end, an en dash between --",
         `and a "Clear selection" button. That button pressed, with the speed at ${RANGE_RATE}x: the recording plays and pauses within ${STOP_TOLERANCE}s of`,
         `line ${RANGE_TO + 1}'s end. Then, with focus on line ${RANGE_TO + 1}, a real Escape leaves no line selected and the header names a speaker again,`,
-        "with no Play selection button",
+        `with no Play selection button. Then lines ${RANGE_FROM + 1} and ${RANGE_TO + 1} pressed with Shift (the first, with no anchor left, selects line ${RANGE_FROM + 1}`,
+        `alone and plays nothing): lines ${RANGE_LINES.map((line) => line + 1).join(", ")} are selected and the header offers "Clear selection" again; a real press on it`,
+        "leaves no line selected and no Clear selection button, and focus (document.activeElement) on the card's button.follow-chip, not <body>",
       ].join(" "),
     }, async () => {
       const schemes = {};
@@ -1075,6 +1103,24 @@ export async function runTranscriptColumn(options) {
         await escape(cdp);
         const cleared = await cdp.evaluate(snippets.lineModelState());
         const back = await cdp.evaluate(snippets.cardHeaderState(CARD));
+        // The card's Clear goes with the selection it clears: focus must move to the Follow chip
+        // beside it rather than drop to <body>. Two Shift presses select the range again without
+        // playing, since Escape left no anchor.
+        await pressLine(cdp, RANGE_FROM, SHIFT);
+        await pressLine(cdp, RANGE_TO, SHIFT);
+        const reselected = await cdp.evaluate(snippets.lineModelState());
+        const offeredAgain = await cdp.evaluate(snippets.cardHeaderState(CARD));
+        let clearedByButton = null;
+        if (offeredAgain.clear !== null) {
+          await pressAt(cdp, `${CARD} button.player-header-clear`);
+          const lines = await cdp.evaluate(snippets.lineModelState());
+          clearedByButton = {
+            selected: lines.selected,
+            active: lines.active,
+            onChip: await cdp.evaluate(`document.activeElement === document.querySelector(${JSON.stringify(`${CARD} button.follow-chip`)})`),
+            header: await cdp.evaluate(snippets.cardHeaderState(CARD)),
+          };
+        }
         const parts = {
           firstPlayed: first.landed && first.plays === 1,
           threeSelected: JSON.stringify(ranged.selected) === JSON.stringify(RANGE_LINES),
@@ -1084,6 +1130,9 @@ export async function runTranscriptColumn(options) {
           escapeOnLine: focused,
           cleared: cleared.selected.length === 0,
           speakerBack: back.playSelection === null && back.speaker !== null,
+          reselected: JSON.stringify(reselected.selected) === JSON.stringify(RANGE_LINES) && offeredAgain.clear === "Clear selection",
+          clearClears: clearedByButton !== null && clearedByButton.selected.length === 0 && clearedByButton.header.clear === null,
+          focusOnChip: clearedByButton !== null && clearedByButton.onChip === true,
         };
         schemes[scheme] = {
           drawn,
@@ -1093,6 +1142,8 @@ export async function runTranscriptColumn(options) {
           offered,
           stopped,
           afterEscape: { focusedFirst: focused, selected: cleared.selected, header: back },
+          reselected: { selected: reselected.selected, clear: offeredAgain.clear },
+          afterClear: clearedByButton === null ? null : { selected: clearedByButton.selected, active: clearedByButton.active, onChip: clearedByButton.onChip, clear: clearedByButton.header.clear },
           failed: Object.entries(parts).filter(([, ok]) => !ok).map(([name]) => name),
           matches: Object.values(parts).every(Boolean),
         };
@@ -1407,7 +1458,10 @@ export async function runTranscriptColumn(options) {
         `on the column's label, real Tabs (at most ${TAB_LIMIT}) walk into the transcript and out of it, and the only line focus lands on is`,
         "that one. From it, three real ArrowDowns focus the next three lines in turn. With focus on line",
         `${BEFORE_UNTIMED + 1}, the line before note 106's untimed line ${UNTIMED + 1}, one ArrowDown focuses line ${AFTER_UNTIMED + 1}, which then holds the only tab stop.`,
-        `A real Enter there makes exactly 1 play() call, the recording plays from within ${LANDING_TOLERANCE}s of that line's start, and it is the only selected line`,
+        `A real Enter there makes exactly 1 play() call, the recording plays from within ${LANDING_TOLERANCE}s of that line's start, and it is the only selected line.`,
+        `Then from a fresh load, nothing selected, played or focused, the recording paused at ${PAUSED_AT} s (inside line ${PAUSED_LINE + 1}, 9:20 to 9:30):`,
+        `no line aria-current, and line ${PAUSED_LINE + 1} is the only one with tabindex="0"; after a real press on the column's label, real Tabs walk into the`,
+        `transcript and out of it, and the only line focus lands on is line ${PAUSED_LINE + 1}, the line at the player's time, not line 1`,
       ].join(" "),
     }, async () => {
       const schemes = {};
@@ -1417,18 +1471,7 @@ export async function runTranscriptColumn(options) {
         const drawn = await useScheme(cdp, scheme);
         const rows = await cdp.evaluate(snippets.noteTranscriptRows(NOTE_ID));
         const initial = await cdp.evaluate(snippets.lineModelState());
-        await pressAt(cdp, ".note-side .transcript-head .transcript-label");
-        const walk = [];
-        let entered = false;
-        let left = false;
-        for (let step = 0; step < TAB_LIMIT; step += 1) {
-          await key(cdp, "Tab", { settle: 30 });
-          const place = await cdp.evaluate(snippets.focusPlace());
-          walk.push(place);
-          if (place.inTranscript) entered = true;
-          else if (entered) { left = true; break; }
-        }
-        const tabbedLines = walk.filter((place) => place.line >= 0).map((place) => place.line);
+        const { walk, entered, left, lines: tabbedLines } = await tabThrough(cdp);
         const stop = initial.stops[0] ?? null;
         const steps = [];
         if (stop !== null) {
@@ -1446,6 +1489,19 @@ export async function runTranscriptColumn(options) {
         screenshots.push(shot);
         const entered12 = await played(cdp, () => key(cdp, "Enter"));
         await stopPlaying(cdp);
+        // Paused mid-note, fresh: no line plays, nothing is selected and no line has had focus, so
+        // the stop is the line at the player's time rather than the first.
+        await openNote(cdp);
+        await useScheme(cdp, scheme);
+        await cdp.evaluate(snippets.pauseRecordingAt(CARD, PAUSED_AT));
+        const pausedTime = await settledTime(cdp);
+        // The `timeupdate` after the seek, and the render it makes.
+        await delay(300);
+        const paused = await cdp.evaluate(snippets.lineModelState());
+        const pausedTab = await tabThrough(cdp);
+        const pausedShot = `12-paused-stop-${scheme}-1440x900.png`;
+        await cdp.screenshot(resolve(out, pausedShot));
+        screenshots.push(pausedShot);
         const parts = {
           oneStop: initial.stops.length === 1,
           walked: entered && left,
@@ -1455,6 +1511,9 @@ export async function runTranscriptColumn(options) {
             && JSON.stringify(past.stops) === JSON.stringify([AFTER_UNTIMED]),
           enterPlays: entered12.plays === 1 && entered12.landed && near(entered12.playingAt, rows[AFTER_UNTIMED].startSeconds, LANDING_TOLERANCE)
             && JSON.stringify(entered12.lines.selected) === JSON.stringify([AFTER_UNTIMED]),
+          pausedAt: pausedTime.paused && near(pausedTime.time, PAUSED_AT, 0.01),
+          pausedStop: paused.playing.length === 0 && paused.selected.length === 0 && JSON.stringify(paused.stops) === JSON.stringify([PAUSED_LINE]),
+          pausedTab: pausedTab.entered && pausedTab.left && JSON.stringify(pausedTab.lines) === JSON.stringify([PAUSED_LINE]),
         };
         schemes[scheme] = {
           drawn,
@@ -1465,6 +1524,15 @@ export async function runTranscriptColumn(options) {
           arrowSteps: steps,
           pastUntimed: { focused: past.focused, stops: past.stops, untimedStart: rows[UNTIMED].startSeconds },
           enter: { plays: entered12.plays, landed: entered12.landed, playingAt: entered12.playingAt, start: rows[AFTER_UNTIMED].startSeconds, selected: entered12.lines.selected },
+          paused: {
+            time: round(pausedTime.time),
+            playing: paused.playing,
+            selected: paused.selected,
+            stops: paused.stops,
+            tabs: pausedTab.walk.length,
+            tabbedLines: pausedTab.lines,
+            walk: pausedTab.walk.map((place) => place.element),
+          },
           failed: Object.entries(parts).filter(([, ok]) => !ok).map(([name]) => name),
           matches: Object.values(parts).every(Boolean),
         };

@@ -170,13 +170,16 @@ test("an untimed row by the turn's own speaker, or by nobody, stays in the turn"
   assert.deepEqual(transcriptSections(named)[0]!.turns.map((t) => t.rows.map((r) => r.index)), [[0, 1], [2]]);
 });
 
-test("leading untimed rows go into the first section, as their own turn", () => {
+test("a leading untimed row goes into the first section, and a timed row by the same speaker joins its turn", () => {
   const rows = [row(0, null, null, { speakerId: "a" }), row(1, 10, 20, { speakerId: "a" })];
   const sections = transcriptSections(rows);
   assert.equal(sections.length, 1);
   assert.equal(sections[0]!.lineCount, 2);
-  assert.equal(sections[0]!.turns[0]!.key, "t0");
-  assert.equal(sections[0]!.turns[0]!.startSeconds, 10);
+  const turns = sections[0]!.turns;
+  assert.equal(turns.length, 1);
+  assert.deepEqual(turns[0]!.rows.map((r) => r.index), [0, 1]);
+  assert.equal(turns[0]!.key, "t0");
+  assert.equal(turns[0]!.startSeconds, 10);
 });
 
 test("the same speakerId merges consecutive rows into one turn", () => {
