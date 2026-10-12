@@ -624,6 +624,8 @@ pub fn run() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[cfg(all(test, feature = "tauri-test", target_os = "windows"))]
+mod meeting_progress_native_test;
 #[cfg(all(test, windows, feature = "tauri-test"))]
 mod recording_state_native_test;
 #[cfg(all(test, windows, feature = "tauri-test"))]

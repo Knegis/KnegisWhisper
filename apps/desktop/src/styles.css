@@ -2954,6 +2954,9 @@ button.provider-link:hover:not(:disabled) { background: none; color: var(--band-
 .providers-empty { margin-top: 28px; }
 .providers > .learn-more { margin-top: 32px; }
 
+.meeting-progress { display: flex; gap: 12px; flex-wrap: wrap; }
+.hero-sub .meeting-progress { justify-content: center; }
+.notify-detail .meeting-progress { gap: 6px; font-size: 12px; white-space: nowrap; }
 
 .settings-drafts-dialog { max-width: min(480px, calc(100vw - 40px)); border: 1px solid var(--rule); border-radius: 8px; color: var(--text); background: var(--bg); padding: 24px; }
 .settings-drafts-dialog::backdrop { background: rgb(0 0 0 / 35%); }

@@ -1,3 +1,5 @@
+import { useFinalisationProgress } from "../lib/useFinalisationProgress";
+import { MeetingProgress } from "../components/MeetingProgress";
 /**
  * Meetings: the recording task, the meeting under way, and the meetings
  * behind it.
@@ -193,6 +195,7 @@ export function Meetings({
   /** Opens a Recent meeting's note in Notes. */
   onOpenNote: (id: number) => void;
 }) {
+  const finalisation = useFinalisationProgress();
   // Everything Start, Stop and the privacy line depend on, read together:
   // the summary settings are here, so while they load or fail the line has
   // nothing to go on and the page shows no control bar at all rather than a
@@ -529,7 +532,7 @@ export function Meetings({
   // know that the new provider needs a language. And the microphone check
   // while it listens: five seconds, and a meeting would open the microphone
   // under it (KNEG-364).
-  const startHeld = startBlocked || selected === null || writing || !reviewCurrent || checking;
+  const startHeld = current === "finishing" || startBlocked || selected === null || writing || !reviewCurrent || checking;
   // While a meeting is running, the provider it is running with -- which the
   // notification's Record button may have picked rather than this page.
   const liveProvider =
@@ -938,7 +941,7 @@ export function Meetings({
         icon="meetings"
         status={{ tone: "busy", label: meetingStateLabel(current) }}
         heading="Finishing your meeting"
-        sub="Finalizing the transcript and saving your notes. Speaker labels or recovery from an interrupted transcript may take longer."
+        sub={<><MeetingProgress progress={finalisation} /><span className="muted">Your recording and notes are being preserved. Recovery or speaker analysis may take longer.</span></>}
       />
     ) : readiness.state === "ready" ? (
       <TaskHero
@@ -1261,7 +1264,7 @@ export function Meetings({
               <button
                 type="button"
                 className={startBlocked ? "control-start" : "primary control-start"}
-                disabled={startHeld || current === "finishing"}
+                disabled={startHeld}
                 onClick={() => start(wantSystem && systemAudioAvailable)}
               >
                 <span className="start-dot" aria-hidden="true" />

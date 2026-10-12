@@ -1,3 +1,5 @@
+import { useFinalisationProgress } from "./lib/useFinalisationProgress";
+import { MeetingProgress } from "./components/MeetingProgress";
 /**
  * The meeting notification window's contents.
  *
@@ -60,6 +62,7 @@ import { emptyLiveTranscript, foldTranscriptEvent, liveRows, type LiveTranscript
 const RECORD_WITH = "local";
 
 export function MeetingNotification() {
+  const finalisation = useFinalisationProgress();
   const [state, setState] = useState<MeetingState | null>(null);
   const [offer, setOffer] = useState<Offer | null>(null);
   const [sources, setSources] = useState<Sources | null>(null);
@@ -221,9 +224,7 @@ export function MeetingNotification() {
         <span className="indicator" aria-hidden="true" />
         <span className="notify-body">
           <strong>Finishing meeting</strong>
-          <span className="notify-detail">
-            finalizing the transcript and saving your notes
-          </span>
+          <span className="notify-detail"><MeetingProgress progress={finalisation} /></span>
         </span>
         </div>
       </div>

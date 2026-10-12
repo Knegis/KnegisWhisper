@@ -628,6 +628,7 @@ const MEETING_PROVIDERS: MeetingProviderSummary[] = [
 const DICTATION_LANGUAGE_CODES = ["sv", "en", "da", "no", "fi", "de", "fr", "es"];
 
 let meetingStatus: MeetingStatus = {
+  finalisation: { revision: 0, progress: null },
   state: "idle",
   transcriptFailure: null,
   provider: null,
@@ -2820,6 +2821,12 @@ const devConsole = {
    */
   dictationFailed(message = "No response from the transcription service.") {
     void emit("dictation-outcome", { outcome: "failed", message, historyId: null } satisfies Outcome);
+  },
+  /** Invented progress for UI checks. `snapshot=false` sends a deliberately stale event only. */
+  meetingProgress(update: MeetingStatus["finalisation"], snapshot = true) {
+    if (snapshot) meetingStatus = { ...meetingStatus, finalisation: update, state: update.progress ? "finishing" : "idle" };
+    void emit("meeting-progress", update);
+    if (snapshot) void emit("meeting-state", meetingStatus.state);
   },
   meetingState(state: MeetingState) {
     // The failure sentence travels with the state rather than being a second

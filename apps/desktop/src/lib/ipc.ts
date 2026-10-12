@@ -105,6 +105,8 @@ import type {
   MeetingProviderSummary,
   MeetingState,
   MeetingStatus,
+  FinalisationUpdate,
+  FinalisationProgress,
   MicrophoneCheck,
   MicrophoneSupport,
   ModelCacheStatus,
@@ -237,6 +239,8 @@ export type {
   MeetingProviderSummary,
   MeetingState,
   MeetingStatus,
+  FinalisationUpdate,
+  FinalisationProgress,
   MicrophoneCheck,
   MicrophoneSupport,
   ModelCacheStatus,
@@ -1579,3 +1583,8 @@ export async function getNoteMetadataForPeople(id: number): Promise<NoteListItem
 
 export async function getSpeechInstallations(): Promise<SpeechInstallSnapshot> { return invoke<SpeechInstallSnapshot>("speech_installations"); }
 export function onSpeechInstallations(handler: (jobs: SpeechInstallSnapshot) => void): Promise<UnlistenFn> { return listen<SpeechInstallSnapshot>("speech-installations", event => handler(event.payload)); }
+
+/** Runtime progress for Stop/recovery; revisions order snapshots and events. */
+export async function onMeetingProgress(handler: (update: FinalisationUpdate) => void): Promise<UnlistenFn> {
+  return listen<FinalisationUpdate>("meeting-progress", event => handler(event.payload));
+}
