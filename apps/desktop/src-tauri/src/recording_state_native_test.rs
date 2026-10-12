@@ -95,7 +95,12 @@ fn recording_deletion_retry_crosses_native_ipc_after_reopening_the_database() {
         await invoke('native_recording_report',{passed:true,message:'persisted cleanup, explicit retry, Trash refusal, kept reason, pagination and installation snapshot passed'});
     })().catch(error=>window.__TAURI_INTERNALS__.invoke('native_recording_report',{passed:false,message:String(error)}));"#;
     let mut context = tauri::generate_context!();
-    context.config_mut().build.dev_url = Some("http://127.0.0.1:5199/".parse().unwrap());
+    context.config_mut().build.dev_url = Some(
+        std::env::var("KW_RECORDING_NATIVE_URL")
+            .unwrap_or_else(|_| "http://127.0.0.1:5199/".into())
+            .parse()
+            .unwrap(),
+    );
     context.config_mut().app.windows[0].visible = false;
     context.config_mut().app.windows[0].create = true;
     context.config_mut().app.windows[0].data_directory = Some(temp.path().join("webview"));

@@ -96,10 +96,11 @@ pub enum PurgeError {
     )]
     NotesKept,
     /// Earlier per-note transactions are committed; retry applies only to what remains.
-    #[error("Deletion stopped after deleting {deleted} of the requested notes. {source}")]
+    #[error("Deletion stopped after deleting {deleted} of the requested notes. {reason}")]
     Partial {
         deleted: u64,
         source: Box<PurgeError>,
+        reason: String,
     },
     #[error(transparent)]
     Storage(#[from] StorageError),
@@ -133,19 +134,21 @@ pub async fn delete_forever(
 ///    back out of Trash, live, with its recording gone. If it can't finish --
 ///    a reader holding it back past the busy timeout -- nothing is deleted,
 ///    and the error says so.
-/// 2. One transaction, holding SQLite's write lock from its start
-///    (`BEGIN IMMEDIATE`), deletes the recordings' rows, taking their names,
-///    and the notes -- only those still in Trash.
-/// 3. The files are removed, inside that transaction. A file already gone
-///    counts as removed. Any other failure rolls the transaction back and is
-///    returned: the notes stay in Trash, and the person sees why.
-/// 4. The transaction commits.
+/// 2. One transaction per confirmed note, holding SQLite's write lock from
+///    its start (`BEGIN IMMEDIATE`), rechecks Trash, reads the attachment and
+///    deletes that note's rows.
+/// 3. Its file is removed inside the transaction. A missing file counts as
+///    removed; another failure rolls back this note and stops the operation.
+/// 4. Commit and yield before the next note, repeating the checkpoint too.
+///    Earlier deletions stay committed when a later note fails; Partial reports
+///    their count. Dedicated file-backed connections wait at most 100 ms for
+///    database contention, leaving ordinary pool connections unchanged.
 ///
 /// Files are never removed after the commit: a crash or a failure between
 /// the two would leave a WAV no note owns, which crash recovery offers under
 /// Meetings › Interrupted -- a recording deleted forever, offered back, with
 /// no error anyone saw. The worst this order leaves is notes still in Trash
-/// whose recordings are gone -- after a failed removal of a later file, a
+/// whose recordings are gone -- after a
 /// failed commit, an app crash or force-quit, or a power loss before the commit reached the disk -- and
 /// pressing again finishes, the missing files counting as removed.
 pub async fn empty_trash(
@@ -165,10 +168,17 @@ pub async fn empty_trash(
         match purge_one(connection.as_mut(), id, directory).await {
             Ok(count) => deleted += count,
             Err(error) if deleted > 0 => {
+                let reason = match &error {
+                    PurgeError::NotOnDisk => "The remaining notes could not yet be confirmed as saved on this computer. No additional notes were deleted. Try again in a moment.".into(),
+                    PurgeError::RecordingKept => "A remaining recording could not be deleted. Its note is still in Trash. Close any app using that recording and retry.".into(),
+                    PurgeError::NotesKept => "The current recording was deleted, but its note could not be removed from Trash. Retry to finish.".into(),
+                    _ => format!("The remaining deletion failed: {error}. Retry to finish."),
+                };
                 return Err(PurgeError::Partial {
                     deleted,
                     source: Box::new(error),
-                })
+                    reason,
+                });
             }
             Err(error) => return Err(error),
         }
@@ -1136,8 +1146,7 @@ mod tests {
         );
         assert_eq!(
             error.to_string(),
-            "Deletion stopped after deleting 1 of the requested notes. A recording in Trash couldn't be deleted from this computer, so the notes are \
-             still in Trash. Some recordings may already have been removed. Close any app that may be using the remaining recording and try again."
+            "Deletion stopped after deleting 1 of the requested notes. A remaining recording could not be deleted. Its note is still in Trash. Close any app using that recording and retry."
         );
         assert!(notes::get(p, plain).await.unwrap().is_none());
         assert!(crate::trash::is_trashed(p, locked).await.unwrap());
