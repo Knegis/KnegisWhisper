@@ -2057,9 +2057,10 @@ export function findBarState() {
 /**
  * Every Find mark in the open note's transcript (KNEG-448): its text, whether it is the current
  * one (`transcript-match-current`), the line it is in (its index among every line, and whether
- * that line is the playing one), and its computed background, colour and text decoration, beside
- * `--band`, `--band-ink`, `--band-wash` and `--band-text` resolved from the root (a token given
- * to a probe's `color`, so equal colours compare equal however they were written).
+ * that line is the playing one), its computed background, colour, text decoration and box shadow
+ * -- a shadow would paint over the letters either side of a match inside a word -- and its box,
+ * beside `--band`, `--band-ink`, `--band-wash` and `--band-text` resolved from the root (a token
+ * given to a probe's `color`, so equal colours compare equal however they were written).
  */
 export function findMarksState() {
   return source(`
@@ -2086,6 +2087,8 @@ export function findMarksState() {
           color: style.color,
           decoration: style.textDecorationLine,
           radius: style.borderTopLeftRadius,
+          shadow: style.boxShadow,
+          box: (() => { const rect = mark.getBoundingClientRect(); return { left: rect.left, top: rect.top, width: rect.width, height: rect.height }; })(),
         };
       }),
       band: resolve('--band'),

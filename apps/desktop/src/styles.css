@@ -1510,13 +1510,14 @@ button.transcript-find-step { flex: none; display: flex; align-items: center; ju
 
 /*
  * Find's matches (KNEG-448), drawn in place of a line's words while Find is open. The current one
- * is marked as the word being said is: `--band` with `--band-ink`, widened by its shadow without
- * moving a letter. The rest are `--band-wash` with `--band-text`, and underlined, because on the
- * playing line, whose fill is the same wash, the wash alone would not show. The `mark` element's
- * own yellow is replaced; corners are a control's 2px.
+ * is marked: `--band` with `--band-ink`. Unlike the word being said, it is not widened by a
+ * shadow: a match is often part of a word ("Möte" in "Mötet"), and a shadow would paint over the
+ * letters beside it. The rest are `--band-wash` with `--band-text`, and underlined, because on
+ * the playing line, whose fill is the same wash, the wash alone would not show. The `mark`
+ * element's own yellow is replaced; corners are a control's 2px.
  */
 .transcript mark.transcript-match { padding: 0; border-radius: 2px; background: var(--band-wash); color: var(--band-text); text-decoration: underline; text-underline-offset: 3px; }
-.transcript mark.transcript-match-current { background: var(--band); color: var(--band-ink); text-decoration: none; box-shadow: 0 0 0 2px var(--band); }
+.transcript mark.transcript-match-current { background: var(--band); color: var(--band-ink); text-decoration: none; }
 
 /* Wrap on narrow notes while keeping the field and actions beside their label when space permits. */
 .transcript-rename {

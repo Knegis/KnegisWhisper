@@ -1071,7 +1071,8 @@ export async function runTranscriptColumn(options) {
         `says "Match 1 of 3"; exactly 3 mark.transcript-match, in lines ${FIND_LINES.map((line) => line + 1).join(", ")}, exactly one of them`,
         `.transcript-match-current, in line ${FIND_LINES[0] + 1}, which (once the column has stopped scrolling) is wholly inside the visible`,
         "band; the current one's computed background is the resolved --band and its colour",
-        "--band-ink, the others' background --band-wash and colour --band-text, underlined. A real Enter: \"2/3\", the",
+        "--band-ink, the others' background --band-wash and colour --band-text, underlined; every mark's computed box-shadow \"none\"",
+        "(here and after Enter), so no fill spreads over the letters beside a match inside a word. A real Enter: \"2/3\", the",
         `"${SECOND_SECTION}" toggle aria-expanded="true", the current mark in line ${FIND_LINES[1] + 1}, and that line, once the column has`,
         "stopped scrolling, wholly inside the visible band (lineBandState: the scroller less the head and --player-h + 24px, ±1px).",
         `A real Shift+Enter: "1/3", the current mark back in line ${FIND_LINES[0] + 1}. The field cleared with real Backspaces and`,
@@ -1116,6 +1117,13 @@ export async function runTranscriptColumn(options) {
         const nextShot = `09-find-next-${scheme}-1440x900.png`;
         await cdp.screenshot(resolve(out, nextShot));
         screenshots.push(nextShot);
+        // The current mark inside "Mötet", at 4x with 32px either side: the letters next to it must be whole.
+        const inWord = nextMarks.marks.find((mark) => mark.current)?.box ?? null;
+        if (inWord !== null) {
+          const zoom = `09-find-mark-${scheme}-zoom.png`;
+          await cdp.screenshot(resolve(out, zoom), { clip: { x: inWord.left - 32, y: inWord.top - 8, width: inWord.width + 64, height: inWord.height + 16 }, scale: 4 });
+          screenshots.push(zoom);
+        }
 
         await key(cdp, "Enter", { modifiers: SHIFT });
         const steppedBack = await waited(cdp, findShows("1/3"), "the count 1/3 again", 3_000);
@@ -1154,6 +1162,9 @@ export async function runTranscriptColumn(options) {
           currentColours: current.length === 1 && current[0].background === marks.band && current[0].color === marks.bandInk,
           otherColours: others.length === FIND_LINES.length - 1
             && others.every((mark) => mark.background === marks.bandWash && mark.color === marks.bandText && mark.decoration.includes("underline")),
+          // A match is often part of a word ("Möte" in "Mötet"): a shadow would paint over the letters beside it.
+          noShadow: marks.marks.length > 0 && marks.marks.every((mark) => mark.shadow === "none")
+            && nextMarks.marks.length > 0 && nextMarks.marks.every((mark) => mark.shadow === "none"),
           next: stepped && next.shown === "2/3" && next.input?.focused === true && nextLine === FIND_LINES[1],
           opensSection: nextExpanded === "true",
           inView: nextBand !== null && nextBand.inBand,
@@ -1175,7 +1186,7 @@ export async function runTranscriptColumn(options) {
           opened,
           typed,
           marks,
-          next: { ...next, expanded: nextExpanded, currentLine: nextLine, band: nextBand === null ? null : { inBand: nextBand.inBand, top: round(nextBand.top), bottom: round(nextBand.bottom), band: { top: round(nextBand.band.top), bottom: round(nextBand.band.bottom) } } },
+          next: { ...next, expanded: nextExpanded, currentLine: nextLine, shadows: nextMarks.marks.map((mark) => mark.shadow), band: nextBand === null ? null : { inBand: nextBand.inBand, top: round(nextBand.top), bottom: round(nextBand.bottom), band: { top: round(nextBand.band.top), bottom: round(nextBand.band.bottom) } } },
           back: { shown: back.shown, spoken: back.spoken, focused: back.input?.focused ?? null, currentLine: backMarks.marks.find((mark) => mark.current)?.line ?? null },
           upper: { value: upper.input?.value ?? null, shown: upper.shown, spoken: upper.spoken, marks: upper.marks },
           bare: { value: bare.input?.value ?? null, shown: bare.shown, spoken: bare.spoken, lines: markLines(bareMarks) },
