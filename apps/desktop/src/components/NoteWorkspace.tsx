@@ -104,10 +104,10 @@ const playerSlotOf = (wide: boolean, tab: Tab): PlayerSlot => wide && tab !== "r
  *
  * **Wide** (`WIDE`, tracked with a change listener): the transcript leaves
  * its tab for a column on the right, the Transcript tab is hidden, and the
- * player sits at the foot of that column -- except while Replay is open,
- * which has the full player over it in the note column, as it does in a
- * narrower window. A Transcript tab that is open when the window widens gives
- * way to Notes; narrowing brings the tab back. The three tab ids stay the
+ * player is a card floating at the foot of that column (KNEG-448) -- except
+ * while Replay is open, which has the full player over it in the note column,
+ * as it does in a narrower window. A Transcript tab that is open when the
+ * window widens gives way to Notes; narrowing brings the tab back. The three tab ids stay the
  * same in both layouts -- the hidden tab keeps its button and its (empty)
  * panel, so no `aria-controls` points at nothing.
  *
@@ -142,8 +142,8 @@ const playerSlotOf = (wide: boolean, tab: Tab): PlayerSlot => wide && tab !== "r
  *
  * A summary source is shown once and then cleared (`onSourceShown`), so the
  * new transcript does not scroll to it again. The selected lines are the
- * note's (`selection`, KNEG-448), so they survive the switch; a speaker
- * rename left open, or a section closed, does not.
+ * note's (`selection`, KNEG-448), so they survive the switch, and so does
+ * Follow; a speaker rename left open, Find, or a section closed, does not.
  *
  * **The player card's header** (`PlayerHeader`), while the transcript is on
  * screen -- the column at the width, or the Transcript tab below it -- names

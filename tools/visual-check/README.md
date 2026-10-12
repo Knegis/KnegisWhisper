@@ -158,7 +158,8 @@ false check makes it exit 1. The fixtures' search is a substring match standing
 in for FTS5: which row Rust names is pinned by `crates/notes-core`'s tests, not
 here. The fixtures' recording plays since KNEG-412, but no check here starts
 it, so "nothing started" is shown and "a recording already playing kept
-playing" is not.
+playing" is not. That a hit shows its row rather than the line the paused
+player is at, with Follow on (KNEG-448), is `transcript-column.mjs`'s claim 17.
 
 ## Note playback
 
@@ -243,7 +244,9 @@ none, is covered by `cargo test` (`transcript.rs`, `local.rs`, `speech.rs`,
 `media.rs`, `meeting/notes.rs`), and that the pinned server sends word times at
 all by the ignored `crates/transcription-core/tests/word_timings.rs`. Not
 measured: how far the mark is from the sound on a real recording, and scrolling
-or CPU on an hour-long note.
+or CPU on an hour-long note in the real window. That a 1,500-line note plays,
+word-timed lines and all, with no long task is `transcript-column.mjs`'s claim
+15, in headless Edge.
 
 ## Transcript column
 

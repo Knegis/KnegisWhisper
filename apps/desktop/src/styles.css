@@ -1581,7 +1581,8 @@ button.transcript-find-step { flex: none; display: flex; align-items: center; ju
 /* `margin: 0` against the generic button's `.75rem` top margin, which held Play 11px low. */
 .recording-controls button { flex: none; margin: 0; }
 button.recording-play { display: flex; align-items: center; justify-content: center; width: 34px; height: 34px; margin: 0 6px 0 0; padding: 0; background: var(--control); }
-/* Filled at rest, so its hover is the same neutral wash laid twice: darker in both schemes. */
+/* Filled at rest, so its hover is the same neutral wash laid twice: a stronger wash in both
+ * schemes, darker in light and lighter in dark. */
 button.recording-play:hover:not(:disabled) { background: linear-gradient(var(--control), var(--control)), var(--control); }
 button.recording-skip { height: 30px; padding: 0 6px; font: 12px/16px var(--font-mono); letter-spacing: 0.5px; }
 button.recording-skip + button.recording-skip { margin-right: 8px; }
@@ -2772,8 +2773,9 @@ button.note-people-add:hover:not(:disabled), button.note-people-add[aria-expande
 .note-workspace > section { min-width: 0; margin-top: 0; }
 .note-workspace [hidden], .note-workspace > [hidden] { display: none; }
 /* The note owns a single player, whichever view is open: in full above Replay, and otherwise a mini
- * player held to the foot of the note once playback has started. A wide window keeps it in full above
- * Replay, and otherwise moves it to the foot of the transcript column (`.note-side-player`, above).
+ * player held to the foot of the note -- on the Transcript tab from the start, with its header, and
+ * on Notes once playback has started (KNEG-448). A wide window keeps it in full above Replay, and
+ * otherwise moves it to the foot of the transcript column (`.note-side-player`, above).
  * The mini player is the same card as the column's (KNEG-448), held to the foot of the note rather
  * than floated: a `--rule` edge, the card corner, the page colour and `--card-shadow`. */
 .note-mini-player { position: sticky; bottom: 0; grid-row: 3; padding: 10px 10px 8px 12px; background: var(--bg); border: 1px solid var(--rule); border-radius: 4px; box-shadow: var(--card-shadow); z-index: 3; }

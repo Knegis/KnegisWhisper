@@ -220,7 +220,8 @@ by a test.
   copied, to save a five-column table that costs nothing to keep.
 
   **`speaker_mappings` is owned by `kw_notes_core::speakers` (KNEG-318, 2026-09-25).**
-  The Transcript tab's rename writes one name per note and raw speaker id. Playback rows, all
+  The rename on a speaker turn's name, in the Transcript tab or the column beside a note in a
+  wide window, writes one name per note and raw speaker id. Playback rows, all
   desktop exports, the local API export, and the summary prompt and source-linked rows read that
   note's mappings. `profile_id`, `speaker_profiles`, and `note_speaker_embeddings` remain
   write-only pending KNEG-319.
