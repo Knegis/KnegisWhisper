@@ -2122,6 +2122,227 @@ export function findLineState(index) {
   `);
 }
 
+/**
+ * Note `id` with a long meeting's transcript in place of its own (KNEG-448): `invoke` is wrapped,
+ * as `follow-ups.mjs` wraps it, so `note_transcript_rows` for `id` answers `count` rows made here,
+ * and every other call goes on to the fixtures. The rows start 5 s apart from 0 s and each lasts
+ * its 5 s; three diarised speakers ("Maja", "Jonas" and the unnamed "Speaker 3", as note 106 names
+ * them) take turns of 1, 2, 3 and 4 lines in rotation; and every tenth row, from row 2 (10 s) on,
+ * is timed word by word as local Whisper times it, its words spelling its text. Run before the
+ * note opens. `window.__longTranscript` records, with `performance.now()`, when the rows are
+ * handed back (`resolvedAt`), when the first of them is in the column (`shownAt`, a
+ * MutationObserver's callback after React's commit) and the next animation frame (`frameAt`, the
+ * frame that paints them) and the task after it (`paintedAt`), and every long task from now until
+ * `longTasksRecord` stops it (`loadTasks`).
+ */
+export function injectLongTranscript(id, count) {
+  return source(`
+    if (window.__longTranscript) return { installed: false };
+    const id = ${JSON.stringify(id)};
+    const count = ${JSON.stringify(count)};
+    const speakers = [['speaker_0', 'Maja'], ['speaker_1', 'Jonas'], ['speaker_2', 'Speaker 3']];
+    const sayings = [
+      'Vi tittar på siffrorna för förra kvartalet innan vi går vidare.',
+      'Det där behöver vi stämma av med kunden först.',
+      'Jag kan ta fram ett förslag till nästa vecka.',
+      'Bygget har varit grönt hela veckan, så det ser bra ut.',
+      'Har någon hunnit läsa igenom underlaget som skickades ut?',
+      'Vi lägger det på listan och tar det i nästa sprint.',
+      'Det låter rimligt, men vi behöver mer tid för testerna.',
+      'Kan vi flytta den punkten till slutet av mötet?',
+    ];
+    const rows = [];
+    let speaker = 0;
+    let left = 1;
+    let turn = 0;
+    for (let index = 0; index < count; index += 1) {
+      if (left === 0) {
+        turn += 1;
+        speaker = turn % speakers.length;
+        left = (turn % 4) + 1;
+      }
+      left -= 1;
+      const start = index * 5;
+      const text = sayings[index % sayings.length];
+      const words = index % 10 === 2
+        ? text.split(' ').map((word, at) => ({ text: word, start: Math.round((start + 0.2 + at * 0.4) * 100) / 100, end: Math.round((start + 0.2 + at * 0.4 + 0.32) * 100) / 100 }))
+        : [];
+      rows.push({ index, startSeconds: start, endSeconds: start + 5, speaker: speakers[speaker][1], speakerId: speakers[speaker][0], text, words });
+    }
+    const record = window.__longTranscript = { id, count, resolvedAt: null, shownAt: null, frameAt: null, paintedAt: null, loadTasks: [] };
+    const loadObserver = new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) record.loadTasks.push({ start: entry.startTime, duration: entry.duration });
+    });
+    loadObserver.observe({ type: 'longtask', buffered: false });
+    record.stop = () => loadObserver.disconnect();
+    const shown = new MutationObserver(() => {
+      if (record.shownAt !== null || !document.querySelector('.note-side .transcript-rows li')) return;
+      record.shownAt = performance.now();
+      shown.disconnect();
+      requestAnimationFrame(() => {
+        record.frameAt = performance.now();
+        setTimeout(() => { record.paintedAt = performance.now(); }, 0);
+      });
+    });
+    shown.observe(document.body, { childList: true, subtree: true });
+    const original = window.__TAURI_INTERNALS__.invoke.bind(window.__TAURI_INTERNALS__);
+    window.__TAURI_INTERNALS__.invoke = async (cmd, args, options) => {
+      if (cmd === 'note_transcript_rows' && args?.id === id) {
+        record.resolvedAt = performance.now();
+        return rows.map((row) => ({ ...row, words: row.words.map((word) => ({ ...word })) }));
+      }
+      return original(cmd, args, options);
+    };
+    return { installed: true, rows: rows.length, worded: rows.filter((row) => row.words.length > 0).length };
+  `);
+}
+
+/** What `injectLongTranscript` recorded of the column's first paint, and the long tasks while it loaded; stops that watch. */
+export function longTranscriptLoad() {
+  return source(`
+    const record = window.__longTranscript;
+    if (!record) throw new Error('No long transcript was injected');
+    record.stop();
+    const { id, count, resolvedAt, shownAt, frameAt, paintedAt, loadTasks } = record;
+    return { id, count, resolvedAt, shownAt, frameAt, paintedAt, loadTasks };
+  `);
+}
+
+/**
+ * Starts recording, into `window.__longTasks`, every long task from now (a `PerformanceObserver`
+ * for `longtask`, not buffered, so nothing from before counts), and at each `timeupdate` of the
+ * recording in `container` its time, its rate and the playing line (`aria-current`) -- read as
+ * the event fires, so it is the line of the render before -- with the Follow chip's
+ * `aria-pressed`.
+ */
+export function watchLongTasks(container) {
+  return source(`
+    const audio = document.querySelector(${JSON.stringify(`${container} audio`)});
+    if (!audio) throw new Error('No recording in ' + ${JSON.stringify(container)});
+    const lines = [...document.querySelectorAll('.note-detail .transcript .transcript-rows li')];
+    const record = window.__longTasks = { startedAt: performance.now(), tasks: [], updates: [] };
+    const observer = new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) record.tasks.push({ start: entry.startTime, duration: entry.duration });
+    });
+    observer.observe({ type: 'longtask', buffered: false });
+    const update = () => {
+      const line = document.querySelector('.note-detail .transcript .transcript-rows li[aria-current="true"]');
+      record.updates.push({
+        at: performance.now(),
+        time: audio.currentTime,
+        rate: audio.playbackRate,
+        line: line ? lines.indexOf(line) : null,
+        follow: document.querySelector(${JSON.stringify(`${container} button.follow-chip`)})?.getAttribute('aria-pressed') ?? null,
+      });
+    };
+    audio.addEventListener('timeupdate', update);
+    record.stop = () => { observer.disconnect(); audio.removeEventListener('timeupdate', update); };
+    return true;
+  `);
+}
+
+/** What `watchLongTasks` recorded, stopped. */
+export function longTasksRecord() {
+  return source(`
+    const record = window.__longTasks;
+    if (!record) throw new Error('No long-task watch was started');
+    record.stop();
+    window.__longTasks = null;
+    return { startedAt: record.startedAt, endedAt: performance.now(), tasks: record.tasks, updates: record.updates };
+  `);
+}
+
+/**
+ * How many of the note's components React rendered for one `timeupdate` of the recording in
+ * `container`, read from React's own fibers (no counter in the app): after a `timeupdate` and
+ * two frames, by when React has committed it, each component's props object and first hook are
+ * taken -- from both copies of its fiber, the one on screen and the one worked on last -- for the
+ * workspace, the card's player and header, the panel, the sections' wrapper, and every section,
+ * turn and line; then the same after the next `timeupdate`. React gives a component it renders
+ * again a new props object when its parent drew it afresh, and new hooks whenever it runs, so a
+ * render shows as an object it did not have before; one a memo comparison kept shows none.
+ * Resolves to the count per component, how many it found, the `timeupdate`s between the two
+ * reads (one, or the count is of more), and the playing line at each read (the same, or the count
+ * includes a line change).
+ */
+export function rendersForOneTimeupdate(container) {
+  return source(`
+    const audio = document.querySelector(${JSON.stringify(`${container} audio`)});
+    if (!audio) throw new Error('No recording in ' + ${JSON.stringify(container)});
+    const fiberOf = (element) => {
+      const key = Object.keys(element).find((name) => name.startsWith('__reactFiber$'));
+      return key ? element[key] : null;
+    };
+    // A function's name as the bundler left it: Vite's dev build renames a forwardRef's render
+    // function that shares its component's name ("RecordingPlayer2").
+    const nameOf = (fiber) => (typeof fiber.type === 'function' ? fiber.type.name : fiber.type?.render?.name ?? '').replace(/\\d+$/, '');
+    // The nearest component above \`element\` called \`name\`: for a memo with a comparison, the
+    // function inside it, which is worked on only when it renders.
+    const owner = (element, name) => {
+      for (let fiber = fiberOf(element); fiber; fiber = fiber.return) if (nameOf(fiber) === name) return fiber;
+      return null;
+    };
+    const NAMES = ['NoteWorkspace', 'RecordingPlayer', 'PlayerHeader', 'TranscriptPanel', 'TranscriptSections', 'Section', 'Turn', 'Line'];
+    const instances = (name) => {
+      const detail = document.querySelector('.note-detail');
+      const first = (selector) => [...document.querySelectorAll(selector)].slice(0, 1);
+      switch (name) {
+        case 'NoteWorkspace': return first('.note-detail');
+        case 'RecordingPlayer': return first(${JSON.stringify(`${container} .recording-player`)});
+        case 'PlayerHeader': return first(${JSON.stringify(`${container} .player-header`)});
+        case 'TranscriptPanel': return first('.note-detail .transcript');
+        case 'TranscriptSections': return first('.note-detail .transcript .transcript-turn');
+        case 'Section': return [...detail.querySelectorAll('.transcript .transcript-section')];
+        case 'Turn': return [...detail.querySelectorAll('.transcript .transcript-turn')];
+        default: return [...detail.querySelectorAll('.transcript .transcript-rows li')];
+      }
+    };
+    const read = () => {
+      const byName = new Map();
+      for (const name of NAMES) {
+        const seen = new Map();
+        for (const element of instances(name)) {
+          const fiber = owner(element, name);
+          seen.set(element, fiber === null ? null
+            : new Set([fiber.memoizedProps, fiber.memoizedState, fiber.alternate?.memoizedProps, fiber.alternate?.memoizedState].filter((value) => value !== null && typeof value === 'object')));
+        }
+        byName.set(name, seen);
+      }
+      const playing = document.querySelector('.note-detail .transcript .transcript-rows li[aria-current="true"]');
+      return { byName, line: playing ? [...document.querySelectorAll('.note-detail .transcript .transcript-rows li')].indexOf(playing) : null, time: audio.currentTime };
+    };
+    const frames = () => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)));
+    const nextUpdate = () => new Promise((done) => audio.addEventListener('timeupdate', done, { once: true }));
+    return (async () => {
+      if (audio.paused) throw new Error('The recording is not playing');
+      await nextUpdate();
+      await frames();
+      const before = read();
+      let updates = 0;
+      const count = () => { updates += 1; };
+      audio.addEventListener('timeupdate', count);
+      await nextUpdate();
+      await frames();
+      audio.removeEventListener('timeupdate', count);
+      const after = read();
+      const rendered = {};
+      const found = {};
+      for (const name of NAMES) {
+        const then = before.byName.get(name);
+        rendered[name] = 0;
+        found[name] = 0;
+        for (const [element, now] of after.byName.get(name)) {
+          if (now === null) continue;
+          found[name] += 1;
+          const was = then.get(element);
+          if (was === undefined || was === null || [...now].some((value) => !was.has(value))) rendered[name] += 1;
+        }
+      }
+      return { rendered, found, updates, lineBefore: before.line, lineAfter: after.line, timeBefore: before.time, timeAfter: after.time };
+    })();
+  `);
+}
+
 /* ------------------------------------------------------------ level meters */
 
 /**

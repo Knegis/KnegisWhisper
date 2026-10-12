@@ -252,21 +252,23 @@ node tools/visual-check/transcript-column.mjs --url http://127.0.0.1:5191/
 ```
 
 Same options as the chip menus (the banner is always removed). It measures
-KNEG-448, the transcript column beside a note as the M6 redesign draws it, and
-grows as the redesign lands: the ids are the plan's, so they are not
-contiguous. Fixture note 106, "Roadmap review — long transcript"
+KNEG-448, the transcript column beside a note as the M6 redesign draws it. The
+ids are the plan's and are grouped by what they measure, not by the order they
+run in. Fixture note 106, "Roadmap review — long transcript"
 (`devFixtures.ts`, its rows in `apps/desktop/src/lib/fixtureTranscript.ts`), has
 a 690 s recording, which the fixtures serve as a WAV of that length, and a
 transcript in three five-minute sections starting at 0, 300 and 600 s, of 26,
 19 and 9 lines in 19, 14 and 8 turns (`transcriptSections`, pinned in
 `tests/fixtureTranscript.test.ts`). Each check starts from a fresh load at
-1440x900 on Notes with note 106 opened from the library, and measures in both
-colour schemes: `prefers-color-scheme` emulated over CDP, which is what the
-stylesheet reads, with `data-theme` set on the root to match. Presses are real
-pointer presses, Edge runs with `--mute-audio`, and a count of `play()` calls
-is installed before the page's own code runs. A line is pressed inside its
-left padding (`linePadPoint`), on the line itself rather than a word, after
-checking that the line is what is under that point. Sixteen checks so far:
+1440x900 on Notes with note 106 opened from the library (13 and 17 also at
+1000x720; 15 with a long meeting's rows in place of the note's own), and
+measures in both colour schemes: `prefers-color-scheme` emulated over CDP,
+which is what the stylesheet reads, with `data-theme` set on the root to match.
+Presses are real pointer presses, Edge runs with `--mute-audio`, and a count of
+`play()` calls is installed before the page's own code runs. A line is pressed
+inside its left padding (`linePadPoint`), on the line itself rather than a
+word, after checking that the line is what is under that point. Seventeen
+checks:
 
 1. The column has a plain header and is grouped: `.transcript-head` is sticky
    at top 0 and holds one heading, "Transcript" drawn uppercase, and one
@@ -345,10 +347,14 @@ checking that the line is what is under that point. Sixteen checks so far:
    the resolved `--band` behind `--band-ink`, the others `--band-wash` behind
    `--band-text`, underlined. Enter: "2/3", the closed section opened and line
    45 inside the band; Shift+Enter: "1/3" again. Cleared with Backspaces,
-   "MÖTE" finds 3 and "mote" 1 (in "remote", line 43). Focus stays in the
-   field and the Follow chip stays on (nothing plays). Escape brings the label
-   back with focus on the Find button and no mark left; no `play()` call and
-   no line selected throughout.
+   "MÖTE" finds 3 and "mote" 1 (in "remote", line 43). Each count is read only
+   once the field holds the whole query and every mark reads it ("möte" or
+   "Möte", and "mote"): a letter short, "möt", "MÖT" and "mot" find the same
+   lines, and the query is searched a moment after it is typed. Every mark's
+   `box-shadow` is `none`, so the current one's fill stops at the match inside
+   "Mötet". Focus stays in the field and the Follow chip stays on (nothing
+   plays). Escape brings the label back with focus on the Find button and no
+   mark left; no `play()` call and no line selected throughout.
 10. A playing line that matches shows its marks, not its words: line 50
     (10:41, timed word by word) pressed at 0.75x plays with one word lit;
     Find opened and "möte" typed, the line, still playing, holds marks, no
@@ -378,6 +384,22 @@ checking that the line is what is under that point. Sixteen checks so far:
     over "Loading transcript and recording…", drawn as the loaded column's
     label is (case, face, size, colour, the head's height and the label's
     left).
+15. A meeting of 1,500 lines plays without a long task. `invoke` is wrapped,
+    as `follow-ups.mjs` wraps it (`injectLongTranscript`), so note 106's
+    `note_transcript_rows` answers 1,500 rows: 5 s apart from 0 s, three
+    speakers in turns of 1 to 4 lines, every tenth row from row 3 timed word by
+    word. The column draws 1,500 lines in 13 sections of 10 minutes (the last
+    "2:00:00 – 2:05:00") and 600 turns. Line 3 (10 s, word-timed) pressed in
+    its padding plays it, the card's select sets 2x, and for 6 s a
+    `PerformanceObserver` for `longtask` (not buffered) records every long task
+    while every `timeupdate` records the rate, the playing line and the chip:
+    2x throughout, Follow on throughout, at least one line change, and no long
+    task of 100 ms or more. Reported, not judged: the time from the rows being
+    handed back to the column's first frame, the long tasks of that mount, and
+    how many components React rendered for one `timeupdate` within a line
+    (`rendersForOneTimeupdate`, read from React's fibers: a component that
+    rendered has a props object or hooks it did not have before). The
+    recording is still the 690 s one, so only the first 138 lines can play.
 16. From a fresh load in each scheme, a real pointer on a line that is not
     playing gives it the resolved `--panel-hover`; played by a press in its
     padding, which also selects it, under the pointer it keeps the resolved
@@ -404,7 +426,20 @@ column is scrolled into the transcript rather than at its top, Shift+Arrow,
 Home and End between lines, the arrow keys over a collapsed section, what a
 screen reader announces for a turn's list or the find count, a touchpad's
 real inertia, and a drag of the scrollbar, which this Edge draws none of
-(`--hide-scrollbars`): those two are for the real window.
+(`--hide-scrollbars`): those two are for the real window. Claim 15 is Vite's
+development build, where React's StrictMode renders every component twice, in
+headless Edge: it says nothing of CPU, or of a production build in WebView2 or
+WKWebView, and its 6 s start at line 3, already in view, so Follow scrolls
+nothing inside them.
+
+Run on 2026-10-12 against the `transcript-m6` branch (its Vite on 5197):
+17/17 in both schemes. Claim 15 measured 0 long tasks in the 6 s at 2x in
+each scheme, across lines 3 to 5; the column's first frame came 0.28 s (dark)
+and 0.32 s (light) after the rows were handed back, in two long tasks of up to
+256 ms and 291 ms; and one `timeupdate` rendered the workspace, the player, its
+header and the panel, and none of the 13 sections, 600 turns or 1,500 lines.
+Across a line change the same count, taken by a one-off probe, read the
+sections' wrapper, 1 section, 2 turns and 2 lines, so it does see a render.
 
 ## Note meta
 

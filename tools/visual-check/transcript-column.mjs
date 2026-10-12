@@ -1,17 +1,18 @@
 #!/usr/bin/env node
 /**
  * Measures, against dev fixtures, the transcript column beside a note in a
- * wide window as the M6 redesign draws it (KNEG-448). The claims arrive with
- * the tasks that make them true, so the ids are the plan's and are not
- * contiguous: 1, 11, 13, 14 and 16 are the column's header, sections, turns,
- * rename and hover, 2 and 3 the player card, 4, 8 and 12 the click model
- * (a press plays from a line, Shift selects a range the card offers to play,
- * one tab stop with the arrow keys between lines), 5, 6, 7 and 17 Follow
- * (the card's chip keeps the playing line in view until the person scrolls,
- * and gives way to a search hit's row), and 9 and 10 Find in this transcript
- * (the head's search button opens a find bar that marks the matches and moves
- * between them without playing; a playing line that matches shows its marks
- * rather than its words).
+ * wide window as the M6 redesign draws it (KNEG-448). The ids are the plan's,
+ * grouped by what they measure rather than in the order they run: 1, 11, 13,
+ * 14 and 16 are the column's header, sections, turns, rename and hover, 2 and
+ * 3 the player card, 4, 8 and 12 the click model (a press plays from a line,
+ * Shift selects a range the card offers to play, one tab stop with the arrow
+ * keys between lines), 5, 6, 7 and 17 Follow (the card's chip keeps the
+ * playing line in view until the person scrolls, and gives way to a search
+ * hit's row), 9 and 10 Find in this transcript (the head's search button opens
+ * a find bar that marks the matches and moves between them without playing; a
+ * playing line that matches shows its marks rather than its words), and 15 a
+ * meeting of 1,500 lines, injected in place of the fixture's, playing without
+ * a long task.
  *
  * Fixture note 106, "Roadmap review — long transcript"
  * (`apps/desktop/src/lib/devFixtures.ts`, its rows in `lib/fixtureTranscript.ts`):
@@ -149,6 +150,9 @@ const FIND_BUTTON = ".note-side .transcript-head button.transcript-find";
 const FIND_QUERY = "möte";
 const FIND_UPPER = "MÖTE";
 const FIND_BARE = "mote";
+/** The text a mark shows for "möte" and "MÖTE" (the line's own letters: "Möte" inside "Mötet"), and for "mote". */
+const FIND_TEXTS = ["möte", "Möte"];
+const FIND_BARE_TEXTS = ["mote"];
 const FIND_LINES = [21, 44, 49];
 const FIND_BARE_LINES = [42];
 const FIND_BUTTONS = ["Previous match", "Next match", "Close find"];
@@ -157,6 +161,21 @@ const FIND_PLAYING = 49;
 const FIND_RATE = "0.75";
 /** How soon after Find closes claim 10 expects one of the playing line's words lit again. */
 const RELIGHT_MS = 500;
+/**
+ * Claim 15's long meeting (`injectLongTranscript`): this many rows in place of note 106's own,
+ * 5 s apart from 0 s, so they reach 7,500 s, which `blockSecondsFor` cuts into 600 s sections --
+ * thirteen, the last 2:00:00 – 2:05:00. The recording is still the 690 s one, so only the first
+ * 138 lines can play.
+ */
+const LONG_ROWS = 1500;
+const LONG_SECTIONS = 13;
+/** Claim 15 presses line 3 (10 s), the first of the rows timed word by word, so the word loop runs too. */
+const LONG_LINE = 2;
+const LONG_RATE = "2";
+/** How long claim 15 watches for long tasks while the long meeting plays. */
+const LONG_WATCH_MS = 6000;
+/** The longest a task may run while it plays: the Long Tasks API reports tasks over 50 ms; one over 100 ms is a visible stall. */
+const LONG_TASK_LIMIT = 100;
 
 /** Counts `play()` from before the app's own code runs (as `transcript-search.mjs` does). */
 const COUNT_PLAYS = `(() => {
@@ -253,6 +272,25 @@ async function backspaces(cdp, count) {
 
 /** Whether the open find bar's count shows `shown`, for a wait: the field's query is searched a moment after it is typed. */
 const findShows = (shown) => `(${snippets.findBarState()}).shown === ${JSON.stringify(shown)}`;
+
+/**
+ * Whether the open find bar has searched `query` itself, for a wait after typing it: the field
+ * reads `query`, the count shows `shown` (a string, or a RegExp the count must match) and every
+ * mark's text is one of `texts`. A letter typed before the last can meet the count alone -- in
+ * note 106 "möt" finds the same three lines as "möte", and "mot" the same one as "mote" -- and the
+ * query is searched a moment after it is typed (`useDeferredValue`), so the marks are what show
+ * which query was searched.
+ */
+const findSettledOn = (query, shown, texts) => `(() => {
+  const bar = ${snippets.findBarState()};
+  const marks = [...document.querySelectorAll('.note-detail .transcript mark.transcript-match')].map((mark) => mark.textContent);
+  return bar.input?.value === ${JSON.stringify(query)}
+    && ${shown instanceof RegExp ? `${shown}.test(bar.shown ?? '')` : `bar.shown === ${JSON.stringify(shown)}`}
+    && marks.length > 0 && marks.every((text) => ${JSON.stringify(texts)}.includes(text));
+})()`;
+
+/** Whether every mark a `findMarksState` read holds reads one of `texts`. */
+const marksRead = (state, texts) => state.marks.length > 0 && state.marks.every((mark) => texts.includes(mark.text));
 
 /** The lines a `findMarksState` read has marks in, each once, in order. */
 const markLines = (state) => [...new Set(state.marks.map((mark) => mark.line))];
@@ -1067,7 +1105,9 @@ export async function runTranscriptColumn(options) {
         "scrolled back to its top (typing starts from the line at the top of the visible band). A real press on the head's",
         "button.transcript-find puts a [role=\"search\"] bar in the head in place of the label, the head as tall as before, holding",
         `an input[aria-label="Find in transcript"] with focus and buttons labelled ${FIND_BUTTONS.map((label) => `"${label}"`).join(", ")}.`,
-        `"${FIND_QUERY}" typed with real key events: the bar's .transcript-find-count shows "1/3" (aria-hidden) and its role=status`,
+        `"${FIND_QUERY}" typed with real key events -- and, for this and each query below, the field reading the whole query and every`,
+        `mark reading ${FIND_TEXTS.map((text) => `"${text}"`).join(" or ")} ("${FIND_BARE}" for "${FIND_BARE}"), since a letter short ("möt", "MÖT", "mot") finds the`,
+        "same lines: the bar's .transcript-find-count shows \"1/3\" (aria-hidden) and its role=status",
         `says "Match 1 of 3"; exactly 3 mark.transcript-match, in lines ${FIND_LINES.map((line) => line + 1).join(", ")}, exactly one of them`,
         `.transcript-match-current, in line ${FIND_LINES[0] + 1}, which (once the column has stopped scrolling) is wholly inside the visible`,
         "band; the current one's computed background is the resolved --band and its colour",
@@ -1096,7 +1136,7 @@ export async function runTranscriptColumn(options) {
         await pressPoint(cdp, await cdp.evaluate(snippets.centerOfText(FIND_BUTTON, null)), "the Find button");
         const opened = await cdp.evaluate(snippets.findBarState());
         await typeKeys(cdp, FIND_QUERY);
-        const counted = await waited(cdp, findShows("1/3"), "the count 1/3", 3_000);
+        const counted = await waited(cdp, findSettledOn(FIND_QUERY, "1/3", FIND_TEXTS), `the count 1/3 for "${FIND_QUERY}"`, 3_000);
         await scrollSettled(cdp, SIDE_BODY);
         const typed = await cdp.evaluate(snippets.findBarState());
         const marks = await cdp.evaluate(snippets.findMarksState());
@@ -1132,12 +1172,15 @@ export async function runTranscriptColumn(options) {
 
         await backspaces(cdp, FIND_QUERY.length);
         await typeKeys(cdp, FIND_UPPER);
-        await waited(cdp, `/\\/3$/.test((${snippets.findBarState()}).shown ?? '')`, "three matches", 3_000);
+        // "MÖT", a letter short, finds the same three lines: the field and the marks must read the whole query.
+        await waited(cdp, findSettledOn(FIND_UPPER, /\/3$/, FIND_TEXTS), `three matches for "${FIND_UPPER}"`, 3_000);
         const upper = await cdp.evaluate(snippets.findBarState());
+        const upperMarks = await cdp.evaluate(snippets.findMarksState());
 
         await backspaces(cdp, FIND_UPPER.length);
         await typeKeys(cdp, FIND_BARE);
-        await waited(cdp, findShows("1/1"), "the count 1/1", 3_000);
+        // As "mot" finds "remote" too.
+        await waited(cdp, findSettledOn(FIND_BARE, "1/1", FIND_BARE_TEXTS), `the count 1/1 for "${FIND_BARE}"`, 3_000);
         const bare = await cdp.evaluate(snippets.findBarState());
         const bareMarks = await cdp.evaluate(snippets.findMarksState());
         // Nothing plays, so going between matches leaves Follow as it was (the owner's ruling: only while playing).
@@ -1155,7 +1198,8 @@ export async function runTranscriptColumn(options) {
           labelFirst: !before.bar && (before.label ?? "").toLowerCase() === "transcript" && before.findButton?.disabled === false,
           opened: opened.bar && opened.label === null && opened.input?.label === "Find in transcript" && opened.input.focused
             && JSON.stringify(opened.buttons) === JSON.stringify(FIND_BUTTONS) && near(opened.height, before.height, 0.5),
-          counted: counted && typed.shown === "1/3" && typed.shownHidden === true && typed.spoken === "Match 1 of 3" && typed.input?.focused === true,
+          counted: counted && typed.input?.value === FIND_QUERY && typed.shown === "1/3" && typed.shownHidden === true
+            && typed.spoken === "Match 1 of 3" && typed.input?.focused === true && marksRead(marks, FIND_TEXTS),
           marks: marks.marks.length === FIND_LINES.length && JSON.stringify(markLines(marks)) === JSON.stringify(FIND_LINES),
           currentFirst: current.length === 1 && current[0].line === FIND_LINES[0],
           typedInView: typedBand !== null && typedBand.inBand,
@@ -1170,8 +1214,10 @@ export async function runTranscriptColumn(options) {
           inView: nextBand !== null && nextBand.inBand,
           back: steppedBack && back.shown === "1/3" && back.input?.focused === true
             && backMarks.marks.find((mark) => mark.current)?.line === FIND_LINES[0],
-          caseFolded: /\/3$/.test(upper.shown ?? "") && upper.marks === FIND_LINES.length,
-          accentsKept: bare.shown === "1/1" && JSON.stringify(markLines(bareMarks)) === JSON.stringify(FIND_BARE_LINES),
+          caseFolded: upper.input?.value === FIND_UPPER && /\/3$/.test(upper.shown ?? "") && upper.marks === FIND_LINES.length
+            && marksRead(upperMarks, FIND_TEXTS),
+          accentsKept: bare.input?.value === FIND_BARE && bare.shown === "1/1" && JSON.stringify(markLines(bareMarks)) === JSON.stringify(FIND_BARE_LINES)
+            && marksRead(bareMarks, FIND_BARE_TEXTS),
           closed: !closedBar.bar && (closedBar.label ?? "").toLowerCase() === "transcript" && closedBar.findButton?.focused === true && closedBar.marks === 0,
           noPlay: plays === 0,
           noSelection: lines.selected.length === 0,
@@ -1188,8 +1234,8 @@ export async function runTranscriptColumn(options) {
           marks,
           next: { ...next, expanded: nextExpanded, currentLine: nextLine, shadows: nextMarks.marks.map((mark) => mark.shadow), band: nextBand === null ? null : { inBand: nextBand.inBand, top: round(nextBand.top), bottom: round(nextBand.bottom), band: { top: round(nextBand.band.top), bottom: round(nextBand.band.bottom) } } },
           back: { shown: back.shown, spoken: back.spoken, focused: back.input?.focused ?? null, currentLine: backMarks.marks.find((mark) => mark.current)?.line ?? null },
-          upper: { value: upper.input?.value ?? null, shown: upper.shown, spoken: upper.spoken, marks: upper.marks },
-          bare: { value: bare.input?.value ?? null, shown: bare.shown, spoken: bare.spoken, lines: markLines(bareMarks) },
+          upper: { value: upper.input?.value ?? null, shown: upper.shown, spoken: upper.spoken, marks: upper.marks, texts: upperMarks.marks.map((mark) => mark.text) },
+          bare: { value: bare.input?.value ?? null, shown: bare.shown, spoken: bare.spoken, lines: markLines(bareMarks), texts: bareMarks.marks.map((mark) => mark.text) },
           afterEscape: { bar: closedBar.bar, label: closedBar.label, focus: closedBar.focus, findButton: closedBar.findButton, marks: closedBar.marks },
           plays,
           selected: lines.selected,
@@ -1232,7 +1278,12 @@ export async function runTranscriptColumn(options) {
         const playsBefore = await cdp.evaluate("window.__plays ?? null");
         await pressPoint(cdp, await cdp.evaluate(snippets.centerOfText(FIND_BUTTON, null)), "the Find button");
         await typeKeys(cdp, FIND_QUERY);
-        const marked = await waited(cdp, `(${lineState}).marks > 0`, "marks in the playing line", 3_000);
+        // "möt" marks the line too: the whole query searched, and its mark reading it.
+        const marked = await waited(cdp, `(() => {
+          const line = ${lineState};
+          const marks = [...document.querySelectorAll('.note-detail .transcript .transcript-rows li')[${FIND_PLAYING}].querySelectorAll('mark.transcript-match')].map((mark) => mark.textContent);
+          return line.marks > 0 && (${snippets.findBarState()}).input?.value === ${JSON.stringify(FIND_QUERY)} && marks.every((text) => ${JSON.stringify(FIND_TEXTS)}.includes(text));
+        })()`, "marks for the whole query in the playing line", 3_000);
         const during = await cdp.evaluate(lineState);
         const bar = await cdp.evaluate(snippets.findBarState());
         // Going to the first match while the line plays is a Find step: Follow lets go (the owner's ruling).
@@ -1533,6 +1584,114 @@ export async function runTranscriptColumn(options) {
           drawn,
           pending,
           loaded,
+          failed: Object.entries(parts).filter(([, ok]) => !ok).map(([name]) => name),
+          matches: Object.values(parts).every(Boolean),
+        };
+      }
+      return {
+        measured: { schemes },
+        matches: SCHEMES.every((scheme) => schemes[scheme].matches),
+        screenshots,
+      };
+    });
+
+    // 15. A meeting of 1,500 lines plays without a long frame.
+    await check({
+      id: "15",
+      claim: "With 1,500 lines, playback makes no long frame.",
+      expectation: [
+        `in each scheme: note 106's note_transcript_rows answered with ${LONG_ROWS} rows (injectLongTranscript: 5 s apart from 0 s, three speakers in`,
+        "turns of 1 to 4 lines, every tenth row from row 3 timed word by word), opened at 1440x900, the column draws",
+        `${LONG_ROWS} lines in ${LONG_SECTIONS} sections. The time from the rows being handed back to the column's first frame is reported, not judged.`,
+        `Line ${LONG_LINE + 1} (10 s, word-timed) pressed in its padding plays it (1 play() call, from within ${LANDING_TOLERANCE}s of its start) with the card's`,
+        `Follow chip aria-pressed="true"; the speed set to ${LONG_RATE}x with the card's select; then for ${LONG_WATCH_MS / 1000} s a PerformanceObserver for`,
+        "longtask (not buffered) and every timeupdate's rate, playing line and chip are recorded: every timeupdate at",
+        `${LONG_RATE}x with the chip pressed, at least two playing lines seen (a line change inside the window), and the longest long`,
+        `task under ${LONG_TASK_LIMIT} ms (none at all counts as 0). How many long tasks, the longest, and how many of the note's components React`,
+        "rendered for one timeupdate within a line (rendersForOneTimeupdate, read from its fibers) are reported",
+      ].join(" "),
+    }, async () => {
+      const schemes = {};
+      const screenshots = [];
+      for (const scheme of SCHEMES) {
+        await cdp.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: scheme }] });
+        let injected = null;
+        await loadNote(cdp, WIDE, async () => {
+          injected = await cdp.evaluate(snippets.injectLongTranscript(NOTE_ID, LONG_ROWS));
+        });
+        const drawn = await cdp.evaluate(snippets.markColorScheme(scheme));
+        await waitFor(
+          cdp,
+          `document.querySelectorAll('.note-side .transcript-rows li').length === ${LONG_ROWS} && (document.querySelector(${JSON.stringify(`${CARD} audio`)})?.readyState ?? 0) >= 1`,
+          "the long transcript in the column and the recording's metadata",
+          30_000,
+        );
+        await waited(cdp, "window.__longTranscript?.paintedAt != null", "the column's first frame", 5_000);
+        const load = await cdp.evaluate(snippets.longTranscriptLoad());
+        const laidOut = await cdp.evaluate(`({
+          lines: document.querySelectorAll('.note-side .transcript-rows li').length,
+          sections: document.querySelectorAll('.note-side button.transcript-section-toggle').length,
+          turns: document.querySelectorAll('.note-side .transcript-turn').length,
+          wordedLines: [...document.querySelectorAll('.note-side .transcript-rows li')].filter((line) => line.querySelector('.transcript-word')).length,
+          lastTitle: [...document.querySelectorAll('.note-side .transcript-section-title')].at(-1)?.textContent ?? null,
+        })`);
+        // The mount's own long tasks: from the rows handed back to the frame after the column's first.
+        const mountTasks = load.resolvedAt === null || load.paintedAt === null ? []
+          : load.loadTasks.filter((task) => task.start + task.duration >= load.resolvedAt && task.start <= load.paintedAt);
+        await delay(250);
+        const first = await played(cdp, () => pressLine(cdp, LONG_LINE));
+        const rows = await cdp.evaluate(snippets.noteTranscriptRows(NOTE_ID));
+        const followFirst = (await cdp.evaluate(snippets.followChipState(CARD))).pressed;
+        await cdp.evaluate(snippets.choosePlayerSpeed(CARD, LONG_RATE));
+        await cdp.evaluate(snippets.watchLongTasks(CARD));
+        await delay(LONG_WATCH_MS);
+        const watch = await cdp.evaluate(snippets.longTasksRecord());
+        const shot = `15-long-playing-${scheme}-1440x900.png`;
+        await cdp.screenshot(resolve(out, shot));
+        screenshots.push(shot);
+        // One timeupdate inside a line, so the count is of a render that moves nothing.
+        let renders = null;
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          renders = await cdp.evaluate(snippets.rendersForOneTimeupdate(CARD));
+          if (renders.updates === 1 && renders.lineBefore === renders.lineAfter) break;
+        }
+        await stopPlaying(cdp);
+        await cdp.evaluate(snippets.choosePlayerSpeed(CARD, "1"));
+        const tasks = watch.tasks;
+        const longest = tasks.reduce((most, task) => Math.max(most, task.duration), 0);
+        const linesSeen = [...new Set(watch.updates.map((update) => update.line).filter((line) => line !== null))];
+        const parts = {
+          injected: injected?.installed === true && injected.rows === LONG_ROWS && load.resolvedAt !== null,
+          laidOut: laidOut.lines === LONG_ROWS && laidOut.sections === LONG_SECTIONS,
+          started: first.landed && first.plays === 1 && near(first.playingAt, rows[LONG_LINE].startSeconds, LANDING_TOLERANCE),
+          followOn: followFirst === "true" && watch.updates.length > 0 && watch.updates.every((update) => update.follow === "true"),
+          fast: watch.updates.length > 0 && watch.updates.every((update) => update.rate === Number(LONG_RATE)),
+          lineChanged: linesSeen.length >= 2,
+          noLongFrame: longest < LONG_TASK_LIMIT,
+        };
+        schemes[scheme] = {
+          drawn,
+          injected,
+          laidOut,
+          firstPaint: {
+            resolvedToShownMs: load.shownAt === null ? null : round(load.shownAt - load.resolvedAt),
+            resolvedToFrameMs: load.frameAt === null ? null : round(load.frameAt - load.resolvedAt),
+            resolvedToPaintedMs: load.paintedAt === null ? null : round(load.paintedAt - load.resolvedAt),
+            mountLongTasks: mountTasks.length,
+            mountLongest: round(mountTasks.reduce((most, task) => Math.max(most, task.duration), 0)),
+          },
+          first: { plays: first.plays, landed: first.landed, playingAt: first.playingAt, start: rows[LONG_LINE].startSeconds },
+          playback: {
+            watchedMs: round(watch.endedAt - watch.startedAt),
+            timeupdates: watch.updates.length,
+            from: round(watch.updates[0]?.time ?? null),
+            to: round(watch.updates.at(-1)?.time ?? null),
+            linesSeen,
+            longTasks: tasks.length,
+            longestMs: round(longest),
+            tasks: tasks.map((task) => ({ start: round(task.start - watch.startedAt), duration: round(task.duration) })),
+          },
+          renders,
           failed: Object.entries(parts).filter(([, ok]) => !ok).map(([name]) => name),
           matches: Object.values(parts).every(Boolean),
         };
