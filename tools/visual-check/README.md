@@ -1,5 +1,31 @@
 # Visual checks
 
+## Transcript follow-ups, settings drafts and meeting progress (2026-10-12)
+
+```powershell
+node tools/visual-check/three-issues.mjs --url http://127.0.0.1:5191/ --port 9262 --out target/three-issues/ui
+```
+
+The probe checks stable transcript identity/state/focus at 1000/1280/1440px,
+Ctrl+F, single-line Clear, wide Replay controls and failed media. It checks
+settings Stay/Discard/Save, edits during saving, failed writes, credential-row
+replacement, shortcut/Vocabulary/Corti/company drafts, blur-save navigation and
+calendar failures. Main and compact (392x92) progress checks cover stages, stale
+events and completion in light/dark. All data and errors are invented.
+
+The hidden native progress test exercises real typed-only recording recovery,
+settings persistence/validation, progress events and status, and cleanup after
+success/failure. It requires an absolute disposable profile inside this worktree's
+`target`, named `native-progress-profile`. No microphone, provider or model runs.
+
+```powershell
+$env:KW_AUTOMATION_PROFILE = (Join-Path (Get-Location) 'target/three-issues/native-progress-profile')
+$env:KW_PROGRESS_NATIVE_URL = 'http://127.0.0.1:5191/'
+cargo test -p knegiswhisper --lib --features tauri-test native_meeting_progress_and_settings_ipc -- --ignored --nocapture
+Remove-Item Env:KW_AUTOMATION_PROFILE, Env:KW_PROGRESS_NATIVE_URL
+```
+
+
 ## Five backlog fixes (2026-10-12)
 
 Against an isolated worktree Vite server, the following checks use invented browser data:
