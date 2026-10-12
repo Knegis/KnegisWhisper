@@ -1,6 +1,7 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { NoteEditor } from "./NoteEditor";
-import { getNoteSummary, generateNoteSummary, cancelNoteSummary, updateNoteSummary, exportNoteSummary, onNoteSummaryChanged, type SummaryState } from "../lib/ipc";
+import { getNoteSummary, getSummaryReadiness, generateNoteSummary, cancelNoteSummary, updateNoteSummary, exportNoteSummary, onNoteSummaryChanged, type SummaryState, type SummaryReadiness, type SummarySetupTarget } from "../lib/ipc";
+import { summaryProgressText } from "../lib/summaryProgress";
 import { summaryModelName } from "../lib/meetingView";
 import { useAutosave, type AutosaveStatus } from "../lib/useAutosave";
 
@@ -10,7 +11,9 @@ export type SummaryPaneHandle = { flush: () => Promise<void>; draft: () => strin
  * toolbar's "Saved" can cover the summary too (KNEG-398). Pass a stable
  * function, such as a state setter.
  */
-export const SummaryPane = forwardRef<SummaryPaneHandle, { noteId: number; visible: boolean; onSource: (row: number) => void; onSaveStatus?: (status: AutosaveStatus) => void; readOnly?: boolean }>(function SummaryPane({ noteId, visible, onSource, onSaveStatus, readOnly = false }, ref) {
+export const SummaryPane = forwardRef<SummaryPaneHandle, { noteId: number; visible: boolean; hasTranscript: boolean | null; focusOnReady: boolean; onSetup: (target: SummarySetupTarget) => Promise<void>; onSource: (row: number) => void; onSaveStatus?: (status: AutosaveStatus) => void; readOnly?: boolean }>(function SummaryPane({ noteId, visible, hasTranscript, focusOnReady, onSetup, onSource, onSaveStatus, readOnly = false }, ref) {
+  const actionRef = useRef<HTMLButtonElement>(null);
+  const focusedReturn = useRef(false);
   const [state, setState] = useState<SummaryState | null>(null);
   const current = useRef<SummaryState | null>(null);
   const dirty = useRef(false);
@@ -21,6 +24,32 @@ export const SummaryPane = forwardRef<SummaryPaneHandle, { noteId: number; visib
   const [editorKey, setEditorKey] = useState(0);
   const [pending, setPending] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [readiness, setReadiness] = useState<SummaryReadiness | null>(null);
+  const [readinessError, setReadinessError] = useState<string | null>(null);
+  const readinessGeneration = useRef(0);
+  useEffect(() => {
+    if (focusOnReady && visible && state !== null && (readiness !== null || readinessError !== null) && hasTranscript !== null && !focusedReturn.current) {
+      focusedReturn.current = true;
+      actionRef.current?.focus();
+    }
+  }, [focusOnReady, visible, state, readiness, readinessError, hasTranscript]);
+  const refreshReadiness = useCallback(async () => {
+    const generation = ++readinessGeneration.current;
+    try {
+      const next = await getSummaryReadiness();
+      if (generation === readinessGeneration.current) { setReadiness(next); setReadinessError(null); }
+      return next;
+    } catch (cause) {
+      if (generation === readinessGeneration.current) { setReadiness(null); setReadinessError(String(cause)); }
+      throw cause;
+    }
+  }, []);
+  useEffect(() => {
+    if (!visible) return;
+    void refreshReadiness().catch(() => undefined);
+    const timer = setInterval(() => { void refreshReadiness().catch(() => undefined); }, 2000);
+    return () => { ++readinessGeneration.current; clearInterval(timer); };
+  }, [visible, refreshReadiness]);
   const save = useCallback(async (patch: Partial<{ content: string }>) => {
     if (patch.content === undefined || current.current === null) return;
     const version = editVersion.current;
@@ -54,14 +83,18 @@ export const SummaryPane = forwardRef<SummaryPaneHandle, { noteId: number; visib
     try { await flush(); await action(); } catch (cause) { setError(String(cause)); } finally { setPending(false); }
   };
   const generate = () => run(async () => {
+    const ready = await refreshReadiness();
+    if (ready.state === "needs-setup") { await onSetup(ready.target); return; }
     const latest = await getNoteSummary(noteId);
     const replace = latest.edited || latest.legacy;
     if (replace && !window.confirm("Replace your edited summary? The current version will stay until the new summary succeeds.")) return;
     const retry = latest.status === "failed" || latest.status === "interrupted";
     const next = await generateNoteSummary(noteId, latest.revision, replace, retry);
+    if (current.current?.content !== next.content) setEditorKey(key => key + 1);
     current.current = next; summaryDraft.current = next.content ?? ""; setState(next);
   });
   const busy = state?.status === "queued" || state?.status === "processing";
+  const needsSetup = !busy && readiness?.state === "needs-setup";
   return <section className="summary-pane" hidden={!visible} aria-label="AI summary" onClickCapture={event => {
     const link = (event.target as HTMLElement).closest<HTMLAnchorElement>('a[href^="#summary-source-"]');
     if (!link) return;
@@ -71,7 +104,10 @@ export const SummaryPane = forwardRef<SummaryPaneHandle, { noteId: number; visib
     if (source) onSource(source.rowIndex);
   }}>
     <div className="summary-toolbar controls">
-      <button type="button" disabled={readOnly || pending || busy || !state} onClick={() => { void generate(); }}>{state?.status === "failed" || state?.status === "interrupted" ? "Retry summary" : state?.content ? "Regenerate summary" : "Generate summary"}</button>
+      <button ref={actionRef} type="button" data-summary-action disabled={readOnly || pending || busy || !state || hasTranscript !== true || (readiness === null && readinessError === null)} onClick={() => {
+        if (readinessError) void refreshReadiness().catch(() => undefined);
+        else void generate();
+      }}>{readinessError ? "Retry setup check" : needsSetup ? "Set up summaries" : state?.status === "failed" || state?.status === "interrupted" ? "Retry summary" : state?.content ? "Regenerate summary" : "Generate summary"}</button>
       {busy && <button type="button" disabled={readOnly || pending} onClick={() => { void run(async () => { await cancelNoteSummary(noteId); const next = await getNoteSummary(noteId); current.current = next; setState(next); }); }}>Cancel</button>}
       {state?.content !== null && state && <>
         <button type="button" disabled={pending} onClick={() => { void run(async () => { const latest = await getNoteSummary(noteId); await navigator.clipboard.writeText(latest.content ?? ""); setNotice("Summary copied"); }); }}>Copy</button>
@@ -79,7 +115,10 @@ export const SummaryPane = forwardRef<SummaryPaneHandle, { noteId: number; visib
         <button type="button" disabled={pending} onClick={() => { void run(async () => { const path = await exportNoteSummary(noteId, "txt"); if (path) setNotice(`Exported to ${path}`); }); }}>Export text</button>
       </>}
     </div>
-    <p role="status" className="muted">{!state ? "Loading summary…" : busy ? state.status === "queued" ? "Summary queued" : `Generating summary · ${state.completed} steps completed` : state.edited ? "Edited summary · source links are navigation aids" : state.legacy ? "Imported summary · source references unavailable" : state.content ? `AI summary · ${state.language ?? "language unknown"}${state.model ? ` · by ${summaryModelName(state.model)}` : ""}` : "Summaries use your saved transcript. Configure the model in Settings > Cleanup & summaries."}</p>
+    <p role="status" className="muted">{!state ? "Loading summary…" : summaryProgressText(state) ?? "Summaries use your saved transcript."}</p>
+    {!busy && state?.content && <p className="muted">{state.edited ? "Edited summary · source links are navigation aids" : state.legacy ? "Imported summary · source references unavailable" : `AI summary · ${state.language ?? "language unknown"}${state.model ? ` · by ${summaryModelName(state.model)}` : ""}`}</p>}
+    {hasTranscript === null ? <p className="muted">Loading saved transcript…</p> : !hasTranscript ? <p className="muted">This note needs a saved transcript with speech before a summary can be generated.</p> : needsSetup && readiness?.state === "needs-setup" ? <p className="muted">{readiness.reason}</p> : null}
+    {readinessError && <p className="error" role="alert">Couldn’t check summary setup: {readinessError}</p>}
     {/* The people are part of what a summary was made from, and since KNEG-362 they can change after it. */}
     {state?.outdated && <p className="warn">The transcript or the people changed since this summary was made. Regenerate it to update it and its source links.</p>}
     {(error || state?.error) && <p className="error" role="alert">{error ?? state?.error}</p>}

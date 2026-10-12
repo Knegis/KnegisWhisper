@@ -13,6 +13,7 @@ import { NoteEditor } from "./NoteEditor";
 import { NotePeople } from "./NotePeople";
 import { PlayerHeader } from "./PlayerHeader";
 import { SummaryPane, type SummaryPaneHandle } from "./SummaryPane";
+import type { SummarySetupTarget } from "../lib/ipc";
 import { RecordingPlayer, type PlayerPosition, type RecordingPlayerHandle } from "./RecordingPlayer";
 import { TranscriptHeading, TranscriptPanel } from "./TranscriptPanel";
 
@@ -168,7 +169,9 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
   onMore: (anchor: HTMLButtonElement) => void;
   /** Whether the menu More opens is open, for its `aria-expanded`. */
   moreOpen: boolean;
-}>(function NoteWorkspace({ note, revealRow = null, reload, onSaved, onExport, onMore, moreOpen }, ref) {
+  onSummarySetup: (target: SummarySetupTarget) => Promise<void>;
+  focusSummary: boolean;
+}>(function NoteWorkspace({ note, revealRow = null, reload, onSaved, onExport, onMore, moreOpen, onSummarySetup, focusSummary }, ref) {
   const [blocked, setBlocked] = useState<"trashed" | "deleted" | "restored" | null>(null);
   const blockedRef = useRef(blocked); blockedRef.current = blocked;
   const [draftNotice, setDraftNotice] = useState<string | null>(null);
@@ -660,7 +663,10 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
                 onChange={content => { draft.current.content = content; setEmpty(!content.trim()); autosave.schedule({ content }); }} />
             </div>
             <h2 className="note-section-heading">AI summary</h2>
-            <SummaryPane readOnly={blocked !== null} ref={summaryRef} noteId={note.id} visible={tab === "notes"} onSource={index => { void showSource(index); }} onSaveStatus={setSummarySave} />
+            <SummaryPane readOnly={blocked !== null} ref={summaryRef} noteId={note.id} visible={tab === "notes"}
+              hasTranscript={transcript === null ? null : transcript.rows.some(row => row.text.trim())}
+              focusOnReady={focusSummary}
+              onSetup={onSummarySetup} onSource={index => { void showSource(index); }} onSaveStatus={setSummarySave} />
           </section>
           {/* The ref changes with the tab, the element does not: Replay's full player is not a card.
               The mini card waits for playback only on Notes; on Transcript it is there from the

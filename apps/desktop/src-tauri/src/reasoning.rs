@@ -487,7 +487,7 @@ fn local_route_summary(
 /// readable and valid, which is what its form on the same page reports. Not
 /// merely something in the slot -- a configuration that no longer reads would
 /// otherwise be "Can be used" beside a form saying it can't.
-fn company_account_ready(
+pub(crate) fn company_account_ready(
     id: &str,
     name: &str,
     credentials: &dyn kw_security::CredentialStore,

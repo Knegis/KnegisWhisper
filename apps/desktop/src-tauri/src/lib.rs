@@ -477,6 +477,7 @@ pub fn run() -> anyhow::Result<()> {
             commands::provider_credential_present,
             commands::probe_providers,
             summaries::summary_settings_get,
+            summaries::summary_readiness_get,
             summaries::summary_settings_set,
             summaries::note_summary_get,
             summaries::note_summary_generate,
@@ -625,3 +626,5 @@ pub fn run() -> anyhow::Result<()> {
 
 #[cfg(all(test, windows, feature = "tauri-test"))]
 mod recording_state_native_test;
+#[cfg(all(test, windows, feature = "tauri-test"))]
+mod summary_native_test;

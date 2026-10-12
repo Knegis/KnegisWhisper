@@ -1,4 +1,5 @@
 import { TitleBar } from "./components/TitleBar";
+import type { SummarySetupTarget } from "./lib/ipc";
 import { LanguagePopup } from "./components/LanguagePopup";
 /**
  * The shell: a title bar, a rail, and a card holding the page -- with a list
@@ -178,8 +179,10 @@ function renderView(
   view: ViewId,
   diagnostics: Diagnostics,
   select: (id: ViewId) => void,
-  searchNoteRequest: { id: number; transcriptRow: number | null } | null,
+  searchNoteRequest: { id: number; transcriptRow: number | null; summaryFocus?: boolean } | null,
   openNote: (id: number, transcriptRow?: number) => void,
+  openSummarySetup: (id: number, target: SummarySetupTarget) => void,
+  summaryFocus: number | undefined,
 ): ReactNode {
   switch (view) {
     case "dictation":
@@ -191,7 +194,7 @@ function renderView(
     case "meeting-settings":
       return <SettingsMeetings onGoToVocabulary={() => select("vocabulary")} />;
     case "notes":
-      return <Notes openRequest={searchNoteRequest} onOpenNote={openNote} onImport={() => select("notes-upload")} />;
+      return <Notes openRequest={searchNoteRequest} onOpenNote={openNote} onImport={() => select("notes-upload")} onSummarySetup={openSummarySetup} />;
     case "vocabulary":
       return <Vocabulary />;
     case "notes-upload":
@@ -204,7 +207,7 @@ function renderView(
       );
     case "intelligence":
       return (
-        <SettingsIntelligence onGoToProviders={() => select("providers")} />
+        <SettingsIntelligence onGoToProviders={() => select("providers")} onGoToLocalModels={() => select("local-llm")} summaryFocus={summaryFocus} />
       );
     case "local-llm":
       return <SettingsIntelligenceLocal />;
@@ -233,13 +236,14 @@ function Shell({ panelCollapsed, onTogglePanel }: { panelCollapsed: boolean; onT
   // application is for. Reopening on the screen you last used sounds helpful
   // until the screen you last used is the one that failed.
   const [history, navigate] = useReducer(navigationHistory, initialHistory);
+  const [summarySetup, setSummarySetup] = useState<{ noteId: number; nonce: number } | null>(null);
   const destination = history.entries[history.index] ?? defaultDestination;
   const view = destination.view;
   // A local variable, because TypeScript does not narrow a repeated
   // `PAGES[view]`.
   const page = PAGES[view];
   // A new request for each destination, so a row chosen again is shown again (KNEG-406).
-  const searchNoteRequest = useMemo(() => destination.noteId === undefined ? null : { id: destination.noteId, transcriptRow: destination.transcriptRow ?? null }, [destination]);
+  const searchNoteRequest = useMemo(() => destination.noteId === undefined ? null : { id: destination.noteId, transcriptRow: destination.transcriptRow ?? null, ...(destination.summaryFocus ? { summaryFocus: true } : {}) }, [destination]);
   const openNote = useCallback((id: number, transcriptRow?: number) => navigate({ type: "visit", destination: { view: "notes", noteId: id, ...(transcriptRow === undefined ? {} : { transcriptRow }) } }), []);
 
   /*
@@ -252,8 +256,19 @@ function Shell({ panelCollapsed, onTogglePanel }: { panelCollapsed: boolean; onT
    * panel's are both derived from `view`.
    */
   const select = useCallback((id: ViewId) => {
+    if (railOf(id) !== "settings") setSummarySetup(null);
     navigate({ type: "visit", destination: { view: id } });
   }, []);
+  const openSummarySetup = useCallback((noteId: number, _target: SummarySetupTarget) => {
+    setSummarySetup({ noteId, nonce: Date.now() });
+    navigate({ type: "visit", destination: { view: "intelligence" } });
+  }, []);
+  const returnToSummary = () => {
+    if (summarySetup === null) return;
+    const noteId = summarySetup.noteId;
+    setSummarySetup(null);
+    navigate({ type: "visit", destination: { view: "notes", noteId, summaryFocus: true } });
+  };
 
   /*
    * The settings screen the rail's Settings reopens: the last one visited
@@ -310,7 +325,7 @@ function Shell({ panelCollapsed, onTogglePanel }: { panelCollapsed: boolean; onT
 
   const boundary = (
     <ViewBoundary view={view} onReset={() => select("diagnostics")} onFailedChange={setBoundaryFailed}>
-      {renderView(view, diagnostics, select, searchNoteRequest, openNote)}
+      {renderView(view, diagnostics, select, searchNoteRequest, openNote, openSummarySetup, summarySetup?.nonce)}
     </ViewBoundary>
   );
 
@@ -324,6 +339,7 @@ function Shell({ panelCollapsed, onTogglePanel }: { panelCollapsed: boolean; onT
   const content = (
     <div className="content">
       {page && view !== "providers" ? <PageHeader page={page} /> : null}
+      {summarySetup !== null && railOf(view) === "settings" && <div className="controls summary-setup-return"><button type="button" onClick={returnToSummary}>Return to note</button></div>}
       {boundary}
     </div>
   );

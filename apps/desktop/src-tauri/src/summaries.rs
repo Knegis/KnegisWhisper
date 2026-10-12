@@ -3,6 +3,7 @@ use crate::{local_llm::LocalLlm, state::AppState};
 use kw_notes_core::summary::{self, Job, SummaryReference, SummarySettings, SummaryState};
 use kw_reasoning_core::summary::{Summary, PROMPT};
 use kw_reasoning_core::{Chat, ChatRoute, ChatSettings, RequestOptions};
+use serde::Serialize;
 use serde_json::json;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -10,9 +11,169 @@ use std::{
     time::Duration,
 };
 use tauri::{AppHandle, Emitter, State};
+use ts_rs::TS;
 
 pub const SUMMARY_SETTINGS_KEY: &str = "reasoning.summaries";
 pub const SUMMARY_EVENT: &str = "note-summary-changed";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "kebab-case")]
+pub enum SummarySetupTarget {
+    SummarySettings,
+    Providers,
+    LocalTextModels,
+    CompanyAccounts,
+}
+
+/// Configuration readiness, not a claim that a provider has answered a live request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(tag = "state", rename_all = "kebab-case")]
+pub enum SummaryReadiness {
+    Ready,
+    NeedsSetup {
+        reason: String,
+        target: SummarySetupTarget,
+    },
+}
+
+fn readiness_for(
+    settings: &SummarySettings,
+    credentials: &dyn kw_security::CredentialStore,
+    local_problem: Option<String>,
+    enterprise_ready: bool,
+) -> SummaryReadiness {
+    let needs = |reason: String, target| SummaryReadiness::NeedsSetup { reason, target };
+    match route(settings) {
+        Err(reason) => needs(reason, SummarySetupTarget::SummarySettings),
+        Ok(ChatRoute::Local) => local_problem.map_or(SummaryReadiness::Ready, |reason| {
+            needs(reason, SummarySetupTarget::LocalTextModels)
+        }),
+        Ok(ChatRoute::Provider { key_ref, .. }) if !credentials.contains(&key_ref) => needs(
+            "Add the selected summary provider's API key under Providers.".into(),
+            SummarySetupTarget::Providers,
+        ),
+        Ok(ChatRoute::Enterprise { .. }) if !enterprise_ready => needs(
+            "Complete the selected company account under Cleanup & summaries.".into(),
+            SummarySetupTarget::CompanyAccounts,
+        ),
+        Ok(_) => SummaryReadiness::Ready,
+    }
+}
+
+#[cfg(test)]
+#[test]
+#[allow(clippy::unwrap_used)]
+fn summary_readiness_checks_routes_assets_and_credentials_without_requiring_automatic_summaries() {
+    use kw_security::CredentialStore as _;
+    let credentials = kw_security::MemoryCredentialStore::default();
+    let mut settings = SummarySettings::default();
+    assert!(matches!(
+        readiness_for(&settings, &credentials, None, true),
+        SummaryReadiness::NeedsSetup {
+            target: SummarySetupTarget::SummarySettings,
+            ..
+        }
+    ));
+    settings.provider = "openai".into();
+    settings.model = "test-model".into();
+    assert!(matches!(
+        readiness_for(&settings, &credentials, None, true),
+        SummaryReadiness::NeedsSetup {
+            target: SummarySetupTarget::Providers,
+            ..
+        }
+    ));
+    let key = kw_security::KeyRef::new("openai").unwrap();
+    credentials
+        .set(&key, &kw_security::Secret::new("synthetic-only".into()))
+        .unwrap();
+    assert_eq!(
+        readiness_for(&settings, &credentials, None, true),
+        SummaryReadiness::Ready
+    );
+    settings.provider = "local".into();
+    assert_eq!(
+        readiness_for(&settings, &credentials, None, true),
+        SummaryReadiness::Ready,
+        "installed models may be stopped"
+    );
+    assert!(matches!(
+        readiness_for(&settings, &credentials, Some("missing model".into()), true),
+        SummaryReadiness::NeedsSetup {
+            target: SummarySetupTarget::LocalTextModels,
+            ..
+        }
+    ));
+    settings.self_hosted_url = Some("http://127.0.0.1:18881/v1".into());
+    assert_eq!(
+        readiness_for(&settings, &credentials, None, true),
+        SummaryReadiness::Ready,
+        "self-hosted servers need no key by default"
+    );
+    settings.self_hosted_url = Some("not a URL".into());
+    assert!(matches!(
+        readiness_for(&settings, &credentials, None, true),
+        SummaryReadiness::NeedsSetup {
+            target: SummarySetupTarget::SummarySettings,
+            ..
+        }
+    ));
+    settings.self_hosted_url = None;
+    settings.provider = "unknown-provider".into();
+    assert!(matches!(
+        readiness_for(&settings, &credentials, None, true),
+        SummaryReadiness::NeedsSetup {
+            target: SummarySetupTarget::SummarySettings,
+            ..
+        }
+    ));
+    settings.provider = "bedrock".into();
+    settings.enterprise = true;
+    assert!(matches!(
+        readiness_for(&settings, &credentials, None, false),
+        SummaryReadiness::NeedsSetup {
+            target: SummarySetupTarget::CompanyAccounts,
+            ..
+        }
+    ));
+    assert_eq!(
+        readiness_for(&settings, &credentials, None, true),
+        SummaryReadiness::Ready
+    );
+}
+
+fn readiness(state: &AppState, llm: &LocalLlm, settings: &SummarySettings) -> SummaryReadiness {
+    let resolved = route(settings);
+    let local_problem = if matches!(resolved, Ok(ChatRoute::Local))
+        && !(llm.running_model().as_deref() == Some(settings.model.as_str())
+            && llm.running_port().is_some())
+    {
+        llm.check_startable(&settings.model).err()
+    } else {
+        None
+    };
+    let enterprise_ready = match resolved {
+        Ok(ChatRoute::Enterprise { id }) => {
+            crate::reasoning::company_account_ready(&id, &id, state.credentials())
+        }
+        _ => true,
+    };
+    readiness_for(
+        settings,
+        state.credentials(),
+        local_problem,
+        enterprise_ready,
+    )
+}
+
+#[tauri::command]
+pub async fn summary_readiness_get(
+    state: State<'_, AppState>,
+    llm: State<'_, Arc<LocalLlm>>,
+) -> Result<SummaryReadiness, String> {
+    let settings = summary_settings_get(state.clone()).await?;
+    Ok(readiness(&state, &llm, &settings))
+}
 
 /// Keep the stored segment indexes as source ids even when blank rows are
 /// omitted, so a summary link still points to the original passage.
@@ -182,6 +343,7 @@ pub async fn note_summary_get(state: State<'_, AppState>, id: i64) -> Result<Sum
 pub async fn note_summary_generate(
     app: AppHandle,
     state: State<'_, AppState>,
+    llm: State<'_, Arc<LocalLlm>>,
     id: i64,
     revision: i64,
     replace_edited: bool,
@@ -194,7 +356,9 @@ pub async fn note_summary_generate(
     )
     .await
     .map_err(|e| e.to_string())?;
-    let _ = route(&settings)?;
+    if let SummaryReadiness::NeedsSetup { reason, .. } = readiness(&state, &llm, &settings) {
+        return Err(reason);
+    }
     summary::enqueue(
         state.db().pool(),
         id,
@@ -363,11 +527,18 @@ async fn generate(
         .collect();
     let total = i64::try_from(inputs.len().saturating_mul(2).saturating_sub(1))
         .map_err(|_| "Too many summary chunks.")?;
-    summary::progress(state.db().pool(), job, 0, total, &job.chunks_json)
-        .await
-        .map_err(|_| "Could not save summary progress.")?;
     let mut cache: BTreeMap<String, Summary> = serde_json::from_str(&job.chunks_json)
         .map_err(|_| "Saved summary progress is invalid. Regenerate to start over.")?;
+    summary::progress(
+        state.db().pool(),
+        job,
+        i64::try_from(cache.len()).map_err(|_| "Too many cached summary steps.")?,
+        total,
+        &job.chunks_json,
+    )
+    .await
+    .map_err(|_| "Could not save summary progress.")?;
+    let _ = app.emit(SUMMARY_EVENT, job.note_id);
     let mut layer = Vec::new();
     let mut weights = Vec::new();
     for (index, input) in inputs.iter().enumerate() {

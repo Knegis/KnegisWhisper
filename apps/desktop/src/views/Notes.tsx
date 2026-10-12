@@ -100,6 +100,7 @@ import { hitMeta } from "../lib/searchHit";
 import { deleteForeverQuestion, emptyTrashQuestion, movedToTrash, trashedMeta, trashSpaceLine } from "../lib/trash";
 import { carriesNote, draggedNoteId, folderChange, NOTE_DRAG_TYPE } from "../lib/noteDrag";
 import { useNotesLibrary } from "../lib/useNotesLibrary";
+import type { SummarySetupTarget } from "../lib/ipc";
 import { acknowledgeNote, noteHasPerson } from "../lib/noteList";
 
 function noteDate(value: string | null) {
@@ -130,7 +131,7 @@ type FocusTarget = "undo" | "title" | "trash";
  */
 type ContextMenu = { x: number; y: number; anchor: HTMLButtonElement; fromButton?: boolean } & ({ kind: "note"; note: NoteListItem | Note } | { kind: "folder"; folder: Folder });
 
-export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, onImport }: { initialNoteId?: number | null; openRequest?: { id: number; transcriptRow: number | null } | null; onOpenNote?: (id: number, transcriptRow?: number) => void; onImport: () => void }) {
+export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, onImport, onSummarySetup }: { initialNoteId?: number | null; openRequest?: { id: number; transcriptRow: number | null; summaryFocus?: boolean } | null; onOpenNote?: (id: number, transcriptRow?: number) => void; onImport: () => void; onSummarySetup: (id: number, target: SummarySetupTarget) => void }) {
   const [context, setContext] = useState<ContextMenu | null>(null);
   const [shareFolder, setShareFolder] = useState<Folder | null>(null);
   const [shareImportRequest, setShareImportRequest] = useState(0);
@@ -824,6 +825,8 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
           </>
         ) : trashedView ?? (openNote ? (
           <NoteWorkspace
+            focusSummary={openRequest?.id === openNote.id && openRequest.summaryFocus === true}
+            onSummarySetup={async target => { await workspaceRef.current?.flush(); onSummarySetup(openNote.id, target); }}
             key={openNote.id}
             ref={workspaceRef}
             note={openNote}

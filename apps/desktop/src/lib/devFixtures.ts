@@ -2584,6 +2584,9 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
     return null;
   },
   summary_settings_get: () => summarySettings,
+  summary_readiness_get: () => summaryConfigured(summarySettings)
+    ? { state: "ready" as const }
+    : { state: "needs-setup" as const, reason: "Choose a summary provider and model.", target: "summary-settings" as const },
   note_summary_get: (a) => summaryOf(arg<number>(a, "id") ?? 0),
   note_summary_generate: (a) => {
     const id = arg<number>(a, "id") ?? 0;

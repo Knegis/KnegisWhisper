@@ -448,6 +448,13 @@ export type SummaryState = { noteId: number, content: string | null, revision: n
  */
 model: string | null, references: Array<SummaryReference>, };
 
+export type SummarySetupTarget = "summary-settings" | "providers" | "local-text-models" | "company-accounts";
+
+/**
+ * Configuration readiness, not a claim that a provider has answered a live request.
+ */
+export type SummaryReadiness = { "state": "ready" } | { "state": "needs-setup", reason: string, target: SummarySetupTarget, };
+
 /**
  * What the user configured, as stored.
  *

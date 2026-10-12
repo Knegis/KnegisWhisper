@@ -164,6 +164,8 @@ fn render() -> String {
             kw_notes_core::summary::SummarySettings,
             kw_notes_core::summary::SummaryReference,
             kw_notes_core::summary::SummaryState,
+            crate::summaries::SummarySetupTarget,
+            crate::summaries::SummaryReadiness,
             crate::reasoning::CleanupSettings,
             crate::reasoning::ReasoningDispatch,
             crate::reasoning::ReasoningModelSummary,

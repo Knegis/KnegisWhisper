@@ -179,8 +179,12 @@ function EnterpriseForm({
 
 export function SettingsIntelligence({
   onGoToProviders,
+  onGoToLocalModels,
+  summaryFocus,
 }: {
   onGoToProviders: () => void;
+  onGoToLocalModels: () => void;
+  summaryFocus?: number | undefined;
 }) {
   const load = useCallback(() => getReasoningStatus(), []);
   const { data, error, guard } = useRefresh(load);
@@ -271,7 +275,7 @@ export function SettingsIntelligence({
     <div className="view">
       {error ? <FailureLine text="That didn't work." detail={error} /> : null}
 
-      <SummarySettingsPanel />
+      <SummarySettingsPanel focusRequest={summaryFocus} onGoToProviders={onGoToProviders} onGoToLocalModels={onGoToLocalModels} />
       <section data-surface="settings.intelligence">
         <h2>Dictation cleanup</h2>
         <p className="muted">
