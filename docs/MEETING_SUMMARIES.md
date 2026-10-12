@@ -5,6 +5,9 @@ Implemented on 2026-09-20. Tracking: [KNEG-278](https://linear.app/axelalbertkar
 ## Use
 
 In Settings > Cleanup & summaries > Meeting summaries, select a provider/model and save.
+Unsaved changes are identified beside the form. Leaving via navigation or Return to note offers
+Save changes, Discard changes or Stay. A failed write keeps the draft; edits made during a save
+remain pending. Settings retain their existing immediate, blur and explicit save conventions.
 Automatic generation is off by default. Enable it to summarize newly saved meetings
 and completed audio/video imports, including imports submitted through the local API.
 Turning it off cancels queued automatic jobs; already-running jobs have a Cancel action.

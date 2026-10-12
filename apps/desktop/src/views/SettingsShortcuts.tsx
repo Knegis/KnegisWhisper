@@ -1,3 +1,4 @@
+import { useSettingsDraft } from "../components/SettingsDrafts";
 /**
  * Settings > Shortcuts: the key bound to each action, and the evidence that
  * pressing it did something.
@@ -23,7 +24,7 @@
  * shortcuts".
  */
 
-import { Fragment, useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 
 import { Keycaps } from "../components/Keycaps";
 import { LearnMore } from "../components/LearnMore";
@@ -71,7 +72,7 @@ export function SettingsShortcuts({
     return { hotkeys, portalPreference: portalPreference === true };
   }, []);
 
-  const { data, error, reload, guard } = useRefresh(load);
+  const { data, error, reload, fail } = useRefresh(load);
 
   useEffect(() => {
     if (!data?.hotkeys.portalEnabled) return;
@@ -121,28 +122,26 @@ export function SettingsShortcuts({
    * it was — an earlier version of this control had a fourth, silence, which is
    * the only unacceptable one.
    */
-  const applyHotkey = (b: Binding) => {
-    const typed = (draftKeys[b.action] ?? acceleratorText(b)).trim();
-    if (!typed) {
-      setHotkeyResult((prev) => ({
-        ...prev,
-        [b.action]: "Type an accelerator first, for example Control+Shift+D.",
-      }));
-      return;
-    }
-    void guard(async () => {
-      // A single comma-separated string, matching `hotkey_set`: one action can
-      // have several accelerators.
-      const change = await setHotkey(b.action, typed);
-      setHotkeyResult((prev) => ({ ...prev, [b.action]: changeLabel(change) }));
-      // Drop the draft so the field goes back to mirroring what is stored.
-      setDraftKeys((prev) => {
-        const next = { ...prev };
-        delete next[b.action];
-        return next;
-      });
-    });
+  const keysSaved = useRef<Record<string, string>>({});
+  const keysNow = useRef(draftKeys); keysNow.current = draftKeys;
+  const persistHotkey = async (b: Binding) => {
+    const submitted = keysNow.current[b.action];
+    const typed = (submitted ?? acceleratorText(b)).trim();
+    if (!typed) throw new Error("Type an accelerator first, for example Control+Shift+D.");
+    const change = await setHotkey(b.action, typed);
+    setHotkeyResult(prev => ({ ...prev, [b.action]: changeLabel(change) }));
+    if (submitted !== undefined) keysSaved.current[b.action] = submitted;
+    await reload();
   };
+  const dirtyKeys = () => Object.keys(keysNow.current).filter(action => {
+    const binding = data?.hotkeys.bindings.find(item => item.action === action);
+    return keysNow.current[action] !== (keysSaved.current[action] ?? (binding ? acceleratorText(binding) : ""));
+  });
+  const shortcutDraft = useSettingsDraft({ label: "Keyboard shortcuts", dirty: dirtyKeys().length > 0,
+    save: async () => { for (const binding of data?.hotkeys.bindings ?? []) if (dirtyKeys().includes(binding.action)) await persistHotkey(binding); },
+    discard: () => setDraftKeys({ ...keysSaved.current }) });
+  const applyHotkey = (b: Binding) => { void shortcutDraft.run(() => persistHotkey(b)).catch(cause => setHotkeyResult(prev => ({ ...prev, [b.action]: String(cause) }))); };
+
 
   /**
    * Switch one action between toggling and being held.
@@ -153,16 +152,16 @@ export function SettingsShortcuts({
    * for a mode change any more than it can for a key.
    */
   const applyMode = (b: Binding, mode: HotkeyMode) => {
-    void guard(async () => {
+    void shortcutDraft.run(async () => {
       const change = await setHotkeyMode(b.action, mode);
       setHotkeyResult((prev) => ({ ...prev, [b.action]: changeLabel(change) }));
       await reload();
-    });
+    }, `mode:${b.action}`).catch(fail);
   };
 
   if (!data) {
     return (
-      <div className="view">
+      <div className="view">{shortcutDraft.feedback}
         {error ? <p className="error">{error}</p> : <p className="muted">Loading…</p>}
       </div>
     );
@@ -183,7 +182,7 @@ export function SettingsShortcuts({
   ))];
 
   return (
-    <div className="view">
+    <div className="view">{shortcutDraft.feedback}
       {error ? <p className="error">{error}</p> : null}
 
       <section data-surface="settings.shortcuts" aria-label="Shortcuts">
@@ -191,9 +190,9 @@ export function SettingsShortcuts({
           <div className="field">
             <label>
               <input type="checkbox" checked={data.portalPreference}
-                onChange={(event) => { const enabled = event.target.checked; void guard(async () => {
+                onChange={(event) => { const enabled = event.target.checked; void shortcutDraft.run(async () => {
                   await setHotkeyPortal(enabled); await reload();
-                }); }} />
+                }, "portal").catch(fail); }} />
               Use desktop portal for shortcuts
             </label>
             <p className="muted">Opt-in preview. Restart the application after changing this setting. The desktop may ask you to approve or change the shortcut.</p>

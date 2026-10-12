@@ -1,3 +1,4 @@
+import { SettingsDraftsProvider, useSettingsNavigation } from "./components/SettingsDrafts";
 import { TitleBar } from "./components/TitleBar";
 import type { SummarySetupTarget } from "./lib/ipc";
 import { LanguagePopup } from "./components/LanguagePopup";
@@ -235,7 +236,9 @@ function Shell({ panelCollapsed, onTogglePanel }: { panelCollapsed: boolean; onT
   // Not persisted, and starting on Dictation because that is what the
   // application is for. Reopening on the screen you last used sounds helpful
   // until the screen you last used is the one that failed.
-  const [history, navigate] = useReducer(navigationHistory, initialHistory);
+  const [history, dispatchNavigate] = useReducer(navigationHistory, initialHistory);
+  const requestNavigation = useSettingsNavigation();
+  const navigate = useCallback((action: Parameters<typeof navigationHistory>[1]) => { void requestNavigation(() => dispatchNavigate(action)); }, [requestNavigation]);
   const [summarySetup, setSummarySetup] = useState<{ noteId: number; nonce: number } | null>(null);
   const destination = history.entries[history.index] ?? defaultDestination;
   const view = destination.view;
@@ -244,7 +247,7 @@ function Shell({ panelCollapsed, onTogglePanel }: { panelCollapsed: boolean; onT
   const page = PAGES[view];
   // A new request for each destination, so a row chosen again is shown again (KNEG-406).
   const searchNoteRequest = useMemo(() => destination.noteId === undefined ? null : { id: destination.noteId, transcriptRow: destination.transcriptRow ?? null, ...(destination.summaryFocus ? { summaryFocus: true } : {}) }, [destination]);
-  const openNote = useCallback((id: number, transcriptRow?: number) => navigate({ type: "visit", destination: { view: "notes", noteId: id, ...(transcriptRow === undefined ? {} : { transcriptRow }) } }), []);
+  const openNote = useCallback((id: number, transcriptRow?: number) => navigate({ type: "visit", destination: { view: "notes", noteId: id, ...(transcriptRow === undefined ? {} : { transcriptRow }) } }), [navigate]);
 
   /*
    * Go to a screen.
@@ -256,18 +259,24 @@ function Shell({ panelCollapsed, onTogglePanel }: { panelCollapsed: boolean; onT
    * panel's are both derived from `view`.
    */
   const select = useCallback((id: ViewId) => {
-    if (railOf(id) !== "settings") setSummarySetup(null);
-    navigate({ type: "visit", destination: { view: id } });
-  }, []);
+    void requestNavigation(() => {
+      if (railOf(id) !== "settings") setSummarySetup(null);
+      dispatchNavigate({ type: "visit", destination: { view: id } });
+    });
+  }, [requestNavigation]);
   const openSummarySetup = useCallback((noteId: number, _target: SummarySetupTarget) => {
-    setSummarySetup({ noteId, nonce: Date.now() });
-    navigate({ type: "visit", destination: { view: "intelligence" } });
-  }, []);
+    void requestNavigation(() => {
+      setSummarySetup({ noteId, nonce: Date.now() });
+      dispatchNavigate({ type: "visit", destination: { view: "intelligence" } });
+    });
+  }, [requestNavigation]);
   const returnToSummary = () => {
     if (summarySetup === null) return;
     const noteId = summarySetup.noteId;
-    setSummarySetup(null);
-    navigate({ type: "visit", destination: { view: "notes", noteId, summaryFocus: true } });
+    void requestNavigation(() => {
+      setSummarySetup(null);
+      dispatchNavigate({ type: "visit", destination: { view: "notes", noteId, summaryFocus: true } });
+    });
   };
 
   /*
@@ -390,7 +399,7 @@ export default function App() {
   // surface a compile-visible addition rather than a quiet fall-through.
   switch (currentSurface()) {
     case "main":
-      return <MainWindow />;
+      return <SettingsDraftsProvider><MainWindow /></SettingsDraftsProvider>;
     case "dictation-languages":
       return <LanguagePopup />;
     case "overlay":

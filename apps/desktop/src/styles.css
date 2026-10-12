@@ -2953,3 +2953,9 @@ button.provider-link:hover:not(:disabled) { background: none; color: var(--band-
 .provider-tech .learn-more { margin: 0; }
 .providers-empty { margin-top: 28px; }
 .providers > .learn-more { margin-top: 32px; }
+
+
+.settings-drafts-dialog { max-width: min(480px, calc(100vw - 40px)); border: 1px solid var(--rule); border-radius: 8px; color: var(--text); background: var(--bg); padding: 24px; }
+.settings-drafts-dialog::backdrop { background: rgb(0 0 0 / 35%); }
+.settings-draft-status { display: block; font-size: 12px; margin-top: 6px; }
+.settings-draft-error { display: block; }

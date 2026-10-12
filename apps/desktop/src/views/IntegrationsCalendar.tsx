@@ -1,3 +1,4 @@
+import { useSettingsDraft } from "../components/SettingsDrafts";
 /**
  * Integrations > Calendar — Google Calendar and Microsoft Graph, plus Apple's
  * unimplemented EventKit state.
@@ -27,7 +28,7 @@
  * under Learn more. Times are shown in your locale, not as stored.
  */
 
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 
 import { FailureLine } from "../components/FailureLine";
 import { LearnMore } from "../components/LearnMore";
@@ -97,14 +98,18 @@ function ProviderSection({
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<Plain | null>(null);
 
-  const clientId = draft ?? status.clientId ?? "";
+  const savedClient = useRef<string | null>(null);
+  const clientId = draft ?? savedClient.current ?? status.clientId ?? "";
   const company = provider === "google" ? "Google" : "Microsoft";
   const portal = provider === "google" ? "Google Cloud Console" : "the Azure portal";
 
   const saveClientId = useCallback(async () => {
     await setCalendarClientId(provider, clientId.trim());
-  }, [provider, clientId]);
+    savedClient.current = clientId.trim();
+    await reload();
+  }, [provider, clientId, draft, reload]);
 
+  const clientDraft = useSettingsDraft({ label: `${company} calendar client ID`, dirty: draft !== null && draft.trim() !== (savedClient.current ?? status.clientId ?? ""), save: saveClientId, discard: () => setDraft(savedClient.current) });
   const run = useCallback(
     async (work: () => Promise<void>) => {
       setBusy(true);
@@ -144,6 +149,7 @@ function ProviderSection({
         </p>
       </LearnMore>
 
+      {clientDraft.feedback}
       <div className="row">
         <span className="row-label">Client ID</span>
         <span className="row-value controls">
@@ -154,7 +160,7 @@ function ProviderSection({
             value={clientId}
             onChange={(e) => setDraft(e.target.value)}
             onBlur={() => {
-              void run(saveClientId);
+              void clientDraft.run(saveClientId).catch(cause => setError(String(cause)));
             }}
           />
         </span>
@@ -204,7 +210,7 @@ function ProviderSection({
                       onChange={(e) => {
                         const selected = e.target.checked;
                         void run(async () => {
-                          await setCalendarSelected(provider, cal.id, selected);
+                          await clientDraft.run(async () => { await setCalendarSelected(provider, cal.id, selected); }, `calendar:${cal.id}`);
                           await reload();
                         });
                       }}
@@ -256,7 +262,7 @@ function ProviderSection({
               disabled={busy || !status.clientIdConfigured}
               onClick={() => {
                 void run(async () => {
-                  await saveClientId();
+                  await clientDraft.run(saveClientId);
                   const outcome = await connectCalendar(provider);
                   setNote(connectOutcomeLabel(outcome));
                   await reload();

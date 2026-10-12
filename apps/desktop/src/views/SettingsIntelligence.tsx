@@ -1,3 +1,4 @@
+import { useSettingsDraft } from "../components/SettingsDrafts";
 import { SummarySettingsPanel } from "../components/SummarySettingsPanel";
 /**
  * Settings > Intelligence — the reasoning model that tidies a dictation.
@@ -30,7 +31,7 @@ import { SummarySettingsPanel } from "../components/SummarySettingsPanel";
  * Settings › Providers.
  */
 
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 
 import { FailureLine } from "../components/FailureLine";
 import { LearnMore } from "../components/LearnMore";
@@ -112,20 +113,21 @@ function EnterpriseForm({
   onClear,
 }: {
   status: EnterpriseStatus;
-  onSave: (config: EnterpriseConfig) => void;
-  onClear: () => void;
+  onSave: (config: EnterpriseConfig) => Promise<void>;
+  onClear: () => Promise<void>;
 }) {
   const [values, setValues] = useState<Record<string, string>>({});
   const fields = ENTERPRISE_FIELDS[status.provider] ?? [];
   // A saved field by the label its box has, not the key Rust stores it under.
   const label = (name: string) => fields.find((f) => f.key === name)?.label ?? name;
 
-  const save = () => {
-    // The tag Rust discriminates on. Built here rather than inferred, so an
-    // unknown provider is a missing key rather than a mis-tagged document.
-    onSave({ provider: status.provider, ...values } as unknown as EnterpriseConfig);
-    setValues({});
+  const persist = async () => {
+    const submitted = values;
+    await onSave({ provider: status.provider, ...submitted } as unknown as EnterpriseConfig);
+    setValues(current => JSON.stringify(current) === JSON.stringify(submitted) ? {} : current);
   };
+  const companyDraft = useSettingsDraft({ label: `${status.name} account`, order: 20 + ["bedrock", "azure", "vertex"].indexOf(status.provider), dirty: Object.values(values).some(value => value.length > 0), save: persist, discard: () => setValues({}) });
+  const save = () => { void companyDraft.run(persist).catch(() => undefined); };
 
   return (
     <div className="row">
@@ -161,13 +163,14 @@ function EnterpriseForm({
           </span>
         ))}
 
+        {companyDraft.feedback}
         <span className="controls">
           {/* Never disabled: a control that silently does nothing is the defect. */}
           <button type="button" onClick={save}>
             Save
           </button>
           {status.configured ? (
-            <button type="button" onClick={onClear}>
+            <button type="button" onClick={() => { void companyDraft.run(onClear).catch(() => undefined); }}>
               Clear
             </button>
           ) : null}
@@ -187,7 +190,7 @@ export function SettingsIntelligence({
   summaryFocus?: number | undefined;
 }) {
   const load = useCallback(() => getReasoningStatus(), []);
-  const { data, error, guard } = useRefresh(load);
+  const { data, error, reload } = useRefresh(load);
 
   /** Draft edits, so nothing is saved until Apply. */
   const [draftProvider, setDraftProvider] = useState<string | null>(null);
@@ -195,6 +198,25 @@ export function SettingsIntelligence({
   const [draftUrl, setDraftUrl] = useState<string | null>(null);
   const [said, setSaid] = useState<string | null>(null);
 
+  const cleanupSaved = useRef<NonNullable<typeof data>["settings"] | null>(null);
+  const lastCleanupRead = useRef(data?.settings);
+  if (data?.settings !== lastCleanupRead.current) { lastCleanupRead.current = data?.settings; cleanupSaved.current = data?.settings ?? null; }
+  const currentDrafts = useRef({ provider: draftProvider, model: draftModel, url: draftUrl });
+  currentDrafts.current = { provider: draftProvider, model: draftModel, url: draftUrl };
+  const persistCleanup = async (enabled = cleanupSaved.current?.enabled ?? data?.settings.enabled ?? false) => {
+    if (!data) throw new Error("Settings haven't loaded yet.");
+    const submitted = currentDrafts.current;
+    const configuration = effectiveCleanup(cleanupSaved.current ?? data.settings, data.providers, enabled, submitted);
+    const next = await setCleanup(configuration);
+    cleanupSaved.current = configuration;
+    setSaid(savedLine(next, id => data.providers.flatMap(p => p.models).find(m => m.id === id)?.name ?? id));
+    if (currentDrafts.current.provider === submitted.provider) setDraftProvider(null);
+    if (currentDrafts.current.model === submitted.model) setDraftModel(null);
+    if (currentDrafts.current.url === submitted.url) setDraftUrl(null);
+    await reload();
+  };
+  const cleanupDraft = useSettingsDraft({ label: "Dictation cleanup", order: 10, dirty: data !== null && JSON.stringify(effectiveCleanup(cleanupSaved.current ?? data.settings, data.providers, (cleanupSaved.current ?? data.settings).enabled, currentDrafts.current)) !== JSON.stringify(effectiveCleanup(cleanupSaved.current ?? data.settings, data.providers, (cleanupSaved.current ?? data.settings).enabled)),
+    save: () => persistCleanup(), discard: () => { setDraftProvider(null); setDraftModel(null); setDraftUrl(null); } });
   if (!data) {
     return (
       <div className="view">
@@ -203,7 +225,8 @@ export function SettingsIntelligence({
     );
   }
 
-  const { settings, route, providers, enterprise } = data;
+  const { route, providers, enterprise } = data;
+  const settings = cleanupSaved.current ?? data.settings;
 
   // A draft field falls back to what is stored, so the controls always show the
   // real configuration rather than an empty box next to a working setting.
@@ -216,19 +239,7 @@ export function SettingsIntelligence({
     providers.flatMap((p) => p.models).find((m) => m.id === id)?.name ?? id;
   const current = cleanupRouteLine(route, modelName);
 
-  const apply = (enabled: boolean) => {
-    setSaid(null);
-    void guard(async () => {
-      // The same computation Dictation's Tidy up toggle sends (`lib/cleanup.ts`);
-      // the write stays here, where the settings audit looks for it.
-      const next = await setCleanup(effectiveCleanup(settings, providers, enabled, drafts));
-      setSaid(savedLine(next, modelName));
-      // Drafts drop so the controls go back to mirroring what is stored.
-      setDraftProvider(null);
-      setDraftModel(null);
-      setDraftUrl(null);
-    });
-  };
+  const apply = (enabled: boolean) => { setSaid(null); void cleanupDraft.run(() => persistCleanup(enabled)).catch(() => undefined); };
 
   const providerRow = (p: ReasoningProviderSummary) => {
     const dispatch = reasoningDispatchLine(p.dispatch);
@@ -397,6 +408,7 @@ export function SettingsIntelligence({
             Turn it off
           </button>
         </span>
+        {cleanupDraft.feedback}
         {said ? (
           <p className="muted" role="status">
             {said}
@@ -443,12 +455,8 @@ export function SettingsIntelligence({
           <EnterpriseForm
             key={e.provider}
             status={e}
-            onSave={(config) => {
-              void guard(() => setEnterpriseConfig(config));
-            }}
-            onClear={() => {
-              void guard(() => clearEnterpriseConfig(e.provider));
-            }}
+            onSave={async config => { await setEnterpriseConfig(config); await reload(); }}
+            onClear={async () => { await clearEnterpriseConfig(e.provider); await reload(); }}
           />
         ))}
       </section>
