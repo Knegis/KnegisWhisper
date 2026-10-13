@@ -1,0 +1,60 @@
+import { useRef, type MouseEvent } from "react";
+
+import { Icon } from "./Icon";
+
+type PlayerHeaderProps = {
+  /** Who is speaking at the player's time (`lastStartedLine`'s speaker); null when nobody is known. */
+  speaker: string | null;
+  playing: boolean;
+  /** The selection's "a–b" (`selectionInterval`), while two or more lines are selected; null otherwise. */
+  selection: string | null;
+  hasSelection: boolean;
+  canPlaySelection: boolean;
+  onPlaySelection: () => void;
+  onClearSelection: () => void;
+  /** Whether Follow is on: the transcript keeps the playing line in view (KNEG-448). */
+  follow: boolean;
+  /** The chip pressed: Follow off, or on and the transcript back at the line the player is at. */
+  onToggleFollow: () => void;
+};
+
+/**
+ * The line across the top of the player card while the transcript is on screen (KNEG-448): who
+ * is speaking -- a 6px square, `--band` while the recording plays and muted while it is paused,
+ * and the name -- or, while lines are selected, "Play selection (a–b)" and a button that clears
+ * the selection; and at the far end the Follow chip, `--band` while it is on. A fixed 24px row
+ * whichever it shows, so the card does not change height as playback passes a line nobody is
+ * known to have said.
+ */
+export function PlayerHeader({ speaker, playing, selection, hasSelection, canPlaySelection, onPlaySelection, onClearSelection, follow, onToggleFollow }: PlayerHeaderProps) {
+  const followRef = useRef<HTMLButtonElement>(null);
+  // Clear goes with the selection it clears, and focus on it would drop to `<body>`: it moves first
+  // to the Follow chip beside it, or to the card's Play when there is no chip (KNEG-448).
+  const clearSelection = (event: MouseEvent<HTMLButtonElement>) => {
+    const next = followRef.current ?? event.currentTarget.closest(".recording-player")?.querySelector<HTMLElement>(".recording-play") ?? null;
+    next?.focus();
+    onClearSelection();
+  };
+  return (
+    <div className="player-header">
+      {selection !== null ? (
+        <>
+          <button type="button" disabled={!canPlaySelection} className="player-header-play" onClick={onPlaySelection}>
+            Play selection <span className="player-header-range">({selection})</span>
+          </button>
+        </>
+      ) : speaker !== null ? (
+        <>
+          <span className={playing ? "player-header-marker player-header-marker-playing" : "player-header-marker"} aria-hidden="true" />
+          <span className="player-header-speaker">{speaker}</span>
+        </>
+      ) : null}
+      {hasSelection && <button type="button" className="player-header-clear" aria-label="Clear selection" title="Clear selection" onClick={clearSelection}>
+        <Icon name="close" size={14} />
+      </button>}
+      <button ref={followRef} type="button" className="follow-chip" aria-pressed={follow} title="Keep the playing line in view" onClick={onToggleFollow}>
+        Follow
+      </button>
+    </div>
+  );
+}

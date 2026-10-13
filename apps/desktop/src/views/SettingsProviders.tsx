@@ -1,3 +1,4 @@
+import { useSettingsDraft, useSettingsNavigation } from "../components/SettingsDrafts";
 /**
  * Settings > Providers — where an API key gets stored.
  *
@@ -46,7 +47,7 @@
  * the open, above the lists.
  */
 
-import { useCallback, useEffect, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 
 import { FailureLine } from "../components/FailureLine";
 import { Icon } from "../components/Icon";
@@ -135,7 +136,7 @@ export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) 
     ]);
     return { slots, transcription, meetings };
   }, []);
-  const { data, error, guard, fail } = useRefresh(load);
+  const { data, error, reload, fail } = useRefresh(load);
 
   /** The one row whose form is open, and what is typed in it. Never seeded from a stored value; there is no way to. */
   const [open, setOpen] = useState<string | null>(null);
@@ -177,83 +178,50 @@ export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) 
     });
 
   /** Open this row's form, closing any other -- and dropping whatever was typed there. */
-  const toggle = (slot: string) => {
-    setDraft("");
-    setOpen((current) => (current === slot ? null : slot));
+  const requestReplacement = useSettingsNavigation();
+  const draftNow = useRef(draft); draftNow.current = draft;
+  const persistKey = async () => {
+    if (!open) return;
+    const slot = data?.slots.find(item => item.slot === open);
+    if (!slot) throw new Error("This credential is no longer available.");
+    const submitted = draftNow.current;
+    const typed = submitted.trim();
+    if (!typed) throw new Error("Type a key first. Use Clear to remove the stored one.");
+    await setProviderCredential(slot.slot, typed);
+    if (draftNow.current === submitted) { setDraft(""); setOpen(null); setRefocus({ formId: `provider-form-${slot.slot}` }); }
+    setProbe(null); setTestNote(null);
+    say(slot.slot, "Saved. Test connections can check supported providers.");
+    await reload();
   };
+  const keyDraft = useSettingsDraft({ label: "Provider key", dirty: draft.length > 0,
+    save: persistKey, discard: () => { setDraft(""); setOpen(null); } });
+  const toggle = (slot: string) => { void requestReplacement(() => {
+    setDraft(""); setOpen(current => current === slot ? null : slot);
+  }); };
 
   const save = (slot: CredentialSlotStatus) => {
-    const typed = draft.trim();
-    if (!typed) {
-      say(slot.slot, "Type a key first. Use Clear to remove the stored one.");
-      return;
-    }
-    let done = false;
     rowError(slot.slot, null);
-    void guard(async () => {
-      try {
-        await setProviderCredential(slot.slot, typed);
-      } catch (cause) {
-        rowError(slot.slot, { text: "Couldn't save the key.", detail: message(cause) });
-        return;
-      }
-      // Cleared immediately, and this is the only copy that ever existed in the
-      // renderer. A field that keeps the key on screen after saving is a field
-      // that leaks it to the next person at the machine.
-      setDraft("");
-      setOpen(null);
-      say(
-        slot.slot,
-        slot.kind !== "custom-endpoint"
-          ? "Saved. Press Test connections to check that it works."
-          : slot.usedFor.length > 0
-            ? "Saved. Cleanup and summaries send it to the server address you enter under Cleanup & summaries."
-            : "Saved. It does nothing on its own yet: the feature that uses it needs its server's address too.",
-      );
-      // Any earlier verdict is now about a different key, and "nothing to
-      // test" may no longer be true.
-      setProbe(null);
-      setTestNote(null);
-      done = true;
-    }).then(() => { if (done) setRefocus({ formId: `provider-form-${slot.slot}` }); });
+    void keyDraft.run(persistKey).catch(cause => rowError(slot.slot, { text: "Couldn't save the key.", detail: message(cause) }));
   };
 
   const clear = (slot: CredentialSlotStatus) => {
-    let done = false;
     rowError(slot.slot, null);
-    void guard(async () => {
-      // An empty value is how `provider_credential_set` deletes. Explicit here
-      // so the intent is not hidden in a falsy check.
-      try {
-        await setProviderCredential(slot.slot, "");
-      } catch (cause) {
-        rowError(slot.slot, { text: "Couldn't remove the key.", detail: message(cause) });
-        return;
-      }
-      setDraft("");
-      setOpen(null);
-      say(slot.slot, "Removed from this computer.");
-      setProbe(null);
-      setTestNote(null);
-      done = true;
-    }).then(() => { if (done) setRefocus({ formId: `provider-form-${slot.slot}` }); });
+    void keyDraft.run(async () => {
+      await setProviderCredential(slot.slot, "");
+      setDraft(""); setOpen(null); setProbe(null); setTestNote(null);
+      say(slot.slot, "Removed. This key is no longer stored.");
+      setRefocus({ formId: `provider-form-${slot.slot}` });
+      await reload();
+    }).catch(cause => rowError(slot.slot, { text: "Couldn't remove the key.", detail: message(cause) }));
   };
 
   const header = (actions?: ReactNode) =>
     actions === undefined ? <PageHeader page={PAGES.providers} /> : <PageHeader page={PAGES.providers} actions={actions} />;
-
-  if (!data) {
-    return (
-      <div className="view">
-        {header()}
-        {error ? <FailureLine text="This page couldn't load." detail={error} /> : <p className="muted">Loading…</p>}
-      </div>
-    );
-  }
-
+  if (!data) return <div className="view">{keyDraft.feedback}{header()}{error ? <FailureLine text="This page couldn't load." detail={error} /> : <p className="muted">Loading...</p>}</div>;
   const { slots, transcription, meetings } = data;
-  const bySlot = new Map(slots.map((s) => [s.slot, s]));
+  const bySlot = new Map(slots.map(slot => [slot.slot, slot]));
   const lists = providerRows(slots, transcription, meetings);
+
   // What `probe_configured` will test: a transcription provider with a key.
   const testable = slots.filter((s) => s.stored && transcription.some((p) => p.credentialSlot === s.slot));
 
@@ -461,7 +429,7 @@ export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) 
   const failures = ran.flatMap((r) => (r.outcome.outcome === "fail" ? [{ ...r, detail: r.outcome.detail }] : []));
 
   return (
-    <div className="view providers" data-surface="settings.providers">
+    <div className="view providers" data-surface="settings.providers">{keyDraft.feedback}
       {header(
         <>
           <label className="providers-search">

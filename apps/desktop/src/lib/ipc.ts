@@ -105,6 +105,8 @@ import type {
   MeetingProviderSummary,
   MeetingState,
   MeetingStatus,
+  FinalisationUpdate,
+  FinalisationProgress,
   MicrophoneCheck,
   MicrophoneSupport,
   ModelCacheStatus,
@@ -237,6 +239,8 @@ export type {
   MeetingProviderSummary,
   MeetingState,
   MeetingStatus,
+  FinalisationUpdate,
+  FinalisationProgress,
   MicrophoneCheck,
   MicrophoneSupport,
   ModelCacheStatus,
@@ -1560,8 +1564,9 @@ export const deleteVocabulary = (id: number) => invoke<void>("vocabulary_delete"
 export const restoreVocabulary = () => invoke<void>("vocabulary_restore");
 
 
-export type { SummarySettings, SummaryState, SummaryReference } from "../generated/ipc-types.js";
-import type { SummarySettings, SummaryState } from "../generated/ipc-types.js";
+export type { SummarySettings, SummaryState, SummaryReference, SummaryReadiness, SummarySetupTarget } from "../generated/ipc-types.js";
+import type { SummarySettings, SummaryState, SummaryReadiness } from "../generated/ipc-types.js";
+export const getSummaryReadiness = () => invoke<SummaryReadiness>("summary_readiness_get");
 export const getSummarySettings = () => invoke<SummarySettings>("summary_settings_get");
 export async function setSummarySettings(settings: SummarySettings): Promise<void> { return invoke<void>("summary_settings_set", { settings }); }
 export const getNoteSummary = (id: number) => invoke<SummaryState>("note_summary_get", { id });
@@ -1578,3 +1583,8 @@ export async function getNoteMetadataForPeople(id: number): Promise<NoteListItem
 
 export async function getSpeechInstallations(): Promise<SpeechInstallSnapshot> { return invoke<SpeechInstallSnapshot>("speech_installations"); }
 export function onSpeechInstallations(handler: (jobs: SpeechInstallSnapshot) => void): Promise<UnlistenFn> { return listen<SpeechInstallSnapshot>("speech-installations", event => handler(event.payload)); }
+
+/** Runtime progress for Stop/recovery; revisions order snapshots and events. */
+export async function onMeetingProgress(handler: (update: FinalisationUpdate) => void): Promise<UnlistenFn> {
+  return listen<FinalisationUpdate>("meeting-progress", event => handler(event.payload));
+}

@@ -5,7 +5,7 @@ import { DEFAULT_VIEW, type ViewId } from "./navigation.js";
  * (KNEG-406). The row is kept with the entry, so Back and Forward show it
  * again.
  */
-export type Destination = { view: ViewId; noteId?: number; transcriptRow?: number };
+export type Destination = { view: ViewId; noteId?: number; transcriptRow?: number; summaryFocus?: boolean };
 export type NavigationHistory = { entries: Destination[]; index: number };
 export type NavigationAction = { type: "visit"; destination: Destination } | { type: "back" | "forward" };
 export const defaultDestination: Destination = { view: DEFAULT_VIEW };

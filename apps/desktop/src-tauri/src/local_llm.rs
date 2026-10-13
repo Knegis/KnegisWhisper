@@ -198,11 +198,42 @@ impl LocalLlm {
         }
     }
 
+    /// Read-only preflight shared with summary setup. Never starts, downloads or hashes assets.
+    pub(crate) fn check_startable(&self, model_id: &str) -> Result<(), String> {
+        let (_, asset) = self
+            .catalog
+            .resolve(SIDECAR)
+            .map_err(|error| error.to_string())?;
+        let sidecars = paths::sidecar_dir();
+        let installation = kw_sidecar::locate(
+            SIDECAR,
+            asset,
+            &kw_sidecar::SearchPath {
+                bundled: None,
+                downloaded: sidecars.path,
+            },
+            &kw_sidecar::RealFs,
+        );
+        if installation.executable().is_none() {
+            return Err(installation.explain("the local text-generation server"));
+        }
+        let registry = kw_provider_registry::registry().map_err(|error| error.to_string())?;
+        let model = find_model(registry, model_id)?;
+        if !gguf_path(&model.file_name).is_file() {
+            return Err(format!(
+                "{} is not installed. Install it under Local text models.",
+                model.name
+            ));
+        }
+        Ok(())
+    }
+
     /// Start the server for one model, or return the port if it is already up.
     pub async fn start_model(&self, model_id: &str) -> Result<u16, String> {
         if let Some(port) = self.endpoint.port() {
             return Ok(port);
         }
+        self.check_startable(model_id)?;
 
         let (spec, asset) = self.catalog.resolve(SIDECAR).map_err(|e| e.to_string())?;
 

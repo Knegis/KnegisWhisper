@@ -146,6 +146,11 @@ use tokio::sync::{mpsc, oneshot, Mutex};
 use ts_rs::TS;
 
 /// State changes.
+pub mod finalisation;
+use finalisation::{
+    FinalisationUpdate, Kind as FinalisationKind, Stage as FinalisationStage, Tracker,
+};
+
 pub const STATE_EVENT: &str = "meeting-state";
 /// One piece of transcript, as it is produced.
 pub const TRANSCRIPT_EVENT: &str = "meeting-transcript";
@@ -337,6 +342,7 @@ pub struct MeetingPlan {
 #[serde(rename_all = "camelCase")]
 pub struct MeetingStatus {
     pub state: MeetingState,
+    pub finalisation: FinalisationUpdate,
     /// Why the live transcription stopped, when it has.
     ///
     /// The provider's own sentence, naming which of the two sockets died --
@@ -524,6 +530,7 @@ pub struct MeetingRuntime {
     /// machine beside it makes start, polling, and stale completions agree on
     /// one answer.
     lifecycle: Mutex<SessionLifecycle>,
+    finalisation: Mutex<Tracker>,
     /// The session in progress.
     ///
     /// Behind an `Arc` so the pump's own task can hold it too. This lock remains
@@ -746,12 +753,30 @@ impl MeetingRuntime {
             credentials,
             live: Arc::new(Mutex::new(None)),
             lifecycle: Mutex::new(SessionLifecycle::default()),
+            finalisation: Mutex::new(Tracker::default()),
             local,
             local_revive,
             sherpa,
             stream,
             watch: Mutex::new(WatchState::default()),
             notes,
+        }
+    }
+
+    async fn begin_progress(&self, id: u64, kind: FinalisationKind) {
+        let update = self.finalisation.lock().await.begin(id, kind);
+        let _ = self.app.emit("meeting-progress", update);
+    }
+    async fn progress_stage(&self, stage: FinalisationStage) {
+        let update = self.finalisation.lock().await.stage(stage);
+        if let Some(update) = update {
+            let _ = self.app.emit("meeting-progress", update);
+        }
+    }
+    async fn end_progress(&self, id: u64) {
+        let update = self.finalisation.lock().await.end(id);
+        if let Some(update) = update {
+            let _ = self.app.emit("meeting-progress", update);
         }
     }
 
@@ -1066,8 +1091,14 @@ impl MeetingRuntime {
             .await
             .begin_recovery()
             .map_err(str::to_owned)?;
+        self.begin_progress(generation, FinalisationKind::Recovery)
+            .await;
+        self.emit_state(MeetingState::Finishing);
         let result = self.recover_recording_inner(storage_key).await;
-        let _ = self.lifecycle.lock().await.finished(generation);
+        self.end_progress(generation).await;
+        if self.lifecycle.lock().await.finished(generation) {
+            self.emit_state(MeetingState::Idle);
+        }
         result
     }
 
@@ -1139,6 +1170,7 @@ impl MeetingRuntime {
         if let Some(speaker_note) = speaker_note {
             details.push_str(&format!(" {speaker_note}"));
         }
+        self.progress_stage(FinalisationStage::SavingNote).await;
         save_recovered(
             &self.db,
             &path,
@@ -1366,6 +1398,9 @@ impl MeetingRuntime {
             let _ = self.lifecycle.lock().await.finished(generation);
             return Err("no meeting is being recorded".to_owned());
         };
+        self.begin_progress(generation, FinalisationKind::Stop)
+            .await;
+        self.emit_state(MeetingState::Finishing);
         let notes = self.notes.take();
         self.notes.flush().await;
         let Live {
@@ -1384,8 +1419,6 @@ impl MeetingRuntime {
             notes,
         };
 
-        self.emit_state(MeetingState::Finishing);
-
         crate::meeting_window::remember_panel_placement(&self.app).await;
         crate::meeting_window::show(&self.app, crate::meeting_window::Mode::Compact);
 
@@ -1400,6 +1433,7 @@ impl MeetingRuntime {
             )
             .await;
 
+        self.end_progress(generation).await;
         if self.lifecycle.lock().await.finished(generation) {
             self.emit_state(MeetingState::Idle);
             crate::meeting_window::hide(&self.app);
@@ -1437,6 +1471,8 @@ impl MeetingRuntime {
         // sender, the pump sees the channel close, finishes the provider and
         // returns. Aborting instead would leave two sockets open until the
         // process noticed.
+        self.progress_stage(FinalisationStage::FinishingLiveTranscript)
+            .await;
         let live_transcript = pump_result(pump.await);
 
         // The live socket is gone now. The whole-file pass below uses the
@@ -1464,6 +1500,7 @@ impl MeetingRuntime {
                         None,
                     );
                     if let Some(note) = note {
+                        self.progress_stage(FinalisationStage::SavingNote).await;
                         match create_meeting_note(&self.db, note, &save.plan, None).await {
                             // A folder deleted since Start is left out of this
                             // note without a word: only Stop's and Recover's
@@ -1618,6 +1655,7 @@ impl MeetingRuntime {
 
         if phase == SessionPhase::Finishing {
             MeetingStatus {
+                finalisation: self.finalisation.lock().await.snapshot(),
                 state: MeetingState::Finishing,
                 transcript_failure: None,
                 provider: None,
@@ -1635,6 +1673,7 @@ impl MeetingRuntime {
         } else {
             match held.as_ref() {
                 Some(live) => MeetingStatus {
+                    finalisation: self.finalisation.lock().await.snapshot(),
                     state: live_state(
                         live.transcript_failure.get().is_some(),
                         live.pump.is_finished(),
@@ -1654,6 +1693,7 @@ impl MeetingRuntime {
                     notification_activatable,
                 },
                 None => MeetingStatus {
+                    finalisation: self.finalisation.lock().await.snapshot(),
                     state: MeetingState::Idle,
                     transcript_failure: None,
                     provider: None,
@@ -1767,6 +1807,7 @@ impl MeetingRuntime {
                 message: "The meeting note had no content".into(),
             };
         };
+        self.progress_stage(FinalisationStage::SavingNote).await;
         match save_stopped(
             &self.db,
             note,
@@ -1871,6 +1912,8 @@ impl MeetingRuntime {
         if !wanted {
             return labelled(&pass, None, false);
         }
+        self.progress_stage(FinalisationStage::AnalysingSpeakers)
+            .await;
         match crate::diarization::turns(recording).await {
             Ok(Some(turns)) => labelled(&pass, Some(&turns), true),
             Ok(None) => {
@@ -1897,6 +1940,8 @@ impl MeetingRuntime {
 
     /// Transcribe the finished recording in one request.
     async fn transcribe_whole(&self, path: &std::path::Path) -> Result<Option<WholePass>, String> {
+        self.progress_stage(FinalisationStage::TranscribingRecording)
+            .await;
         use kw_transcription_core::local::Inference;
 
         // This pass's use of the whisper server, held until its one request is

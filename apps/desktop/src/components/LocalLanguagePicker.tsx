@@ -1,3 +1,4 @@
+import { useSettingsDraft } from "./SettingsDrafts";
 import { useEffect, useRef, useState } from "react";
 import { FailureLine } from "./FailureLine";
 import { LANGUAGES } from "../lib/controlBar";
@@ -29,7 +30,7 @@ export function LocalLanguagePicker({
 }) {
   const [selected, setSelected] = useState<string[] | null>(initial ? [...initial] : null);
   const [busy, setBusy] = useState(false);
-  const writes = useRef(Promise.resolve());
+  const committed = useRef<string[] | null>(initial ? [...initial] : null);
   const saveGeneration = useRef(0);
   const saving = useRef(false);
   const wanted = useRef(selected);
@@ -42,27 +43,32 @@ export function LocalLanguagePicker({
     let revision = 0;
     void onLocalDictationLanguages(value => {
       revision++;
-      if (!disposed && !saving.current) { wanted.current = value; setSelected(value); }
+      if (!disposed && !saving.current && JSON.stringify(wanted.current) === JSON.stringify(committed.current)) { committed.current = value; wanted.current = value; setSelected(value); }
     }).then(async unlisten => {
       if (disposed) { unlisten(); return; }
       stop = unlisten;
       const before = revision;
       const value = await getLocalDictationLanguages();
-      if (!disposed && before === revision && !saving.current) { wanted.current = value; setSelected(value); }
+      if (!disposed && before === revision && !saving.current) { committed.current = value; wanted.current = value; setSelected(value); }
     }).catch(e => { if (!disposed) setError({ text: "Couldn't read the dictation languages.", detail: String(e) }); });
     return () => { disposed = true; alive.current = false; stop?.(); };
   }, []);
+  const persist = async (languages: string[]) => {
+    await setLocalDictationLanguages(languages);
+    committed.current = languages;
+  };
+  const languageDraft = useSettingsDraft({ label: "Dictation languages", dirty: JSON.stringify(selected) !== JSON.stringify(committed.current),
+    save: async () => { if (wanted.current !== null) await persist(wanted.current); },
+    discard: () => { wanted.current = committed.current; setSelected(committed.current); setError(null); } });
   const save = async (languages: string[]) => {
     const generation = ++saveGeneration.current;
-    saving.current = true;
-    wanted.current = languages; setSelected(languages);
+    saving.current = true; wanted.current = languages; setSelected(languages);
     setBusy(true); setError(null);
-    const write = writes.current.then(() => setLocalDictationLanguages(languages));
-    writes.current = write.catch(() => undefined);
-    try { await write; const committed = await getLocalDictationLanguages(); if (alive.current && generation === saveGeneration.current) { wanted.current = committed; setSelected(committed); } }
+    try { await languageDraft.run(() => persist(languages)); }
     catch (e) { if (alive.current && generation === saveGeneration.current) setError({ text: "Couldn't save the dictation languages.", detail: String(e) }); }
     finally { if (alive.current && generation === saveGeneration.current) { setBusy(false); saving.current = false; } }
   };
+
   return <fieldset className="local-language-picker" disabled={disabled || selected === null} aria-busy={busy || undefined}>
     <legend>Dictation languages</legend>
     <button type="button" aria-pressed={selected?.length === 0} className={selected?.length === 0 ? "marked" : undefined} onClick={() => void save([])}>Detect automatically</button>
@@ -74,6 +80,7 @@ export function LocalLanguagePicker({
       </label>)}
     </div>
     <p className="muted">{note}</p>
+    {languageDraft.feedback}
     {error && <FailureLine text={error.text} detail={error.detail} />}
   </fieldset>;
 }

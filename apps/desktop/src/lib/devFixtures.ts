@@ -97,13 +97,19 @@ import type {
   Transcription,
   TrashSummary,
   UpdateCheckResult,
-  Word,
 } from "../generated/ipc-types";
 // `OverlayPreferences` is hand-written in `ipc.ts`, not generated: Rust's
 // `persistent_overlay::Snapshot` has no `ts_rs` derive. A type-only import, so
 // this stays below the wrappers as the module doc above requires.
 import type { OverlayPreferences } from "./ipc";
 import { FIXTURE_RECORDING_SECONDS, toneWav } from "./fixtureWav";
+import {
+  LONG_TRANSCRIPT_SECONDS,
+  LONG_TRANSCRIPT_SEGMENTS,
+  longTranscriptRows,
+  wordedSegment,
+  type StoredSegment,
+} from "./fixtureTranscript";
 import { emailKey, HAS_SPACE, readParticipants, trimSpace } from "./people";
 import { summaryConfigured } from "./summaryConfigured";
 
@@ -622,6 +628,7 @@ const MEETING_PROVIDERS: MeetingProviderSummary[] = [
 const DICTATION_LANGUAGE_CODES = ["sv", "en", "da", "no", "fi", "de", "fr", "es"];
 
 let meetingStatus: MeetingStatus = {
+  finalisation: { revision: 0, progress: null },
   state: "idle",
   transcriptFailure: null,
   provider: null,
@@ -1621,23 +1628,6 @@ function fixtureOnNote(note: Note, email: string): boolean {
   return readParticipants(note.participants).some((participant) => participant.email !== null && emailKey(participant.email) === wanted);
 }
 
-/** A stored segment as an import local Whisper timed word by word saves it (KNEG-408). */
-type StoredSegment = { text: string; timestamp: number; endTimestamp: number; words?: Word[] };
-
-/**
- * One row of fixture note 105: `text`, a word every `step` seconds from `start`, each lasting
- * most of its step, and the row ending just after its last word.
- */
-function wordedSegment(start: number, step: number, text: string): StoredSegment {
-  const hundredths = (seconds: number) => Math.round(seconds * 100) / 100;
-  const words = text.split(" ").map((word, at) => ({
-    text: word,
-    start: hundredths(start + at * step),
-    end: hundredths(start + at * step + step * 0.8),
-  }));
-  return { text, timestamp: start, endTimestamp: hundredths((words.at(-1)?.end ?? start) + 0.3), words };
-}
-
 /**
  * Fixture note 105's transcript: two rows timed word by word and one, as every note saved before
  * KNEG-408 is, without words, all inside the fixture recording's first 20 s.
@@ -1728,11 +1718,24 @@ let notes: Note[] = [
     createdAt: "2026-08-19T10:00:00Z",
     updatedAt: "2026-08-19T10:12:00Z",
   }),
+  fixtureNote({
+    id: 106,
+    // A long meeting for the transcript column (KNEG-448): three 5-minute sections, turns, word
+    // timings, lines with no speaker or no time (`fixtureTranscript.ts`). Dated just after 105 so
+    // 101 stays the newest note and 105 the oldest.
+    title: "Roadmap review — long transcript",
+    noteType: "meeting",
+    transcript: JSON.stringify(LONG_TRANSCRIPT_SEGMENTS),
+    audioDurationSeconds: LONG_TRANSCRIPT_SECONDS,
+    transcribedBy: fixtureTranscribedBy("local"),
+    createdAt: "2026-08-19T12:00:00Z",
+    updatedAt: "2026-08-19T12:30:00Z",
+  }),
 ];
 
-// Every note here is served the same playable WAV (`servePlayableRecordings`), so 101's recording
-// is as long as that WAV, not as the meeting: the note's own `audioDurationSeconds` still says the
-// meeting ran 1847 s.
+// Every note here is served a playable WAV as long as its recording's `durationSeconds`
+// (`servePlayableRecordings`): 120 s for 101 and 105, so 101's recording is shorter than the
+// meeting, whose own `audioDurationSeconds` still says it ran 1847 s, and 690 s for 106.
 const noteRecordings = new Map<number, NoteRecording>([
   [
     101,
@@ -1752,6 +1755,16 @@ const noteRecordings = new Map<number, NoteRecording>([
       durationSeconds: FIXTURE_RECORDING_SECONDS,
       originalFilename: "genomgang.m4a",
       createdAt: "2026-08-19T10:00:00Z",
+    },
+  ],
+  [
+    106,
+    {
+      noteId: 106,
+      storageKey: "20260819-120000.wav",
+      durationSeconds: LONG_TRANSCRIPT_SECONDS,
+      originalFilename: null,
+      createdAt: "2026-08-19T12:00:00Z",
     },
   ],
 ]);
@@ -1790,10 +1803,11 @@ const noteTranscriptRows = new Map<number, TranscriptRow[]>([
     text: segment.text,
     words: segment.words ?? [],
   }))],
+  [106, longTranscriptRows()],
 ]);
 const speakerNames = new Map<number, Map<string, string>>();
 
-let nextNoteId = 106;
+let nextNoteId = 107;
 let nextFolderId = 4;
 
 function fixtureImport(result: Omit<MediaImportResult, "noteId" | "recording" | "retainedBytes">): MediaImportResult {
@@ -2571,6 +2585,9 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
     return null;
   },
   summary_settings_get: () => summarySettings,
+  summary_readiness_get: () => summaryConfigured(summarySettings)
+    ? { state: "ready" as const }
+    : { state: "needs-setup" as const, reason: "Choose a summary provider and model.", target: "summary-settings" as const },
   note_summary_get: (a) => summaryOf(arg<number>(a, "id") ?? 0),
   note_summary_generate: (a) => {
     const id = arg<number>(a, "id") ?? 0;
@@ -2805,6 +2822,12 @@ const devConsole = {
   dictationFailed(message = "No response from the transcription service.") {
     void emit("dictation-outcome", { outcome: "failed", message, historyId: null } satisfies Outcome);
   },
+  /** Invented progress for UI checks. `snapshot=false` sends a deliberately stale event only. */
+  meetingProgress(update: MeetingStatus["finalisation"], snapshot = true) {
+    if (snapshot) meetingStatus = { ...meetingStatus, finalisation: update, state: update.progress ? "finishing" : "idle" };
+    void emit("meeting-progress", update);
+    if (snapshot) void emit("meeting-state", meetingStatus.state);
+  },
   meetingState(state: MeetingState) {
     // The failure sentence travels with the state rather than being a second
     // thing to remember to set: either failure state with an empty detail line
@@ -2974,17 +2997,19 @@ function markThePageAsInvented(): void {
 }
 
 /**
- * The one URL every fixture recording plays from: `toneWav`'s two minutes,
- * built the first time a note with a recording asks for it and then kept.
- * Kept because `recordingSrc` runs on every render: a new blob URL each time
+ * The URL a fixture recording of `seconds` plays from: `toneWav`'s tone, built the first time a
+ * note with a recording of that length asks and then kept, one per length, so only the long note
+ * pays for its 690 s. Kept because `recordingSrc` runs on every render: a new blob URL each time
  * would hand the `<audio>` a new `src` and reload it mid-playback.
  */
-let fixtureRecordingUrl: string | null = null;
-function fixtureRecording(): string {
-  fixtureRecordingUrl ??= URL.createObjectURL(
-    new Blob([toneWav({ seconds: FIXTURE_RECORDING_SECONDS })], { type: "audio/wav" }),
-  );
-  return fixtureRecordingUrl;
+const fixtureRecordingUrls = new Map<number, string>();
+function fixtureRecording(seconds: number): string {
+  let url = fixtureRecordingUrls.get(seconds);
+  if (url === undefined) {
+    url = URL.createObjectURL(new Blob([toneWav({ seconds })], { type: "audio/wav" }));
+    fixtureRecordingUrls.set(seconds, url);
+  }
+  return url;
 }
 
 /**
@@ -3003,7 +3028,7 @@ function servePlayableRecordings(): void {
   const mocked = internals.convertFileSrc.bind(internals);
   internals.convertFileSrc = (filePath, protocol = "asset") =>
     protocol === "recording" && noteRecordings.has(Number(filePath))
-      ? fixtureRecording()
+      ? fixtureRecording(noteRecordings.get(Number(filePath))?.durationSeconds ?? FIXTURE_RECORDING_SECONDS)
       : mocked(filePath, protocol);
 }
 

@@ -37,31 +37,91 @@ Notes opens by default, with personal Markdown notes first and an independently
 editable AI summary below. An empty personal note offers **Start from transcript**;
 this copies literal speech and available speaker labels without changing the source.
 
-Transcript shows the original rows and playback actions. In windows 1280px or wider
-a note's transcript is a column to the right of the note instead, and the Transcript tab
-is hidden; crossing that width keeps playback and the reading position. A note with no
-transcript has no column, and keeps the one-column layout at any width. **Hide
-transcript**, beside Export and More above the editor, puts the note back in the one-column
-layout with the Transcript tab, and **Show transcript** brings the column back; both keep
-playback and the reading position the same way, and the choice holds for every note until
-the app closes. Replay
-provides the full player and recording details without repeating the transcript, at
-any width: in a wide window the player sits at the foot of the transcript column and
-moves into Replay while that tab is open, keeping its place and whether it was playing.
-Audio continues across tabs through one player; compact controls remain available
-after playback starts. Leaving the note
-stops playback. Missing recordings offer the existing native WAV attachment flow.
-Summary references reveal the supporting row — in Transcript, or in the column when
-the window is that wide — and play its interval when audio exists. Tabs support arrow
-keys, Home and End; a hidden Transcript tab is skipped. At widths of 900px or less,
-the list panel initially collapses (and collapses when entering that width); the
-title bar's list toggle reopens it. Tabs wrap when necessary.
+Transcript shows the stored transcript line by line, grouped into speaker turns and, when it
+spans more than one time block, into collapsible time sections, under a header that stays in
+view as it scrolls (KNEG-448). A section is 5 minutes of a transcript up to an hour long, 10
+minutes up to three hours and 15 beyond, headed by its range ("5:00 – 10:00") and how many
+lines it has; a transcript inside one block has no section headers. A turn is one speaker's run
+of lines under a square marker, the name and when the turn starts. Another speaker, a new
+section or a pause of a minute or more starts a new turn, and a timed line with no speaker
+stands alone. A line with no time is muted, never selected or played, and stays in the turn
+before it unless another speaker said it, when it starts a turn of that speaker's. A speaker
+known by a diarisation label has a name that is a button: it opens the rename form under that
+turn.
+
+With a recording, pressing a line, or Enter or Space on it, selects that line alone and plays
+from it to the end; on a note without one, a press only selects. Pressing the selected line
+plays it again rather than deselecting it. With Shift, a press or Enter selects every line from
+the last one chosen to this one and plays nothing, and with two or more selected the card offers
+**Play selection**, which stops at the last one's end, and **Clear**, which deselects them and
+leaves focus on the Follow chip. Clear is also available for a single selected line, alongside
+the current speaker. Escape while focus is on a line clears any selection. Dragging over a line's text to copy it plays nothing, and a double-click plays only on its
+first click. The lines are one tab stop across them, plus one word of the line holding
+it when that line is drawn word by word (the first, until the arrow keys move along its words).
+The stop is the line that last had focus, else the one a selection started from, else the line
+the player is at, playing or paused, so Tab into the transcript lands where the recording is.
+The arrow keys, Home and End move between the lines, including untimed lines with a speaker,
+and skip closed sections. F2 renames the focused line's speaker; speaker names also remain
+clickable, without adding a Tab stop for every turn. Closing Rename returns focus to the line.
+
+Playback, seeking and skip controls are disabled until the recording's metadata is usable and
+again if the recording fails to load. Transcript playback requests cannot advance a failed player's clock.
+
+The player is a card: floating over the foot of the transcript column in a wide window, and in
+a narrower one held below the transcript at the foot of the note, where it shows on the Transcript tab from the start
+and on Notes once something has played. While the transcript is on screen, the card names who
+is speaking (the last line to have started) and carries the **Follow** chip, on as each note
+opens. While Follow is on, a line that starts playing outside the part of the transcript
+between its header and the card is centred, its section opened first when it is closed; while
+the recording is paused nothing follows. While Follow is on, the transcript coming on screen
+(the Transcript tab opened, the layout switched) also brings back the line the player is at,
+playing or paused, when it is out of view, unless a search hit or a summary reference is being
+shown. The person moving the transcript turns Follow off: a wheel, a touch moving anywhere but on the player
+card, a press on its scrollbar, a scrolling key with focus on a line or a button in the
+transcript or, with focus nowhere, after a press in it, the arrow keys between lines, or closing
+the section that is playing. Actual scrolls also release Follow unless they belong to the app's
+reveal operation; this covers selection autoscroll, overlay scrollbars and focus reveal.
+Opening Rename turns Follow off until it is explicitly enabled after the form closes. A search
+hit turns it off while something plays. The chip is a toggle: pressed while Follow is on it
+turns it off, and pressed while off it turns it on and centres the line the player is at,
+wherever it is. Pressing a line or a word, Play selection or a summary reference turns Follow
+on too, but centres a line only when the one playing is out of view. On Replay in a wide window,
+the full player also carries the speaker/selection header and Follow chip while the transcript
+column is visible.
+
+The header's search button opens **Find** in place of the label: what is typed is marked in the
+lines, case ignored and accents kept ("mote" does not find "möte"), with a count such as 2/5,
+read out as "Match 2 of 5". Typing goes to the first match from the reader's place, and Enter
+and Shift+Enter, or the up and down buttons beside the field, move to the next and previous
+match, opening a closed section and centring its line. Find never selects or plays a line;
+while something plays, moving to a match turns Follow off. A playing line with matches shows
+them rather than its words until Find closes. Escape or Close ends it and clears the query.
+Ctrl+F or Cmd+F opens Find when the transcript is visible and focus is in the note workspace.
+Editable fields and dialogs keep their shortcuts; inside Find, the shortcut selects its query.
+
+In windows 1280px or wider a note's transcript is a column to the right of the note instead,
+and the Transcript tab is hidden; crossing that width keeps playback, the reading position and
+the selected lines, Find/query/current match, collapsed sections and an open speaker rename,
+including its draft and focus. The transcript remains mounted as its layout changes. A note with no transcript has no column, and keeps the one-column layout at any width.
+**Hide transcript**, beside Export and More above the editor, puts the note back in the
+one-column layout with the Transcript tab, and **Show transcript** brings the column back; both
+keep playback and the reading position the same way, and the choice holds for every note until
+the app closes. Replay provides the full player and recording details without repeating the
+transcript, at any width: in a wide window the player card sits at the foot of the transcript
+column and moves into Replay while that tab is open, keeping its place and whether it was
+playing. Audio continues across tabs through one player. Leaving the note stops playback.
+Missing recordings offer the existing native WAV attachment flow. Summary references select the
+supporting line and bring it into view — in Transcript, or in the column when the window is
+that wide — and play its interval when audio exists. Tabs support arrow keys, Home and End; a
+hidden Transcript tab is skipped. At widths of 900px or less, the list panel initially collapses
+(and collapses when entering that width); the title bar's list toggle reopens it. Tabs wrap when
+necessary.
 
 A row that local Whisper timed word by word (KNEG-408) -- a media import, or a
 meeting's whole-recording pass, on a Whisper engine -- is drawn word by word while
-it plays, and the word being said is marked. Clicking a word plays from it; a row
-or selection played with its Play button still stops at its end when the word is
-inside it. Every other row is marked as a whole row, as before: notes saved before
+it plays, and the word being said is marked. Clicking a word selects its line and
+plays from the word to the end, so a selection being played no longer stops at its
+end (KNEG-448). Every other row is marked as a whole row, as before: notes saved before
 word timings were kept, Parakeet, cloud providers and live captions, and a row whose
 text no longer matches its words. With reduced motion asked for, the mark jumps
 from word to word instead of fading. How far the mark sits from the sound on a real
@@ -331,6 +391,17 @@ live audio; those KNEG-300 acceptance checks remain for a real meeting session.
 The current frontend passed typecheck, build, 56 tests and the capability audit;
 12 meeting composition/lifecycle tests and three notes-sidecar tests passed in
 Rust. `git diff --check` passed.
+
+The transcript column of KNEG-448 (2026-10-12) was measured in headless Edge against the dev
+fixtures, not in the Tauri window: `tools/visual-check/transcript-column.mjs`, seventeen claims
+in both schemes at 1440x900 and 1000x720 (the README's Transcript column section), with the
+sections, turns, selection, Find and Follow decisions unit-tested in `transcriptLayout`,
+`transcriptFind`, `followScroll` and `playerControls`. Its claim 15 played a meeting of 1,500
+lines, Follow scrolling the column to the playing line, with no long task. The two smokes above need the native app: `notes-smoke` presses the
+player's Play by its new class (`.recording-play`), and `summary-smoke` finds the line a
+source selected by `.transcript-row-current`, which the selected line keeps, in the note's
+transcript in either layout; neither has been run since, and both are on KNEG-378 with the
+real-window checks of the column.
 
 Native file-dialog attachment/cancellation was not exercised in this pass. macOS,
 Linux, hosted CI and release validation remain unverified. Synthetic audio/provider

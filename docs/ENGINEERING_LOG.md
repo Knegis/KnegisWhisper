@@ -12,6 +12,216 @@ maintained in place rather than appended to, because its purpose is to be curren
 
 ---
 
+## 2026-10-12 — KNEG-448: transcript column (M6)
+
+Branch `transcript-m6`, from `dev` at 802b458: the transcript column beside a note, and the
+Transcript tab below 1280px, redrawn as the M6 mockup the owner picked on 2026-10-11, with his
+four answers of that day (time-block sections, a click plays from the line, Follow lets go when
+the person scrolls, Find within this transcript). The AI-named topic sections the mockup draws
+did not land in this round: they are KNEG-449, as the owner answered on 2026-10-11. Frontend
+only: no Rust change and no migration, so nothing here adds to the profile lockout. Tasks 1 to
+9 were each reviewed as they landed (2 and 3 together), and the reviews of 8 and 9 each took one
+fix round.
+
+**What landed.** Pure helpers first, each with node tests: sections, turns and selection
+(60f2315, `lib/transcriptLayout.ts`), find (61d7eeb, `lib/transcriptFind.ts`), skip and tick
+arithmetic with a pause and a chevron-up icon (1d66dc8), and fixture note 106, an 11:30 meeting
+with a 690 s recording, built to exercise the column (a2ea0d1). Then the floating player card
+with −15/+15 and a tick per section (d564f18); sections, speaker turns and a sticky header
+(2eac761); a press on a line plays from it, with the selection and the speaker moved to the card
+(2d17044); Follow (aa64949, and 4506567: a search hit keeps its row in view, and a key meant for
+the note leaves Follow on); and Find (1edd525, and 09a4ee2: the current match's fill no longer
+spreads over the letters beside it). da2a9dd adds the 1,500-line performance claim and the full
+check pass; the commit that adds this entry edits the docs, and the code comments the redesign
+had made false, to match. 27dfcf2, first on the branch, is not KNEG-448: it moves a
+capability-audit pin that 902e511 had left stale. The whole-branch review's fixes came last, in
+one commit: the card's Clear moves focus to the Follow chip as it goes, rather than dropping it
+to `<body>`; the lines' tab stop falls back to the line the player is at, not the playing line,
+so it holds through gaps and pauses; time sections are groups, not region landmarks (in Edge's
+accessibility tree note 106's page had five regions, three of them its sections, and now has
+two; a two-hour meeting's thirteen sections had added thirteen more); a touch on the mini card no
+longer lets go of Follow; and these docs say exactly when Clear is there and what the tab stop
+holds. Claims 8 and 12 of `transcript-column.mjs` were extended for the first two and measured
+false before the fix; the other two were measured by a probe run by hand, before and after,
+with CDP in headless Edge, and are in no committed check.
+
+**Rulings.** The run's ledger is git-ignored, so its rulings are kept here, one line each, with
+what each costs if it is wrong. Each was read against the code as it is now.
+- A section is 5 minutes of a transcript up to an hour, 10 up to three hours and 15 beyond
+  (`blockSecondsFor`), titled by its range with `formatClock` ("1:00:00 – 1:10:00"); the last
+  ends where the transcript does. If wrong: a long meeting has too many headers or too few.
+- A transcript inside one block draws no section headers and the player no ticks. If wrong: a
+  short meeting loses a "0:00 – 4:12" header it had no use for.
+- A turn splits on a new speaker key (`speakerId`, else the name; ids and names never match each
+  other), a section boundary, or a pause of 60 s or more after the last timed line's end; a timed
+  line with no speaker is a turn of its own. If wrong: a turn reads as one speech across a pause
+  or a heading, or one speaker's lines break into more heads than the owner wanted.
+- An untimed line stays in the turn before it when it has no speaker or the same one; another
+  speaker's starts that speaker's turn, timed "—" until a timed line joins it (Task 6's review,
+  fixed in 2d17044). A leading untimed line starts a turn that a same-speaker timed line then
+  joins. If wrong: an extra one-line turn for each untimed line by another speaker.
+- A line press, or Enter or Space on a line, selects it alone and plays from its start to the end
+  with Follow on; on a note without a recording it only selects. If wrong: the owner wanted a
+  line to play only its own interval, as the old Play button did.
+- A word press plays from the word to the end, so a selection being played no longer stops at
+  its end. If wrong: a word inside a played selection should keep the selection's stop.
+- Play selection needs two or more timed lines and stops at the last one's end. The card's Clear
+  is there only while two or more lines are selected, and leaves focus on the Follow chip; a
+  single selected line is deselected with Escape while focus is on a line, as any selection can
+  be. Pressing the selected line plays it again rather than deselecting it. If wrong: a person
+  expecting a click to toggle the selection finds it plays, and one selected line -- a search
+  hit's, a summary reference's, a pressed line's -- has no way to clear it by pointer.
+- A selected line is `--selected` and the playing line `--band-wash`, which wins over selected;
+  hover is `--panel-hover`. If wrong: the light theme's `--selected` (#ebebef on #f8f8f9) is too
+  faint to find a selection by.
+- Follow lets go on the person's scroll inputs, playing or paused: a wheel (not within 400 ms of
+  Follow turning on, for a touchpad's run-on), a touch move anywhere but on the player card (in
+  the narrow layout the mini card is inside the scroller listened on), a press on the scrollbar,
+  the arrow keys between lines, and a scrolling key in the transcript. If wrong: a person
+  scrolling while paused finds Follow off when they press Play.
+- A scrolling key with focus on `<body>` lets go only after a press in the transcript's scroller,
+  since Chromium sends the key to the scroller pressed last (4506567, from Task 8's review). A
+  key from a focused line or button inside it lets go too, except Space, which presses it. If
+  wrong: a key for the note beside a wide transcript, after a press in the transcript, still
+  lets go.
+- Collapsing the section of the playing line turns Follow off; collapsing it while paused does
+  not. If wrong: Follow reopens a section the person closed while paused, once Play is pressed.
+- The chip is a toggle: pressed while Follow is on it turns it off; pressed while off it turns
+  it on, and only that press forces a centre, of the line the player is at, in view or not. A
+  line or word press, Play selection and a summary reference turn Follow on and centre only a
+  line that is out of the band, so a pressed line does not move from under the pointer. If
+  wrong: a line pressed near the band's edge stays there rather than coming to the middle.
+- While Follow is on, the transcript coming on screen (the Transcript tab, a layout switch)
+  brings back the line the player is at only when it is out of the band, two frames later once
+  the card has its height, and not while a search hit or summary reference is being shown
+  (4506567); with Follow off it moves nothing. If wrong: the owner wanted that line centred
+  whenever the transcript comes on screen, in view or not.
+- A search hit turns Follow off only while playing; a Find step does the same. A summary
+  reference turns Follow on and plays its interval. If wrong: a search hit while paused leaves
+  Follow on, so Play scrolls from the hit back to the player's line.
+- Find matches substrings, case folded per code point with accents kept ("mote" never finds
+  "möte"; "ß" is not "ss"), never overlapping. If wrong: a person typing without å, ä or ö finds
+  nothing, as KNEG-405's search already chose.
+- A new query starts from the match that was current, else the first match whose line reaches
+  below the top of the band, else the first. If wrong: typing jumps somewhere the person did not
+  expect, rather than to the first match.
+- A move found by typing jumps; Enter, Shift+Enter, Previous and Next glide (smooth unless
+  reduced motion). Every move centres its line, in view or not. If wrong: the typed jump reads
+  as abrupt, and centring a line already in view moves the transcript needlessly.
+- While Find has matches in a line, the line draws its text with them marked in place of its
+  words, so the playing line's word highlight stops until Find closes or stops matching there.
+  If wrong: the word being said is not lit while Find is open on it.
+- The narrow mini card shows on the Transcript tab before anything has played, with its header
+  and the chip; on Notes it waits for playback and has neither. If wrong: an empty card on the
+  Transcript tab of a note nobody plays.
+- In a wide window on Replay the column still follows, with no chip on screen: Replay's player
+  has no header. If wrong: a wheel there turns Follow off with nothing to show it.
+- The selection and Follow live in `NoteWorkspace` and survive a layout switch; Find, closed
+  sections and an open rename live in the panel and do not. If wrong: see the open question on
+  crossing 1280px below.
+- The rename form opens between its turn's head and lines, and scrolls itself clear of the card.
+  If wrong: none found; the form used to open above the whole transcript.
+- The lines are one tab stop across them, plus one word of the line holding it when that line is
+  drawn word by word (the first, until the arrow keys move along its words). The stop is held by
+  the line focused last, else the selection's anchor, else the line the player is at
+  (`lastStartedLine`, playing or paused, through the gaps between lines), else the first,
+  passing over untimed lines and closed sections. Until the final review it fell back to the
+  playing line, so while paused or in a gap it went to line 1, and moved there and back -- a
+  redraw of the first section and turn -- at every gap. Collapsing the section holding it moves
+  it to the nearest line after the section, or before when none follows, and focus to the
+  toggle. If wrong: Tab back into the transcript lands somewhere the person did not leave.
+- Selecting text in a line plays nothing: a click that ends a text selection reaching into the
+  line is skipped, so a drag plays 0 times and a double-click once. If wrong: a person wanting
+  to play by double-click gets the same single play.
+- The narrow Transcript tab pulls the transcript out by 20px, not the plan's 12, so line text
+  starts where the note title does (measured x=429 both). If wrong: hover fills reach 8px further
+  than the plan drew.
+- The player card is inset 12px from the column (padding box), 4px corners, `--bg` on `--panel`,
+  and floats over the scrollbar's lowest ~90px, as the canvas draws it. The unplayed track is
+  `.recording-scrubber::before`, so the ticks sit unbroken under the range. If wrong: the card
+  hides the bottom of the column's scrollbar.
+- The code never disables the range or the skip buttons, so they stay live after a recording
+  fails to load. A CSS rule would hide the ticks under a disabled range, but it never applies
+  today. Whether to disable them on error is an open question below. If wrong: a failed
+  recording's controls go on taking presses that do nothing useful.
+- Fixture note 106 has a 690 s recording, served as a WAV of that length (a soft beep each
+  second), and is dated 2026-08-19 12:00, not the plan's 2026-08-12, so 105 stays the oldest and
+  101 the newest. Its unnamed speaker is "Speaker 3" (`speaker_2`), as Rust's `rows()` names one.
+  If wrong: a check that counts on note order or names would read another note.
+- Process: Follow wiring moved into Task 8 and the card's speaker into Task 7, and the check's
+  claims grew task by task (the plan's ids, not contiguous until claim 15). If wrong: a claim was
+  checked one task later than ideal.
+- Process: Tasks 2 and 3, two small pure modules, went to one implementer as two commits and one
+  review. If wrong: one review covered two commits.
+- Process: the gates' baseline was npm 401 and tools 197, not the plan's 396/197, since `dev`
+  had moved (KNEG-420/422/423/424). No cost.
+- Process: the stale capability pin was fixed as its own commit first (27dfcf2), since it failed
+  the tools gate on `dev`. If wrong: a trivial conflict if `dev` fixes it the same way.
+
+**Claim 15, measured** (`transcript-column.mjs`: added in da2a9dd, and in the fix round after
+4811a88 started from line 61 so that Follow has to scroll, with the long-task observer guarded
+and checked by a control). 1,500 rows injected in place of note 106's (13 sections, 600 turns,
+150 lines with words), in headless Edge on Vite's development build, where React's StrictMode
+renders twice. Line 61 (300 s), pressed from the column's top, sits at the band's foot, so line
+62 starts below it: in every run Follow scrolled the column 387px inside the 6 s at 2x. Long
+tasks while playing, over three runs in both schemes: none in four of the six, one of 56 ms, and
+two of 54 and 53 ms, the longest 56 ms, under the 100 ms limit; the one of 56 ms came as line 62
+started and Follow scrolled. A 120 ms task run on purpose after each window was seen every time,
+so "none" means none. From the rows being handed back to the column's first frame: 0.17–0.44 s,
+in two or three long tasks of up to 390 ms. One `timeupdate` within a line renders the
+workspace, the player, its header and the panel, and none of the 13 sections, 600 turns or
+1,500 lines; one across a line change also renders the sections' wrapper, 1 section, 1 or 2
+turns and 2 lines. Both counts are read from React's fibers by the claim itself and reported,
+not judged. Not measured: CPU, a production build, the real window. The same count, taken by a
+probe run by hand on note 106 at the gap between lines 30 and 31 (5:52 to 6:00), for the final
+review's tab-stop fix: before it, the `timeupdate` entering the gap rendered 2 sections, 2 turns
+and 2 lines, and the one leaving it the same, as the stop went to line 1 and back; after it, 1,
+1 and 1 entering, and 1 section, 2 turns and 2 lines leaving, as at any line change.
+
+**Not verified headless; going to KNEG-378.**
+- The real Tauri window with an hour-plus real meeting: CPU while playing, Follow with touchpad
+  inertia and with a scrollbar drag (headless Edge hides scrollbars; macOS overlay scrollbars
+  can't be told apart by `offsetX`, so a drag there may not let go), Find on å/ä/ö, both themes,
+  in WebView2 and WKWebView.
+- Renaming a speaker from a turn on a diarised note.
+- The 1000×720 Transcript tab in the real window.
+- A Narrator pass over the turn listboxes, the section groups and the Find count.
+- The card covering the bottom ~90px of the column's scrollbar.
+- `notes-smoke` and `summary-smoke`, which need the native app; their selectors are updated but
+  neither has been run since. `summary-smoke` now finds the selected row in the note's
+  transcript in either layout; it had looked under the visible tab panel, which holds the
+  transcript only below 1280px (its default 1000x720 window is below it) since KNEG-377 moved
+  the transcript into a column. Its Transcript-tab assertion still needs a window below 1280px.
+- A touch on the mini card leaving Follow on: measured only by the hand-run probe, with CDP's
+  touch emulation in headless Edge (a drag along the card's range left the chip pressed; a drag
+  over the lines turned it off), not on a touchscreen and not by a committed check.
+- `note-playback.mjs` check 4 failed once, in Task 6: in one run of four, the card's audio
+  paused at 0.38 s, with readyState 4, before reaching its lead time. Every later run passed (4/4
+  over Tasks 6 to 10, and again in the final review's fix pass). Not diagnosed.
+
+**Open questions for the owner** (listed, not ruled):
+- 41 Rename buttons and 3 section toggles on note 106 are tab stops, so getting past its
+  transcript takes about 44 Tabs. One option: F2 on a line renames that turn's speaker, and the
+  buttons leave the tab order.
+- Should the range and the skip buttons be disabled when a recording fails to load? Today the
+  code never disables them, so they stay live (+15 four times reads "1:00 / 0:00"), and the CSS
+  rule that would hide the ticks under a disabled range never applies.
+- Collapsing the current line's section while paused leaves Follow on, so Play opens it again.
+- Tab focus, or a text-drag selection, doesn't release Follow: the focused control or the quote
+  can be scrolled away at the next line change.
+- Crossing 1280px draws the transcript afresh: Find closes and loses its query, closed sections
+  open again, and focus inside the transcript goes to the selected tab. A Windows Snap to half of
+  a 2560px screen lands exactly on that width.
+- A smooth glide (Enter, Previous or Next in Find, or Follow) can be cut short by a later
+  keystroke in the find field, leaving the line outside the band. Believed, not traced:
+  Chromium's caret reveal. Typing itself jumps, so it is not cut.
+- The find count's status region announces on every query change; what a screen reader says is
+  for KNEG-378's Narrator pass.
+
+**Pre-existing, not ours.** `note-meta.mjs` check 4 expects "live captions by Deepgram"; the
+fixture has said "Deepgram Realtime" since 902e511 (KNEG-422/424). The same check and fixture
+string are on `dev` (802b458), so it is expected to fail there too; it was not run on `dev`.
+
 ## 2026-10-08 — KNEG-422/424: durable recording intent and review follow-ups
 
 - Deletion intent belongs to the exact attached recording and is written only after

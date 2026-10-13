@@ -1,14 +1,18 @@
 /**
- * The Kit icon set: one 24-unit stroked path per name, plus the two filled
+ * The Kit icon set: one 24-unit stroked path per name, plus the three filled
  * marks (`FILLED`) that read as fills rather than outlines because they *are*
- * the thing rather than a control for it -- `stop` and `play` mark a state,
- * not an action to take on one.
+ * the thing rather than a control for it -- `stop`, `play` and `pause` mark a
+ * state, not an action to take on one.
  *
  * Every `d` here is copied verbatim from the approved canvas (`Kit.dc.html`,
  * `Settings.dc.html`, and the Meetings and Notes artboards for the handful
  * that live there instead) -- see
  * `.superpowers/sdd/nifty-tumbling-giraffe/icons-from-canvas.md` for the
- * source table. Four are not on the canvas. `restore` is drawn for the title
+ * source table. Six are not on the canvas. `pause` (two solid bars, in
+ * `stop`'s and `play`'s 24-unit frame) and `chevronUp` (`chevronDown`
+ * mirrored vertically) were drawn for the recording player's pause state and
+ * the find bar's collapse control (KNEG-448), not copied from the Kit canvas.
+ * `restore` is drawn for the title
  * bar, which needs a fourth window-state icon, in the same stroke and corner
  * style as the other three. `panelRight` is `panel` mirrored, its rule at
  * 14.75 rather than 9.25, for the note's transcript column toggle, which
@@ -55,6 +59,7 @@ export type IconName =
   | "check"
   | "chevronDown"
   | "chevronRight"
+  | "chevronUp"
   | "back"
   | "forward"
   | "panel"
@@ -106,6 +111,7 @@ export const ICONS: Record<IconName, string> = {
   check: "M5 12.5l4.5 4.5L19 7.5",
   chevronDown: "M7 10l5 5 5-5",
   chevronRight: "M10 7l5 5-5 5",
+  chevronUp: "M7 14l5-5 5 5",
   back: "M19.5 12h-15M10.5 6l-6 6 6 6",
   forward: "M4.5 12h15M13.5 6l6 6-6 6",
   panel: "M3.75 4.75h16.5v14.5H3.75zM9.25 4.75v14.5",
@@ -124,12 +130,14 @@ export const ICONS: Record<IconName, string> = {
 
 /**
  * Filled marks: `fill: currentColor; stroke: none` (`.icon-filled` in
- * `styles.css`), for the two states that are a fill rather than a stroked
- * control -- a playing transport is a solid triangle, not an outlined one.
+ * `styles.css`), for the states that are a fill rather than a stroked
+ * control -- a playing transport is a solid triangle, not an outlined one,
+ * and the pause that replaces it is two solid bars.
  */
 export const FILLED = {
   stop: "M5 5h14v14H5z",
   play: "M7.5 5.25v13.5L18.5 12z",
+  pause: "M7 5h3.5v14H7zM13.5 5H17v14h-3.5z",
 } as const;
 
 /**

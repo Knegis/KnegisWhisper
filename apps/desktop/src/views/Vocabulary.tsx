@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
+import { useSettingsDraft, useSettingsNavigation } from "../components/SettingsDrafts";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getVocabulary, updateVocabulary, editVocabulary, deleteVocabulary, restoreVocabulary, reviewVocabulary, getDictationRoute, getLocalStatus, getSherpaStatus, getMeetingStatus, getMeetingProviders, type VocabularyReview } from "../lib/ipc";
 import { useRefresh } from "../lib/useRefresh";
 
@@ -22,22 +23,28 @@ export function Vocabulary() {
     ]);
     return { words, dictationReview, meetingReview, providers, provider, route, meeting };
   }, [meetingPreview]);
-  const { data, error, reload, guard } = useRefresh(load);
+  const { data, error, reload, guard, fail } = useRefresh(load);
   const [query, setQuery] = useState("");
   const [draft, setDraft] = useState("");
   const [editing, setEditing] = useState<number | null>(null);
   const [editText, setEditText] = useState("");
   const [removed, setRemoved] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const replaceDraft = useSettingsNavigation();
+  const persistAdd = async () => { const submitted = draft; await updateVocabulary([submitted], []); setDraft(current => current === submitted ? "" : current); await reload(); };
+  const editNow = useRef(editText); editNow.current = editText;
+  const persistEdit = async () => { if (editing === null) return; const submitted = editText; await editVocabulary(editing, submitted); if (editNow.current === submitted) setEditing(null); await reload(); };
+  const addGuard = useSettingsDraft({ label: "New vocabulary term", dirty: draft.length > 0, save: persistAdd, discard: () => setDraft("") });
+  const editGuard = useSettingsDraft({ label: "Vocabulary edit", order: 1, dirty: editing !== null && editText !== data?.words.find(word => word.id === editing)?.word, save: persistEdit, discard: () => setEditing(null) });
   const act = async (work: () => Promise<void>) => { if (busy) return; setBusy(true); try { await guard(work); } finally { setBusy(false); } };
   useEffect(() => { const refresh = () => { void reload(); }; window.addEventListener("focus", refresh); return () => window.removeEventListener("focus", refresh); }, [reload]);
-  const saveEdit = () => act(async () => { if (editing === null) return; await editVocabulary(editing, editText); setEditing(null); });
-  return <div className="view vocabulary-view" data-surface="vocabulary">
+  const saveEdit = () => editGuard.run(persistEdit).catch(cause => { fail(cause); });
+  return <div className="view vocabulary-view" data-surface="vocabulary">{addGuard.feedback}{editGuard.feedback}
     <section>
       <p>Add names, words and phrases you want transcription to recognize. Saved terms apply automatically where supported.</p>
       <p className="muted">Hints do not guarantee spelling or train the model. Keep the list focused on important names and terminology. Local Whisper keeps them on this device. Supported cloud providers receive applicable terms. Changes apply to the next dictation request or new meeting.</p>
       {error && <p role="alert" className="error">{error}</p>}
-      <form className="controls vocabulary-add" onSubmit={event => { event.preventDefault(); void act(async () => { await updateVocabulary([draft], []); setDraft(""); }); }}>
+      <form className="controls vocabulary-add" onSubmit={event => { event.preventDefault(); void addGuard.run(persistAdd).catch(fail); }}>
         <input aria-label="Word or phrase" placeholder="e.g. KnegisWhisper or Åsa Karlsson" value={draft} onChange={event => setDraft(event.target.value)} maxLength={100} disabled={busy} />
         <button type="submit" disabled={busy || !draft.trim()}>Add</button>
       </form>
@@ -52,7 +59,7 @@ export function Vocabulary() {
             <button type="button" disabled={busy} onClick={() => setEditing(null)}>Cancel</button>
           </> : <>
             <span className="vocabulary-word">{word.word}</span>
-            <button type="button" disabled={busy} aria-label={`Edit ${word.word}`} onClick={() => { setEditing(word.id); setEditText(word.word); }}>Edit</button>
+            <button type="button" disabled={busy} aria-label={`Edit ${word.word}`} onClick={() => { void replaceDraft(() => { setEditing(word.id); setEditText(word.word); }); }}>Edit</button>
             <button type="button" disabled={busy} aria-label={`Delete ${word.word}`} onClick={() => { void act(async () => { await deleteVocabulary(word.id); setRemoved(word.word); }); }}>Delete</button>
           </>}
         </li>)}</ul>

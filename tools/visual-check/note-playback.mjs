@@ -140,7 +140,8 @@ async function playingNote(cdp) {
   const loaded = await cdp.evaluate(snippets.playerState());
   if (loaded.errors.length) throw new SetupError("the player could not load the recording", loaded);
   await cdp.evaluate(snippets.choosePlayerSpeed(SLOT.side, String(RATE)));
-  await pressText(cdp, `${SLOT.side} .recording-player button`, "Play");
+  // An icon button since KNEG-448, named by its label rather than by text.
+  await pressText(cdp, `${SLOT.side} .recording-player button[aria-label="Play"]`, null);
   try {
     await waitFor(cdp, `${playingIn("side", LEAD_SECONDS)} || Boolean(document.querySelector('.recording-player .error'))`, "the recording to play", 10_000);
   } catch (error) {

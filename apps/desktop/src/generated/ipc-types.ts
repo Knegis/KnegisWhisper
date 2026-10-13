@@ -1,5 +1,5 @@
 /**
- * GENERATED FILE — DO NOT EDIT.
+ * GENERATED FILE â€” DO NOT EDIT.
  *
  * Source:    the Rust types themselves, via `#[derive(ts_rs::TS)]`
  * Generator: apps/desktop/src-tauri/src/ipc_types.rs
@@ -448,6 +448,13 @@ export type SummaryState = { noteId: number, content: string | null, revision: n
  */
 model: string | null, references: Array<SummaryReference>, };
 
+export type SummarySetupTarget = "summary-settings" | "providers" | "local-text-models" | "company-accounts";
+
+/**
+ * Configuration readiness, not a claim that a provider has answered a live request.
+ */
+export type SummaryReadiness = { "state": "ready" } | { "state": "needs-setup", reason: string, target: SummarySetupTarget, };
+
 /**
  * What the user configured, as stored.
  *
@@ -769,10 +776,18 @@ liveProviderId: string | null, };
  */
 export type RecordingRemoval = "deleted" | "kept-incomplete" | "kept-untranscribed" | "deleted-update-failed" | "delete-failed";
 
+export type Stage = "preparing-recording" | "finishing-live-transcript" | "transcribing-recording" | "analysing-speakers" | "saving-note";
+
+export type Kind = "stop" | "recovery";
+
+export type FinalisationProgress = { operationId: number, kind: Kind, stage: Stage, elapsedSeconds: number, };
+
+export type FinalisationUpdate = { revision: number, progress: FinalisationProgress | null, };
+
 /**
  * What can be said about the meeting session.
  */
-export type MeetingStatus = { state: MeetingState,
+export type MeetingStatus = { state: MeetingState, finalisation: FinalisationUpdate,
 /**
  * Why the live transcription stopped, when it has.
  *

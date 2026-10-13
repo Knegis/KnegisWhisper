@@ -1,3 +1,4 @@
+import { useSettingsDraft } from "../components/SettingsDrafts";
 /**
  * Settings > Meetings: how meetings are transcribed, detected and labelled.
  *
@@ -43,7 +44,7 @@
  * is given here is the name Rust gives it.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { LearnMore } from "../components/LearnMore";
 import { Row } from "../components/Row";
@@ -100,7 +101,7 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
     return { providers, status, language, keyterms, detect, diarization, provider, deleteRecordings };
   }, []);
 
-  const { data, error, reload, guard } = useRefresh(load);
+  const { data, error, reload, guard, fail } = useRefresh(load);
 
   /** Live meeting state, which arrives by event between reads. */
   const [state, setState] = useState<MeetingState | null>(null);
@@ -120,7 +121,7 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
     setResettingNotification(true);
     setNotificationResetError(null);
     try {
-      await resetMeetingNotificationPlacement();
+      await preferencesGuard.run(resetMeetingNotificationPlacement, "notification-placement");
     } catch (error) {
       setNotificationResetError(String(error));
     } finally {
@@ -170,17 +171,39 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
   // it offers Start, so the two screens cannot disagree about whether a
   // meeting is running. Above the loading guard for the effect below.
   const recording = meetingIsLive(state ?? data?.status.state ?? "idle");
-  // A meeting started from the notification disables the language field
-  // while it may hold half-typed text. It is dropped rather than saved: the
-  // meeting has already read the language, and the field goes back to the one
-  // it is using (KNEG-347). Disabling the focused field also blurs it, which
-  // is when it saves -- measured in Edge on 2026-10-02, though the issue
-  // expected no blur -- so the blur handler below skips a disabled field, or
-  // the draft would become the next meeting's language.
-  useEffect(() => {
-    if (recording) setLanguageDraft(null);
-  }, [recording]);
-
+  // A meeting started elsewhere freezes configuration, but keeps the draft for after it ends.
+  const languageSaved = useRef<string | null>(null);
+  const providerSaved = useRef<{ value: string | null } | null>(null);
+  const listsSaved = useRef<{ allow: string[]; block: string[] } | null>(null);
+  const languageNow = useRef(languageDraft); languageNow.current = languageDraft;
+  const providerNow = useRef(chosen); providerNow.current = chosen;
+  const listsNow = useRef({ allow: allowDraft, block: blockDraft }); listsNow.current = { allow: allowDraft, block: blockDraft };
+  const persistLanguage = async () => {
+    const submitted = languageNow.current;
+    if (submitted === null) return;
+    if (recording) throw new Error("Wait until the meeting ends to save its language.");
+    await setMeetingLanguage(submitted.trim()); languageSaved.current = submitted.trim();
+    // Keep the acknowledged value visible even if the following read fails.
+    await reload();
+  };
+  const persistProvider = async () => {
+    const submitted = providerNow.current;
+    if (submitted === null) return;
+    if (recording) throw new Error("Wait until the meeting ends to change its provider.");
+    await setMeetingProvider(submitted); providerSaved.current = { value: submitted };
+    await reload();
+  };
+  const persistLists = async () => {
+    if (!data) throw new Error("Settings haven't loaded yet.");
+    const submitted = listsNow.current;
+    const lists = { allow: onePerLine(submitted.allow ?? data.detect.allow.join("\n")), block: onePerLine(submitted.block ?? data.detect.block.join("\n")) };
+    await setMeetingDetectLists(lists); listsSaved.current = lists;
+    await reload();
+  };
+  const preferencesGuard = useSettingsDraft({ label: "Meeting preferences", order: 3, dirty: false, save: async () => {}, discard: () => {} });
+  const languageGuard = useSettingsDraft({ label: "Meeting language", order: 1, dirty: languageDraft !== null && languageDraft.trim() !== (languageSaved.current ?? data?.language ?? ""), save: persistLanguage, discard: () => setLanguageDraft(languageSaved.current ?? data?.language ?? null) });
+  const providerGuard = useSettingsDraft({ label: "Meeting provider", dirty: chosen !== null && chosen !== (providerSaved.current?.value ?? data?.provider ?? null), save: persistProvider, discard: () => setChosen(providerSaved.current?.value ?? data?.provider ?? null) });
+  const listGuard = useSettingsDraft({ label: "Meeting detection lists", order: 2, dirty: (allowDraft !== null || blockDraft !== null) && JSON.stringify({ allow: onePerLine(allowDraft ?? data?.detect.allow.join("\n") ?? ""), block: onePerLine(blockDraft ?? data?.detect.block.join("\n") ?? "") }) !== JSON.stringify(listsSaved.current ?? data?.detect), save: persistLists, discard: () => { setAllowDraft(listsSaved.current?.allow.join("\n") ?? null); setBlockDraft(listsSaved.current?.block.join("\n") ?? null); } });
   if (!data) {
     return (
       <div className="view">
@@ -209,10 +232,7 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
   // the database, and a preview describing a configuration it will not use is
   // the defect this used to be awaited before `startMeeting` to close.
   // Nothing typed is nothing to save -- the field is showing the saved value.
-  const saveLanguage = () => {
-    if (languageDraft === null) return;
-    void guard(() => setMeetingLanguage(effectiveLanguage.trim()));
-  };
+  const saveLanguage = () => { void languageGuard.run(persistLanguage).catch(fail); };
 
   // Both lists go in one write because they are one setting: `meetings.detect`
   // holds the pair, so saving either alone would have to re-send the other.
@@ -223,17 +243,12 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
   // lists back. Saying so here rather than reaching for a fresh poll — a walk
   // costs a pass over every process on the machine, and the screen catching up
   // one tick later is not worth spending that on every keystroke-and-blur.
-  const persistDetectLists = async () => {
-    await setMeetingDetectLists({
-      allow: onePerLine(effectiveAllowText),
-      block: onePerLine(effectiveBlockText),
-    });
-    await reload();
-  };
+  const persistDetectLists = () => listGuard.run(persistLists);
 
   return (
     <div className="view">
       {error ? <p className="error">{error}</p> : null}
+      {preferencesGuard.feedback}
 
       <section data-surface="settings.meetings">
         {usable.length === 0 ? (
@@ -251,6 +266,7 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
           <p className="caveat">
             A meeting is being recorded, so the provider and the language
             can't be changed until it ends.
+            {languageDraft !== null && languageDraft.trim() !== (languageSaved.current ?? data.language) && " Your unsaved language is kept for after the meeting; it does not change the meeting being recorded."}
           </p>
         ) : null}
 
@@ -267,7 +283,7 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
                 // Saved on change rather than at Start, so a choice survives
                 // a restart even when no meeting was recorded after making it
                 // -- and so the Meetings page, which reads it back, names it.
-                void guard(() => setMeetingProvider(id));
+                void providerGuard.run(async () => { await setMeetingProvider(id); providerSaved.current = { value: id }; await reload(); }).catch(fail);
               }}
             >
               {usable.map((p) => (
@@ -276,6 +292,7 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
                 </option>
               ))}
             </select>
+              {providerGuard.feedback}
           </span>
         </div>
 
@@ -314,7 +331,7 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
                 onClick={() => {
                   const id = selectedProvider.id;
                   setChosen(id);
-                  void guard(() => setMeetingProvider(id));
+                  void providerGuard.run(async () => { await setMeetingProvider(id); providerSaved.current = { value: id }; await reload(); }).catch(fail);
                 }}
               >
                 {`Use ${selectedProvider.name}`}
@@ -349,6 +366,7 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
                     if (e.key === "Enter" && !e.nativeEvent.isComposing) saveLanguage();
                   }}
                 />
+                {languageGuard.feedback}
               </span>
             </div>
             <div className="row">
@@ -393,10 +411,10 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
                 checked={data.deleteRecordings}
                 onChange={(e) => {
                   const enabled = e.target.checked;
-                  void guard(async () => {
+                  void preferencesGuard.run(async () => {
                     await setMeetingDeleteRecordings(enabled);
                     await reload();
-                  });
+                  }, "retention").catch(fail);
                 }}
               />
               Delete each recording once its transcript is saved
@@ -444,10 +462,10 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
                 checked={status.promptOnDetect}
                 onChange={(e) => {
                   const enabled = e.target.checked;
-                  void guard(async () => {
+                  void preferencesGuard.run(async () => {
                     await setMeetingPrompt(enabled);
                     await reload();
-                  });
+                  }, "notification").catch(fail);
                 }}
               />
               Show a window when a meeting starts
@@ -515,6 +533,7 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
                 void guard(persistDetectLists);
               }}
             />
+                {listGuard.feedback}
           </span>
         </div>
         <LearnMore>
@@ -581,10 +600,10 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
                 disabled={!diarization.ready && !diarization.enabled}
                 onChange={(e) => {
                   const enabled = e.target.checked;
-                  void guard(async () => {
+                  void preferencesGuard.run(async () => {
                     await setDiarizationEnabled(enabled);
                     await reload();
-                  });
+                  }, "speaker-labels").catch(fail);
                 }}
               />
               Add speaker labels to saved meeting notes

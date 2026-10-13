@@ -18,11 +18,12 @@ export async function reload(cdp, timeout = 15000) {
   try { await cdp.send("Page.reload", { ignoreCache: true }); await loaded; }
   finally { clearTimeout(timer); stop(); }
 }
-export async function press(cdp, point) {
+/** A real pointer press at `point`; `modifiers` is CDP's bit field (Alt 1, Ctrl 2, Meta 4, Shift 8). */
+export async function press(cdp, point, { modifiers = 0 } = {}) {
   const { x, y } = point;
-  await cdp.send("Input.dispatchMouseEvent", {type:"mouseMoved",x,y});
-  await cdp.send("Input.dispatchMouseEvent", {type:"mousePressed",x,y,button:"left",clickCount:1});
-  await cdp.send("Input.dispatchMouseEvent", {type:"mouseReleased",x,y,button:"left",clickCount:1});
+  await cdp.send("Input.dispatchMouseEvent", {type:"mouseMoved",x,y,modifiers});
+  await cdp.send("Input.dispatchMouseEvent", {type:"mousePressed",x,y,button:"left",clickCount:1,modifiers});
+  await cdp.send("Input.dispatchMouseEvent", {type:"mouseReleased",x,y,button:"left",clickCount:1,modifiers});
   await delay(150);
 }
 export async function pressText(cdp, selector, text) {

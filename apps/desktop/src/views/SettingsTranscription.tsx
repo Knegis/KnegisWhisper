@@ -1,3 +1,4 @@
+import { useSettingsDraft } from "../components/SettingsDrafts";
 import { LocalLanguagePicker } from "../components/LocalLanguagePicker";
 /**
  * Settings > Transcription, and Settings > Transcription > Local.
@@ -201,47 +202,25 @@ export function SettingsTranscription({
   /** The local list's language filter: a dictation language's code, or `null` for any (KNEG-330). */
   const [language, setLanguage] = useState<string | null>(null);
 
-  const choose = (p: ProviderSummary) => {
+  const cortiSaved = useRef({ environment: "", tenant: "" });
+  const scopesNow = useRef({ environment: cortiEnvironment ?? "", tenant: cortiTenant ?? "" });
+  scopesNow.current = { environment: cortiEnvironment ?? "", tenant: cortiTenant ?? "" };
+  const persistChoice = async (p: ProviderSummary) => {
     const model = selected[p.id] ?? p.models[0];
-    if (!model) {
-      setChosen(`${p.name} has no model to choose.`);
-      return;
-    }
-
-    // Corti needs two more values, and Rust refuses the route without them.
-    // Checked here so the message names the empty box rather than arriving as a
-    // rejected command.
-    if (p.id === "corti") {
-      const environment = (cortiEnvironment ?? "").trim();
-      const tenant = (cortiTenant ?? "").trim();
-      if (!environment || !tenant) {
-        setChosen(
-          "Corti needs both an environment and a tenant. Neither has a safe default.",
-        );
-        return;
-      }
-    }
-
-    void guard(async () => {
-      await setCloudProvider(
-        p.id,
-        model,
-        p.id === "corti"
-          ? {
-              environment: (cortiEnvironment ?? "").trim(),
-              tenant: (cortiTenant ?? "").trim(),
-            }
-          : undefined,
-      );
-      // Where the audio goes is said with the choice, not left to the row
-      // above to be noticed (KNEG-343).
-      setChosen(
-        p.configured
-          ? `Dictation now goes to ${p.name} (${model}). Audio is sent to ${p.name}.`
-          : `Set to ${p.name} (${model}). It won't work until you add a key on the Providers page.`,
-      );
-    });
+    if (!model) throw new Error(`${p.name} has no model to choose.`);
+    const submitted = scopesNow.current;
+    const scopes = { environment: submitted.environment.trim(), tenant: submitted.tenant.trim() };
+    if (p.id === "corti" && (!scopes.environment || !scopes.tenant)) throw new Error("Corti needs both an environment and a tenant.");
+    await setCloudProvider(p.id, model, p.id === "corti" ? scopes : undefined);
+    if (p.id === "corti") cortiSaved.current = submitted;
+    setChosen(p.configured ? `Dictation now goes to ${p.name} (${model}). Audio is sent to ${p.name}.` : `Set to ${p.name} (${model}). Add a key on the Providers page.`);
+    await reload();
   };
+  const routeDraft = useSettingsDraft({ label: "Corti dictation configuration", dirty: JSON.stringify(scopesNow.current) !== JSON.stringify(cortiSaved.current),
+    save: async () => { const provider = data?.providers.find(p => p.id === "corti"); if (!provider) throw new Error("Corti is unavailable."); await persistChoice(provider); },
+    discard: () => { setCortiEnvironment(cortiSaved.current.environment); setCortiTenant(cortiSaved.current.tenant); } });
+  const choose = (p: ProviderSummary) => { void routeDraft.run(() => persistChoice(p)).catch(cause => setChosen(String(cause))); };
+
 
   /**
    * Run an install and always stop saying it is running.
@@ -344,7 +323,7 @@ export function SettingsTranscription({
 
   if (!data) {
     return (
-      <div className="view">
+      <div className="view">{routeDraft.feedback}
         {error ? <FailureLine text="This page couldn't load." detail={error} /> : <p className="muted">Loading…</p>}
       </div>
     );
@@ -358,7 +337,7 @@ export function SettingsTranscription({
   const shown = filterByLanguage(localModelRows(local, sherpa, route), language);
 
   return (
-    <div className="view">
+    <div className="view">{routeDraft.feedback}
       {jobs.length > 0 && <section aria-label="Speech model installation progress" role="status">{jobs.map(job => <p key={job.id}>{data.local.models.find(model => model.id === job.id)?.name ?? data.sherpa.models.find(model => model.id === job.id)?.name ?? (job.id === "speech-server" ? "Speech processing tools" : job.id)}: {job.progress ? progressLabel(job.progress, id => data.local.models.find(model => model.id === id)?.name ?? data.sherpa.models.find(model => model.id === id)?.name ?? id) : "Starting…"}</p>)}</section>}
       {error ? <FailureLine text="That didn't work." detail={error} /> : null}
 

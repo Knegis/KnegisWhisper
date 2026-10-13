@@ -1480,7 +1480,8 @@ fn purge_failed(context: &str, error: note_recordings::PurgeError) -> String {
         note_recordings::PurgeError::Storage(e) => fail(context, e),
         said @ (note_recordings::PurgeError::NotOnDisk
         | note_recordings::PurgeError::RecordingKept
-        | note_recordings::PurgeError::NotesKept) => said.to_string(),
+        | note_recordings::PurgeError::NotesKept
+        | note_recordings::PurgeError::Partial { .. }) => said.to_string(),
     }
 }
 

@@ -657,9 +657,11 @@ export function meetingRecordingNotes() {
 }
 
 /**
- * The open note's recording, as Notes shows it: how many players and row
- * Play buttons there are, its transcript rows, its recording details, the
- * "no recording attached" block, and which tab is selected.
+ * The open note's recording, as Notes shows it: how many players there are,
+ * how many transcript lines play when pressed (`.transcript-line-playable`,
+ * which a line is only with a recording to play, since KNEG-448 took the
+ * rows' own Play buttons away), its transcript rows, its recording details,
+ * the "no recording attached" block, and which tab is selected.
  */
 export function noteRecordingState() {
   return source(`
@@ -670,7 +672,7 @@ export function noteRecordingState() {
       tab: note?.querySelector('[role="tab"][aria-selected="true"]')?.textContent.trim() ?? null,
       audios: note ? note.querySelectorAll('audio').length : null,
       players: note ? note.querySelectorAll('.recording-player').length : null,
-      rowPlays: note ? note.querySelectorAll('.transcript-play').length : null,
+      playableLines: note ? note.querySelectorAll('.transcript-line-playable').length : null,
       rows: note ? [...note.querySelectorAll('.transcript-rows .transcript-text')].map(text) : [],
       details: note ? [...note.querySelectorAll('.recording-details p')].filter((item) => !item.closest('[hidden]')).map(text) : [],
       disposition: note ? [...note.querySelectorAll('.recording-disposition p')].filter(item => !item.closest('[hidden]')).map(text) : [],
@@ -1217,6 +1219,1159 @@ export function watchSeek() {
 export function seekRecord() {
   return source(`
     return window.__seek ?? null;
+  `);
+}
+
+/* ------------------------------------------------------- transcript column */
+
+/**
+ * Marks the root with `data-theme` for `scheme`, beside the emulated
+ * `prefers-color-scheme` a check sets over CDP. The stylesheet reads only the
+ * media query (`styles.css`, `@media (prefers-color-scheme: light)`); the
+ * attribute is set so a rule keyed on it later would see the same scheme.
+ * Returns which scheme the page is now drawing.
+ */
+export function markColorScheme(scheme) {
+  return source(`
+    document.documentElement.dataset.theme = ${JSON.stringify(scheme)};
+    return matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  `);
+}
+
+/**
+ * The transcript column's player card (KNEG-448). Its box against the
+ * column's padding box -- inside the column's left rule, which is the
+ * column's own edge, not the card's to clear -- its border, corners and
+ * background beside the resolved `--rule` and `--bg` (a token's value is
+ * resolved by giving it to an element's `color`, so `#2e2e33` and
+ * `rgb(46, 46, 51)` compare equal), the controls it holds, and where each
+ * section mark's centre sits beside where the range's thumb would at that
+ * fraction: `5px + (width - 10px) * fraction` of the range's box, the
+ * mapping `styles.css` draws the thumb and the played part with.
+ */
+export function playerCardState() {
+  return source(`
+    const side = document.querySelector('.note-side');
+    const card = side?.querySelector('.note-side-player');
+    if (!side || !card) throw new Error('No player in the transcript column');
+    const resolve = (value) => {
+      const probe = document.createElement('i');
+      probe.style.color = value;
+      document.body.append(probe);
+      const color = getComputedStyle(probe).color;
+      probe.remove();
+      return color;
+    };
+    const root = getComputedStyle(document.documentElement);
+    const raw = (name) => root.getPropertyValue(name).trim();
+    const box = (element) => {
+      if (!element) return null;
+      const rect = element.getBoundingClientRect();
+      return { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
+    };
+    const outer = side.getBoundingClientRect();
+    const left = outer.left + side.clientLeft;
+    const inner = { left, right: left + side.clientWidth, bottom: outer.top + side.clientTop + side.clientHeight };
+    const rect = card.getBoundingClientRect();
+    const style = getComputedStyle(card);
+    const sides = ['Top', 'Right', 'Bottom', 'Left'];
+    const corners = ['TopLeft', 'TopRight', 'BottomRight', 'BottomLeft'];
+    const play = card.querySelector('button[aria-label="Play"]');
+    const row = card.querySelector('.recording-controls');
+    const range = card.querySelector('input[type="range"]');
+    const audio = card.querySelector('audio');
+    return {
+      scheme: matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light',
+      dataTheme: document.documentElement.dataset.theme ?? null,
+      inset: { left: rect.left - inner.left, right: inner.right - rect.right, bottom: inner.bottom - rect.bottom },
+      card: box(card),
+      position: style.position,
+      borderWidths: sides.map((name) => style['border' + name + 'Width']),
+      borderStyles: sides.map((name) => style['border' + name + 'Style']),
+      borderColors: sides.map((name) => style['border' + name + 'Color']),
+      radii: corners.map((name) => style['border' + name + 'Radius']),
+      background: style.backgroundColor,
+      tokens: { rule: raw('--rule'), bg: raw('--bg') },
+      resolved: { rule: resolve(raw('--rule')), bg: resolve(raw('--bg')) },
+      play: box(play),
+      playMarginTop: play ? getComputedStyle(play).marginTop : null,
+      controls: box(row),
+      back: Boolean(card.querySelector('button[aria-label="Back 15 seconds"]')),
+      forward: Boolean(card.querySelector('button[aria-label="Forward 15 seconds"]')),
+      clock: card.querySelector('.recording-clock')?.textContent ?? null,
+      selects: card.querySelectorAll('select').length,
+      range: box(range),
+      marks: [...card.querySelectorAll('.recording-mark')].map((mark) => {
+        const at = mark.getBoundingClientRect();
+        return { centre: (at.left + at.right) / 2, width: at.width, height: at.height, color: getComputedStyle(mark).backgroundColor };
+      }),
+      duration: audio && Number.isFinite(audio.duration) ? audio.duration : null,
+    };
+  `);
+}
+
+/**
+ * Pauses the recording in `container` and puts it at `seconds`, as a check's
+ * starting point; the seek's end is for the check to wait on
+ * (`recordingAt`).
+ */
+export function pauseRecordingAt(container, seconds) {
+  return source(`
+    const audio = document.querySelector(${JSON.stringify(`${container} audio`)});
+    if (!audio) throw new Error('No recording in ' + ${JSON.stringify(container)});
+    audio.pause();
+    audio.currentTime = ${JSON.stringify(seconds)};
+    return true;
+  `);
+}
+
+/** The recording in `container`: its time, whether it is paused, and whether a seek is under way. */
+export function recordingAt(container) {
+  return source(`
+    const audio = document.querySelector(${JSON.stringify(`${container} audio`)});
+    if (!audio) throw new Error('No recording in ' + ${JSON.stringify(container)});
+    return { time: audio.currentTime, paused: audio.paused, seeking: audio.seeking };
+  `);
+}
+
+/** Scrolls the transcript column to its end at once, not smoothly, and says how far that was. */
+export function scrollSideToEnd() {
+  return source(`
+    const body = document.querySelector('.note-side .note-side-body');
+    if (!body) throw new Error('No transcript column');
+    body.scrollTo({ top: body.scrollHeight, behavior: 'instant' });
+    return { scrollTop: body.scrollTop, maxScroll: body.scrollHeight - body.clientHeight };
+  `);
+}
+
+/**
+ * The transcript column at the end of its scroll: the last transcript line's
+ * bottom, the card's top, the scroller's own box, whether the column is at
+ * the end of its scroll, and the `--player-h` the note carries beside the
+ * card's own height.
+ */
+export function lastLineState() {
+  return source(`
+    const body = document.querySelector('.note-side .note-side-body');
+    const card = document.querySelector('.note-side .note-side-player');
+    if (!body || !card) throw new Error('No transcript column with a player');
+    const lines = body.querySelectorAll('.transcript-rows li');
+    const last = lines[lines.length - 1];
+    if (!last) throw new Error('The transcript column has no lines');
+    const scroller = body.getBoundingClientRect();
+    return {
+      lines: lines.length,
+      lastText: last.querySelector('.transcript-text')?.textContent ?? last.textContent,
+      lastBottom: last.getBoundingClientRect().bottom,
+      cardTop: card.getBoundingClientRect().top,
+      cardHeight: card.offsetHeight,
+      scroller: { top: scroller.top, bottom: scroller.bottom },
+      scrollTop: body.scrollTop,
+      maxScroll: body.scrollHeight - body.clientHeight,
+      paddingBottom: getComputedStyle(body).paddingBottom,
+      playerH: document.querySelector('.note-detail')?.style.getPropertyValue('--player-h') || null,
+    };
+  `);
+}
+
+/**
+ * The line playing in the transcript column (`aria-current`), as the column
+ * scrolled it into view: its box beside the card's top and the bottom of the
+ * column's sticky head (the scroller's top when it has none), and how far the
+ * column had to scroll to show it.
+ */
+export function playingLineState() {
+  return source(`
+    const body = document.querySelector('.note-side .note-side-body');
+    const card = document.querySelector('.note-side .note-side-player');
+    if (!body || !card) throw new Error('No transcript column with a player');
+    const line = body.querySelector('.transcript-rows li[aria-current="true"]');
+    const head = body.querySelector('.transcript-head');
+    const scroller = body.getBoundingClientRect();
+    const rect = line?.getBoundingClientRect() ?? null;
+    return {
+      index: line ? [...body.querySelectorAll('.transcript-rows li')].indexOf(line) : null,
+      text: line?.querySelector('.transcript-text')?.textContent ?? null,
+      top: rect?.top ?? null,
+      bottom: rect?.bottom ?? null,
+      clearTop: head ? head.getBoundingClientRect().bottom : scroller.top + body.clientTop,
+      cardTop: card.getBoundingClientRect().top,
+      scrollTop: body.scrollTop,
+      playerH: document.querySelector('.note-detail')?.style.getPropertyValue('--player-h') || null,
+    };
+  `);
+}
+
+/** An element as a short selector-like string for a report: its tag, its classes, and its text when short. */
+const DESCRIBE = `const describe = (element) => {
+      const classes = typeof element.className === 'string' && element.className.trim() ? '.' + element.className.trim().split(/\\s+/).join('.') : '';
+      const text = (element.textContent ?? '').trim();
+      return element.tagName.toLowerCase() + classes + (text && text.length <= 24 ? ' "' + text + '"' : '');
+    };`;
+
+/**
+ * The transcript beside a note, grouped as the M6 redesign draws it
+ * (KNEG-448): its sticky head (the headings and buttons in it, its position),
+ * each section toggle's state, title and count, the 6px marker of each turn,
+ * how many per-line Play buttons the column (`.note-side`) holds,
+ * and -- over the panel's `aside` and everything in it -- any element with a
+ * rounded corner other than a control (a button, an input, a select, a
+ * textarea, a mark or a word), and any computed weight above 400.
+ */
+export function transcriptColumnState() {
+  return source(`
+    ${DESCRIBE}
+    const aside = document.querySelector('.note-side .transcript');
+    if (!aside) throw new Error('No transcript in the column');
+    const head = aside.querySelector('.transcript-head');
+    const headStyle = head ? getComputedStyle(head) : null;
+    const corners = ['TopLeft', 'TopRight', 'BottomRight', 'BottomLeft'];
+    const rounded = [];
+    const heavy = [];
+    for (const element of [aside, ...aside.querySelectorAll('*')]) {
+      const style = getComputedStyle(element);
+      if (!element.matches('button, input, select, textarea, mark, .transcript-word')) {
+        const radii = corners.map((corner) => style['border' + corner + 'Radius']);
+        if (radii.some((radius) => radius !== '0px')) rounded.push(describe(element) + ' ' + radii.join(' '));
+      }
+      if (Number(style.fontWeight) > 400) heavy.push(describe(element) + ' ' + style.fontWeight);
+    }
+    return {
+      head: head ? {
+        position: headStyle.position,
+        top: headStyle.top,
+        headings: [...head.querySelectorAll('h1, h2, h3, h4, h5, h6, [role="heading"]')].map((heading) => ({
+          text: heading.textContent.trim(),
+          drawn: getComputedStyle(heading).textTransform,
+        })),
+        buttons: [...head.querySelectorAll('button')].map((button) => ({
+          label: button.getAttribute('aria-label'),
+          disabled: button.disabled,
+        })),
+      } : null,
+      toggles: [...aside.querySelectorAll('button.transcript-section-toggle')].map((button) => ({
+        expanded: button.getAttribute('aria-expanded'),
+        title: button.querySelector('.transcript-section-title')?.textContent ?? null,
+        count: button.querySelector('.transcript-section-count')?.textContent ?? null,
+        height: button.getBoundingClientRect().height,
+      })),
+      markers: [...aside.querySelectorAll('.transcript-turn-head')].map((turnHead) => {
+        const marker = turnHead.querySelector('.transcript-turn-marker');
+        if (!marker) return null;
+        const rect = marker.getBoundingClientRect();
+        return { width: rect.width, height: rect.height };
+      }),
+      lines: aside.querySelectorAll('.transcript-rows li').length,
+      // Per-line Play buttons anywhere in the column, the card included (gone since KNEG-448's click model).
+      rowPlays: document.querySelector('.note-side')?.querySelectorAll('.transcript-play').length ?? null,
+      rounded,
+      heavy,
+    };
+  `);
+}
+
+/**
+ * Scrolls `scroller` down by `by` pixels at once, then reads where the open
+ * note's transcript head stands against the scroller's top edge (inside its
+ * border, where a sticky head sticks).
+ */
+export function scrollAndReadHead(scroller, by) {
+  return source(`
+    const element = document.querySelector(${JSON.stringify(scroller)});
+    if (!element) throw new Error('No ' + ${JSON.stringify(scroller)});
+    const before = element.scrollTop;
+    element.scrollBy({ top: ${JSON.stringify(by)}, behavior: 'instant' });
+    const heads = [...document.querySelectorAll('.note-detail .transcript .transcript-head')].filter((head) => head.getClientRects().length > 0);
+    const head = heads[0] ?? null;
+    return {
+      before,
+      after: element.scrollTop,
+      scrollerTop: element.getBoundingClientRect().top + element.clientTop,
+      headTop: head ? head.getBoundingClientRect().top : null,
+      heads: heads.length,
+      position: head ? getComputedStyle(head).position : null,
+    };
+  `);
+}
+
+/**
+ * The transcript column's label and status line, and how the label is drawn,
+ * for the column before and after its rows arrive.
+ */
+export function columnLabelState() {
+  return source(`
+    const side = document.querySelector('.note-side');
+    if (!side) throw new Error('No transcript column');
+    const label = side.querySelector('.transcript-head .transcript-label');
+    const head = label?.closest('.transcript-head') ?? null;
+    const style = label ? getComputedStyle(label) : null;
+    return {
+      label: label?.textContent ?? null,
+      drawn: style ? { textTransform: style.textTransform, fontFamily: style.fontFamily, fontSize: style.fontSize, color: style.color } : null,
+      head: head ? { height: head.getBoundingClientRect().height, left: label.getBoundingClientRect().left - side.getBoundingClientRect().left } : null,
+      status: side.querySelector('[role="status"]')?.textContent ?? null,
+      lines: side.querySelectorAll('.transcript-rows li').length,
+      headings: [...side.querySelectorAll('h1, h2, h3, h4, h5, h6')].map((heading) => heading.textContent.trim()),
+    };
+  `);
+}
+
+/** Every transcript line's `aria-selected` in the open note, in stored order. */
+export function lineSelection() {
+  return source(`
+    return [...document.querySelectorAll('.note-detail .transcript .transcript-rows li')].map((line) => line.getAttribute('aria-selected'));
+  `);
+}
+
+/**
+ * Marks the first `button.transcript-speaker` in the column reading `name`
+ * with `data-probe`, so the turn it belongs to can be found again after it is
+ * pressed, and returns its centre.
+ */
+export function markSpeakerButton(name) {
+  return source(`
+    const button = [...document.querySelectorAll('.note-side button.transcript-speaker')]
+      .find((item) => item.textContent.trim() === ${JSON.stringify(name)});
+    if (!button) throw new Error('No speaker button reads ' + ${JSON.stringify(name)});
+    document.querySelectorAll('[data-probe="rename"]').forEach((item) => item.removeAttribute('data-probe'));
+    button.dataset.probe = 'rename';
+    const rect = button.getBoundingClientRect();
+    return { x: (rect.left + rect.right) / 2, y: (rect.top + rect.bottom) / 2, label: button.getAttribute('aria-label') };
+  `);
+}
+
+/**
+ * The open rename form beside the speaker button `markSpeakerButton` marked:
+ * whether it sits in that button's `.transcript-turn`, what it is a child of,
+ * and whether focus is in its text field.
+ */
+export function renameFormState() {
+  return source(`
+    const button = document.querySelector('[data-probe="rename"]');
+    const forms = [...document.querySelectorAll('.note-detail form.transcript-rename')];
+    const form = forms[0] ?? null;
+    const turn = button?.closest('.transcript-turn') ?? null;
+    const input = form?.querySelector('input[type="text"]') ?? null;
+    const active = document.activeElement;
+    return {
+      forms: forms.length,
+      label: form?.getAttribute('aria-label') ?? null,
+      inPressedTurn: Boolean(form && turn && turn.contains(form)),
+      parent: form ? [form.parentElement.tagName.toLowerCase(), ...form.parentElement.classList].join('.') : null,
+      focusInInput: Boolean(input) && active === input,
+      focused: active ? [active.tagName.toLowerCase(), ...active.classList].join('.') : null,
+    };
+  `);
+}
+
+/**
+ * Line `index` of the column: a point inside its left padding (on the line,
+ * off its text, words and buttons), whether it is the playing line, and its
+ * computed background beside `--panel-hover` and `--band-wash` resolved from
+ * the root (by giving each to an element's `color`).
+ */
+export function lineHoverState(index) {
+  return source(`
+    const line = document.querySelectorAll('.note-side .transcript .transcript-rows li')[${JSON.stringify(index)}];
+    if (!line) throw new Error('No line ' + ${JSON.stringify(index)});
+    const resolve = (name) => {
+      const probe = document.createElement('i');
+      probe.style.color = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+      document.body.append(probe);
+      const color = getComputedStyle(probe).color;
+      probe.remove();
+      return color;
+    };
+    const rect = line.getBoundingClientRect();
+    return {
+      point: { x: rect.left + 8, y: rect.top + rect.height / 2 },
+      text: line.querySelector('.transcript-text')?.textContent ?? null,
+      current: line.getAttribute('aria-current') === 'true',
+      hovered: line.matches(':hover'),
+      background: getComputedStyle(line).backgroundColor,
+      panelHover: resolve('--panel-hover'),
+      bandWash: resolve('--band-wash'),
+    };
+  `);
+}
+
+/**
+ * A point to press on transcript line `index` of the open note (KNEG-448): inside the line's
+ * left padding, so a press there lands on the line itself and not on a word or its text. The
+ * line is first brought into view the way the column's own scrolls bring one (`nearest`, at once,
+ * clear of the sticky head and the player card by the lines' scroll margins). `onLine` says
+ * whether the element under the point is the line, so a press that would land on anything else
+ * -- the card floating over it, a word -- is caught before it is made.
+ */
+export function linePadPoint(index) {
+  return source(`
+    const line = document.querySelectorAll('.note-detail .transcript .transcript-rows li')[${JSON.stringify(index)}];
+    if (!line) throw new Error('No transcript line ' + ${JSON.stringify(index)});
+    line.scrollIntoView({ block: 'nearest', behavior: 'instant' });
+    const rect = line.getBoundingClientRect();
+    const pad = parseFloat(getComputedStyle(line).paddingLeft) || 0;
+    const x = rect.left + Math.max(1, Math.min(8, pad / 2));
+    const y = rect.top + Math.min(rect.height / 2, 11);
+    return {
+      x,
+      y,
+      pad,
+      onLine: document.elementFromPoint(x, y) === line,
+      text: line.querySelector('.transcript-text')?.textContent ?? null,
+    };
+  `);
+}
+
+/**
+ * The open note's transcript lines as the click model leaves them (KNEG-448): which are selected
+ * (`aria-selected="true"`), which is playing (`aria-current`), which hold a tab stop
+ * (`tabindex="0"`), which has focus, and each one's classes for the selected and playing look;
+ * plus what has focus when it is not a line.
+ */
+export function lineModelState() {
+  return source(`
+    const lines = [...document.querySelectorAll('.note-detail .transcript .transcript-rows li')];
+    const active = document.activeElement;
+    const indexes = (test) => lines.flatMap((line, at) => test(line) ? [at] : []);
+    return {
+      lines: lines.length,
+      selected: indexes((line) => line.getAttribute('aria-selected') === 'true'),
+      playing: indexes((line) => line.getAttribute('aria-current') === 'true'),
+      stops: indexes((line) => line.getAttribute('tabindex') === '0'),
+      playable: indexes((line) => line.classList.contains('transcript-line-playable')),
+      selectedLook: indexes((line) => line.classList.contains('transcript-line-selected')),
+      playingLook: indexes((line) => line.classList.contains('transcript-line-playing')),
+      focused: lines.indexOf(active),
+      focusedWithin: lines.findIndex((line) => line.contains(active)),
+      active: active ? [active.tagName.toLowerCase(), ...active.classList].join('.') + (active.getAttribute('aria-label') ? '[' + active.getAttribute('aria-label') + ']' : '') : null,
+    };
+  `);
+}
+
+/**
+ * Where focus is after a Tab, for a walk through the transcript: whether it is inside the open
+ * note's `.transcript` at all, the transcript line it is on (its index among every line, or -1),
+ * and the element, described.
+ */
+export function focusPlace() {
+  return source(`
+    ${DESCRIBE}
+    const active = document.activeElement;
+    const lines = [...document.querySelectorAll('.note-detail .transcript .transcript-rows li')];
+    return {
+      inTranscript: Boolean(active?.closest?.('.note-detail .transcript')),
+      line: lines.indexOf(active),
+      element: active && active !== document.body ? describe(active).slice(0, 80) : 'body',
+    };
+  `);
+}
+
+/**
+ * The header line of the player card in `container` (KNEG-448's `PlayerHeader`): its height,
+ * the speaker it names and its 6px marker's fill beside the resolved `--band` and `--muted`, or
+ * its "Play selection" button and the button that clears the selection.
+ */
+export function cardHeaderState(container) {
+  return source(`
+    const slot = document.querySelector(${JSON.stringify(container)});
+    if (!slot) throw new Error('No ' + ${JSON.stringify(container)});
+    const resolve = (name) => {
+      const probe = document.createElement('i');
+      probe.style.color = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+      document.body.append(probe);
+      const color = getComputedStyle(probe).color;
+      probe.remove();
+      return color;
+    };
+    const header = slot.querySelector('.player-header');
+    const marker = header?.querySelector('.player-header-marker') ?? null;
+    const play = header?.querySelector('button.player-header-play') ?? null;
+    const clear = header?.querySelector('button.player-header-clear') ?? null;
+    return {
+      present: Boolean(header),
+      height: header ? header.getBoundingClientRect().height : null,
+      speaker: header?.querySelector('.player-header-speaker')?.textContent ?? null,
+      marker: marker ? { width: marker.getBoundingClientRect().width, height: marker.getBoundingClientRect().height, fill: getComputedStyle(marker).backgroundColor } : null,
+      playSelection: play?.textContent ?? null,
+      clear: clear ? clear.getAttribute('aria-label') : null,
+      band: resolve('--band'),
+      muted: resolve('--muted'),
+    };
+  `);
+}
+
+/**
+ * Records, into `window.__landing`, where the recording in `container` lands after its next seek:
+ * the time when that seek ended (`seeked`), and the time on the first animation frame after it
+ * with the recording playing -- "where it was once playing", read in the page rather than after a
+ * round trip to the check.
+ */
+export function watchLanding(container) {
+  return source(`
+    const audio = document.querySelector(${JSON.stringify(`${container} audio`)});
+    if (!audio) throw new Error('No recording in ' + ${JSON.stringify(container)});
+    const landing = window.__landing = { seeked: null, playingAt: null };
+    audio.addEventListener('seeked', () => { landing.seeked = audio.currentTime; }, { once: true });
+    const step = () => {
+      if (window.__landing !== landing) return;
+      if (landing.seeked !== null && !audio.paused && audio.readyState >= 3) { landing.playingAt = audio.currentTime; return; }
+      requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+    return true;
+  `);
+}
+
+/** What `watchLanding` recorded so far. */
+export function landingRecord() {
+  return source(`
+    return window.__landing ?? null;
+  `);
+}
+
+/**
+ * The narrow layout's mini player: whether it is there, `hidden`, drawn, and whether it carries the
+ * card's header line and its Follow chip (KNEG-448).
+ */
+export function miniPlayerState() {
+  return source(`
+    const mini = document.querySelector('.note-detail .note-mini-player');
+    return {
+      present: Boolean(mini),
+      hidden: mini ? mini.hidden : null,
+      drawn: mini ? mini.getClientRects().length > 0 : false,
+      header: Boolean(mini?.querySelector('.player-header')),
+      follow: Boolean(mini?.querySelector('button.follow-chip')),
+      tab: document.querySelector('.note-detail [role="tab"][aria-selected="true"]')?.textContent.trim() ?? null,
+    };
+  `);
+}
+
+/**
+ * The Follow chip in the player card in `container` (KNEG-448): whether it is there, its
+ * `aria-pressed`, its text and how it is drawn, beside `--band`, `--band-ink` and `--muted`
+ * resolved from the root (by giving each to an element's `color`), and the centre to press it at.
+ */
+export function followChipState(container) {
+  return source(`
+    const slot = document.querySelector(${JSON.stringify(container)});
+    if (!slot) throw new Error('No ' + ${JSON.stringify(container)});
+    const resolve = (name) => {
+      const probe = document.createElement('i');
+      probe.style.color = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+      document.body.append(probe);
+      const color = getComputedStyle(probe).color;
+      probe.remove();
+      return color;
+    };
+    const chip = slot.querySelector('button.follow-chip');
+    const style = chip ? getComputedStyle(chip) : null;
+    const rect = chip ? chip.getBoundingClientRect() : null;
+    return {
+      present: Boolean(chip),
+      pressed: chip ? chip.getAttribute('aria-pressed') : null,
+      text: chip ? chip.textContent.trim() : null,
+      drawn: style ? {
+        background: style.backgroundColor,
+        color: style.color,
+        fontFamily: style.fontFamily,
+        fontSize: style.fontSize,
+        textTransform: style.textTransform,
+        radius: style.borderTopLeftRadius,
+        height: rect.height,
+      } : null,
+      point: rect ? { x: (rect.left + rect.right) / 2, y: (rect.top + rect.bottom) / 2 } : null,
+      band: resolve('--band'),
+      bandInk: resolve('--band-ink'),
+      muted: resolve('--muted'),
+    };
+  `);
+}
+
+/**
+ * Starts recording, into `window.__playingLines`, every transcript line in `scroller` that becomes
+ * the playing one (`aria-current`), read each animation frame: its index among the lines, the
+ * scroller's `scrollTop` at that frame, and -- `settle` ms later, once a scroll it set off has had
+ * time to end -- where the line stands beside the bottom of the transcript's sticky head and the
+ * top of the card in `container`, the scroller's `scrollTop` then, whether it is still playing,
+ * and the Follow chip's `aria-pressed`. A line already playing is recorded first.
+ */
+export function watchPlayingLines(scroller, container, settle) {
+  return source(`
+    const body = document.querySelector(${JSON.stringify(scroller)});
+    const card = document.querySelector(${JSON.stringify(container)});
+    if (!body || !card) throw new Error('No ' + ${JSON.stringify(scroller)} + ' with a card in ' + ${JSON.stringify(container)});
+    const record = window.__playingLines = { changes: [] };
+    const measure = (change, line) => {
+      const rect = line.getBoundingClientRect();
+      const head = body.querySelector('.transcript-head');
+      change.settled = {
+        current: line.getAttribute('aria-current') === 'true',
+        drawn: line.getClientRects().length > 0,
+        top: rect.top,
+        bottom: rect.bottom,
+        headBottom: head ? head.getBoundingClientRect().bottom : null,
+        cardTop: card.getBoundingClientRect().top,
+        scrollTop: body.scrollTop,
+        follow: card.querySelector('button.follow-chip')?.getAttribute('aria-pressed') ?? null,
+      };
+    };
+    let current = null;
+    const step = () => {
+      if (window.__playingLines !== record) return;
+      const line = body.querySelector('.transcript-rows li[aria-current="true"]');
+      if (line !== current) {
+        current = line;
+        if (line) {
+          const change = { index: [...body.querySelectorAll('.transcript-rows li')].indexOf(line), scrollTop: body.scrollTop, settled: null };
+          record.changes.push(change);
+          setTimeout(() => measure(change, line), ${JSON.stringify(settle)});
+        }
+      }
+      requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+    return true;
+  `);
+}
+
+/** What `watchPlayingLines` recorded so far; stops it with `stop`. */
+export function playingLinesRecord(stop = false) {
+  return source(`
+    const record = window.__playingLines ?? null;
+    if (${JSON.stringify(stop)}) window.__playingLines = null;
+    return record;
+  `);
+}
+
+/**
+ * The playing line in `scroller` beside the band Follow keeps it in (KNEG-448): the scroller's
+ * box inside its border, less the transcript's sticky head at the top and the card -- the note's
+ * `--player-h` plus 24px -- at the bottom. Both centres, and how far apart they are.
+ */
+export function followBandState(scroller) {
+  return source(`
+    const body = document.querySelector(${JSON.stringify(scroller)});
+    if (!body) throw new Error('No ' + ${JSON.stringify(scroller)});
+    const lines = [...body.querySelectorAll('.transcript-rows li')];
+    const line = body.querySelector('.transcript-rows li[aria-current="true"]');
+    const heads = [...body.querySelectorAll('.transcript-head')].filter((head) => head.getClientRects().length > 0);
+    const head = heads[0] ?? null;
+    const detail = document.querySelector('.note-detail');
+    const playerH = detail ? parseFloat(getComputedStyle(detail).getPropertyValue('--player-h')) || 0 : 0;
+    const top = body.getBoundingClientRect().top + body.clientTop;
+    const headHeight = head ? head.getBoundingClientRect().height : 0;
+    const band = { top: top + headHeight, bottom: top + body.clientHeight - playerH - 24 };
+    band.centre = (band.top + band.bottom) / 2;
+    const rect = line ? line.getBoundingClientRect() : null;
+    const centre = rect ? (rect.top + rect.bottom) / 2 : null;
+    return {
+      index: line ? lines.indexOf(line) : null,
+      line: rect ? { top: rect.top, bottom: rect.bottom, centre } : null,
+      band,
+      offset: centre === null ? null : centre - band.centre,
+      scrollTop: body.scrollTop,
+      headHeight,
+      playerH,
+    };
+  `);
+}
+
+/**
+ * Transcript line `index` of the open note beside the band Follow keeps lines in, inside
+ * `scroller` (`followBandState`'s band): whether it is drawn and wholly inside it (±1px), how far
+ * its centre is from the band's, and the scroller's `scrollTop`.
+ */
+export function lineBandState(scroller, index) {
+  return source(`
+    const body = document.querySelector(${JSON.stringify(scroller)});
+    const line = document.querySelectorAll('.note-detail .transcript .transcript-rows li')[${JSON.stringify(index)}];
+    if (!body || !line) throw new Error('No ' + ${JSON.stringify(scroller)} + ' or no line ' + ${JSON.stringify(index)});
+    const head = [...body.querySelectorAll('.transcript-head')].find((item) => item.getClientRects().length > 0) ?? null;
+    const detail = document.querySelector('.note-detail');
+    const playerH = detail ? parseFloat(getComputedStyle(detail).getPropertyValue('--player-h')) || 0 : 0;
+    const top = body.getBoundingClientRect().top + body.clientTop;
+    const band = { top: top + (head ? head.getBoundingClientRect().height : 0), bottom: top + body.clientHeight - playerH - 24 };
+    const rect = line.getBoundingClientRect();
+    const drawn = line.getClientRects().length > 0;
+    return {
+      drawn,
+      top: rect.top,
+      bottom: rect.bottom,
+      band,
+      inBand: drawn && rect.top >= band.top - 1 && rect.bottom <= band.bottom + 1,
+      offset: (rect.top + rect.bottom) / 2 - (band.top + band.bottom) / 2,
+      scrollTop: body.scrollTop,
+    };
+  `);
+}
+
+/**
+ * A point inside `selector` that lands on nothing a person would operate -- no button, field,
+ * link, editable text or focusable element -- found down its left edge, 6px in: for a press that
+ * only says where the person last pressed. `plain` is false when there is none.
+ */
+export function blankPoint(selector) {
+  return source(`
+    const element = document.querySelector(${JSON.stringify(selector)});
+    if (!element) throw new Error('No ' + ${JSON.stringify(selector)});
+    ${DESCRIBE}
+    const rect = element.getBoundingClientRect();
+    for (let y = rect.top + 40; y < Math.min(rect.bottom, innerHeight) - 40; y += 20) {
+      const x = rect.left + 6;
+      const hit = document.elementFromPoint(x, y);
+      if (!hit || !element.contains(hit)) continue;
+      if (hit.closest('button, input, textarea, select, a, [contenteditable], [tabindex], [role="option"]')) continue;
+      return { x, y, plain: true, hit: describe(hit).slice(0, 60) };
+    }
+    return { x: rect.left + 6, y: rect.top + 40, plain: false, hit: null };
+  `);
+}
+
+/**
+ * A point over `selector`, a scroller, for a real wheel: across its middle and 40% down, and
+ * whether the element there is inside it (so not the card floating over its foot), with its
+ * `scrollTop` now.
+ */
+export function scrollerPoint(selector) {
+  return source(`
+    const element = document.querySelector(${JSON.stringify(selector)});
+    if (!element) throw new Error('No ' + ${JSON.stringify(selector)});
+    const rect = element.getBoundingClientRect();
+    const x = rect.left + rect.width / 2;
+    const y = rect.top + rect.height * 0.4;
+    const hit = document.elementFromPoint(x, y);
+    return { x, y, inside: Boolean(hit) && element.contains(hit), scrollTop: element.scrollTop };
+  `);
+}
+
+/**
+ * The section toggle titled `title` in the open note's transcript, scrolled to the middle of its
+ * scroller at once -- clear of the sticky head and of the card floating over the scroller's foot,
+ * which the toggle has no scroll margins to keep out from under -- unless it is already clear of
+ * both: its centre to press, its `aria-expanded`, and whether the toggle is what is at that point.
+ */
+export function sectionToggleState(title) {
+  return source(`
+    const toggle = [...document.querySelectorAll('.note-detail .transcript button.transcript-section-toggle')]
+      .find((button) => button.querySelector('.transcript-section-title')?.textContent === ${JSON.stringify(title)});
+    if (!toggle) throw new Error('No section toggle titled ' + ${JSON.stringify(title)});
+    const before = toggle.getBoundingClientRect();
+    if (!toggle.contains(document.elementFromPoint((before.left + before.right) / 2, (before.top + before.bottom) / 2))) {
+      toggle.scrollIntoView({ block: 'center', behavior: 'instant' });
+    }
+    const rect = toggle.getBoundingClientRect();
+    return {
+      x: (rect.left + rect.right) / 2,
+      y: (rect.top + rect.bottom) / 2,
+      expanded: toggle.getAttribute('aria-expanded'),
+      onToggle: toggle.contains(document.elementFromPoint((rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2)),
+    };
+  `);
+}
+
+/** The `aria-expanded` of the open note's section toggle titled `title`, without moving anything. */
+export function sectionExpanded(title) {
+  return source(`
+    const toggle = [...document.querySelectorAll('.note-detail .transcript button.transcript-section-toggle')]
+      .find((button) => button.querySelector('.transcript-section-title')?.textContent === ${JSON.stringify(title)});
+    return toggle ? toggle.getAttribute('aria-expanded') : null;
+  `);
+}
+
+/**
+ * Two points across the first line box of transcript line `index`'s text, for a real drag that
+ * selects some of it: 2px in from the text's start, and up to 160px along the same line box. The
+ * line is first brought into view as `linePadPoint` brings it. `onText` says whether the press
+ * point is on the line's text.
+ */
+export function lineTextDrag(index) {
+  return source(`
+    const line = document.querySelectorAll('.note-detail .transcript .transcript-rows li')[${JSON.stringify(index)}];
+    if (!line) throw new Error('No transcript line ' + ${JSON.stringify(index)});
+    line.scrollIntoView({ block: 'nearest', behavior: 'instant' });
+    const text = line.querySelector('.transcript-text');
+    if (!text) throw new Error('Line ' + ${JSON.stringify(index)} + ' has no text');
+    const range = document.createRange();
+    range.selectNodeContents(text);
+    const first = range.getClientRects()[0];
+    if (!first) throw new Error('Line ' + ${JSON.stringify(index)} + ' text is not drawn');
+    const y = first.top + first.height / 2;
+    const from = { x: first.left + 2, y };
+    const to = { x: first.left + Math.min(first.width - 2, 160), y };
+    const hit = document.elementFromPoint(from.x, from.y);
+    return { from, to, onText: Boolean(hit) && text.contains(hit), text: text.textContent };
+  `);
+}
+
+/** The page's text selection: what it reads, whether it is collapsed, and which transcript lines it reaches. */
+export function textSelectionState() {
+  return source(`
+    const selection = getSelection();
+    const lines = [...document.querySelectorAll('.note-detail .transcript .transcript-rows li')];
+    const range = selection && selection.rangeCount > 0 ? selection.getRangeAt(0) : null;
+    return {
+      text: selection ? selection.toString() : '',
+      collapsed: selection ? selection.isCollapsed : true,
+      lines: range ? lines.flatMap((line, at) => range.intersectsNode(line) ? [at] : []) : [],
+    };
+  `);
+}
+
+/**
+ * The open note's transcript head while Find may be open (KNEG-448): whether it holds the find bar
+ * (`[role="search"]`) or the label, the bar's field -- its `aria-label`, its value and whether it
+ * has focus -- the count it shows (and whether that is hidden from assistive technology), what its
+ * `role="status"` says, the labels of the bar's buttons, and what has focus, described: the Find
+ * button, when the head shows it, is told apart. Also how many `mark.transcript-match` the
+ * transcript holds.
+ */
+export function findBarState() {
+  return source(`
+    ${DESCRIBE}
+    const heads = [...document.querySelectorAll('.note-detail .transcript > .transcript-head')].filter((head) => head.getClientRects().length > 0);
+    const head = heads[0] ?? null;
+    if (!head) throw new Error('No transcript head on screen');
+    const bar = head.querySelector('[role="search"]');
+    const input = bar ? bar.querySelector('input') : null;
+    const count = bar ? bar.querySelector('.transcript-find-count') : null;
+    const status = bar ? bar.querySelector('[role="status"]') : null;
+    const findButton = head.querySelector('button.transcript-find');
+    const active = document.activeElement;
+    return {
+      bar: Boolean(bar),
+      height: head.getBoundingClientRect().height,
+      label: head.querySelector('.transcript-label')?.textContent.trim() ?? null,
+      input: input ? { label: input.getAttribute('aria-label'), value: input.value, focused: active === input } : null,
+      shown: count ? count.textContent : null,
+      shownHidden: count ? count.closest('[aria-hidden="true"]') !== null : null,
+      spoken: status ? status.textContent : null,
+      buttons: bar ? [...bar.querySelectorAll('button')].map((button) => button.getAttribute('aria-label')) : [],
+      findButton: findButton ? { label: findButton.getAttribute('aria-label'), disabled: findButton.disabled, focused: active === findButton } : null,
+      focus: active && active !== document.body ? describe(active).slice(0, 80) : 'body',
+      marks: document.querySelectorAll('.note-detail .transcript mark.transcript-match').length,
+    };
+  `);
+}
+
+/**
+ * Every Find mark in the open note's transcript (KNEG-448): its text, whether it is the current
+ * one (`transcript-match-current`), the line it is in (its index among every line, and whether
+ * that line is the playing one), its computed background, colour, text decoration and box shadow
+ * -- a shadow would paint over the letters either side of a match inside a word -- and its box,
+ * beside `--band`, `--band-ink`, `--band-wash` and `--band-text` resolved from the root (a token
+ * given to a probe's `color`, so equal colours compare equal however they were written).
+ */
+export function findMarksState() {
+  return source(`
+    const resolve = (name) => {
+      const probe = document.createElement('i');
+      probe.style.color = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+      document.body.append(probe);
+      const color = getComputedStyle(probe).color;
+      probe.remove();
+      return color;
+    };
+    const lines = [...document.querySelectorAll('.note-detail .transcript .transcript-rows li')];
+    const marks = [...document.querySelectorAll('.note-detail .transcript mark.transcript-match')];
+    return {
+      marks: marks.map((mark) => {
+        const style = getComputedStyle(mark);
+        const line = mark.closest('li');
+        return {
+          text: mark.textContent,
+          current: mark.classList.contains('transcript-match-current'),
+          line: lines.indexOf(line),
+          playing: line?.getAttribute('aria-current') === 'true',
+          background: style.backgroundColor,
+          color: style.color,
+          decoration: style.textDecorationLine,
+          radius: style.borderTopLeftRadius,
+          shadow: style.boxShadow,
+          box: (() => { const rect = mark.getBoundingClientRect(); return { left: rect.left, top: rect.top, width: rect.width, height: rect.height }; })(),
+        };
+      }),
+      band: resolve('--band'),
+      bandInk: resolve('--band-ink'),
+      bandWash: resolve('--band-wash'),
+      bandText: resolve('--band-text'),
+    };
+  `);
+}
+
+/**
+ * Transcript line `index` of the open note as Find and the word highlight leave it (KNEG-448),
+ * with the recording's time, in one read: whether it is the playing line, how many Find marks and
+ * word spans it draws, which of its words are lit, and how many words are lit anywhere in the
+ * transcript.
+ */
+export function findLineState(index) {
+  return source(`
+    const line = document.querySelectorAll('.note-detail .transcript .transcript-rows li')[${JSON.stringify(index)}];
+    if (!line) throw new Error('No transcript line ' + ${JSON.stringify(index)});
+    const words = [...line.querySelectorAll('.transcript-word')];
+    return {
+      time: document.querySelector('.note-detail audio')?.currentTime ?? null,
+      playing: line.getAttribute('aria-current') === 'true',
+      text: line.querySelector('.transcript-text')?.textContent ?? null,
+      marks: line.querySelectorAll('mark.transcript-match').length,
+      words: words.length,
+      lit: words.flatMap((word, at) => word.classList.contains('transcript-word-current') ? [at] : []),
+      litAnywhere: document.querySelectorAll('.note-detail .transcript .transcript-word-current').length,
+    };
+  `);
+}
+
+/**
+ * Note `id` with a long meeting's transcript in place of its own (KNEG-448): `invoke` is wrapped,
+ * as `follow-ups.mjs` wraps it, so `note_transcript_rows` for `id` answers `count` rows made here,
+ * and every other call goes on to the fixtures. The rows start 5 s apart from 0 s and each lasts
+ * its 5 s; three diarised speakers ("Maja", "Jonas" and the unnamed "Speaker 3", as note 106 names
+ * them) take turns of 1, 2, 3 and 4 lines in rotation; and every tenth row, from the first on
+ * (0 s, 50 s, … 300 s, …), is timed word by word as local Whisper times it, its words spelling its
+ * text. Run before the
+ * note opens. `window.__longTranscript` records, with `performance.now()`, when the rows are
+ * handed back (`resolvedAt`), when the first of them is in the column (`shownAt`, a
+ * MutationObserver's callback after React's commit) and the next animation frame (`frameAt`, the
+ * frame that paints them) and the task after it (`paintedAt`), and every long task from now until
+ * `longTasksRecord` stops it (`loadTasks`).
+ */
+export function injectLongTranscript(id, count) {
+  return source(`
+    if (window.__longTranscript) return { installed: false };
+    const id = ${JSON.stringify(id)};
+    const count = ${JSON.stringify(count)};
+    const speakers = [['speaker_0', 'Maja'], ['speaker_1', 'Jonas'], ['speaker_2', 'Speaker 3']];
+    const sayings = [
+      'Vi tittar på siffrorna för förra kvartalet innan vi går vidare.',
+      'Det där behöver vi stämma av med kunden först.',
+      'Jag kan ta fram ett förslag till nästa vecka.',
+      'Bygget har varit grönt hela veckan, så det ser bra ut.',
+      'Har någon hunnit läsa igenom underlaget som skickades ut?',
+      'Vi lägger det på listan och tar det i nästa sprint.',
+      'Det låter rimligt, men vi behöver mer tid för testerna.',
+      'Kan vi flytta den punkten till slutet av mötet?',
+    ];
+    const rows = [];
+    let speaker = 0;
+    let left = 1;
+    let turn = 0;
+    for (let index = 0; index < count; index += 1) {
+      if (left === 0) {
+        turn += 1;
+        speaker = turn % speakers.length;
+        left = (turn % 4) + 1;
+      }
+      left -= 1;
+      const start = index * 5;
+      const text = sayings[index % sayings.length];
+      const words = index % 10 === 0
+        ? text.split(' ').map((word, at) => ({ text: word, start: Math.round((start + 0.2 + at * 0.4) * 100) / 100, end: Math.round((start + 0.2 + at * 0.4 + 0.32) * 100) / 100 }))
+        : [];
+      rows.push({ index, startSeconds: start, endSeconds: start + 5, speaker: speakers[speaker][1], speakerId: speakers[speaker][0], text, words });
+    }
+    // Long tasks are reported only where the browser has the entry type; without it, nothing is observed rather than 0.
+    const observing = typeof PerformanceObserver === 'function' && (PerformanceObserver.supportedEntryTypes ?? []).includes('longtask');
+    const record = window.__longTranscript = { id, count, observing, resolvedAt: null, shownAt: null, frameAt: null, paintedAt: null, loadTasks: [] };
+    const loadObserver = observing ? new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) record.loadTasks.push({ start: entry.startTime, duration: entry.duration });
+    }) : null;
+    loadObserver?.observe({ type: 'longtask', buffered: false });
+    record.stop = () => loadObserver?.disconnect();
+    const shown = new MutationObserver(() => {
+      if (record.shownAt !== null || !document.querySelector('.note-side .transcript-rows li')) return;
+      record.shownAt = performance.now();
+      shown.disconnect();
+      requestAnimationFrame(() => {
+        record.frameAt = performance.now();
+        setTimeout(() => { record.paintedAt = performance.now(); }, 0);
+      });
+    });
+    shown.observe(document.body, { childList: true, subtree: true });
+    const original = window.__TAURI_INTERNALS__.invoke.bind(window.__TAURI_INTERNALS__);
+    window.__TAURI_INTERNALS__.invoke = async (cmd, args, options) => {
+      if (cmd === 'note_transcript_rows' && args?.id === id) {
+        record.resolvedAt = performance.now();
+        return rows.map((row) => ({ ...row, words: row.words.map((word) => ({ ...word })) }));
+      }
+      return original(cmd, args, options);
+    };
+    return { installed: true, rows: rows.length, worded: rows.filter((row) => row.words.length > 0).length };
+  `);
+}
+
+/** What `injectLongTranscript` recorded of the column's first paint, and the long tasks while it loaded; stops that watch. */
+export function longTranscriptLoad() {
+  return source(`
+    const record = window.__longTranscript;
+    if (!record) throw new Error('No long transcript was injected');
+    record.stop();
+    const { id, count, observing, resolvedAt, shownAt, frameAt, paintedAt, loadTasks } = record;
+    return { id, count, observing, resolvedAt, shownAt, frameAt, paintedAt, loadTasks };
+  `);
+}
+
+/**
+ * Starts recording, into `window.__longTasks`, every long task from now (a `PerformanceObserver`
+ * for `longtask`, not buffered, so nothing from before counts), and at each `timeupdate` of the
+ * recording in `container` its time, its rate, the playing line (`aria-current`) -- read as the
+ * event fires, so it is the line of the render before -- the Follow chip's `aria-pressed`, and
+ * `scroller`'s `scrollTop`. Resolves `{ supported: false }`, observing nothing, where the browser
+ * has no `longtask` entries (`PerformanceObserver.supportedEntryTypes`), so a count of none is
+ * never read from an observer that was never registered.
+ */
+export function watchLongTasks(container, scroller) {
+  return source(`
+    const audio = document.querySelector(${JSON.stringify(`${container} audio`)});
+    const body = document.querySelector(${JSON.stringify(scroller)});
+    if (!audio || !body) throw new Error('No recording in ' + ${JSON.stringify(container)} + ' or no ' + ${JSON.stringify(scroller)});
+    const supported = typeof PerformanceObserver === 'function' && (PerformanceObserver.supportedEntryTypes ?? []).includes('longtask');
+    if (!supported) return { supported: false };
+    const lines = [...document.querySelectorAll('.note-detail .transcript .transcript-rows li')];
+    const record = window.__longTasks = { startedAt: performance.now(), tasks: [], updates: [] };
+    const observer = new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) record.tasks.push({ start: entry.startTime, duration: entry.duration });
+    });
+    observer.observe({ type: 'longtask', buffered: false });
+    const update = () => {
+      const line = document.querySelector('.note-detail .transcript .transcript-rows li[aria-current="true"]');
+      record.updates.push({
+        at: performance.now(),
+        time: audio.currentTime,
+        rate: audio.playbackRate,
+        line: line ? lines.indexOf(line) : null,
+        follow: document.querySelector(${JSON.stringify(`${container} button.follow-chip`)})?.getAttribute('aria-pressed') ?? null,
+        scrollTop: body.scrollTop,
+      });
+    };
+    audio.addEventListener('timeupdate', update);
+    record.observer = observer;
+    record.stopUpdates = () => audio.removeEventListener('timeupdate', update);
+    return { supported: true };
+  `);
+}
+
+/**
+ * What `watchLongTasks` recorded, then a control, then stopped. The watched window ends now
+ * (`endedAt`); one task in the page then runs `controlMs` ms on purpose, and the observer must
+ * report it -- tasks from then on are the control's, not the window's -- so a window with no long
+ * task was watched by an observer that does see one.
+ */
+export function longTasksRecord(controlMs = 120) {
+  return source(`
+    const record = window.__longTasks;
+    if (!record) throw new Error('No long-task watch was started');
+    record.stopUpdates();
+    const endedAt = performance.now();
+    return (async () => {
+      await new Promise((done) => setTimeout(() => {
+        const from = performance.now();
+        while (performance.now() - from < ${JSON.stringify(controlMs)}) { /* the control's long task */ }
+        done();
+      }, 0));
+      await new Promise((done) => setTimeout(done, 300));
+      for (const entry of record.observer.takeRecords()) record.tasks.push({ start: entry.startTime, duration: entry.duration });
+      record.observer.disconnect();
+      window.__longTasks = null;
+      return {
+        startedAt: record.startedAt,
+        endedAt,
+        tasks: record.tasks.filter((task) => task.start < endedAt),
+        control: record.tasks.filter((task) => task.start >= endedAt),
+        updates: record.updates,
+      };
+    })();
+  `);
+}
+
+/**
+ * How many of the note's components React rendered for one `timeupdate` of the recording in
+ * `container`, read from React's own fibers (no counter in the app): after a `timeupdate` and
+ * two frames, by when React has committed it, each component's props object and first hook are
+ * taken -- from both copies of its fiber, the one on screen and the one worked on last -- for the
+ * workspace, the card's player and header, the panel, the sections' wrapper, and every section,
+ * turn and line; then the same after the next `timeupdate`. React gives a component it renders
+ * again a new props object when its parent drew it afresh, and new hooks whenever it runs, so a
+ * render shows as an object it did not have before; one a memo comparison kept shows none.
+ * Resolves to the count per component, how many it found, the `timeupdate`s between the two
+ * reads (one, or the count is of more), and the playing line at each read (the same, or the count
+ * includes a line change).
+ */
+export function rendersForOneTimeupdate(container) {
+  return source(`
+    const audio = document.querySelector(${JSON.stringify(`${container} audio`)});
+    if (!audio) throw new Error('No recording in ' + ${JSON.stringify(container)});
+    const fiberOf = (element) => {
+      const key = Object.keys(element).find((name) => name.startsWith('__reactFiber$'));
+      return key ? element[key] : null;
+    };
+    // A function's name as the bundler left it: Vite's dev build renames a forwardRef's render
+    // function that shares its component's name ("RecordingPlayer2").
+    const nameOf = (fiber) => (typeof fiber.type === 'function' ? fiber.type.name : fiber.type?.render?.name ?? '').replace(/\\d+$/, '');
+    // The nearest component above \`element\` called \`name\`: for a memo with a comparison, the
+    // function inside it, which is worked on only when it renders.
+    const owner = (element, name) => {
+      for (let fiber = fiberOf(element); fiber; fiber = fiber.return) if (nameOf(fiber) === name) return fiber;
+      return null;
+    };
+    const NAMES = ['NoteWorkspace', 'RecordingPlayer', 'PlayerHeader', 'TranscriptPanel', 'TranscriptSections', 'Section', 'Turn', 'Line'];
+    const instances = (name) => {
+      const detail = document.querySelector('.note-detail');
+      const first = (selector) => [...document.querySelectorAll(selector)].slice(0, 1);
+      switch (name) {
+        case 'NoteWorkspace': return first('.note-detail');
+        case 'RecordingPlayer': return first(${JSON.stringify(`${container} .recording-player`)});
+        case 'PlayerHeader': return first(${JSON.stringify(`${container} .player-header`)});
+        case 'TranscriptPanel': return first('.note-detail .transcript');
+        case 'TranscriptSections': return first('.note-detail .transcript .transcript-turn');
+        case 'Section': return [...detail.querySelectorAll('.transcript .transcript-section')];
+        case 'Turn': return [...detail.querySelectorAll('.transcript .transcript-turn')];
+        default: return [...detail.querySelectorAll('.transcript .transcript-rows li')];
+      }
+    };
+    const read = () => {
+      const byName = new Map();
+      for (const name of NAMES) {
+        const seen = new Map();
+        for (const element of instances(name)) {
+          const fiber = owner(element, name);
+          seen.set(element, fiber === null ? null
+            : new Set([fiber.memoizedProps, fiber.memoizedState, fiber.alternate?.memoizedProps, fiber.alternate?.memoizedState].filter((value) => value !== null && typeof value === 'object')));
+        }
+        byName.set(name, seen);
+      }
+      const playing = document.querySelector('.note-detail .transcript .transcript-rows li[aria-current="true"]');
+      return { byName, line: playing ? [...document.querySelectorAll('.note-detail .transcript .transcript-rows li')].indexOf(playing) : null, time: audio.currentTime };
+    };
+    const frames = () => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)));
+    const nextUpdate = () => new Promise((done) => audio.addEventListener('timeupdate', done, { once: true }));
+    return (async () => {
+      if (audio.paused) throw new Error('The recording is not playing');
+      await nextUpdate();
+      await frames();
+      const before = read();
+      let updates = 0;
+      const count = () => { updates += 1; };
+      audio.addEventListener('timeupdate', count);
+      await nextUpdate();
+      await frames();
+      audio.removeEventListener('timeupdate', count);
+      const after = read();
+      const rendered = {};
+      const found = {};
+      for (const name of NAMES) {
+        const then = before.byName.get(name);
+        rendered[name] = 0;
+        found[name] = 0;
+        for (const [element, now] of after.byName.get(name)) {
+          if (now === null) continue;
+          found[name] += 1;
+          const was = then.get(element);
+          if (was === undefined || was === null || [...now].some((value) => !was.has(value))) rendered[name] += 1;
+        }
+      }
+      return { rendered, found, updates, lineBefore: before.line, lineAfter: after.line, timeBefore: before.time, timeAfter: after.time };
+    })();
   `);
 }
 

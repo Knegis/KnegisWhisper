@@ -5,10 +5,26 @@ Implemented on 2026-09-20. Tracking: [KNEG-278](https://linear.app/axelalbertkar
 ## Use
 
 In Settings > Cleanup & summaries > Meeting summaries, select a provider/model and save.
+Unsaved changes are identified beside the form. Leaving via navigation or Return to note offers
+Save changes, Discard changes or Stay. A failed write keeps the draft; edits made during a save
+remain pending. Settings retain their existing immediate, blur and explicit save conventions.
 Automatic generation is off by default. Enable it to summarize newly saved meetings
 and completed audio/video imports, including imports submitted through the local API.
 Turning it off cancels queued automatic jobs; already-running jobs have a Cancel action.
 Older notes can use Generate summary without enabling automatic generation.
+
+When saved configuration is incomplete, a note offers **Set up summaries** instead
+of queueing a request that cannot work (KNEG-399). It opens the summary settings form;
+**Return to note** restores the same note and focuses its summary action. Missing keys
+or local model assets have links to their setup pages. Returning never generates a
+summary automatically. Installed local models can be started by the worker, so a
+stopped model does not require setup again. Readiness describes configuration, not
+successful provider authentication or model quality.
+
+Generation reports Queued, Preparing transcript, Summarising transcript, Combining
+summary and Saving summary from its durable job state. Part counts reflect actual
+worker steps, including saved steps on retry; they are not an ETA or percentage.
+Failed, interrupted and cancelled jobs keep their explicit states and recovery actions.
 
 The Notes tab shows personal notes followed by a separate AI summary section. Summaries cover overview, decisions,
 actual commitments and unresolved questions, omitting empty sections. The default

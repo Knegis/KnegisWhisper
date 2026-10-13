@@ -24,8 +24,9 @@ Built on `worktree-frontend` from `dev` at `5e498c6`.
 ### Still unchecked, and needs a person at the machine
 
 1. **A meeting on the fixed build** with speaker labels on and whisper as the local engine: the
-   note should carry `Speaker N` labels and timed rows (clocks in the Transcript tab, row
-   playback) and no "no timings" sentence. Note how much longer *Stop and transcribe* takes.
+   note should carry `Speaker N` labels and timed rows (in the Transcript tab, speaker turns
+   headed by their start time, and a line that plays when pressed) and no "no timings"
+   sentence. Note how much longer *Stop and transcribe* takes.
 2. **Whether the labels are right**, which is KNEG-125 and needs two people.
 3. **The same meeting with speaker labels off**: no sentence, and the timed rows still there.
 
@@ -74,14 +75,16 @@ Every gate passes on the merged tree. Nothing below has been clicked by a person
 ### Still unchecked, and needs a person at the machine
 
 1. **Open a diarised note** (for example *DemoMeeting*, 2026-09-03) on the Transcript tab: each
-   `Speaker N` label is a dotted-underlined button; pressing it opens "Name for Speaker N" above
-   the list with the input focused; the row is not selected by that press.
-2. **Type a name and Save:** every row of that speaker shows the name; Export in each format shows
-   it; the summary's Generate, run afterwards, uses it.
+   turn's `Speaker N` name is a button, a plain name underlined only on hover and focus
+   (KNEG-448); pressing it opens "Name for Speaker N" under that turn's name with the input
+   focused; no line is selected by that press.
+2. **Type a name and Save:** every turn of that speaker shows the name; Export in each format
+   shows it; the summary's Generate, run afterwards, uses it.
 3. **Remove name** restores `Speaker N`; Escape and Cancel close the form without a change.
 4. **Suggestions:** on a note with calendar participants their names come first in the datalist;
    a name used on another note appears after them; a name already on this note does not.
-5. **A meeting with no speaker labels** shows plain "You"/"Others" spans with no rename.
+5. **A meeting with no speaker labels** heads its turns with plain "You"/"Others" names and no
+   rename.
 
 ## 2026-09-25 (third) — KNEG-317: the chosen meeting provider is saved, and only the round trip has been measured
 

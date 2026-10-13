@@ -66,7 +66,7 @@ try {
   assert.equal(await cdp.evaluate(`document.querySelector('#note-${id}-panel-replay .transcript') === null`), true);
   await waitFor(`document.querySelector('audio')?.readyState >= 1`);
   assert.equal(await cdp.evaluate(`document.querySelectorAll('audio').length`), 1);
-  await click('.recording-player > button');
+  await click('.recording-player .recording-play');
   await waitFor(`!document.querySelector('audio').paused`);
   await tab('notes');
   assert.equal(await cdp.evaluate(`document.querySelector('audio').paused`), false);
@@ -75,7 +75,7 @@ try {
   // measured starting 110-323 ms after Play, and the first cold run failed (KNEG-377). Eight
   // seconds before `waitFor` gives up.
   await waitFor(`document.querySelector('audio').currentTime > 0`);
-  await click('.recording-player > button');
+  await click('.recording-player .recording-play');
   results.push('one native audio instance plays across tabs with mini-player');
   db.exec(`CREATE TRIGGER notes_smoke_fail BEFORE UPDATE ON notes BEGIN SELECT RAISE(FAIL, 'Synthetic save failure'); END`);
   await setTitle(`${name} retry`); await click('[role="tab"][id$="-transcript"]');
