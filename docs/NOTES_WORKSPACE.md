@@ -400,8 +400,22 @@ sections, turns, selection, Find and Follow decisions unit-tested in `transcript
 lines, Follow scrolling the column to the playing line, with no long task. The two smokes above need the native app: `notes-smoke` presses the
 player's Play by its new class (`.recording-play`), and `summary-smoke` finds the line a
 source selected by `.transcript-row-current`, which the selected line keeps, in the note's
-transcript in either layout; neither has been run since, and both are on KNEG-378 with the
-real-window checks of the column.
+transcript in either layout.
+
+Both ran on 2026-10-23 in a disposable native profile, a debug build of `main`'s tree at
+`db3c1c1`, with WebView2 on CDP 9337 and synthetic data:
+
+- `summary-smoke` passed. A first attempt that day failed on an evaluation error whose text was
+  lost, and was not reproduced.
+- `notes-smoke` fails at its first tab switch, three runs of three: right after Replay → Notes,
+  `audio.paused` is true. The cause was measured over CDP. The one `<audio>` element moves into
+  the mini player, and on that move it reloads: `readyState` falls from 4 to 0 and `currentTime`
+  to 0. Within 0.6 s it is playing again near the position it had. A scratch copy of the smoke
+  that waits for playback to resume, instead of asserting it at once, passed all eight groups,
+  including the forced save failure, the 720px fit and the close-window persistence.
+
+So the instance survives the tab switch, but playback does not run through it: it reloads and
+resumes. The other real-window checks of the column stay on KNEG-378.
 
 Native file-dialog attachment/cancellation was not exercised in this pass. macOS,
 Linux, hosted CI and release validation remain unverified. Synthetic audio/provider

@@ -12,6 +12,41 @@ maintained in place rather than appended to, because its purpose is to be curren
 
 ---
 
+## 2026-10-23 — a Linear sweep, and a loopback guard that never reached `dev`
+
+Branch `sweep/2026-10-23-low-input`, from `origin/main` at `db3c1c1`. This is a reconciliation of
+the 72 open issues against git, CI and the validation ledgers. The per-issue record is
+`LINEAR_LOW_INPUT_SWEEP_2026_10_23.md`. No product code changed. Two findings belong here, because
+both are the kind this log exists for.
+
+**The streaming server's loopback guard was on `main` only.** `5c8f6aa` (merged by PR #31,
+2026-09-05; `dc4f19f` is an unmerged twin on another branch) made `sherpa_stream.rs` pass
+`--host=127.0.0.1` and refuse a server whose `--help` offers no host option. Every later Dev PR
+merged `dev` into `main`, never the reverse. So `main` held 27 commits that `dev` lacked: 26 merges
+and the guard, which was the whole difference in tree.
+
+Measured today, the pinned v1.13.4 has no host option. Started with `dev`'s arguments, it listened
+on `0.0.0.0`. The Windows Firewall rule for it is an inbound Allow, so local-streaming meetings on
+`dev`, and on the 2026-09-19 installed build, exposed an unauthenticated WebSocket service to the
+network the machine was on. The fix is the fast-forward, not a third copy of the commit.
+
+Its cost is real: with the pinned server, local-streaming meetings now refuse to start, and
+readiness still says Ready. Restoring them needs a server that takes a bind address.
+`NETWORK_BOUNDARY.md` § Loopback is not egress now says which sidecars take a host argument, and
+that `kw_sidecar::port` only chooses the port.
+
+The lesson is about branch flow, not the guard. A fix merged straight into `main` has no route back
+to `dev` in this repository's flow. A security fix landing on `main` needs `main` merged into `dev`
+the same day.
+
+**The native `notes-smoke` has not passed since the transcript-column redesign.** Its first tab
+switch asserts that playback carries on. Measured over CDP, the one `<audio>` element moves into
+the mini player and reloads (`readyState` 4 → 0, `currentTime` → 0). Within 600 ms it is playing
+again, near its old position. Every other group passes. This was the first native run of either
+smoke since KNEG-448, which is what KNEG-378 item 49 was waiting for.
+
+---
+
 ## 2026-10-12 — KNEG-448: transcript column (M6)
 
 Branch `transcript-m6`, from `dev` at 802b458: the transcript column beside a note, and the

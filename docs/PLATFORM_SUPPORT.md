@@ -827,6 +827,17 @@ Windowed local and cloud meetings, and failed or incomplete local streams, still
 recovery. Optional local speaker analysis can still add processing time. The new
 stop path has automated coverage; timing on a real long meeting remains to be checked.
 
+**The pinned server cannot bind to loopback, so the application refuses to start it.**
+v1.13.4 has no host option and listens on every interface (measured 2026-10-23:
+`0.0.0.0`). Since `5c8f6aa`, `sherpa_stream.rs` refuses a streaming server whose
+`--help` offers no host option. With the pinned binary, a local-streaming meeting is
+therefore expected to fail at Start with "the installed streaming server cannot bind to
+loopback only". That is believed from the source and the measured help text, not
+run. Meetings' readiness (`apps/desktop/src/lib/readiness.ts`) does not know about the
+guard and still reports the provider ready. Restoring local streaming needs a server
+build that takes a bind address. The 2026-09-01 verification above ran on a build
+without the guard ([network boundary](NETWORK_BOUNDARY.md), § Loopback is not egress).
+
 **A real bug this measurement caught.** `config/provider-registry.json`'s
 `sizeMb` for a sherpa model (631 for Parakeet Unified EN 0.6B) is **the
 extracted model's footprint on disk, not the compressed `.tar.bz2` download**:

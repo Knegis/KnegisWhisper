@@ -167,10 +167,24 @@ that could aim it at another host and no way for a later change to widen it quie
 what makes "not egress" a property of the signature rather than a claim in a comment. The path is
 parsed rather than trusted, so one carrying a scheme or an authority is refused.
 
-The sidecars themselves are bound to `127.0.0.1` by `kw_sidecar::port`, which also takes no
-address, and `whisper-server` is passed `--host 127.0.0.1` explicitly. These servers have no
-authentication of any kind; a bind to `0.0.0.0` would be an open transcription endpoint on the
-network.
+Each sidecar server is bound to `127.0.0.1` by its own command line: `whisper-server` and
+`llama-server` are passed `--host 127.0.0.1`, and `sherpa-onnx-online-websocket-server`
+`--host=127.0.0.1`. `kw_sidecar::port` only chooses the port, by probing a loopback bind, and
+takes no address either. These servers have no authentication of any kind; a bind to `0.0.0.0`
+would be an open transcription endpoint on the network.
+
+**That happened, and the streaming server is why the host has to be checked, not just passed.**
+The pinned `sherpa-onnx-online-websocket-server`, v1.13.4, has no host option: its `--help` lists
+`--port` and nothing to choose an address, and started without one it listened on `0.0.0.0`
+(measured 2026-10-23 with `Get-NetTCPConnection`). So `sherpa_stream.rs` reads the executable's
+`--help` before every start and refuses one that offers no host option
+(`require_loopback_bind_support`, `5c8f6aa`). With v1.13.4 that refusal is expected every time, so
+local-streaming meetings do not start. That is believed from the guard and the measured help text;
+it was not run in the app. The guard reached `main` on 2026-09-05 and `dev` only on 2026-10-23.
+Builds from `dev` in between, including the release build installed on 2026-09-19, started the
+streaming server on every interface. A Windows Firewall inbound Allow rule for the executable,
+from an earlier prompt, left nothing on the machine in its way.
+`LINEAR_LOW_INPUT_SWEEP_2026_10_23.md` names the issue.
 
 ## Redirects are followed, one validated hop at a time
 

@@ -1,6 +1,8 @@
 # KNEG-411: local folder sharing
 
-Status: implemented locally on 2026-10-07; integration and release validation are separate.
+Status: implemented on 2026-10-07 (`25d620f`, `fd025b3`), merged into `dev` that day and into
+`main` by PR #57 on 2026-10-08. Validated locally on Windows (§ Local validation on 2026-10-07).
+Hosted CI, packaged builds and macOS/Linux remain unvalidated.
 Issue: https://linear.app/axelalbertkarlsson/issue/KNEG-411
 Baseline: dev at b24415ce8e61bb7554dd4cf36b7fa38fa90174df.
 
