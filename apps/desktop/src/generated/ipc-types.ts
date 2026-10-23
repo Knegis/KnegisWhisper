@@ -1718,6 +1718,15 @@ selected: string | null,
  */
 selectedStream: string | null,
 /**
+ * Whether the installed streaming server can be kept to this computer:
+ * its `--help` offers a host option, which `sherpa_stream` checks before
+ * every start and refuses to launch without (KNEG-484). `None` when no
+ * streaming server is installed, or its help could not be read. The pinned
+ * v1.13.4 answers `false`, so Meetings says local streaming needs setup
+ * before Start, rather than letting Start fail (KNEG-485).
+ */
+streamBindsLoopback: boolean | null,
+/**
  * Where models are kept. Shown because the native binaries cannot open a
  * file whose path holds a non-ASCII character, so this is sometimes not
  * where a person would expect.

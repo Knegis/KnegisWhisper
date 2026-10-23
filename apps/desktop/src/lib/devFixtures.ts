@@ -1127,6 +1127,8 @@ const SHERPA: SherpaStatus = {
   // as Rust does.
   selected: "parakeet-unified-en-0.6b",
   selectedStream: "nemotron-speech-streaming-en-0.6b",
+  // A server that can be kept to this computer, so the fixtures' local streaming stays startable.
+  streamBindsLoopback: true,
   modelsDir: "C:\\ProgramData\\KnegisWhisper\\models\\sherpa",
 };
 

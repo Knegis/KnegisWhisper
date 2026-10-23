@@ -91,6 +91,7 @@ function sherpa(selected: string | null, selectedStream: string | null, over: Pa
     models: SHERPA_MODELS,
     selected,
     selectedStream,
+    streamBindsLoopback: null,
     modelsDir: "",
     ...over,
   };

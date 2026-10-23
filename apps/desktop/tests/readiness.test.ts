@@ -357,13 +357,14 @@ const whisper = (over: { port?: number | null; serverInstalled?: boolean; instal
   models: (over.installed ?? [false, true]).map((installed) => ({ installed })),
 });
 
-const sherpa = (over: { cliInstalled?: boolean; selectedStream?: string | null; installed?: boolean } = {}) => ({
+const sherpa = (over: { cliInstalled?: boolean; selectedStream?: string | null; installed?: boolean; streamBindsLoopback?: boolean | null } = {}) => ({
   cliInstalled: over.cliInstalled ?? true,
   selectedStream: over.selectedStream === undefined ? "nemotron" : over.selectedStream,
   models: [
     { id: "parakeet", installed: true },
     { id: "nemotron", installed: over.installed ?? true },
   ],
+  streamBindsLoopback: over.streamBindsLoopback === undefined ? true : over.streamBindsLoopback,
 });
 
 test("the local provider can start when its server runs, or when a model is installed for Start to load", () => {
@@ -392,6 +393,25 @@ test("local streaming needs a streaming model chosen, downloaded, and its runtim
       detail: "Download it under Settings > Transcription > Local.",
     });
   }
+});
+
+test("local streaming whose server can't be kept to this computer says so before Start (KNEG-485)", () => {
+  // The pinned server listens on every interface, so Start would be refused (KNEG-484).
+  // Nothing in Transcription fixes it, so the way out is another provider.
+  assert.deepEqual(localProviderProblem("local-streaming", null, sherpa({ streamBindsLoopback: false })), {
+    problem: "The streaming server for live meetings can't be limited to this computer.",
+    detail: "This version of it listens on the network, so it isn't started. Choose Local windowed model or a cloud provider for live meetings.",
+    fix: "provider-menu",
+  });
+  // Not known -- no server installed yet, or its help could not be read -- holds nothing:
+  // Start's own refusal is still there.
+  assert.equal(localProviderProblem("local-streaming", null, sherpa({ streamBindsLoopback: null })), null);
+  assert.equal(localProviderProblem("local-streaming", null, sherpa({ streamBindsLoopback: true })), null);
+  // A model still to download is said first: that is the next thing to do.
+  assert.equal(
+    localProviderProblem("local-streaming", null, sherpa({ installed: false, streamBindsLoopback: false }))?.problem,
+    "The streaming model for live meetings isn't downloaded yet.",
+  );
 });
 
 test("what can't be known yet, and cloud providers, never hold Start", () => {
@@ -433,4 +453,22 @@ test("a local provider that can't start is needs-setup, fixed in Transcription, 
     systemAudio: available,
   });
   assert.equal(saved.state === "needs-setup" && saved.fix.view, "provider-menu");
+});
+
+test("a local provider whose way out is another provider offers the provider menu, not Transcription (KNEG-485)", () => {
+  const localProblem = { problem: "The streaming server can't be limited.", detail: "Choose another.", fix: "provider-menu" as const };
+  const r = meetingReadiness({
+    usable: [provider()],
+    selected: "local-streaming",
+    savedUnusable: null,
+    languageWarning: null,
+    localProblem,
+    systemAudio: available,
+  });
+  assert.deepEqual(r, {
+    state: "needs-setup",
+    problem: localProblem.problem,
+    detail: localProblem.detail,
+    fix: { view: "provider-menu", label: "Choose another provider" },
+  });
 });

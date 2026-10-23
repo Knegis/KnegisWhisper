@@ -12,6 +12,46 @@ maintained in place rather than appended to, because its purpose is to be curren
 
 ---
 
+## 2026-10-23 (later) — KNEG-488, 490 and 485: three of the sweep's findings, fixed
+
+Branch `fix/kneg-488-490-485`, from `dev` at `e043748`.
+
+**KNEG-488: the player is rendered once and moved, not mounted in each slot.** Each of its three
+slots rendered `{player}` under its own parent, so every move mounted a new `RecordingPlayer`
+with a fresh `<audio>`, and a handoff (`position`/`resume`) restarted it. A narrow window got its
+second slot in `96a0a01` (KNEG-455), which is when Replay ↔ Notes started to cut playback there,
+and when the native `notes-smoke` started failing. Now `NoteWorkspace` renders the player through
+a portal into one host element, and the slot on screen appends that element. A media element
+moved within a task keeps playing, so the handoff is gone, and `position`/`resume` with it.
+
+`note-playback.mjs` tags the element, and now requires it to survive every move. Its new check 5
+is the narrow Replay ↔ Notes switch, and it failed before the change (49 of 50 samples on another
+element). After it, all five checks passed, as did the native `notes-smoke` as written and the
+transcript-column, three-issues, word-highlight, follow/rename and search probes.
+
+**KNEG-490: a portal without GlobalShortcuts is one to fall back from.** The hosted runner's
+session bus activated a real `xdg-desktop-portal` once the test's fake released the name. That
+portal answers the `version` read with `org.freedesktop.DBus.Error.InvalidArgs` ("No such
+interface"), which `can_fallback` did not list. So the test was right: on any desktop with that
+portal and no backend, the app rejected every shortcut instead of using the plugin. That was
+measured in WSL against a GDBus service, GDBus being the library `xdg-desktop-portal` uses. The
+repository's `portal_bus_tests`, compiled from its own source in a harness that avoids the ALSA
+headers, failed exactly as CI did on a bus that could activate that service. With the fix, it
+passed there and on a bare bus. The fix classifies only the `version` read: `InvalidArgs`,
+`UnknownInterface` and `UnknownProperty` there are `PortalError::NoInterface`, which falls back.
+Message text is not matched, because GLib translates it.
+
+**KNEG-485, the readiness half.** `sherpa_status` now reports `streamBindsLoopback`, from the
+guard's own `--help` check. It is cached per installed server (path, length, mtime); the guard
+itself still asks before every start. Meetings reads it: with local streaming chosen and the
+answer `false`, it is Needs setup, "The streaming server for live meetings can't be limited to
+this computer.", with "Choose another provider", which opens the provider menu, and Start held.
+That was measured natively against the installed v1.13.4, with the owner's sidecars and models
+junctioned into a disposable profile. Both trees measured identical before and after. Restoring
+local streaming itself, a server that takes a bind address, is still KNEG-485's other half.
+
+---
+
 ## 2026-10-23 — a Linear sweep, and a loopback guard that never reached `dev`
 
 Branch `sweep/2026-10-23-low-input`, from `origin/main` at `db3c1c1`. This is a reconciliation of
@@ -42,8 +82,9 @@ to `dev` in this repository's flow. A security fix landing on `main` needs `main
 the same day.
 
 **The native `notes-smoke` has not passed since the transcript-column redesign.** Its first tab
-switch asserts that playback carries on. Measured over CDP, the one `<audio>` element moves into
-the mini player and reloads (`readyState` 4 → 0, `currentTime` → 0). Within 600 ms it is playing
+switch asserts that playback carries on. Measured over CDP, the `<audio>` in the mini player after
+the switch starts from nothing (`readyState` 0, `currentTime` 0). It is a newly mounted element,
+not the old one moved; that was found the same day (entry above). Within 600 ms it is playing
 again, near its old position. Every other group passes. This was the first native run of either
 smoke since KNEG-448, which is what KNEG-378 item 49 was waiting for. It is KNEG-488.
 

@@ -833,9 +833,12 @@ v1.13.4 has no host option and listens on every interface (measured 2026-10-23:
 `--help` offers no host option. With the pinned binary, a local-streaming meeting is
 therefore expected to fail at Start with "the installed streaming server cannot bind to
 loopback only". That is believed from the source and the measured help text, not
-run. Meetings' readiness (`apps/desktop/src/lib/readiness.ts`) does not know about the
-guard and still reports the provider ready. Restoring local streaming needs a server
-build that takes a bind address (KNEG-485). The 2026-09-01 verification above ran on a build
+run. Meetings says so before Start. `sherpa_status` reports `streamBindsLoopback`, from the
+guard's own `--help` check, cached per installed server. With local streaming chosen and
+that answer `false`, readiness (`apps/desktop/src/lib/readiness.ts`) is Needs setup, with
+"Choose another provider" and Start held. That was measured in a disposable native
+profile against the installed v1.13.4 on 2026-10-23. Restoring local streaming needs a
+server build that takes a bind address (KNEG-485). The 2026-09-01 verification above ran on a build
 without the guard ([network boundary](NETWORK_BOUNDARY.md), § Loopback is not egress).
 
 **A real bug this measurement caught.** `config/provider-registry.json`'s

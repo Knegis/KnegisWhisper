@@ -141,6 +141,13 @@ pub struct SherpaStatus {
     /// engines run different models and choosing one for dictation must not
     /// silently change what a meeting records with.
     pub selected_stream: Option<String>,
+    /// Whether the installed streaming server can be kept to this computer:
+    /// its `--help` offers a host option, which `sherpa_stream` checks before
+    /// every start and refuses to launch without (KNEG-484). `None` when no
+    /// streaming server is installed, or its help could not be read. The pinned
+    /// v1.13.4 answers `false`, so Meetings says local streaming needs setup
+    /// before Start, rather than letting Start fail (KNEG-485).
+    pub stream_binds_loopback: Option<bool>,
     /// Where models are kept. Shown because the native binaries cannot open a
     /// file whose path holds a non-ASCII character, so this is sometimes not
     /// where a person would expect.
@@ -418,6 +425,13 @@ pub async fn sherpa_status(
         .await
         .ok()
         .filter(|id| !id.is_empty()),
+        // Off the async runtime: the first read per installed server starts it with `--help`.
+        stream_binds_loopback: tauri::async_runtime::spawn_blocking(
+            crate::sherpa_stream::installed_binds_loopback,
+        )
+        .await
+        .ok()
+        .flatten(),
         models_dir: root.display().to_string(),
     })
 }
