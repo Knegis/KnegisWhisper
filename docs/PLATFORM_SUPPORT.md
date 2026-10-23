@@ -835,7 +835,7 @@ therefore expected to fail at Start with "the installed streaming server cannot 
 loopback only". That is believed from the source and the measured help text, not
 run. Meetings' readiness (`apps/desktop/src/lib/readiness.ts`) does not know about the
 guard and still reports the provider ready. Restoring local streaming needs a server
-build that takes a bind address. The 2026-09-01 verification above ran on a build
+build that takes a bind address (KNEG-485). The 2026-09-01 verification above ran on a build
 without the guard ([network boundary](NETWORK_BOUNDARY.md), § Loopback is not egress).
 
 **A real bug this measurement caught.** `config/provider-registry.json`'s

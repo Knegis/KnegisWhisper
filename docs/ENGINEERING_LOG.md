@@ -35,6 +35,8 @@ readiness still says Ready. Restoring them needs a server that takes a bind addr
 `NETWORK_BOUNDARY.md` § Loopback is not egress now says which sidecars take a host argument, and
 that `kw_sidecar::port` only chooses the port.
 
+The exposure is KNEG-484 (Urgent), and restoring local streaming is KNEG-485.
+
 The lesson is about branch flow, not the guard. A fix merged straight into `main` has no route back
 to `dev` in this repository's flow. A security fix landing on `main` needs `main` merged into `dev`
 the same day.
@@ -43,7 +45,14 @@ the same day.
 switch asserts that playback carries on. Measured over CDP, the one `<audio>` element moves into
 the mini player and reloads (`readyState` 4 → 0, `currentTime` → 0). Within 600 ms it is playing
 again, near its old position. Every other group passes. This was the first native run of either
-smoke since KNEG-448, which is what KNEG-378 item 49 was waiting for.
+smoke since KNEG-448, which is what KNEG-378 item 49 was waiting for. It is KNEG-488.
+
+**The first full dispatch since 2026-09-15 was red on one Linux step** (run 39964300965). The portal
+private-bus regression's "absent portal" case was not absent on the hosted runner: after the fake
+portal released its name, D-Bus activated the runner's real `xdg-desktop-portal`, which answered
+without a GlobalShortcuts backend. Either the test needs a bus with no activatable services, or the
+app needs to fall back when the portal is present but the interface is missing. That is KNEG-490.
+Everything else in the matrix was green on rustc 1.99.1.
 
 ---
 

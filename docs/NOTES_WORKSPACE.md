@@ -415,7 +415,7 @@ Both ran on 2026-10-23 in a disposable native profile, a debug build of `main`'s
   including the forced save failure, the 720px fit and the close-window persistence.
 
 So the instance survives the tab switch, but playback does not run through it: it reloads and
-resumes. The other real-window checks of the column stay on KNEG-378.
+resumes. That is KNEG-488. The other real-window checks of the column stay on KNEG-378.
 
 Native file-dialog attachment/cancellation was not exercised in this pass. macOS,
 Linux, hosted CI and release validation remain unverified. Synthetic audio/provider

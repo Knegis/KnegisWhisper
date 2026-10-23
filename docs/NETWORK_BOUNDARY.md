@@ -183,8 +183,8 @@ local-streaming meetings do not start. That is believed from the guard and the m
 it was not run in the app. The guard reached `main` on 2026-09-05 and `dev` only on 2026-10-23.
 Builds from `dev` in between, including the release build installed on 2026-09-19, started the
 streaming server on every interface. A Windows Firewall inbound Allow rule for the executable,
-from an earlier prompt, left nothing on the machine in its way.
-`LINEAR_LOW_INPUT_SWEEP_2026_10_23.md` names the issue.
+from an earlier prompt, left nothing on the machine in its way. That exposure is KNEG-484.
+Restoring local streaming with a server that can bind loopback is KNEG-485.
 
 ## Redirects are followed, one validated hop at a time
 
