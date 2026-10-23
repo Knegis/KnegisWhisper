@@ -407,15 +407,24 @@ Both ran on 2026-10-23 in a disposable native profile, a debug build of `main`'s
 
 - `summary-smoke` passed. A first attempt that day failed on an evaluation error whose text was
   lost, and was not reproduced.
-- `notes-smoke` fails at its first tab switch, three runs of three: right after Replay → Notes,
-  `audio.paused` is true. The cause was measured over CDP. The one `<audio>` element moves into
-  the mini player, and on that move it reloads: `readyState` falls from 4 to 0 and `currentTime`
-  to 0. Within 0.6 s it is playing again near the position it had. A scratch copy of the smoke
-  that waits for playback to resume, instead of asserting it at once, passed all eight groups,
-  including the forced save failure, the 720px fit and the close-window persistence.
+- `notes-smoke` failed at its first tab switch, three runs of three: right after Replay → Notes,
+  `audio.paused` was true. Each slot rendered the player under its own parent, so a move
+  between slots mounted a new `RecordingPlayer`, and with it a new `<audio>` that loaded from
+  nothing (`readyState` 0, `currentTime` 0) before resuming the old one's position. A narrow
+  window has had two slots since `96a0a01` (KNEG-455), so this hit every Replay ↔ Notes switch
+  there. A scratch copy of the smoke that waited for the resume passed all eight groups.
 
-So the instance survives the tab switch, but playback does not run through it: it reloads and
-resumes. That is KNEG-488. The other real-window checks of the column stay on KNEG-378.
+That was KNEG-488. The fix renders the player once, into an element that the slot on screen
+holds (`NoteWorkspace.tsx`, `holdPlayer`), so a tab switch, a crossing of the width or hiding
+the column moves the same `<audio>` and playback never stops. Measured afterwards:
+
+- The repository's `notes-smoke`, as written, passed all eight groups, three runs of three.
+- Over CDP, the element stayed playing through Replay → Notes → Replay (`currentTime` 0.272,
+  0.28, 0.884, 1.202) with one `play` event in all.
+- In headless Edge, `note-playback.mjs`, which now requires the same element after every move
+  and has a check for the narrow Replay ↔ Notes switch, passed all five checks.
+
+The other real-window checks of the column stay on KNEG-378.
 
 Native file-dialog attachment/cancellation was not exercised in this pass. macOS,
 Linux, hosted CI and release validation remain unverified. Synthetic audio/provider

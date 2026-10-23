@@ -16,22 +16,12 @@ import { SKIP_SECONDS, markFractions, skipTarget } from "../lib/playerControls";
 import { IconFilled } from "./Icon";
 
 /**
- * Where a player is: its time, the end of the interval it is playing to (or
- * `null`), whether it is playing, and its speed.
+ * A note mounts its player once, however often it is moved between slots
+ * (`NoteWorkspace.tsx`, KNEG-488), so no position is handed from one player to
+ * another.
  */
-export type PlayerPosition = { time: number; end: number | null; playing: boolean; rate: number };
-
 export type RecordingPlayerHandle = {
   playInterval: (start: number, end: number | null) => void;
-  /**
-   * `position` and `resume` hand playback from one player to the next. A note
-   * mounts a new player when a wide window moves it into the transcript
-   * column, or back, and when a wide window's Replay tab is opened or left
-   * (`NoteWorkspace.tsx`). `position` is read from the old player before it
-   * goes, and the new one resumes from it.
-   */
-  position: () => PlayerPosition | null;
-  resume: (from: PlayerPosition) => void;
   /**
    * The recording's time now, read from the element rather than from the
    * last `timeupdate` (four a second), for a transcript row highlighting word
@@ -87,7 +77,6 @@ export const RecordingPlayer = forwardRef<RecordingPlayerHandle, RecordingPlayer
     const [playing, setPlaying] = useState(false);
     const [speed, setSpeed] = useState("1");
     const readyRef = useRef(false);
-    const resumeRef = useRef<PlayerPosition | null>(null);
     const [ready, setReady] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
@@ -176,34 +165,6 @@ export const RecordingPlayer = forwardRef<RecordingPlayerHandle, RecordingPlayer
             else clearIntervalPlayback();
           });
         },
-        position: () => {
-          const audio = audioRef.current;
-          if (audio === null) return null;
-          return { time: audio.currentTime, end: intervalEndRef.current, playing: !audio.paused, rate: audio.playbackRate };
-        },
-        resume: ({ time, end, playing: wasPlaying, rate }) => {
-          const audio = audioRef.current;
-          if (audio === null) return;
-          clearIntervalPlayback();
-          audio.playbackRate = rate;
-          setSpeed(String(rate));
-          if (!readyRef.current) { resumeRef.current = { time, end, playing: wasPlaying, rate }; return; }
-          // A player that has only just mounted has not read its file's metadata yet. A seek made
-          // before then holds only where the engine keeps a default start position, so it is made
-          // again once the metadata is in; playback cannot begin before that.
-          audio.currentTime = time;
-          if (audio.readyState < HTMLMediaElement.HAVE_METADATA) {
-            audio.addEventListener("loadedmetadata", () => { audio.currentTime = time; }, { once: true });
-          }
-          setCurrentTime(time);
-          onCurrentTime(time);
-          if (!wasPlaying) return;
-          intervalEndRef.current = end;
-          void play().then((started) => {
-            if (started) beginIntervalCheck();
-            else clearIntervalPlayback();
-          });
-        },
         time: () => audioRef.current?.currentTime ?? null,
         pause: () => { audioRef.current?.pause(); clearIntervalPlayback(); },
       }),
@@ -222,14 +183,6 @@ export const RecordingPlayer = forwardRef<RecordingPlayerHandle, RecordingPlayer
         const usable = !audio.error && Number.isFinite(audio.duration) && audio.duration > 0;
         readyRef.current = usable; setReady(usable); onReadyChange?.(usable);
         setDuration(usable ? audio.duration : 0);
-        const from = resumeRef.current;
-        if (usable && from) {
-          resumeRef.current = null;
-          audio.currentTime = Math.min(Math.max(from.time, 0), audio.duration);
-          setCurrentTime(audio.currentTime); onCurrentTime(audio.currentTime);
-          intervalEndRef.current = from.end;
-          if (from.playing) void play().then(started => { if (started) beginIntervalCheck(); });
-        }
       };
       const handlePlay = () => {
         setPlaying(true);
@@ -245,7 +198,7 @@ export const RecordingPlayer = forwardRef<RecordingPlayerHandle, RecordingPlayer
         setDuration(0); setCurrentTime(0); onCurrentTime(0);
       };
       const handleError = () => {
-        readyRef.current = false; setReady(false); onReadyChange?.(false); resumeRef.current = null;
+        readyRef.current = false; setReady(false); onReadyChange?.(false);
         audio.pause(); clearIntervalPlayback();
         setCurrentTime(0); setDuration(0); onCurrentTime(0);
         setError(mediaErrorMessage(audio.error));
@@ -271,7 +224,7 @@ export const RecordingPlayer = forwardRef<RecordingPlayerHandle, RecordingPlayer
         audio.removeEventListener("error", handleError);
         audio.removeEventListener("emptied", handleEmptied);
       };
-    }, [beginIntervalCheck, clearIntervalPlayback, onCurrentTime, onPlayingChange, onReadyChange, play]);
+    }, [clearIntervalPlayback, onCurrentTime, onPlayingChange, onReadyChange]);
 
     const scrub = (next: number) => {
       const audio = audioRef.current;

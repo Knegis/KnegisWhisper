@@ -1,4 +1,5 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { attachNoteRecording, getNoteRecording, getNoteRecordingState, getNoteMetadataForPeople, restoreNote, retryNoteRecordingDeletion, type NoteRecordingState, getNoteSpeakerSuggestions, getNoteTranscriptRows, renameNoteSpeaker, updateNote, type Note, type NoteUpdate } from "../lib/ipc";
 import { useAutosave, type AutosaveStatus } from "../lib/useAutosave";
@@ -14,7 +15,7 @@ import { NotePeople } from "./NotePeople";
 import { PlayerHeader } from "./PlayerHeader";
 import { SummaryPane, type SummaryPaneHandle } from "./SummaryPane";
 import type { SummarySetupTarget } from "../lib/ipc";
-import { RecordingPlayer, type PlayerPosition, type RecordingPlayerHandle } from "./RecordingPlayer";
+import { RecordingPlayer, type RecordingPlayerHandle } from "./RecordingPlayer";
 import { TranscriptHeading, TranscriptPanel } from "./TranscriptPanel";
 
 export type NoteWorkspaceHandle = { flush: () => Promise<void> };
@@ -48,7 +49,6 @@ let columnHiddenChoice = false;
 type Flip = {
   anchor: { element: Element; offset: number } | null;
   reading: number;
-  player: PlayerPosition | null;
   focus: "notes-tab" | "selected-tab" | null;
 };
 
@@ -119,32 +119,31 @@ const playerSlotOf = (wide: boolean, tab: Tab): PlayerSlot => tab === "replay" ?
  * the width moves nothing. Showing it again gives an open Transcript tab way
  * to Notes, as widening does.
  *
- * There is only ever one player, so one `<audio>` (`playerSlotOf`). In a wide
- * window, moving to or from Replay moves it between the column and the note,
- * which mounts it afresh; `switchTab` takes its position first and the new
- * one resumes from it, as a crossing of the width does below.
+ * There is only ever one player, so one `<audio>`. It is drawn in one of
+ * three slots (`playerSlotOf`) but rendered once, into an element that the
+ * slot on screen holds (`holdPlayer`). A tab switch, a crossing of the width
+ * or hiding the column moves that element and never mounts the player
+ * afresh, so playback, its speed and an interval's end carry on (KNEG-488).
  *
  * **Crossing the width** -- maximising the 1000px window, or snapping it to
- * half a screen -- or hiding or showing the column mounts the transcript
- * afresh, and the player too unless Replay is open, because each has one
- * parent per layout. What the reader was doing is carried across (`Flip`),
- * taken in the media listener or the column's button before React renders
- * and put back in the new layout:
+ * half a screen -- or hiding or showing the column moves the transcript and
+ * the player to their places in the other layout. What the reader was doing
+ * is carried across (`Flip`), taken in the media listener or the column's
+ * button before React renders and put back in the new layout:
  *
  * - the reading position -- the element at the top of the scroller that is
  *   going (`.notes-main`, or the note's own column when wide), as recorded
  *   after its last scroll -- placed at the same offset in the one that takes
  *   over;
- * - the player's time, speed and interval end, playing again if it was
- *   (`RecordingPlayer`'s `position` and `resume`);
- * - focus, if it was on something that goes: the Transcript tab hands it
+ * - focus, if it was on something that moves: the Transcript tab hands it
  *   to Notes, and anything inside the transcript or the player hands it to
  *   the selected tab.
  *
  * A summary source is shown once and then cleared (`onSourceShown`), so the
- * new transcript does not scroll to it again. The selected lines are the
- * note's (`selection`, KNEG-448), so they survive the switch, and so does
- * Follow; a speaker rename left open, Find, or a section closed, does not.
+ * transcript does not scroll to it again. The selected lines are the note's
+ * (`selection`, KNEG-448), so they survive the switch, and so does Follow.
+ * The transcript itself stays mounted across it (KNEG-455), so a speaker
+ * rename left open, Find and a closed section survive it too.
  *
  * **The player card's header** (`PlayerHeader`), while the transcript is on
  * screen -- the column at the width, or the Transcript tab below it -- names
@@ -207,9 +206,6 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
   const playerRef = useRef<RecordingPlayerHandle>(null);
   const [mediaReady, setMediaReady] = useState(false);
   const [tab, setTab] = useState<Tab>("notes");
-  // The tab on screen, for `switchTab`, which reads it after waiting on a save.
-  const tabNow = useRef(tab);
-  useLayoutEffect(() => { tabNow.current = tab; }, [tab]);
   const [sourceRequest, setSourceRequest] = useState<{ index: number; nonce: number } | null>(null);
   // The transcript lines selected, here rather than in the panel so the player card can offer to
   // play them, and so they outlive the panel's remount when the layout switches (KNEG-448).
@@ -308,7 +304,6 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
     const active = document.activeElement;
     return {
       ...lastReading.current,
-      player: playerRef.current?.position() ?? null,
       focus: active?.id === `note-${note.id}-tab-transcript` ? "notes-tab"
         : active instanceof Element && article?.contains(active) && active.closest(MOVING) ? "selected-tab"
         : null,
@@ -342,6 +337,7 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
   useLayoutEffect(() => {
     renderedWide.current = wide;
     const carried = flip.current;
+    flip.current = null;
     const body = bodyRef.current;
     const main = body?.closest<HTMLElement>(".notes-main");
     if (!carried || !body || !main) return;
@@ -367,31 +363,6 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
     }
   }, [wide, note.id]);
   const playerSlot = playerSlotOf(wide, tab);
-  // The slot the player on screen was mounted in, and the position `switchTab` took from it before
-  // a wide window's move to or from Replay mounts another.
-  const mountedSlot = useRef(playerSlot);
-  const handoff = useRef<PlayerPosition | null>(null);
-  // Playback, once the new player has mounted and subscribed to its audio, so that its play and
-  // pause events reach `onPlayingChange`. A task later rather than in this effect: in development,
-  // StrictMode mounts the new player a second time, and the unmount in between pauses its audio,
-  // which in a headless probe rejected a resume made here with "The play() request was
-  // interrupted by a call to pause()". In a production build the wait is one task.
-  //
-  // Only when the slot changed. Crossing the width with Replay open keeps the player where it is,
-  // playing, and resuming it there would seek it back to where the crossing began and set
-  // `playing` false with no play event to set it again.
-  useEffect(() => {
-    const moved = mountedSlot.current !== playerSlot;
-    mountedSlot.current = playerSlot;
-    const from = handoff.current ?? flip.current?.player ?? null;
-    flip.current = null; handoff.current = null;
-    if (!moved) return;
-    // The old player paused its audio as it unmounted, after it had stopped listening for that.
-    setPlaying(false);
-    if (!from) return;
-    const timer = setTimeout(() => playerRef.current?.resume(from), 0);
-    return () => clearTimeout(timer);
-  }, [wide, playerSlot]);
   const shown: readonly Tab[] = wide ? TABS.filter(value => value !== "transcript") : TABS;
 
   const save = useCallback(async (patch: Partial<Patch>) => {
@@ -435,7 +406,7 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
   const retryDeletion = async () => {
     if (deletionPending.current) return;
     deletionPending.current = true; setRetryingDeletion(true); setAttachmentError(null);
-    playerRef.current?.pause(); handoff.current = null;
+    playerRef.current?.pause();
     try {
       await flush();
       const next = await retryNoteRecordingDeletion(note.id);
@@ -493,6 +464,25 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
       articleRef.current?.style.removeProperty("--player-h");
     };
   }, []);
+  // The one player is rendered once, into an element of its own, and the slot on screen holds
+  // that element (KNEG-488). Rendered in each slot instead, it was mounted afresh on every move --
+  // a tab switch, a crossing of the width, hiding the column -- and its new `<audio>` loaded from
+  // nothing, resuming from the old player's position after a gap: up to 150 ms between two
+  // playing 50 ms samples in headless Edge, where a kept element shows about 60. A media element
+  // moved from one parent to another within a task keeps playing; it is paused only if it is
+  // still out of the document when the browser next looks.
+  const [playerHost] = useState(() => {
+    const host = document.createElement("div");
+    host.className = "player-host";
+    return host;
+  });
+  const holdPlayer = useCallback((slot: HTMLDivElement | null) => {
+    if (slot !== null && playerHost.parentNode !== slot) slot.appendChild(playerHost);
+  }, [playerHost]);
+  const holdObservedPlayer = useCallback((slot: HTMLDivElement | null) => {
+    holdPlayer(slot);
+    return observePlayer(slot);
+  }, [holdPlayer, observePlayer]);
   const attachRecording = async () => {
     if (attachmentPending.current) return;
     attachmentPending.current = true; setAttaching(true); setAttachmentError(null);
@@ -506,12 +496,6 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
     try {
       await flush();
       if (!alive.current) return;
-      // Taken now, while the player that is going is still mounted: see the playback effect. The
-      // layout and the tab are read now too, not from the render that started the switch: the
-      // window can cross the width while the save is pending, and the slots would then be compared
-      // for a layout no longer on screen (KNEG-377).
-      const shownWide = renderedWide.current;
-      if (playerSlotOf(shownWide, next) !== playerSlotOf(shownWide, tabNow.current)) handoff.current = playerRef.current?.position() ?? null;
       setError(null); setTab(next);
       if (focus) document.getElementById(`note-${note.id}-tab-${next}`)?.focus();
     } catch (cause) { setError(message(cause)); }
@@ -595,8 +579,9 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
       selection={toPlay?.label ?? null} hasSelection={selection.rows.size > 0} canPlaySelection={mediaReady} onPlaySelection={playSelection} onClearSelection={clearSelection}
       follow={follow} onToggleFollow={toggleFollow} />
     : null;
-  // Drawn in one of three slots (`playerSlotOf`), never more than once. The header is a prop, so it comes and
-  // goes without remounting the player or moving it (KNEG-377).
+  // Drawn in one of three slots (`playerSlotOf`), never more than once: rendered into `playerHost`,
+  // which that slot holds. The header is a prop, so it comes and goes without remounting the
+  // player or moving it (KNEG-377).
   const player = transcript?.recording
     ? <RecordingPlayer ref={playerRef} noteId={note.id} onCurrentTime={setCurrentTime} onPlayingChange={onPlayingChange} onReadyChange={setMediaReady} marks={marks} header={header} />
     : null;
@@ -672,9 +657,7 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
           {/* The ref changes with the tab, the element does not: Replay's full player is not a card.
               The mini card waits for playback only on Notes; on Transcript it is there from the
               start, with its header (KNEG-448). */}
-          {player && playerSlot === "note" ? <div ref={tab === "replay" ? null : observePlayer} className={tab === "replay" ? "note-full-player" : "note-mini-player"} hidden={tab === "notes" && !playbackStarted}>
-            {player}
-          </div> : null}
+          {player && playerSlot === "note" ? <div ref={tab === "replay" ? holdPlayer : holdObservedPlayer} className={tab === "replay" ? "note-full-player" : "note-mini-player"} hidden={tab === "notes" && !playbackStarted} /> : null}
           <section id={`note-${note.id}-panel-replay`} role="tabpanel"
             aria-labelledby={`note-${note.id}-tab-replay`} hidden={tab !== "replay"}>
             {recordingDetails}{disposition}
@@ -694,10 +677,11 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
       className={wide ? "note-side" : "note-transcript-inline"} hidden={!wide && tab !== "transcript"}>
       {!wide && <>{recordingDetails}{disposition}</>}
       <div className="note-side-body">{transcriptShown ? null : <TranscriptHeading />}{transcriptBody}</div>
-      {player && playerSlot === "side" ? <div ref={observePlayer} className="note-side-player">{player}</div> : null}
+      {player && playerSlot === "side" ? <div ref={holdObservedPlayer} className="note-side-player" /> : null}
     </div>
     {player && playerSlot === "inline" ? <div className="note-inline-player" hidden={tab === "notes" && !playbackStarted}>
-      <div ref={observePlayer} className="note-mini-player" hidden={tab === "notes" && !playbackStarted}>{player}</div>
+      <div ref={holdObservedPlayer} className="note-mini-player" hidden={tab === "notes" && !playbackStarted} />
     </div> : null}
+    {player ? createPortal(player, playerHost) : null}
   </article>;
 });

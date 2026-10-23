@@ -5,9 +5,12 @@
  * (KNEG-412). A note has one `<audio>` and three places to draw it
  * (`NoteWorkspace.tsx`): the foot of the transcript column in a wide window,
  * Replay's full player, and the mini player at the foot of the note. A tab
- * switch, a crossing of the 1280px width, or hiding the column mounts the
- * player afresh in another place, and the old one hands its position to the
- * new one (`RecordingPlayer`'s `position` and `resume`).
+ * switch, a crossing of the 1280px width, or hiding the column moves the one
+ * player to another place. Since KNEG-488 the player is rendered once and the
+ * element holding it is moved, so every move keeps the same `<audio>`, which
+ * each check now requires. Before, each move mounted a new player that resumed
+ * from the old one's position: up to 150 ms between two playing samples, where
+ * a kept element shows about 60, the sampler's own jitter.
  *
  * The fixtures serve a playable two-minute WAV for every note with a
  * recording (`lib/fixtureWav.ts`, `installDevFixtures`); before KNEG-412 the
@@ -165,6 +168,9 @@ const traceLine = (sample, at) => `${Math.round(sample.t - at)}ms: ${sample.audi
 async function move(cdp, expected, act) {
   const before = await cdp.evaluate(snippets.playerState());
   const from = before.audios.find((audio) => playing(audio)) ?? null;
+  // The element itself is tagged, so a player mounted afresh -- a new `<audio>` -- shows (KNEG-488).
+  const tag = `move-${Date.now()}`;
+  await cdp.evaluate(`(() => { const audio = document.querySelector('.note-detail audio'); if (audio) audio.dataset.probe = ${JSON.stringify(tag)}; return true; })()`);
   const at = await cdp.evaluate("performance.now()");
   await act();
   await delay(SETTLE_MS);
@@ -192,6 +198,7 @@ async function move(cdp, expected, act) {
     from: from && { slot: from.slot, time: round(from.currentTime), rate: from.playbackRate },
     firstPlaying: first && { afterMs: Math.round(first.t - at), time: round(firstAudio.currentTime) },
     longestSilenceMs: Math.round(longestSilence),
+    sameElement: final.length === 1 && final[0].probe === tag,
     mostAudios,
     samples: later.length,
     after: {
@@ -205,6 +212,7 @@ async function move(cdp, expected, act) {
     && firstAudio !== null && firstAudio.currentTime >= from.currentTime - BEHIND_SECONDS
     && longestSilence < SILENCE_MS
     && mostAudios <= 1
+    && measured.sameElement
     && final.length === 1 && final[0].slot === expected && !final[0].hidden
     && !final[0].paused && final[0].playbackRate === RATE
     && after.errors.length === 0;
@@ -212,7 +220,7 @@ async function move(cdp, expected, act) {
 }
 
 const MOVE_EXPECTATION = [
-  `after each move, within ${SETTLE_MS}ms: exactly one audio, in the expected slot and not hidden, not paused, at ${RATE}x;`,
+  `after each move, within ${SETTLE_MS}ms: exactly one audio, the element that was playing before the move (tagged), in the expected slot and not hidden, not paused, at ${RATE}x;`,
   `the first sample with that slot playing is at or after the position before the move minus ${BEHIND_SECONDS}s;`,
   `under ${SILENCE_MS}ms with nothing playing; never two audio elements; no player error`,
 ].join(" ");
@@ -350,6 +358,56 @@ export async function runNotePlayback(options) {
       await cdp.screenshot(resolve(out, shot));
       const shown = await move(cdp, "side", () => cdp.evaluate(snippets.pressTranscriptToggle()));
       return { measured: { hidden: hidden.measured, shown: shown.measured }, matches: hidden.matches && shown.matches, screenshots: [shot] };
+    });
+
+    // 5. Below the width, Replay to Notes and back: the mini player and Replay's full player hold
+    // the same audio (KNEG-488).
+    await check({
+      id: "5",
+      claim: "At 1000x900, Replay to Notes and back to Replay keeps the same audio element playing through both tab switches, its time never going back.",
+      expectation: [
+        "with the full player's audio tagged data-probe=kept on Replay at 1000x900: in every 50ms sample while Notes and then Replay are pressed,",
+        `exactly one audio, the tagged one, not paused, at ${RATE}x, its time never lower than the sample before; in slot mini after Notes and full after Replay;`,
+        "more than 1s of the recording played; no player error",
+      ].join(" "),
+    }, async () => {
+      await playingNote(cdp);
+      await viewport(cdp, NARROW);
+      await waitFor(cdp, playingIn("mini"), "the recording to play in the mini player");
+      await pressText(cdp, '.note-detail [role="tab"]', "Replay");
+      await waitFor(cdp, playingIn("full"), "the recording to play in Replay");
+      await cdp.evaluate(`(() => { document.querySelector(${JSON.stringify(`${SLOT.full} audio`)}).dataset.probe = 'kept'; return true; })()`);
+      const at = await cdp.evaluate(snippets.startPlaybackSampler());
+      await pressText(cdp, '.note-detail [role="tab"]', "Notes");
+      await delay(1200);
+      const onNotes = await cdp.evaluate(snippets.playerState());
+      await pressText(cdp, '.note-detail [role="tab"]', "Replay");
+      await delay(1200);
+      const samples = await cdp.evaluate(snippets.playbackSamples());
+      const after = await cdp.evaluate(snippets.playerState());
+      const kept = (sample) => sample.audios.length === 1 && sample.audios[0].probe === "kept"
+        && !sample.audios[0].paused && sample.audios[0].playbackRate === RATE;
+      const times = samples.map((sample) => sample.audios[0]?.currentTime ?? null);
+      const wentBack = times.findIndex((time, index) => index > 0 && (time === null || times[index - 1] === null || time < times[index - 1]));
+      const first = times[0] ?? null;
+      const last = times.at(-1) ?? null;
+      const notKept = samples.filter((sample) => !kept(sample));
+      return {
+        measured: {
+          samples: samples.length,
+          notKept: notKept.length,
+          firstNotKept: notKept[0] ? traceLine(notKept[0], at) : null,
+          wentBackAt: wentBack === -1 ? null : traceLine(samples[wentBack], at),
+          time: { first: first === null ? null : round(first), last: last === null ? null : round(last) },
+          slots: { notes: onNotes.audios.map((audio) => audio.slot), replay: after.audios.map((audio) => audio.slot) },
+          after: { audios: after.audios, errors: after.errors },
+        },
+        matches: samples.length > 0 && notKept.length === 0 && wentBack === -1
+          && onNotes.audios.length === 1 && onNotes.audios[0].slot === "mini"
+          && after.audios.length === 1 && after.audios[0].slot === "full"
+          && first !== null && last !== null && last - first > 1
+          && after.errors.length === 0,
+      };
     });
 
     const markdown = renderMarkdown(report);
