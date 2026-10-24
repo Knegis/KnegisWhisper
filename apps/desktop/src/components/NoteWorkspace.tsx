@@ -208,12 +208,12 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
   const [tab, setTab] = useState<Tab>("notes");
   const [sourceRequest, setSourceRequest] = useState<{ index: number; nonce: number } | null>(null);
   // The transcript lines selected, here rather than in the panel so the player card can offer to
-  // play them, and so they outlive the panel's remount when the layout switches (KNEG-448).
+  // play them (KNEG-448).
   const [selection, setSelection] = useState<LineSelection>(NO_SELECTION);
   // Follow (KNEG-448): whether the transcript keeps the playing line in view. On as each note opens
   // (`Notes.tsx` mounts a workspace per note); the panel turns it off when the person scrolls the
   // transcript, and the card's chip, a line or word pressed, Play selection and a summary source
-  // turn it back on. Here, beside the chip, and so it outlives the panel's remount.
+  // turn it back on. Here, beside the chip.
   const [follow, setFollow] = useState(true);
   // Set as the chip turns Follow on and taken once by the panel, which then centres the line the
   // player is at. Turning it on by pressing a line leaves the transcript where it is: that line is

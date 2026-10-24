@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   CARD_CLEARANCE,
   APP_SCROLL_IDLE_MS,
+  RevealQueue,
   ScrollOwnership,
   followBand,
   inBand,
@@ -21,10 +22,42 @@ test("only a reveal owns scrolls, renewed until 150 ms of inactivity", () => {
 test("scrollend or user input ends a reveal immediately, including during its glide", () => {
   const ownership = new ScrollOwnership();
   ownership.begin(10);
-  ownership.end();
+  ownership.ended();
   assert.equal(ownership.scroll(11), false);
   ownership.begin(20);
   assert.equal(ownership.scroll(21), true);
+  ownership.interrupted();
+  assert.equal(ownership.scroll(22), false);
+  ownership.begin(30);
+  assert.equal(ownership.scroll(31), true);
+});
+
+test("one reveal waits at a time: the latest, taken once its line can be shown", () => {
+  const queue = new RevealQueue();
+  assert.equal(queue.take(() => true), null);
+  queue.push({ index: 3, block: "center" });
+  queue.push({ index: 7, block: "nearest", behavior: "instant" });
+  assert.equal(queue.count, 2);
+  assert.equal(queue.take(() => false), null, "a hidden line waits");
+  const shown = queue.take((index) => index === 7);
+  assert.equal(shown?.index, 7);
+  assert.equal(shown?.block, "nearest");
+  assert.equal(shown?.behavior, "instant");
+  assert.equal(queue.take(() => true), null, "taken once");
+  assert.equal(queue.count, 2, "the count is of reveals asked for, not shown");
+});
+
+test("a reveal that overtakes one still waiting runs that one's then first, once", () => {
+  const queue = new RevealQueue();
+  const ran: string[] = [];
+  queue.push({ index: 1, block: "nearest", then: () => ran.push("source") });
+  queue.push({ index: 2, block: "center" });
+  queue.push({ index: 3, block: "center", then: () => ran.push("follow") });
+  queue.take(() => true)?.then?.();
+  assert.deepEqual(ran, ["source", "follow"]);
+  queue.push({ index: 4, block: "center", then: () => ran.push("later") });
+  queue.take(() => true)?.then?.();
+  assert.deepEqual(ran, ["source", "follow", "later"], "a shown reveal's then is not run again");
 });
 
 test("with focus on the page or the scroller, every scrolling key lets go, and no other key does", () => {

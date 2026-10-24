@@ -10,7 +10,12 @@
 /** Fallback for browsers without scrollend, including reveals that move nothing. */
 export const APP_SCROLL_IDLE_MS = 150;
 
-/** Ownership of one app reveal. A clock is supplied by the caller, so interrupted glides are testable. */
+/**
+ * Ownership of one app reveal. A clock is supplied by the caller, so interrupted glides are
+ * testable. It ends one of two ways, named apart so a reveal can tell them apart (KNEG-455):
+ * `ended` when the scroll itself stops (`scrollend`), `interrupted` when the person does something
+ * that moves the transcript themselves.
+ */
 export class ScrollOwnership {
   private until = Number.NEGATIVE_INFINITY;
   begin(now: number): void { this.until = now + APP_SCROLL_IDLE_MS; }
@@ -19,7 +24,47 @@ export class ScrollOwnership {
     this.until = now + APP_SCROLL_IDLE_MS;
     return true;
   }
-  end(): void { this.until = Number.NEGATIVE_INFINITY; }
+  ended(): void { this.until = Number.NEGATIVE_INFINITY; }
+  interrupted(): void { this.until = Number.NEGATIVE_INFINITY; }
+}
+
+/** Scrolls jump rather than glide when the person asked for less motion. */
+export function scrollBehavior(): ScrollBehavior {
+  return typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
+}
+
+/**
+ * A line to bring into view once it can be (`useReveal`), and what to do once it has been; with
+ * `behavior`, scrolled that way rather than as `scrollBehavior` says.
+ */
+export type Reveal = { index: number; block: ScrollLogicalPosition; then?: (() => void) | undefined; behavior?: ScrollBehavior | undefined };
+
+/**
+ * The reveal waiting to be shown: one at a time, the latest asked for. One that replaces another
+ * still waiting runs that one's `then` before its own once it is shown, so a request overtaken --
+ * a summary source by Follow -- is still reported done rather than left to be shown again later.
+ */
+export class RevealQueue {
+  private pending: Reveal | null = null;
+  private asked = 0;
+
+  /** How many reveals have been asked for, so a deferred one can tell that something else was shown first. */
+  get count(): number { return this.asked; }
+
+  push(reveal: Reveal): void {
+    this.asked += 1;
+    const overtaken = this.pending?.then;
+    const then = reveal.then;
+    this.pending = { ...reveal, then: overtaken === undefined ? then : () => { overtaken(); then?.(); } };
+  }
+
+  /** The reveal waiting, taken off the queue, once `ready` says its line can be scrolled to; else null, and it waits. */
+  take(ready: (index: number) => boolean): Reveal | null {
+    const pending = this.pending;
+    if (pending === null || !ready(pending.index)) return null;
+    this.pending = null;
+    return pending;
+  }
 }
 
 /** The keys that scroll a scroller when nothing else takes them. Left and Right do not move the transcript, which never scrolls sideways. */
