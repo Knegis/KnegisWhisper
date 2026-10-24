@@ -52,5 +52,10 @@ export default defineConfig({
     target: "es2022",
     minify: isDebugBuild ? false : "esbuild",
     sourcemap: isDebugBuild,
+    // Vite's 500 kB advisory is about downloading a page. This bundle is read from disk by the
+    // installed app, and one bundle serves all five windows, so it is one file on purpose: it
+    // measured 1,276 kB on 2026-10-23 (KNEG-486). The limit stays as a tripwire, so growth well
+    // past that still warns.
+    chunkSizeWarningLimit: 1500,
   },
 });

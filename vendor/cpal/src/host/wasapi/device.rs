@@ -261,7 +261,7 @@ unsafe fn format_from_waveformatex_ptr(
     } else {
         SupportedBufferSize::Range {
             min: 0,
-            max: u32::max_value(),
+            max: u32::MAX,
         }
     };
 
