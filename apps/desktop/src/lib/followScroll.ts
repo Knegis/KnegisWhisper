@@ -28,6 +28,37 @@ export class ScrollOwnership {
   interrupted(): void { this.until = Number.NEGATIVE_INFINITY; }
 }
 
+/** How many frames a glide's scroller must hold still for the glide to count as over, once it has moved. */
+export const GLIDE_STILL_FRAMES = 3;
+/** ... and if it has not moved at all yet: a reveal of a line already where it was asked to be, or one slow to start. */
+export const GLIDE_START_FRAMES = 6;
+
+/**
+ * Whether a smooth scroll has stopped, read from its scroller's position once a frame (KNEG-455
+ * item 6). `scrollend` would say so, but does not come when the browser stops a glide short: a key
+ * typed into Find while a step's glide ran left it where it was, with no `scrollend`, in headless
+ * Edge (2026-10-24). Moves under half a pixel count as still, so a glide's slowest last frames end
+ * it a pixel or so early, which leaves its line where it was going.
+ */
+export class GlideWatch {
+  private moved = false;
+  private still = 0;
+
+  constructor(private last: number) {}
+
+  /** The scroller's `scrollTop` this frame; true once the glide is over. */
+  frame(top: number): boolean {
+    if (Math.abs(top - this.last) >= 0.5) {
+      this.moved = true;
+      this.still = 0;
+      this.last = top;
+      return false;
+    }
+    this.still += 1;
+    return this.still >= (this.moved ? GLIDE_STILL_FRAMES : GLIDE_START_FRAMES);
+  }
+}
+
 /** Scrolls jump rather than glide when the person asked for less motion. */
 export function scrollBehavior(): ScrollBehavior {
   return typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";

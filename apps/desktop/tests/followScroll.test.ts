@@ -3,6 +3,9 @@ import test from "node:test";
 import {
   CARD_CLEARANCE,
   APP_SCROLL_IDLE_MS,
+  GLIDE_START_FRAMES,
+  GLIDE_STILL_FRAMES,
+  GlideWatch,
   RevealQueue,
   ScrollOwnership,
   followBand,
@@ -30,6 +33,36 @@ test("scrollend or user input ends a reveal immediately, including during its gl
   assert.equal(ownership.scroll(22), false);
   ownership.begin(30);
   assert.equal(ownership.scroll(31), true);
+});
+
+test("a glide is over once its scroller has held still for three frames after moving", () => {
+  const watch = new GlideWatch(1000);
+  assert.equal(watch.frame(1000), false, "not started yet");
+  assert.equal(watch.frame(1040), false);
+  assert.equal(watch.frame(1120), false);
+  // Stopped short: three still frames end it, wherever it is.
+  assert.equal(watch.frame(1120), false);
+  assert.equal(watch.frame(1120), false);
+  assert.equal(watch.frame(1120), true);
+  assert.equal(GLIDE_STILL_FRAMES, 3);
+});
+
+test("a glide that moves again before three still frames is not over; its slowest frames count as still", () => {
+  const watch = new GlideWatch(0);
+  assert.equal(watch.frame(30), false);
+  assert.equal(watch.frame(30), false);
+  assert.equal(watch.frame(30), false);
+  assert.equal(watch.frame(60), false, "moving again");
+  assert.equal(watch.frame(60.3), false, "under half a pixel: still");
+  assert.equal(watch.frame(60.4), false);
+  assert.equal(watch.frame(60.4), true);
+});
+
+test("a glide that never moves is over after six frames", () => {
+  const watch = new GlideWatch(500);
+  for (let frame = 1; frame < GLIDE_START_FRAMES; frame += 1) assert.equal(watch.frame(500), false, `frame ${frame}`);
+  assert.equal(watch.frame(500), true);
+  assert.equal(GLIDE_START_FRAMES, 6);
 });
 
 test("one reveal waits at a time: the latest, taken once its line can be shown", () => {

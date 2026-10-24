@@ -82,8 +82,11 @@ export function useTranscriptFind({ rows, visible, playing, follow, onReleaseFol
   // or whose section's header does while the section is closed), and the first match when none is
   // that far on. A letter added that still finds the same match moves nothing. The line jumps
   // there rather than gliding: a key typed while the glide runs stops it where it is -- in headless
-  // Edge, typing "möte" left the glide to its first match 10px from where it began, with no other
-  // scroll asked for. Believed, not traced: the browser bringing the field's caret into view.
+  // Edge, typing "möte" left the glide to its first match 10px from where it began. No app code
+  // scrolls then (every scroll and focus call logged, 2026-10-24), and it is not the field's caret
+  // being brought into view alone: a glide set off by script, outside any key, went on through a
+  // typed key. What in the browser stops it is not traced. `useReveal` finishes a glide stopped
+  // short, so a step's glide (Enter, Previous, Next) reaches its line all the same (KNEG-455 item 6).
   useLayoutEffect(() => {
     if (matches.length === 0) return;
     let start: number | null;

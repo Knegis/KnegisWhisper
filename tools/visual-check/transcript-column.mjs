@@ -9,7 +9,8 @@
  * keys between lines), 5, 6, 7, 17, 18 and 19 Follow (the card's chip keeps
  * the playing line in view until the person scrolls, and gives way to a search
  * hit's row; the transcript coming on screen brings the line back; closing a
- * section that is not playing is the app's scroll, not the person's), 9 and 10 Find in this transcript (the head's search button opens
+ * section that is not playing is the app's scroll, not the person's; 20, a key
+ * typed in Find while a glide runs does not leave its line short), 9 and 10 Find in this transcript (the head's search button opens
  * a find bar that marks the matches and moves between them without playing; a
  * playing line that matches shows its marks rather than its words), and 15 a
  * meeting of 1,500 lines, injected in place of the fixture's, playing without
@@ -141,6 +142,8 @@ const CROSS_FROM = 295;
 const SECOND_SECTION = SECTIONS[1].title;
 /** The section claim 19 closes below the playing line. */
 const THIRD_SECTION = SECTIONS[2].title;
+/** How long into a glide claim 20 types its space: well inside a smooth scroll of over a thousand pixels. */
+const GLIDE_KEY_MS = 80;
 /** The first line of the second section: line 27, "Då går vi vidare…" (5:02). */
 const SECOND_SECTION_FIRST = SECTIONS[0].lines;
 /**
@@ -2044,6 +2047,109 @@ export async function runTranscriptColumn(options) {
           scrollTop: { before: round(before), after: round(after) },
           follow,
           stillPlaying,
+          failed: Object.entries(parts).filter(([, ok]) => !ok).map(([name]) => name),
+          matches: Object.values(parts).every(Boolean),
+        };
+      }
+      return {
+        measured: { schemes },
+        matches: SCHEMES.every((scheme) => schemes[scheme].matches),
+        screenshots,
+      };
+    });
+
+    // 20. A keystroke in Find during a glide does not leave the line it was going to outside the band (KNEG-455 item 6).
+    await check({
+      id: "20",
+      claim: "Typing in Find while a Find or Follow glide runs still brings its line into the band.",
+      expectation: [
+        `in each scheme, from a fresh load, the column scrolled to its top. (a) Find opened with a real press, "${FIND_QUERY}" typed with`,
+        `real keys (1/3, line ${FIND_LINES[0] + 1}); a real Enter, which glides to line ${FIND_LINES[1] + 1}, and ${GLIDE_KEY_MS} ms later a real space typed`,
+        `into the field, which finds the same matches: once the column has stopped scrolling, line ${FIND_LINES[1] + 1} is wholly inside the`,
+        `visible band (lineBandState, ±1px). (b) Paused at ${PAUSED_AT} s, Find open and empty with focus in its field, the column scrolled`,
+        `200px and back to its top (a scroll not the app's, so Follow is off); the card's chip clicked (no focus moves), which glides to line ${PAUSED_LINE + 1}, and ${GLIDE_KEY_MS} ms later a real`,
+        `space typed: once the column is still, line ${PAUSED_LINE + 1} is wholly inside the band and the chip aria-pressed="true". The`,
+        "column's scroll and scrollend events are logged as diagnostics",
+      ].join(" "),
+    }, async () => {
+      const schemes = {};
+      const screenshots = [];
+      const logScrolls = `(() => {
+        const body = document.querySelector(${JSON.stringify(SIDE_BODY)});
+        window.__scrollLog = { from: performance.now(), top: body.scrollTop, scrolls: 0, ends: [] };
+        if (!window.__scrollLogged) {
+          window.__scrollLogged = true;
+          body.addEventListener('scroll', () => { window.__scrollLog.scrolls += 1; }, { passive: true });
+          body.addEventListener('scrollend', () => { window.__scrollLog.ends.push({ at: Math.round(performance.now() - window.__scrollLog.from), top: Math.round(body.scrollTop) }); });
+        }
+        return true;
+      })()`;
+      const scrollLog = "window.__scrollLog";
+      for (const scheme of SCHEMES) {
+        await openNote(cdp);
+        const drawn = await useScheme(cdp, scheme);
+        await cdp.evaluate(`document.querySelector(${JSON.stringify(SIDE_BODY)}).scrollTo({ top: 0, behavior: 'instant' })`);
+        await pressPoint(cdp, await cdp.evaluate(snippets.centerOfText(FIND_BUTTON, null)), "the Find button");
+        await typeKeys(cdp, FIND_QUERY);
+        const counted = await waited(cdp, findSettledOn(FIND_QUERY, "1/3", FIND_TEXTS), `the count 1/3 for "${FIND_QUERY}"`, 3_000);
+        await scrollSettled(cdp, SIDE_BODY);
+        await cdp.evaluate(logScrolls);
+        await key(cdp, "Enter", { settle: 0 });
+        await delay(GLIDE_KEY_MS);
+        await typeKeys(cdp, " ", 0);
+        await delay(200);
+        await scrollSettled(cdp, SIDE_BODY);
+        const findStep = {
+          shown: (await cdp.evaluate(snippets.findBarState())).shown,
+          line: await cdp.evaluate(snippets.lineBandState(SIDE_BODY, FIND_LINES[1])),
+          log: await cdp.evaluate(scrollLog),
+        };
+        const findShot = `20-find-glide-${scheme}-1440x900.png`;
+        await cdp.screenshot(resolve(out, findShot));
+        screenshots.push(findShot);
+
+        await openNote(cdp);
+        await useScheme(cdp, scheme);
+        await cdp.evaluate(snippets.pauseRecordingAt(CARD, PAUSED_AT));
+        await settledTime(cdp);
+        await pressPoint(cdp, await cdp.evaluate(snippets.centerOfText(FIND_BUTTON, null)), "the Find button");
+        // A scroll that is not the app's lets Follow go; the column is back at its top after it.
+        await cdp.evaluate(`document.querySelector(${JSON.stringify(SIDE_BODY)}).scrollTo({ top: 200, behavior: 'instant' })`);
+        await delay(200);
+        await cdp.evaluate(`document.querySelector(${JSON.stringify(SIDE_BODY)}).scrollTo({ top: 0, behavior: 'instant' })`);
+        await delay(200);
+        const released = (await cdp.evaluate(snippets.followChipState(CARD))).pressed;
+        await cdp.evaluate(logScrolls);
+        await cdp.evaluate(`document.querySelector(${JSON.stringify(`${CARD} .follow-chip`)}).click()`);
+        await delay(GLIDE_KEY_MS);
+        const fieldFocused = (await cdp.evaluate(snippets.findBarState())).input?.focused ?? false;
+        await typeKeys(cdp, " ", 0);
+        await delay(200);
+        await scrollSettled(cdp, SIDE_BODY);
+        const followStep = {
+          released,
+          fieldFocused,
+          line: await cdp.evaluate(snippets.lineBandState(SIDE_BODY, PAUSED_LINE)),
+          follow: (await cdp.evaluate(snippets.followChipState(CARD))).pressed,
+          log: await cdp.evaluate(scrollLog),
+        };
+        const followShot = `20-follow-glide-${scheme}-1440x900.png`;
+        await cdp.screenshot(resolve(out, followShot));
+        screenshots.push(followShot);
+        const judged = (line) => ({ inBand: line.inBand, top: round(line.top), bottom: round(line.bottom), band: { top: round(line.band.top), bottom: round(line.band.bottom) }, scrollTop: round(line.scrollTop) });
+        const parts = {
+          found: counted,
+          findStepped: findStep.shown === "2/3",
+          findInBand: findStep.line.inBand,
+          followReleasedFirst: released === "false",
+          focusInField: fieldFocused,
+          followInBand: followStep.line.inBand,
+          followOn: followStep.follow === "true",
+        };
+        schemes[scheme] = {
+          drawn,
+          find: { ...findStep, line: judged(findStep.line) },
+          follow: { ...followStep, line: judged(followStep.line) },
           failed: Object.entries(parts).filter(([, ok]) => !ok).map(([name]) => name),
           matches: Object.values(parts).every(Boolean),
         };

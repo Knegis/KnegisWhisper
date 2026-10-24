@@ -1,6 +1,6 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from "react";
 
-import { followBand, inBand, RevealQueue, ScrollOwnership, scrollBehavior, type Band } from "./followScroll";
+import { followBand, GlideWatch, inBand, RevealQueue, ScrollOwnership, scrollBehavior, type Band } from "./followScroll";
 import { useLatest } from "./useLatest";
 
 /**
@@ -69,6 +69,48 @@ export function useReveal(
   const [queue] = useState(() => new RevealQueue());
   const latest = useLatest({ rowsAt, collapsed });
 
+  // Whether line `index` is drawn wholly inside the band Follow keeps the playing line in
+  // (`followBand`): the scroller, less the sticky head and the card with its clearance.
+  const lineInBand = useCallback((index: number): boolean => {
+    const aside = asideRef.current;
+    const line = rowRefs.current.get(index);
+    if (!aside || !line || line.getClientRects().length === 0) return false;
+    const band = visibleBand(aside);
+    if (band === null) return true;
+    const rect = line.getBoundingClientRect();
+    return inBand({ top: rect.top, bottom: rect.bottom }, band);
+  }, [asideRef]);
+
+  // The glide under way, so one the browser stops short can be finished (KNEG-455 item 6). A key
+  // typed into Find while a step's glide runs stops it where it is, its line still outside the
+  // band, and no `scrollend` comes (measured in headless Edge, 2026-10-24: no app code scrolls then,
+  // and what in the browser stops it is not traced). So each glide is watched a frame at a time
+  // until the scroller holds still (`GlideWatch`); its line is then brought into the band at once
+  // if it is not there. The person moving the transcript themselves (`interrupted`) ends the watch,
+  // and so does a newer reveal.
+  const glide = useRef<object | null>(null);
+  const watchGlide = useCallback((index: number, block: ScrollLogicalPosition) => {
+    const aside = asideRef.current;
+    const scroller = aside === null ? null : scrollParent(aside);
+    if (scroller === null) return;
+    const watched = {};
+    glide.current = watched;
+    const watch = new GlideWatch(scroller.scrollTop);
+    const frame = () => {
+      if (glide.current !== watched) return;
+      if (!watch.frame(scroller.scrollTop)) {
+        requestAnimationFrame(frame);
+        return;
+      }
+      glide.current = null;
+      const line = rowRefs.current.get(index);
+      if (line === undefined || line.getClientRects().length === 0 || lineInBand(index)) return;
+      ownership.begin(performance.now());
+      line.scrollIntoView({ block, behavior: "instant" });
+    };
+    requestAnimationFrame(frame);
+  }, [asideRef, lineInBand, ownership]);
+
   const flushReveal = useCallback(() => {
     const pending = queue.take((index) => {
       const line = rowRefs.current.get(index);
@@ -79,11 +121,14 @@ export function useReveal(
     if (pending === null) return;
     const line = rowRefs.current.get(pending.index);
     if (line !== undefined) {
+      const behavior = pending.behavior ?? scrollBehavior();
       ownership.begin(performance.now());
-      line.scrollIntoView({ block: pending.block, behavior: pending.behavior ?? scrollBehavior() });
+      line.scrollIntoView({ block: pending.block, behavior });
+      if (behavior === "smooth") watchGlide(pending.index, pending.block);
+      else glide.current = null;
     }
     pending.then?.();
-  }, [ownership, queue]);
+  }, [ownership, queue, watchGlide]);
 
   const reveal = useCallback<RevealLine>((index, block, then, behavior) => {
     queue.push({ index, block, then, behavior });
@@ -105,23 +150,16 @@ export function useReveal(
   /** How many reveals have been asked for, so a deferred one can tell that something else was shown first. */
   const revealCount = useCallback(() => queue.count, [queue]);
 
-  // Whether line `index` is drawn wholly inside the band Follow keeps the playing line in
-  // (`followBand`): the scroller, less the sticky head and the card with its clearance.
-  const lineInBand = useCallback((index: number): boolean => {
-    const aside = asideRef.current;
-    const line = rowRefs.current.get(index);
-    if (!aside || !line || line.getClientRects().length === 0) return false;
-    const band = visibleBand(aside);
-    if (band === null) return true;
-    const rect = line.getBoundingClientRect();
-    return inBand({ top: rect.top, bottom: rect.bottom }, band);
-  }, [asideRef]);
-
   const appScroll = useMemo<AppScroll>(() => ({
     begin: () => ownership.begin(performance.now()),
     scrolled: (now) => ownership.scroll(now),
+    // A glide that ends by itself is still watched to its last frame: `scrollend` says nothing
+    // about whether it got where it was going.
     ended: () => ownership.ended(),
-    interrupted: () => ownership.interrupted(),
+    interrupted: () => {
+      ownership.interrupted();
+      glide.current = null;
+    },
   }), [ownership]);
 
   return { rowRefs, reveal, revealCount, lineInBand, appScroll };
