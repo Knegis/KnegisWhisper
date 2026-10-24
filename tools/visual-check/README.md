@@ -318,14 +318,14 @@ a 690 s recording, which the fixtures serve as a WAV of that length, and a
 transcript in three five-minute sections starting at 0, 300 and 600 s, of 26,
 19 and 9 lines in 19, 14 and 8 turns (`transcriptSections`, pinned in
 `tests/fixtureTranscript.test.ts`). Each check starts from a fresh load at
-1440x900 on Notes with note 106 opened from the library (13 and 17 also at
+1440x900 on Notes with note 106 opened from the library (13, 17, 18 and 21 at
 1000x720; 15 with a long meeting's rows in place of the note's own), and
 measures in both colour schemes: `prefers-color-scheme` emulated over CDP,
 which is what the stylesheet reads, with `data-theme` set on the root to match.
 Presses are real pointer presses, Edge runs with `--mute-audio`, and a count of
 `play()` calls is installed before the page's own code runs. A line is pressed
 inside its left padding (`linePadPoint`), on the line itself rather than a
-word, after checking that the line is what is under that point. Seventeen
+word, after checking that the line is what is under that point. Twenty-one
 checks:
 
 1. The column has a plain header and is grouped: `.transcript-head` is sticky
@@ -481,14 +481,34 @@ checks:
     106 chosen open the Transcript tab with line 4 the only selected line,
     wholly inside the visible band of `.notes-main` once it has stopped
     scrolling (`lineBandState`), Follow still on and no `play()` call.
+18. The transcript coming on screen brings back the line the player is at (KNEG-455 item 9): at
+    1000x720 on Notes, nothing played and the recording paused at 9:25 (line 43), a real press on
+    the Transcript tab leaves line 43 inside the band of `.notes-main` and within 40px of its
+    centre, with Follow still on and no `play()` call.
+19. Closing a section that is not playing is the app's scroll, not the person's (KNEG-454,
+    KNEG-455 item 9): playing line 43 with Follow on, a real press on the "10:00 – 11:30" toggle
+    below it closes that section and moves the column (its content shrank under it), and Follow is
+    still on and a line still plays.
+20. A key typed in Find while a glide runs does not leave its line short (KNEG-455 item 6): (a) a
+    real Enter steps "möte" from line 22 to line 45, and a real space typed 80 ms into that glide
+    still ends with line 45 inside the band; (b) the Follow chip's recentre on line 43, with an
+    empty Find open and a space typed 80 ms in, ends with line 43 inside the band and Follow on.
+    The column's scroll and `scrollend` events are logged.
+21. A touch drag on the mini card moves neither the transcript nor Follow (KNEG-455 item 8): at
+    1000x720 on the Transcript tab, playing with Follow on and touch emulated, a finger dragged up
+    150px with `Input.dispatchTouchEvent` from a plain point on the card, and from its padding,
+    leaves `.notes-main` where it was and Follow on; a touch drag on the scrubber still seeks; and
+    the control, a drag on the lines, scrolls and lets go. (`Input.synthesizeScrollGesture`'s touch
+    source scrolls nothing in this Edge, not even the lines.)
 
 Measured in headless Edge against dev fixtures, not in the Tauri window; a false
 check makes it exit 1. Skips clamped at 0 and at the end, and ticks dropped at
 the very start or end, are `tests/playerControls.test.ts`'s, not measured here;
 which line the arrow keys go to, the tab stop's choice and Shift's range are
 `tests/transcriptLayout.test.ts`'s (`stepLine`, `lineStop`, `extendSelection`);
-which keys let go of Follow, reveal ownership and its 150 ms inactivity fallback, and
-the band are `tests/followScroll.test.ts`'s; what a query finds (case folded,
+which keys let go of Follow, reveal ownership and its 150 ms inactivity fallback, the
+band, the one waiting reveal (`RevealQueue`) and when a glide counts as stopped (`GlideWatch`)
+are `tests/followScroll.test.ts`'s; what a query finds (case folded,
 accents kept), where a new query starts from the match that was current, and
 which rows keep their matches' arrays across a new query (`regroupMatches`)
 are `tests/transcriptFind.test.ts`'s. Not measured: the Previous and Next
