@@ -369,6 +369,11 @@ pub mod linux_impl {
         /// likely cause is a desktop with no `xdg-desktop-portal`, or one older
         /// than 1.17, which is when `GlobalShortcuts` was added.
         Unreachable(zbus::Error),
+        /// A portal is running, but nothing on it implements `GlobalShortcuts`:
+        /// reading the interface's `version` was answered as a missing
+        /// interface. That is `xdg-desktop-portal` with no backend for it, as
+        /// on a desktop whose compositor has none (KNEG-490).
+        NoInterface(zbus::Error),
         /// The portal answered, and said no.
         Refused { response: u32 },
         /// The user closed the dialog.
@@ -390,6 +395,11 @@ pub mod linux_impl {
                     "the desktop portal could not be reached, so global shortcuts cannot be \
                      registered on this desktop ({e}). GlobalShortcuts needs xdg-desktop-portal \
                      1.17 or newer and a compositor backend that implements it"
+                ),
+                Self::NoInterface(e) => write!(
+                    f,
+                    "the desktop portal is running but offers no global shortcuts on this \
+                     desktop ({e}). GlobalShortcuts needs a compositor backend that implements it"
                 ),
                 Self::Refused { response } => write!(
                     f,
@@ -417,8 +427,35 @@ pub mod linux_impl {
                         | "org.freedesktop.DBus.Error.UnknownMethod"
                 ),
                 Self::Unreachable(zbus::Error::Address(_))
-                | Self::Unreachable(zbus::Error::InputOutput(_)) => true,
+                | Self::Unreachable(zbus::Error::InputOutput(_))
+                | Self::NoInterface(_) => true,
                 _ => false,
+            }
+        }
+
+        /// What a failed read of the interface's `version` means. It is the
+        /// first thing [`bind`] asks, so it is where a portal without
+        /// `GlobalShortcuts` shows. GDBus, which `xdg-desktop-portal` uses,
+        /// answers a property read on an interface it does not export with
+        /// `InvalidArgs` ("No such interface"), not `UnknownInterface`. That was
+        /// measured on 2026-10-23 against a GDBus service, after hosted CI's
+        /// runner activated its own portal this way (KNEG-490). zbus's servers
+        /// answer `UnknownInterface`, and a read of a missing property
+        /// `UnknownProperty`. Only this read is classified so: the same names
+        /// from a later call mean something else.
+        fn from_version_read(error: zbus::Error) -> Self {
+            match &error {
+                zbus::Error::MethodError(name, _, _)
+                    if matches!(
+                        name.as_str(),
+                        "org.freedesktop.DBus.Error.InvalidArgs"
+                            | "org.freedesktop.DBus.Error.UnknownInterface"
+                            | "org.freedesktop.DBus.Error.UnknownProperty"
+                    ) =>
+                {
+                    Self::NoInterface(error)
+                }
+                _ => Self::Unreachable(error),
             }
         }
     }
@@ -614,7 +651,10 @@ pub mod linux_impl {
 
         let connection = Connection::session().await?;
         let portal = GlobalShortcutsProxy::new(&connection).await?;
-        let _version = portal.version().await?;
+        let _version = portal
+            .version()
+            .await
+            .map_err(PortalError::from_version_read)?;
 
         let mut create_options = HashMap::new();
         let handle_token = token();
@@ -826,6 +866,16 @@ mod portal_bus_tests {
     struct Portal {
         response: Arc<AtomicU32>,
     }
+    /// A desktop portal object with no GlobalShortcuts on it: another of the
+    /// portal's interfaces, and nothing else (KNEG-490).
+    struct OtherPortal;
+    #[zbus::interface(name = "org.freedesktop.portal.Settings")]
+    impl OtherPortal {
+        #[zbus(property)]
+        fn version(&self) -> u32 {
+            2
+        }
+    }
     fn string(value: &str) -> OwnedValue {
         OwnedValue::try_from(zbus::zvariant::Value::from(value.to_owned())).unwrap()
     }
@@ -910,6 +960,43 @@ mod portal_bus_tests {
     #[tokio::test]
     #[ignore = "requires dbus-run-session; run explicitly in Linux CI"]
     async fn portal_bus_round_trip() {
+        // First, a portal whose object has no GlobalShortcuts, only Settings. That is
+        // `xdg-desktop-portal` with no backend for it, and the plugin is the fallback there
+        // (KNEG-490). Here, before the fake below takes the name: once it is released at the end,
+        // a bus that can activate a real portal hands the name to that one for good.
+        let bindings = vec![
+            "Control+D".to_owned(),
+            "Control+E".to_owned(),
+            "Control+Super".to_owned(),
+        ];
+        let other = zbus::connection::Builder::session()
+            .unwrap()
+            .name("org.freedesktop.portal.Desktop")
+            .unwrap()
+            .serve_at(DESKTOP, OtherPortal)
+            .unwrap()
+            .build()
+            .await
+            .unwrap();
+        let error = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            linux_impl::bind(&bindings, &bindings),
+        )
+        .await
+        .unwrap()
+        .err()
+        .unwrap();
+        assert!(
+            matches!(error, linux_impl::PortalError::NoInterface(_)),
+            "a portal without GlobalShortcuts is NoInterface, got {error}"
+        );
+        assert!(error.can_fallback(), "{error}");
+        other
+            .release_name("org.freedesktop.portal.Desktop")
+            .await
+            .unwrap();
+        drop(other);
+
         let mode = Arc::new(AtomicU32::new(0));
         let service = zbus::connection::Builder::session()
             .unwrap()
@@ -925,11 +1012,6 @@ mod portal_bus_tests {
             .build()
             .await
             .unwrap();
-        let bindings = vec![
-            "Control+D".to_owned(),
-            "Control+E".to_owned(),
-            "Control+Super".to_owned(),
-        ];
         let (session, refused) = tokio::time::timeout(
             std::time::Duration::from_secs(3),
             linux_impl::bind(&bindings, &bindings),
@@ -1122,7 +1204,7 @@ mod portal_bus_tests {
         .unwrap();
         assert!(
             error.can_fallback(),
-            "an absent portal allows plugin fallback"
+            "an absent portal allows plugin fallback, got {error}"
         );
     }
 }

@@ -67,5 +67,19 @@ attempted on 2026-09-28 with a synthetic unfinished WAV and sidecar, both by
 launching the debug binary and through `tauri:dev`. The process opened a window
 but stalled before `Db::open`; the isolated database was never created and
 WebView2 did not expose its debug port. The processes and Vite server were
-stopped. The Meetings page's Recover button and the recovery path remain to be
-exercised in a functioning native session.
+stopped.
+
+The recovery path has since crossed real WebView IPC twice, both times in a
+hidden native WebView with an in-memory database, a disposable profile and
+synthetic transcription output, not a real crash or model:
+
+- `meeting::native_recovery_test::recovered_provider_and_lightweight_notes_cross_native_ipc`
+  recovered a meeting and checked its provenance, listing and update metadata
+  ([KNEG-423/420 validation](KNEG_423_420_VALIDATION.md)).
+- `native_meeting_progress_and_settings_ipc` ran a real recovery that reported
+  Preparing recording, Transcribing recording and Saving note
+  ([three-issues validation](KNEG_THREE_ISSUES_VALIDATION.md)).
+
+Neither presses the Meetings page's Recover button, and no recording interrupted
+by a real crash has been recovered. That by-hand step is item 34 of KNEG-378:
+end the app's process mid-meeting, then press Recover under Interrupted.

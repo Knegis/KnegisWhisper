@@ -137,7 +137,12 @@ export function dictationReadiness(i: {
 }
 
 /** Why the chosen local meeting provider cannot start. See [`localProviderProblem`]. */
-export type LocalProblem = { problem: string; detail: string };
+/**
+ * `fix` names a way out other than Transcription, for a problem nothing there
+ * can fix: a streaming server that cannot be kept to this computer leaves only
+ * another provider (KNEG-485).
+ */
+export type LocalProblem = { problem: string; detail: string; fix?: "provider-menu" };
 
 /**
  * Why the chosen meeting provider, when it is one of the two that run on this
@@ -152,7 +157,9 @@ export type LocalProblem = { problem: string; detail: string };
  *   installed one, when the server is not running (`local_model.rs`
  *   `meeting_revive_handle`).
  * - `local-streaming`: a streaming model chosen and downloaded, and the
- *   sherpa-onnx runtime that serves it (`sherpa_stream.rs` `start`).
+ *   sherpa-onnx runtime that serves it (`sherpa_stream.rs` `start`) -- a
+ *   streaming server that can be kept to this computer, which `start` checks
+ *   before every launch and refuses otherwise (KNEG-484, KNEG-485).
  *
  * A status that has not arrived is `null` and holds nothing: Start still says
  * what went wrong if it does.
@@ -167,6 +174,8 @@ export function localProviderProblem(
         cliInstalled: boolean;
         selectedStream: string | null;
         models: readonly { id: string; installed: boolean }[];
+        /** `null` when not known: no server installed, or its help unreadable. */
+        streamBindsLoopback: boolean | null;
       }
     | null,
 ): LocalProblem | null {
@@ -192,6 +201,13 @@ export function localProviderProblem(
       return {
         problem: "The streaming model for live meetings isn't downloaded yet.",
         detail: "Download it under Settings > Transcription > Local.",
+      };
+    }
+    if (sherpa.streamBindsLoopback === false) {
+      return {
+        problem: "The streaming server for live meetings can't be limited to this computer.",
+        detail: "This version of it listens on the network, so it isn't started. Choose Local windowed model or a cloud provider for live meetings.",
+        fix: "provider-menu",
       };
     }
   }
@@ -276,7 +292,9 @@ export function meetingReadiness(i: {
       state: "needs-setup",
       problem: i.localProblem.problem,
       detail: i.localProblem.detail,
-      fix: { view: "transcription", label: "Set up local transcription" },
+      fix: i.localProblem.fix === "provider-menu"
+        ? { view: "provider-menu", label: "Choose another provider" }
+        : { view: "transcription", label: "Set up local transcription" },
     };
   }
 

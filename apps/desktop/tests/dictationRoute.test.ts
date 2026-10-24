@@ -46,6 +46,7 @@ function sherpa(selected: string | null, models: SherpaModelStatus[] = PARAKEET)
     models,
     selected,
     selectedStream: null,
+    streamBindsLoopback: null,
     modelsDir: "",
   };
 }

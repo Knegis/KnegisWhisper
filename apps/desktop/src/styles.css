@@ -1550,6 +1550,9 @@ button.transcript-find-step { flex: none; display: flex; align-items: center; ju
  * generic `input` fill it has to override.
  */
 .recording-player { display: flex; flex-direction: column; min-width: 0; }
+/* The element the one player is rendered into, moved between the slots (KNEG-488): no box of its
+   own, so each slot lays the player out as if it were its child. */
+.player-host { display: contents; }
 
 .recording-audio,
 .sr-only {

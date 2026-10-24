@@ -12,6 +12,91 @@ maintained in place rather than appended to, because its purpose is to be curren
 
 ---
 
+## 2026-10-23 (later) — KNEG-488, 490 and 485: three of the sweep's findings, fixed
+
+Branch `fix/kneg-488-490-485`, from `dev` at `e043748`.
+
+**KNEG-488: the player is rendered once and moved, not mounted in each slot.** Each of its three
+slots rendered `{player}` under its own parent, so every move mounted a new `RecordingPlayer`
+with a fresh `<audio>`, and a handoff (`position`/`resume`) restarted it. A narrow window got its
+second slot in `96a0a01` (KNEG-455), which is when Replay ↔ Notes started to cut playback there,
+and when the native `notes-smoke` started failing. Now `NoteWorkspace` renders the player through
+a portal into one host element, and the slot on screen appends that element. A media element
+moved within a task keeps playing, so the handoff is gone, and `position`/`resume` with it.
+
+`note-playback.mjs` tags the element, and now requires it to survive every move. Its new check 5
+is the narrow Replay ↔ Notes switch, and it failed before the change (49 of 50 samples on another
+element). After it, all five checks passed, as did the native `notes-smoke` as written and the
+transcript-column, three-issues, word-highlight, follow/rename and search probes.
+
+**KNEG-490: a portal without GlobalShortcuts is one to fall back from.** The hosted runner's
+session bus activated a real `xdg-desktop-portal` once the test's fake released the name. That
+portal answers the `version` read with `org.freedesktop.DBus.Error.InvalidArgs` ("No such
+interface"), which `can_fallback` did not list. So the test was right: on any desktop with that
+portal and no backend, the app rejected every shortcut instead of using the plugin. That was
+measured in WSL against a GDBus service, GDBus being the library `xdg-desktop-portal` uses. The
+repository's `portal_bus_tests`, compiled from its own source in a harness that avoids the ALSA
+headers, failed exactly as CI did on a bus that could activate that service. With the fix, it
+passed there and on a bare bus. The fix classifies only the `version` read: `InvalidArgs`,
+`UnknownInterface` and `UnknownProperty` there are `PortalError::NoInterface`, which falls back.
+Message text is not matched, because GLib translates it.
+
+**KNEG-485, the readiness half.** `sherpa_status` now reports `streamBindsLoopback`, from the
+guard's own `--help` check. It is cached per installed server (path, length, mtime); the guard
+itself still asks before every start. Meetings reads it: with local streaming chosen and the
+answer `false`, it is Needs setup, "The streaming server for live meetings can't be limited to
+this computer.", with "Choose another provider", which opens the provider menu, and Start held.
+That was measured natively against the installed v1.13.4, with the owner's sidecars and models
+junctioned into a disposable profile. Both trees measured identical before and after. Restoring
+local streaming itself, a server that takes a bind address, is still KNEG-485's other half.
+
+---
+
+## 2026-10-23 — a Linear sweep, and a loopback guard that never reached `dev`
+
+Branch `sweep/2026-10-23-low-input`, from `origin/main` at `db3c1c1`. This is a reconciliation of
+the 72 open issues against git, CI and the validation ledgers. The per-issue record is
+`LINEAR_LOW_INPUT_SWEEP_2026_10_23.md`. No product code changed. Two findings belong here, because
+both are the kind this log exists for.
+
+**The streaming server's loopback guard was on `main` only.** `5c8f6aa` (merged by PR #31,
+2026-09-05; `dc4f19f` is an unmerged twin on another branch) made `sherpa_stream.rs` pass
+`--host=127.0.0.1` and refuse a server whose `--help` offers no host option. Every later Dev PR
+merged `dev` into `main`, never the reverse. So `main` held 27 commits that `dev` lacked: 26 merges
+and the guard, which was the whole difference in tree.
+
+Measured today, the pinned v1.13.4 has no host option. Started with `dev`'s arguments, it listened
+on `0.0.0.0`. The Windows Firewall rule for it is an inbound Allow, so local-streaming meetings on
+`dev`, and on the 2026-09-19 installed build, exposed an unauthenticated WebSocket service to the
+network the machine was on. The fix is the fast-forward, not a third copy of the commit.
+
+Its cost is real: with the pinned server, local-streaming meetings now refuse to start, and
+readiness still says Ready. Restoring them needs a server that takes a bind address.
+`NETWORK_BOUNDARY.md` § Loopback is not egress now says which sidecars take a host argument, and
+that `kw_sidecar::port` only chooses the port.
+
+The exposure is KNEG-484 (Urgent), and restoring local streaming is KNEG-485.
+
+The lesson is about branch flow, not the guard. A fix merged straight into `main` has no route back
+to `dev` in this repository's flow. A security fix landing on `main` needs `main` merged into `dev`
+the same day.
+
+**The native `notes-smoke` has not passed since the transcript-column redesign.** Its first tab
+switch asserts that playback carries on. Measured over CDP, the `<audio>` in the mini player after
+the switch starts from nothing (`readyState` 0, `currentTime` 0). It is a newly mounted element,
+not the old one moved; that was found the same day (entry above). Within 600 ms it is playing
+again, near its old position. Every other group passes. This was the first native run of either
+smoke since KNEG-448, which is what KNEG-378 item 49 was waiting for. It is KNEG-488.
+
+**The first full dispatch since 2026-09-15 was red on one Linux step** (run 39964300965). The portal
+private-bus regression's "absent portal" case was not absent on the hosted runner: after the fake
+portal released its name, D-Bus activated the runner's real `xdg-desktop-portal`, which answered
+without a GlobalShortcuts backend. Either the test needs a bus with no activatable services, or the
+app needs to fall back when the portal is present but the interface is missing. That is KNEG-490.
+Everything else in the matrix was green on rustc 1.99.1.
+
+---
+
 ## 2026-10-12 — KNEG-448: transcript column (M6)
 
 Branch `transcript-m6`, from `dev` at 802b458: the transcript column beside a note, and the

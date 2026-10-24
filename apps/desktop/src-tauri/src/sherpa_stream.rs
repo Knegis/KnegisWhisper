@@ -340,15 +340,7 @@ pub fn build_args(files: &ModelFiles, port: u16, log: &std::path::Path) -> Vec<S
 /// allowing a patched sidecar with the expected option to restore streaming
 /// without weakening this check.
 fn require_loopback_bind_support(executable: &std::path::Path) -> Result<(), String> {
-    let output = std::process::Command::new(executable)
-        .arg("--help")
-        .output()
-        .map_err(|err| format!("could not inspect the streaming server options: {err}"))?;
-    let mut help = output.stdout;
-    help.extend_from_slice(&output.stderr);
-    let help = String::from_utf8_lossy(&help);
-
-    if help_supports_loopback_bind(&help) {
+    if loopback_bind_supported(executable)? {
         Ok(())
     } else {
         Err(
@@ -357,6 +349,47 @@ fn require_loopback_bind_support(executable: &std::path::Path) -> Result<(), Str
                 .to_owned(),
         )
     }
+}
+
+/// Whether `executable`'s `--help` offers a host option. The one check, made by
+/// the guard above before every start and, cached, for the screen below.
+fn loopback_bind_supported(executable: &std::path::Path) -> Result<bool, String> {
+    let output = std::process::Command::new(executable)
+        .arg("--help")
+        .output()
+        .map_err(|err| format!("could not inspect the streaming server options: {err}"))?;
+    let mut help = output.stdout;
+    help.extend_from_slice(&output.stderr);
+    Ok(help_supports_loopback_bind(&String::from_utf8_lossy(&help)))
+}
+
+/// The installed server and the answer it gave, keyed by its path, length and
+/// modification time, so that the answer is asked again when it is replaced.
+type BindAnswer = (PathBuf, u64, Option<std::time::SystemTime>, bool);
+static BIND_ANSWER: std::sync::Mutex<Option<BindAnswer>> = std::sync::Mutex::new(None);
+
+/// For the Meetings page: whether the installed streaming server can be kept
+/// to this computer, so that a server the guard will refuse reads as needing
+/// setup before Start rather than failing at it (KNEG-485). `None` when no
+/// server is installed or its help could not be read. Cached, because the
+/// status is read on every page that shows a local model; the guard itself is
+/// not, and asks before every start.
+pub fn installed_binds_loopback() -> Option<bool> {
+    let executable = installed()?;
+    let meta = std::fs::metadata(&executable).ok()?;
+    let (length, modified) = (meta.len(), meta.modified().ok());
+    if let Ok(held) = BIND_ANSWER.lock() {
+        if let Some((path, len, at, answer)) = held.as_ref() {
+            if *path == executable && *len == length && *at == modified {
+                return Some(*answer);
+            }
+        }
+    }
+    let answer = loopback_bind_supported(&executable).ok()?;
+    if let Ok(mut held) = BIND_ANSWER.lock() {
+        *held = Some((executable, length, modified, answer));
+    }
+    Some(answer)
 }
 
 fn help_supports_loopback_bind(help: &str) -> bool {
@@ -509,6 +542,13 @@ mod tests {
         assert!(help_supports_loopback_bind(
             "Options:\n  --host=127.0.0.1  The address on which to listen."
         ));
+    }
+
+    #[test]
+    fn a_server_that_cannot_be_asked_for_its_options_is_not_an_answer() {
+        let missing = std::env::temp_dir().join("kw-no-such-streaming-server.exe");
+        assert!(loopback_bind_supported(&missing).is_err());
+        assert!(require_loopback_bind_support(&missing).is_err());
     }
 
     #[test]
