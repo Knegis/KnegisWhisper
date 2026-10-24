@@ -10,7 +10,8 @@
  * the playing line in view until the person scrolls, and gives way to a search
  * hit's row; the transcript coming on screen brings the line back; closing a
  * section that is not playing is the app's scroll, not the person's; 20, a key
- * typed in Find while a glide runs does not leave its line short), 9 and 10 Find in this transcript (the head's search button opens
+ * typed in Find while a glide runs does not leave its line short; 21, a touch
+ * drag on the mini card moves neither the transcript nor Follow), 9 and 10 Find in this transcript (the head's search button opens
  * a find bar that marks the matches and moves between them without playing; a
  * playing line that matches shows its marks rather than its words), and 15 a
  * meeting of 1,500 lines, injected in place of the fixture's, playing without
@@ -144,6 +145,11 @@ const SECOND_SECTION = SECTIONS[1].title;
 const THIRD_SECTION = SECTIONS[2].title;
 /** How long into a glide claim 20 types its space: well inside a smooth scroll of over a thousand pixels. */
 const GLIDE_KEY_MS = 80;
+/** How far claim 21's touch drags move, upwards: far enough to scroll the transcript a good way when it scrolls at all. */
+const TOUCH_DRAG = 150;
+/** How far claim 21 drags the scrubber by touch, and how far on the recording must then be. */
+const SCRUB_DRAG = 150;
+const SCRUB_MIN_S = 20;
 /** The first line of the second section: line 27, "Då går vi vidare…" (5:02). */
 const SECOND_SECTION_FIRST = SECTIONS[0].lines;
 /**
@@ -2153,6 +2159,135 @@ export async function runTranscriptColumn(options) {
           failed: Object.entries(parts).filter(([, ok]) => !ok).map(([name]) => name),
           matches: Object.values(parts).every(Boolean),
         };
+      }
+      return {
+        measured: { schemes },
+        matches: SCHEMES.every((scheme) => schemes[scheme].matches),
+        screenshots,
+      };
+    });
+
+    // 21. A touch drag on the mini card does not move the transcript; one on the transcript does, and lets Follow go (KNEG-455 item 8).
+    await check({
+      id: "21",
+      claim: "A touch drag on the mini player card neither scrolls the transcript nor turns Follow off; the scrubber still takes a touch drag.",
+      expectation: [
+        `in each scheme, at 1000x720 on the Transcript tab, line ${CLICK_LINE + 1} pressed (playing, Follow on), touch emulated over CDP. Each`,
+        `drag is Input.dispatchTouchEvent, a finger moved ${TOUCH_DRAG}px upwards in 10 steps (Input.synthesizeScrollGesture's touch source`,
+        "scrolls nothing in headless Edge, not even the transcript, so it cannot show a difference). (a) From a point on the card that",
+        "operates nothing (inside .recording-player, no control under it): .notes-main's scrollTop is unchanged and the chip still",
+        `aria-pressed="true". (b) From the card's own padding, 5px inside its left edge: the same. (c) A touch drag of ${SCRUB_DRAG}px`,
+        "rightwards on the scrubber (Input.dispatchTouchEvent from its thumb) moves the recording on by more than",
+        `${SCRUB_MIN_S} s. (d) The control: from a point on the transcript's lines above the card, .notes-main's scrollTop moves and the`,
+        "chip turns aria-pressed=\"false\"",
+      ].join(" "),
+    }, async () => {
+      const schemes = {};
+      const screenshots = [];
+      const notesTop = "document.querySelector('.notes-main').scrollTop";
+      const chip = async () => (await cdp.evaluate(snippets.followChipState(MINI))).pressed;
+      /** A finger put down at `point`, moved `dy` px (negative is up) in 10 steps, and lifted. */
+      const touchDrag = async (point, dy) => {
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: point.x, y: point.y }] });
+        for (let step = 1; step <= 10; step += 1) {
+          await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: point.x, y: point.y + (dy * step) / 10 }] });
+          await delay(16);
+        }
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+        await delay(400);
+      };
+      for (const scheme of SCHEMES) {
+        await openNarrowTranscript(cdp);
+        const drawn = await useScheme(cdp, scheme);
+        await pressLine(cdp, CLICK_LINE);
+        await waited(cdp, `!${noPlayingLine}`, "a line to play", 5_000);
+        await scrollSettled(cdp, ".notes-main");
+        await cdp.send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 1 });
+        try {
+          // (a) A point on the card that operates nothing.
+          const plain = await cdp.evaluate(`(() => {
+            const card = document.querySelector(${JSON.stringify(`${MINI} .recording-player`)});
+            const rect = card.getBoundingClientRect();
+            for (let y = rect.top + 4; y < rect.bottom - 4; y += 6) for (let x = rect.left + 4; x < rect.right - 4; x += 12) {
+              const hit = document.elementFromPoint(x, y);
+              if (hit && card.contains(hit) && !hit.closest('button, input, select, a, [tabindex], [role="slider"]')) return { x, y, hit: (hit.className || hit.tagName).toString().slice(0, 40) };
+            }
+            return null;
+          })()`);
+          const cardBefore = { top: await cdp.evaluate(notesTop), follow: await chip() };
+          if (plain !== null) await touchDrag(plain, -TOUCH_DRAG);
+          const cardAfter = { top: await cdp.evaluate(notesTop), follow: await chip() };
+          // (b) The card's own padding.
+          const padding = await cdp.evaluate(`(() => {
+            const mini = document.querySelector(${JSON.stringify(MINI)});
+            const rect = mini.getBoundingClientRect();
+            const x = rect.left + 5, y = (rect.top + rect.bottom) / 2;
+            const hit = document.elementFromPoint(x, y);
+            return { x, y, onCard: Boolean(hit && mini.contains(hit) && !hit.closest('.recording-player')) };
+          })()`);
+          if ((await chip()) !== "true") await cdp.evaluate(`document.querySelector(${JSON.stringify(`${MINI} .follow-chip`)}).click()`);
+          await scrollSettled(cdp, ".notes-main");
+          const padBefore = { top: await cdp.evaluate(notesTop), follow: await chip() };
+          await touchDrag(padding, -TOUCH_DRAG);
+          const padAfter = { top: await cdp.evaluate(notesTop), follow: await chip() };
+          // (c) The scrubber, dragged by touch from its thumb.
+          const scrub = await cdp.evaluate(`(() => {
+            const range = document.querySelector(${JSON.stringify(`${MINI} input[aria-label="Recording position"]`)});
+            const rect = range.getBoundingClientRect();
+            const at = Number(range.value) / (Number(range.max) || 1);
+            return { x: rect.left + at * rect.width, y: (rect.top + rect.bottom) / 2, right: rect.right };
+          })()`);
+          const timeBefore = (await cdp.evaluate(snippets.recordingAt(MINI))).time;
+          const to = Math.min(scrub.x + SCRUB_DRAG, scrub.right - 2);
+          await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: scrub.x, y: scrub.y }] });
+          for (let step = 1; step <= 8; step += 1) {
+            await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: scrub.x + ((to - scrub.x) * step) / 8, y: scrub.y }] });
+            await delay(16);
+          }
+          await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+          await delay(300);
+          const timeAfter = (await cdp.evaluate(snippets.recordingAt(MINI))).time;
+          // (d) The control: the transcript's lines, above the card.
+          if ((await chip()) !== "true") await cdp.evaluate(`document.querySelector(${JSON.stringify(`${MINI} .follow-chip`)}).click()`);
+          await scrollSettled(cdp, ".notes-main");
+          const lines = await cdp.evaluate(`(() => {
+            const main = document.querySelector('.notes-main').getBoundingClientRect();
+            const card = document.querySelector(${JSON.stringify(MINI)}).getBoundingClientRect();
+            const x = main.left + main.width / 2, y = (main.top + card.top) / 2;
+            return { x, y, onLines: Boolean(document.elementFromPoint(x, y)?.closest('.transcript')) };
+          })()`);
+          const linesBefore = { top: await cdp.evaluate(notesTop), follow: await chip() };
+          await touchDrag(lines, -TOUCH_DRAG);
+          const linesAfter = { top: await cdp.evaluate(notesTop), follow: await chip() };
+          const shot = `21-touch-${scheme}-1000x720.png`;
+          await cdp.screenshot(resolve(out, shot));
+          screenshots.push(shot);
+          const parts = {
+            plainPoint: plain !== null,
+            cardFollowFirst: cardBefore.follow === "true",
+            cardStill: plain !== null && Math.abs(cardAfter.top - cardBefore.top) < 1,
+            cardFollowOn: cardAfter.follow === "true",
+            paddingOnCard: padding.onCard,
+            paddingStill: Math.abs(padAfter.top - padBefore.top) < 1,
+            paddingFollowOn: padAfter.follow === "true",
+            scrubbed: timeAfter - timeBefore > SCRUB_MIN_S,
+            linesPoint: lines.onLines,
+            linesScrolled: Math.abs(linesAfter.top - linesBefore.top) >= 1,
+            linesLetGo: linesBefore.follow === "true" && linesAfter.follow === "false",
+          };
+          schemes[scheme] = {
+            drawn,
+            card: { point: plain, before: { ...cardBefore, top: round(cardBefore.top) }, after: { ...cardAfter, top: round(cardAfter.top) } },
+            padding: { point: { ...padding, x: round(padding.x), y: round(padding.y) }, before: { ...padBefore, top: round(padBefore.top) }, after: { ...padAfter, top: round(padAfter.top) } },
+            scrub: { from: round(timeBefore), to: round(timeAfter) },
+            lines: { point: { ...lines, x: round(lines.x), y: round(lines.y) }, before: { ...linesBefore, top: round(linesBefore.top) }, after: { ...linesAfter, top: round(linesAfter.top) } },
+            failed: Object.entries(parts).filter(([, ok]) => !ok).map(([name]) => name),
+            matches: Object.values(parts).every(Boolean),
+          };
+        } finally {
+          await cdp.send("Emulation.setTouchEmulationEnabled", { enabled: false });
+          await cdp.evaluate(`document.querySelector(${JSON.stringify(`${MINI} audio`)})?.pause()`);
+        }
       }
       return {
         measured: { schemes },

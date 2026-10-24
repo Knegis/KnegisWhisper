@@ -2787,8 +2787,10 @@ button.note-people-add:hover:not(:disabled), button.note-people-add[aria-expande
  * on Notes once playback has started (KNEG-448). A wide window keeps it in full above Replay, and
  * otherwise moves it to the foot of the transcript column (`.note-side-player`, above).
  * The mini player is the same card as the column's (KNEG-448), held to the foot of the note rather
- * than floated: a `--rule` edge, the card corner, the page colour and `--card-shadow`. */
-.note-mini-player { position: sticky; bottom: 0; grid-row: 3; padding: 10px 10px 8px 12px; background: var(--bg); border: 1px solid var(--rule); border-radius: 4px; box-shadow: var(--card-shadow); z-index: 3; }
+ * than floated: a `--rule` edge, the card corner, the page colour and `--card-shadow`.
+ * A touch drag on it is the card's: held over `.notes-main`, it would otherwise scroll the transcript
+ * under it, and the scrubber takes its own drags either way (KNEG-455 item 8). */
+.note-mini-player { position: sticky; bottom: 0; grid-row: 3; padding: 10px 10px 8px 12px; background: var(--bg); border: 1px solid var(--rule); border-radius: 4px; box-shadow: var(--card-shadow); z-index: 3; touch-action: none; }
 .note-full-player { grid-row: 1; }
 /*
  * The position slider, drawn to the Kit rather than by the platform: the platform's thumb is a round

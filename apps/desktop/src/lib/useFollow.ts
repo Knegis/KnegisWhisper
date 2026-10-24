@@ -104,9 +104,11 @@ export function useFollow({
     const scrollEnd = () => appScroll.ended();
     const wheel = () => letGo();
     // A touch on the player card scrubs or presses it rather than scrolling the transcript: below
-    // 1280px the mini card is inside `.notes-main`, the scroller listened on here (KNEG-448).
+    // 1280px the mini card is inside `.notes-main`, the scroller listened on here (KNEG-448), and
+    // its padding counts as the card -- `touch-action: none` there keeps a drag from scrolling the
+    // transcript under it (KNEG-455 item 8).
     const touch = (event: TouchEvent) => {
-      if (event.target instanceof Element && event.target.closest(".recording-player") !== null) return;
+      if (event.target instanceof Element && event.target.closest(".recording-player, .note-mini-player") !== null) return;
       letGo();
     };
     // A press on the scrollbar lands on the scroller itself, to the right of its content box.
