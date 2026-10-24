@@ -12,6 +12,76 @@ maintained in place rather than appended to, because its purpose is to be curren
 
 ---
 
+## 2026-10-24 — KNEG-455 items 6, 8 and 9, KNEG-489 and KNEG-486
+
+Branch `fix/kneg-455-489-486`, from `dev` at `1fd78fd`. Before anything changed, the six transcript
+probes were run on `1fd78fd` for a baseline, and all passed: transcript-column 17/17, three-issues
+28/28, transcript-follow-rename 4/4, and transcript-search, word-highlight and note-playback 5/5.
+
+**Item 9: the transcript panel's effects no longer depend on where they are declared**
+(`9b72d31`).
+- `TranscriptPanel` went from 653 lines to 347, plus `lib/useReveal`, `lib/useTranscriptFind` and
+  `lib/useFollow`.
+- Two orderings were removed outright, not moved:
+  - the shared `latest` ref is per hook, synced in an insertion effect (`lib/useLatest`), which
+    runs before every layout effect wherever it is declared;
+  - the Follow effect keeps its own previous `visible` instead of reading one the next effect
+    wrote.
+- What still depends on order is kept inside one hook and commented: the reveal queue, now a pure
+  `RevealQueue`, and Follow's two layout effects.
+- The panel calls the hooks reveal, then Find, then Follow. In a commit where Find and Follow both
+  reveal a line, Follow's lands last, as before.
+
+That leaves one race, **believed, not reproduced**. A new query's matches and a playing-line change
+can land in the same commit. Follow's reveal can then override the match's, because Follow sees
+Find's release of it only a render later. It was kept as it was.
+
+Three probe checks now cover behaviour nothing covered:
+- claim 18: the Transcript tab brings back the paused line;
+- claim 19: closing a section below the playing line moves the column and leaves Follow on;
+- three-issues: after the width changes, a wheel over the other layout's scroller turns Follow
+  off.
+
+Claims 18 and 19 were shown to fail with the behaviour they guard removed.
+
+**Item 6: a glide the browser stops short is finished** (`9268d5f`). Claim 20 reproduced it on the
+untouched code, in both schemes:
+- a real space typed 80 ms into a Find step's glide stopped it with line 45 still far below;
+- the same stopped the Follow chip's recentre at scrollTop 115.
+
+The belief on record, Chromium's caret reveal, did not survive tracing. With every
+`scrollIntoView`, `scrollTo`, `scrollBy`, `focus` and `scrollTop` assignment logged, the reveal was
+the only call. A glide set off by script, outside any key, went on through a typed space, a Shift,
+an inserted space and a zero-delta `scrollTo`. A glide set off from a key handler was stopped by
+the next key. What in the browser stops it is not traced. The finding that decided the fix is that
+a glide stopped short gets no `scrollend`. So `useReveal` watches each glide a frame at a time
+(`GlideWatch`). Once the scroller holds still, it brings the line into the band at once if it is
+not there. The person's own input ends the watch.
+
+Claim 20 then passed three runs of three. Claim 3 had failed once in four runs before the fix:
+the column was left at scrollTop 0 after a chip press and a Play press close together. It passed
+all three after. That fits a glide stopped short, but it was not traced.
+
+**Item 8: the mini card is a control, not a scroll handle** (`0bfbf68`). Claim 21 measured it with
+real dispatched touches. `Input.synthesizeScrollGesture`'s touch source scrolls nothing in headless
+Edge, not even the transcript itself. The issue predicted the transcript moving with Follow still
+on. What happened was a drag on the card scrolling the transcript under it by about 175 px, *and*
+Follow turning off: since KNEG-454, any scroll that isn't the app's releases Follow. So the defect
+left was the card moving the transcript beneath it. `touch-action: none` on `.note-mini-player`, and
+its padding counted as the card, fix it. The scrubber still seeks by touch, and a drag on the lines
+still scrolls and lets go. Not measured on a real touchscreen.
+
+**KNEG-489** (`156a54b`). The loopback rule is now `require_loopback`, unit-tested without a socket.
+The integration test that binds 0.0.0.0 is ignored on Windows only. It still runs on Linux and
+macOS in the full matrix. The firewall count for `api-*.exe` stayed at 116 after a run of this
+worktree's fresh test binary, which has no rule. Removing the 116 needs admin and is the owner's.
+
+**KNEG-486** (`bc5d343`). The vendored cpal's `u32::max_value()` is now `u32::MAX`, and clippy 1.99
+on the workspace prints no warning. Vite's limit is 1500 kB, with the reason in `vite.config.ts`,
+as the owner chose. The bundle is 1,277.63 kB.
+
+---
+
 ## 2026-10-23 (later) — KNEG-488, 490 and 485: three of the sweep's findings, fixed
 
 Branch `fix/kneg-488-490-485`, from `dev` at `e043748`.
@@ -294,12 +364,15 @@ and 2 lines, and the one leaving it the same, as the stop went to line 1 and bac
 - Collapsing the current line's section while paused leaves Follow on, so Play opens it again.
 - Tab focus, or a text-drag selection, doesn't release Follow: the focused control or the quote
   can be scrolled away at the next line change.
-- Crossing 1280px draws the transcript afresh: Find closes and loses its query, closed sections
-  open again, and focus inside the transcript goes to the selected tab. A Windows Snap to half of
-  a 2560px screen lands exactly on that width.
-- A smooth glide (Enter, Previous or Next in Find, or Follow) can be cut short by a later
-  keystroke in the find field, leaving the line outside the band. Believed, not traced:
-  Chromium's caret reveal. Typing itself jumps, so it is not cut.
+- Crossing 1280px drew the transcript afresh: Find closed and lost its query, closed sections
+  opened again, and focus inside the transcript went to the selected tab. Fixed in `96a0a01`
+  (KNEG-455): one transcript stays mounted across the width.
+- A smooth glide (Enter, Previous or Next in Find, or Follow) could be cut short by a later
+  keystroke in the find field, leaving the line outside the band. Reproduced and fixed on
+  2026-10-24 (KNEG-455 item 6, `9268d5f`): such a glide stops with no `scrollend`, so `useReveal`
+  watches each glide and finishes one stopped short. No app code scrolls then, and the caret
+  reveal alone does not stop a glide; the browser's trigger is not traced. Typing itself jumps,
+  so it is not cut.
 - The find count's status region announces on every query change; what a screen reader says is
   for KNEG-378's Narrator pass.
 

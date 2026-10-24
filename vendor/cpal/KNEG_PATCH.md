@@ -12,6 +12,9 @@ Enumerator creation errors become normal device-enumeration errors or an
 unavailable default device, rather than an unwrap panic.
 The existing MutexGuard return type also spells out its elided lifetime to
 avoid the Rust 1.98 lifetime-syntax warning; this has no runtime effect.
+The unlimited buffer-size range writes `u32::MAX` for upstream's deprecated
+`u32::max_value()`, which clippy on Rust 1.99 warns about (KNEG-486); the same
+value, so this has no runtime effect either.
 Two trailing whitespace runs in `src/lib.rs` documentation were removed for
 the repository's diff check. All other upstream source files are unchanged.
 

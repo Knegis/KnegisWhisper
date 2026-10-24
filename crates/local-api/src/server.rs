@@ -128,15 +128,24 @@ impl Served {
     }
 }
 
+/// The guarantee [`serve`] gives: a listener whose address is not loopback is
+/// refused before anything is routed. Apart from the listener so it can be
+/// tested without opening a socket on the network (KNEG-489).
+fn require_loopback(address: SocketAddr) -> Result<(), ServeError> {
+    if address.ip().is_loopback() {
+        Ok(())
+    } else {
+        Err(ServeError::NotLoopback { address })
+    }
+}
+
 /// Start serving on an already-bound loopback listener.
 pub fn serve(listener: TcpListener, state: ApiState) -> Result<Served, ServeError> {
     let address = listener
         .local_addr()
         .map_err(|source| ServeError::Address { source })?;
 
-    if !address.ip().is_loopback() {
-        return Err(ServeError::NotLoopback { address });
-    }
+    require_loopback(address)?;
 
     let port = address.port();
     let (shutdown, shutdown_rx) = oneshot::channel();
@@ -891,5 +900,44 @@ mod recording_deletion_tests {
             "the refused PATCH changed nothing"
         );
         server.shutdown().await;
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod bind_tests {
+    use super::*;
+
+    /// KNEG-489. The address rule `serve` applies, without a socket: a
+    /// listener on 0.0.0.0 in a test raises a Windows Firewall prompt for
+    /// every freshly built test binary. `tests/api.rs` still checks that
+    /// `serve` applies it, on Linux and macOS.
+    #[test]
+    fn every_address_off_this_machine_is_refused() {
+        for address in [
+            "0.0.0.0:8200",
+            "[::]:8200",
+            "192.168.1.10:8200",
+            "10.0.0.1:8200",
+        ] {
+            let address: SocketAddr = address.parse().unwrap();
+            let err = require_loopback(address).unwrap_err();
+            assert!(
+                matches!(err, ServeError::NotLoopback { address: refused } if refused == address),
+                "{address}: {err}"
+            );
+            assert!(
+                err.to_string().contains("not safe to expose"),
+                "{address}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn loopback_addresses_are_served() {
+        for address in ["127.0.0.1:8200", "127.0.0.2:8200", "[::1]:8200"] {
+            let address: SocketAddr = address.parse().unwrap();
+            assert!(require_loopback(address).is_ok(), "{address} was refused");
+        }
     }
 }

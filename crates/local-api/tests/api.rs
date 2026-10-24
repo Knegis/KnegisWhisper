@@ -90,10 +90,16 @@ impl Harness {
 // ------------------------------------------------------------------------ bind
 
 #[tokio::test]
+#[cfg_attr(
+    windows,
+    ignore = "binds 0.0.0.0, which raises a Windows Firewall prompt for every new test binary \
+              (KNEG-489); the address rule is unit-tested in server.rs"
+)]
 async fn a_non_loopback_listener_is_refused() {
     // The guarantee this crate owns. Binding 0.0.0.0 would put an
     // unauthenticated-by-transport API with a token in a home-directory file on
-    // the network.
+    // the network. This proves `serve` applies the rule to a real listener;
+    // `server.rs`'s `bind_tests` cover the rule itself on every platform.
     let listener = TcpListener::bind("0.0.0.0:0").await.unwrap();
     let db = Db::open_in_memory().await.unwrap();
     let state = ApiState::new(db.pool().clone(), LocalApiToken::generate().unwrap());

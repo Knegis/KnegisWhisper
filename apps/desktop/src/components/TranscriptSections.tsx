@@ -1,5 +1,6 @@
 import { Fragment, memo, useEffect, useId, useRef, useState, type FormEvent, type RefObject } from "react";
 
+import { scrollBehavior } from "../lib/followScroll";
 import type { TranscriptRow } from "../lib/ipc";
 import { normaliseSpeakerName, renameHeading, suggestionsFor } from "../lib/speakerNames";
 import { sameMatchesOver, textParts, type FindMatch } from "../lib/transcriptFind";
@@ -30,11 +31,6 @@ import { formatClock } from "./RecordingPlayer";
  * (`regroupMatches`), so a new query redraws only the lines it changed, and a
  * step between matches only the two lines it moved between.
  */
-
-/** Scrolls jump rather than glide when the person asked for less motion. */
-export function scrollBehavior(): ScrollBehavior {
-  return typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
-}
 
 /** A speaker being renamed, and the turn whose name was pressed: the form opens under that turn. */
 export type RenameTarget = { turnKey: string; speakerId: string; current: string };

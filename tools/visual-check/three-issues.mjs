@@ -57,6 +57,25 @@ try {
     await waitFor(cdp, "Boolean(document.querySelector('.player-header-clear'))");
     await click(".player-header-clear", null);
     assert.equal(await cdp.evaluate("Boolean(document.querySelector('.player-header-clear'))"), false);
+    // The panel stays mounted across the width (above), so its scroll listeners have to move to the
+    // other layout's scroller: a real wheel there still turns Follow off (KNEG-455 item 9).
+    const chip = slot => cdp.evaluate(`document.querySelector(${JSON.stringify(`${slot} .follow-chip`)})?.getAttribute('aria-pressed') ?? null`);
+    const wheelOver = async selector => {
+      const point = await cdp.evaluate(`(() => { const box=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect(); return { x: box.left + box.width / 2, y: box.top + box.height / 2 }; })()`);
+      await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: point.x, y: point.y });
+      await cdp.send("Input.dispatchMouseEvent", { type: "mouseWheel", x: point.x, y: point.y, deltaX: 0, deltaY: -200 }); await delay(200);
+    };
+    assert.equal(await chip(".note-side-player"), "true", "Follow is on after a line was pressed");
+    await wheelOver(".note-side .note-side-body");
+    assert.equal(await chip(".note-side-player"), "false", "a wheel over the column turns Follow off after 1000 -> 1440");
+    await click(".note-side-player .follow-chip", null);
+    assert.equal(await chip(".note-side-player"), "true");
+    await viewport(1000); await click('.note-detail [role="tab"]', "Transcript");
+    await waitFor(cdp, "Boolean(document.querySelector('.note-mini-player .follow-chip'))");
+    assert.equal(await chip(".note-mini-player"), "true");
+    await wheelOver(".notes-main");
+    assert.equal(await chip(".note-mini-player"), "false", "a wheel over .notes-main turns Follow off after 1440 -> 1000");
+    await click('.note-detail [role="tab"]', "Notes"); await viewport(1440);
     await click('.note-detail [role="tab"]', "Replay");
     await waitFor(cdp, "Boolean(document.querySelector('.note-full-player .follow-chip'))");
     await cdp.evaluate("document.querySelector('audio').pause(); document.querySelector('audio').src='/missing-recording-fixture.wav'");
@@ -64,7 +83,7 @@ try {
     assert.equal(await cdp.evaluate("[...document.querySelectorAll('.recording-play,.recording-skip,input[aria-label=\"Recording position\"]')].every(e=>e.disabled)"), true);
     await cdp.evaluate("document.querySelectorAll('.transcript-line')[5].click()");
     assert.equal(await cdp.evaluate("document.querySelector('.recording-clock').textContent.split(' ').join('')"), "0:00/0:00");
-    results.push({ scheme, group: "transcript", checks: ["Ctrl+F", "same instance", "Find/rename/collapse/focus at 1000/1280/1440", "single-line Clear", "wide Replay header", "failed media controls and imperative playback"] });
+    results.push({ scheme, group: "transcript", checks: ["Ctrl+F", "same instance", "Find/rename/collapse/focus at 1000/1280/1440", "single-line Clear", "Follow's listeners move with the layout", "wide Replay header", "failed media controls and imperative playback"] });
 
     console.log(scheme, "drafts");
     await reload(cdp); await ready(); await summary();

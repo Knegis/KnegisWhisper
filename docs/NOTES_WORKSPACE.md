@@ -77,7 +77,7 @@ the recording is paused nothing follows. While Follow is on, the transcript comi
 (the Transcript tab opened, the layout switched) also brings back the line the player is at,
 playing or paused, when it is out of view, unless a search hit or a summary reference is being
 shown. The person moving the transcript turns Follow off: a wheel, a touch moving anywhere but on the player
-card, a press on its scrollbar, a scrolling key with focus on a line or a button in the
+card (a drag on the mini card moves neither the transcript under it nor Follow), a press on its scrollbar, a scrolling key with focus on a line or a button in the
 transcript or, with focus nowhere, after a press in it, the arrow keys between lines, or closing
 the section that is playing. Actual scrolls also release Follow unless they belong to the app's
 reveal operation; this covers selection autoscroll, overlay scrollbars and focus reveal.

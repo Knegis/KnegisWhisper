@@ -6,9 +6,12 @@
  * 14 and 16 are the column's header, sections, turns, rename and hover, 2 and
  * 3 the player card, 4, 8 and 12 the click model (a press plays from a line,
  * Shift selects a range the card offers to play, one tab stop with the arrow
- * keys between lines), 5, 6, 7 and 17 Follow (the card's chip keeps the
- * playing line in view until the person scrolls, and gives way to a search
- * hit's row), 9 and 10 Find in this transcript (the head's search button opens
+ * keys between lines), 5, 6, 7, 17, 18 and 19 Follow (the card's chip keeps
+ * the playing line in view until the person scrolls, and gives way to a search
+ * hit's row; the transcript coming on screen brings the line back; closing a
+ * section that is not playing is the app's scroll, not the person's; 20, a key
+ * typed in Find while a glide runs does not leave its line short; 21, a touch
+ * drag on the mini card moves neither the transcript nor Follow), 9 and 10 Find in this transcript (the head's search button opens
  * a find bar that marks the matches and moves between them without playing; a
  * playing line that matches shows its marks rather than its words), and 15 a
  * meeting of 1,500 lines, injected in place of the fixture's, playing without
@@ -138,6 +141,15 @@ const CENTRE_TOLERANCE = 40;
 /** Claim 7 plays from here, inside line 26 (4:49 to 4:58), so playback crosses into the second section at 5:02. */
 const CROSS_FROM = 295;
 const SECOND_SECTION = SECTIONS[1].title;
+/** The section claim 19 closes below the playing line. */
+const THIRD_SECTION = SECTIONS[2].title;
+/** How long into a glide claim 20 types its space: well inside a smooth scroll of over a thousand pixels. */
+const GLIDE_KEY_MS = 80;
+/** How far claim 21's touch drags move, upwards: far enough to scroll the transcript a good way when it scrolls at all. */
+const TOUCH_DRAG = 150;
+/** How far claim 21 drags the scrubber by touch, and how far on the recording must then be. */
+const SCRUB_DRAG = 150;
+const SCRUB_MIN_S = 20;
 /** The first line of the second section: line 27, "Då går vi vidare…" (5:02). */
 const SECOND_SECTION_FIRST = SECTIONS[0].lines;
 /**
@@ -1917,6 +1929,365 @@ export async function runTranscriptColumn(options) {
           failed: Object.entries(parts).filter(([, ok]) => !ok).map(([name]) => name),
           matches: Object.values(parts).every(Boolean),
         };
+      }
+      return {
+        measured: { schemes },
+        matches: SCHEMES.every((scheme) => schemes[scheme].matches),
+        screenshots,
+      };
+    });
+
+    // 18. The transcript coming on screen brings back the line the player is at, paused (KNEG-455 item 9).
+    await check({
+      id: "18",
+      claim: "Opening the Transcript tab brings back the line the player is at, though nothing plays.",
+      expectation: [
+        `in each scheme, at 1000x720 from a fresh load on the Notes tab, nothing played and the recording paused at ${PAUSED_AT} s`,
+        `(inside line ${PAUSED_LINE + 1}, far below): a real press on the Transcript tab. Once .notes-main has stopped scrolling: line`,
+        `${PAUSED_LINE + 1} is drawn wholly inside the visible band (lineBandState: .notes-main less the sticky head and --player-h + 24px,`,
+        `±1px) with its centre within ${CENTRE_TOLERANCE}px of the band's, the mini card's Follow chip is still aria-pressed="true", and no`,
+        "play() call was made",
+      ].join(" "),
+    }, async () => {
+      const schemes = {};
+      const screenshots = [];
+      for (const scheme of SCHEMES) {
+        await cdp.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: scheme }] });
+        await loadNote(cdp, NARROW);
+        const drawn = await cdp.evaluate(snippets.markColorScheme(scheme));
+        await waitFor(cdp, "(document.querySelector('.note-detail audio')?.readyState ?? 0) >= 1", "the recording's metadata");
+        await cdp.evaluate(snippets.pauseRecordingAt(MINI, PAUSED_AT));
+        await waitFor(cdp, `(() => { const at = ${snippets.recordingAt(MINI)}; return at.paused && !at.seeking && Math.abs(at.time - ${PAUSED_AT}) < 0.01; })()`, `the recording paused at ${PAUSED_AT} s`);
+        await delay(300);
+        const playsBefore = await cdp.evaluate("window.__plays ?? null");
+        await pressAt(cdp, ".note-detail [role=\"tab\"]", "Transcript");
+        // Past the two frames the transcript waits on coming on screen, and the scroll after them.
+        await delay(600);
+        await scrollSettled(cdp, ".notes-main");
+        const tab = await cdp.evaluate("document.querySelector('.note-detail [role=\"tab\"][aria-selected=\"true\"]')?.textContent.trim() ?? null");
+        const row = await cdp.evaluate(snippets.lineBandState(".notes-main", PAUSED_LINE));
+        const follow = await cdp.evaluate(snippets.followChipState(MINI));
+        const plays = (await cdp.evaluate("window.__plays ?? null")) - playsBefore;
+        const shot = `18-coming-on-screen-${scheme}-1000x720.png`;
+        await cdp.screenshot(resolve(out, shot));
+        screenshots.push(shot);
+        const parts = {
+          onTranscript: tab === "Transcript",
+          scrolled: row.scrollTop > 0,
+          inView: row.inBand,
+          centred: near(row.offset, 0, CENTRE_TOLERANCE),
+          followOn: follow.pressed === "true",
+          noPlay: plays === 0,
+        };
+        schemes[scheme] = {
+          drawn,
+          tab,
+          row: { ...row, top: round(row.top), bottom: round(row.bottom), offset: round(row.offset), band: { top: round(row.band.top), bottom: round(row.band.bottom) } },
+          follow: follow.pressed,
+          plays,
+          failed: Object.entries(parts).filter(([, ok]) => !ok).map(([name]) => name),
+          matches: Object.values(parts).every(Boolean),
+        };
+      }
+      return {
+        measured: { schemes },
+        matches: SCHEMES.every((scheme) => schemes[scheme].matches),
+        screenshots,
+      };
+    });
+
+    // 19. Closing a section that is not playing keeps Follow on, though the scroller moves with it (KNEG-454, KNEG-455 item 9).
+    await check({
+      id: "19",
+      claim: "Closing a section that is not playing leaves Follow on, though it moves the column.",
+      expectation: [
+        `in each scheme, from a fresh load: the recording paused at ${PAUSED_AT} s (line ${PAUSED_LINE + 1}, in "${SECOND_SECTION}") and the card's`,
+        `Play pressed, Follow on. Once the column has stopped scrolling, with "${THIRD_SECTION}" below the playing line and its toggle on`,
+        `screen, a real press on that toggle: it is aria-expanded="false", the column's scrollTop has gone down (the content under it`,
+        `shrank), and ${SETTLE_MS} ms later the card's button.follow-chip is still aria-pressed="true" and a line still plays`,
+      ].join(" "),
+    }, async () => {
+      const schemes = {};
+      const screenshots = [];
+      for (const scheme of SCHEMES) {
+        await openNote(cdp);
+        const drawn = await useScheme(cdp, scheme);
+        await cdp.evaluate(snippets.pauseRecordingAt(CARD, PAUSED_AT));
+        await settledTime(cdp);
+        await pressAt(cdp, `${CARD} button[aria-label="Play"]`);
+        await waited(cdp, `!${noPlayingLine}`, "a line to play", 5_000);
+        await delay(SETTLE_MS);
+        const before = await scrollSettled(cdp, SIDE_BODY);
+        const followBefore = (await cdp.evaluate(snippets.followChipState(CARD))).pressed;
+        // Where the toggle is, read without bringing it into view: a scroll here would be the probe's.
+        const toggle = await cdp.evaluate(`(() => {
+          const toggle = [...document.querySelectorAll('.note-detail .transcript button.transcript-section-toggle')]
+            .find((button) => button.querySelector('.transcript-section-title')?.textContent === ${JSON.stringify(THIRD_SECTION)});
+          const rect = toggle.getBoundingClientRect();
+          const x = (rect.left + rect.right) / 2, y = (rect.top + rect.bottom) / 2;
+          return { x, y, onToggle: toggle.contains(document.elementFromPoint(x, y)) };
+        })()`);
+        if (toggle.onToggle) await pressPoint(cdp, toggle, `the "${THIRD_SECTION}" toggle`);
+        const closed = await cdp.evaluate(snippets.sectionExpanded(THIRD_SECTION));
+        const after = await scrollSettled(cdp, SIDE_BODY);
+        await delay(SETTLE_MS);
+        const follow = (await cdp.evaluate(snippets.followChipState(CARD))).pressed;
+        const stillPlaying = await cdp.evaluate(`!${noPlayingLine}`);
+        const shot = `19-closed-below-${scheme}-1440x900.png`;
+        await cdp.screenshot(resolve(out, shot));
+        screenshots.push(shot);
+        await stopPlaying(cdp);
+        const parts = {
+          followFirst: followBefore === "true",
+          toggleOnScreen: toggle.onToggle,
+          closed: closed === "false",
+          moved: typeof before === "number" && typeof after === "number" && after < before - 1,
+          followOn: follow === "true",
+          playing: stillPlaying,
+        };
+        schemes[scheme] = {
+          drawn,
+          followBefore,
+          toggle: { ...toggle, x: round(toggle.x), y: round(toggle.y) },
+          closed,
+          scrollTop: { before: round(before), after: round(after) },
+          follow,
+          stillPlaying,
+          failed: Object.entries(parts).filter(([, ok]) => !ok).map(([name]) => name),
+          matches: Object.values(parts).every(Boolean),
+        };
+      }
+      return {
+        measured: { schemes },
+        matches: SCHEMES.every((scheme) => schemes[scheme].matches),
+        screenshots,
+      };
+    });
+
+    // 20. A keystroke in Find during a glide does not leave the line it was going to outside the band (KNEG-455 item 6).
+    await check({
+      id: "20",
+      claim: "Typing in Find while a Find or Follow glide runs still brings its line into the band.",
+      expectation: [
+        `in each scheme, from a fresh load, the column scrolled to its top. (a) Find opened with a real press, "${FIND_QUERY}" typed with`,
+        `real keys (1/3, line ${FIND_LINES[0] + 1}); a real Enter, which glides to line ${FIND_LINES[1] + 1}, and ${GLIDE_KEY_MS} ms later a real space typed`,
+        `into the field, which finds the same matches: once the column has stopped scrolling, line ${FIND_LINES[1] + 1} is wholly inside the`,
+        `visible band (lineBandState, ±1px). (b) Paused at ${PAUSED_AT} s, Find open and empty with focus in its field, the column scrolled`,
+        `200px and back to its top (a scroll not the app's, so Follow is off); the card's chip clicked (no focus moves), which glides to line ${PAUSED_LINE + 1}, and ${GLIDE_KEY_MS} ms later a real`,
+        `space typed: once the column is still, line ${PAUSED_LINE + 1} is wholly inside the band and the chip aria-pressed="true". The`,
+        "column's scroll and scrollend events are logged as diagnostics",
+      ].join(" "),
+    }, async () => {
+      const schemes = {};
+      const screenshots = [];
+      const logScrolls = `(() => {
+        const body = document.querySelector(${JSON.stringify(SIDE_BODY)});
+        window.__scrollLog = { from: performance.now(), top: body.scrollTop, scrolls: 0, ends: [] };
+        if (!window.__scrollLogged) {
+          window.__scrollLogged = true;
+          body.addEventListener('scroll', () => { window.__scrollLog.scrolls += 1; }, { passive: true });
+          body.addEventListener('scrollend', () => { window.__scrollLog.ends.push({ at: Math.round(performance.now() - window.__scrollLog.from), top: Math.round(body.scrollTop) }); });
+        }
+        return true;
+      })()`;
+      const scrollLog = "window.__scrollLog";
+      for (const scheme of SCHEMES) {
+        await openNote(cdp);
+        const drawn = await useScheme(cdp, scheme);
+        await cdp.evaluate(`document.querySelector(${JSON.stringify(SIDE_BODY)}).scrollTo({ top: 0, behavior: 'instant' })`);
+        await pressPoint(cdp, await cdp.evaluate(snippets.centerOfText(FIND_BUTTON, null)), "the Find button");
+        await typeKeys(cdp, FIND_QUERY);
+        const counted = await waited(cdp, findSettledOn(FIND_QUERY, "1/3", FIND_TEXTS), `the count 1/3 for "${FIND_QUERY}"`, 3_000);
+        await scrollSettled(cdp, SIDE_BODY);
+        await cdp.evaluate(logScrolls);
+        await key(cdp, "Enter", { settle: 0 });
+        await delay(GLIDE_KEY_MS);
+        await typeKeys(cdp, " ", 0);
+        await delay(200);
+        await scrollSettled(cdp, SIDE_BODY);
+        const findStep = {
+          shown: (await cdp.evaluate(snippets.findBarState())).shown,
+          line: await cdp.evaluate(snippets.lineBandState(SIDE_BODY, FIND_LINES[1])),
+          log: await cdp.evaluate(scrollLog),
+        };
+        const findShot = `20-find-glide-${scheme}-1440x900.png`;
+        await cdp.screenshot(resolve(out, findShot));
+        screenshots.push(findShot);
+
+        await openNote(cdp);
+        await useScheme(cdp, scheme);
+        await cdp.evaluate(snippets.pauseRecordingAt(CARD, PAUSED_AT));
+        await settledTime(cdp);
+        await pressPoint(cdp, await cdp.evaluate(snippets.centerOfText(FIND_BUTTON, null)), "the Find button");
+        // A scroll that is not the app's lets Follow go; the column is back at its top after it.
+        await cdp.evaluate(`document.querySelector(${JSON.stringify(SIDE_BODY)}).scrollTo({ top: 200, behavior: 'instant' })`);
+        await delay(200);
+        await cdp.evaluate(`document.querySelector(${JSON.stringify(SIDE_BODY)}).scrollTo({ top: 0, behavior: 'instant' })`);
+        await delay(200);
+        const released = (await cdp.evaluate(snippets.followChipState(CARD))).pressed;
+        await cdp.evaluate(logScrolls);
+        await cdp.evaluate(`document.querySelector(${JSON.stringify(`${CARD} .follow-chip`)}).click()`);
+        await delay(GLIDE_KEY_MS);
+        const fieldFocused = (await cdp.evaluate(snippets.findBarState())).input?.focused ?? false;
+        await typeKeys(cdp, " ", 0);
+        await delay(200);
+        await scrollSettled(cdp, SIDE_BODY);
+        const followStep = {
+          released,
+          fieldFocused,
+          line: await cdp.evaluate(snippets.lineBandState(SIDE_BODY, PAUSED_LINE)),
+          follow: (await cdp.evaluate(snippets.followChipState(CARD))).pressed,
+          log: await cdp.evaluate(scrollLog),
+        };
+        const followShot = `20-follow-glide-${scheme}-1440x900.png`;
+        await cdp.screenshot(resolve(out, followShot));
+        screenshots.push(followShot);
+        const judged = (line) => ({ inBand: line.inBand, top: round(line.top), bottom: round(line.bottom), band: { top: round(line.band.top), bottom: round(line.band.bottom) }, scrollTop: round(line.scrollTop) });
+        const parts = {
+          found: counted,
+          findStepped: findStep.shown === "2/3",
+          findInBand: findStep.line.inBand,
+          followReleasedFirst: released === "false",
+          focusInField: fieldFocused,
+          followInBand: followStep.line.inBand,
+          followOn: followStep.follow === "true",
+        };
+        schemes[scheme] = {
+          drawn,
+          find: { ...findStep, line: judged(findStep.line) },
+          follow: { ...followStep, line: judged(followStep.line) },
+          failed: Object.entries(parts).filter(([, ok]) => !ok).map(([name]) => name),
+          matches: Object.values(parts).every(Boolean),
+        };
+      }
+      return {
+        measured: { schemes },
+        matches: SCHEMES.every((scheme) => schemes[scheme].matches),
+        screenshots,
+      };
+    });
+
+    // 21. A touch drag on the mini card does not move the transcript; one on the transcript does, and lets Follow go (KNEG-455 item 8).
+    await check({
+      id: "21",
+      claim: "A touch drag on the mini player card neither scrolls the transcript nor turns Follow off; the scrubber still takes a touch drag.",
+      expectation: [
+        `in each scheme, at 1000x720 on the Transcript tab, line ${CLICK_LINE + 1} pressed (playing, Follow on), touch emulated over CDP. Each`,
+        `drag is Input.dispatchTouchEvent, a finger moved ${TOUCH_DRAG}px upwards in 10 steps (Input.synthesizeScrollGesture's touch source`,
+        "scrolls nothing in headless Edge, not even the transcript, so it cannot show a difference). (a) From a point on the card that",
+        "operates nothing (inside .recording-player, no control under it): .notes-main's scrollTop is unchanged and the chip still",
+        `aria-pressed="true". (b) From the card's own padding, 5px inside its left edge: the same. (c) A touch drag of ${SCRUB_DRAG}px`,
+        "rightwards on the scrubber (Input.dispatchTouchEvent from its thumb) moves the recording on by more than",
+        `${SCRUB_MIN_S} s. (d) The control: from a point on the transcript's lines above the card, .notes-main's scrollTop moves and the`,
+        "chip turns aria-pressed=\"false\"",
+      ].join(" "),
+    }, async () => {
+      const schemes = {};
+      const screenshots = [];
+      const notesTop = "document.querySelector('.notes-main').scrollTop";
+      const chip = async () => (await cdp.evaluate(snippets.followChipState(MINI))).pressed;
+      /** A finger put down at `point`, moved `dy` px (negative is up) in 10 steps, and lifted. */
+      const touchDrag = async (point, dy) => {
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: point.x, y: point.y }] });
+        for (let step = 1; step <= 10; step += 1) {
+          await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: point.x, y: point.y + (dy * step) / 10 }] });
+          await delay(16);
+        }
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+        await delay(400);
+      };
+      for (const scheme of SCHEMES) {
+        await openNarrowTranscript(cdp);
+        const drawn = await useScheme(cdp, scheme);
+        await pressLine(cdp, CLICK_LINE);
+        await waited(cdp, `!${noPlayingLine}`, "a line to play", 5_000);
+        await scrollSettled(cdp, ".notes-main");
+        await cdp.send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 1 });
+        try {
+          // (a) A point on the card that operates nothing.
+          const plain = await cdp.evaluate(`(() => {
+            const card = document.querySelector(${JSON.stringify(`${MINI} .recording-player`)});
+            const rect = card.getBoundingClientRect();
+            for (let y = rect.top + 4; y < rect.bottom - 4; y += 6) for (let x = rect.left + 4; x < rect.right - 4; x += 12) {
+              const hit = document.elementFromPoint(x, y);
+              if (hit && card.contains(hit) && !hit.closest('button, input, select, a, [tabindex], [role="slider"]')) return { x, y, hit: (hit.className || hit.tagName).toString().slice(0, 40) };
+            }
+            return null;
+          })()`);
+          const cardBefore = { top: await cdp.evaluate(notesTop), follow: await chip() };
+          if (plain !== null) await touchDrag(plain, -TOUCH_DRAG);
+          const cardAfter = { top: await cdp.evaluate(notesTop), follow: await chip() };
+          // (b) The card's own padding.
+          const padding = await cdp.evaluate(`(() => {
+            const mini = document.querySelector(${JSON.stringify(MINI)});
+            const rect = mini.getBoundingClientRect();
+            const x = rect.left + 5, y = (rect.top + rect.bottom) / 2;
+            const hit = document.elementFromPoint(x, y);
+            return { x, y, onCard: Boolean(hit && mini.contains(hit) && !hit.closest('.recording-player')) };
+          })()`);
+          if ((await chip()) !== "true") await cdp.evaluate(`document.querySelector(${JSON.stringify(`${MINI} .follow-chip`)}).click()`);
+          await scrollSettled(cdp, ".notes-main");
+          const padBefore = { top: await cdp.evaluate(notesTop), follow: await chip() };
+          await touchDrag(padding, -TOUCH_DRAG);
+          const padAfter = { top: await cdp.evaluate(notesTop), follow: await chip() };
+          // (c) The scrubber, dragged by touch from its thumb.
+          const scrub = await cdp.evaluate(`(() => {
+            const range = document.querySelector(${JSON.stringify(`${MINI} input[aria-label="Recording position"]`)});
+            const rect = range.getBoundingClientRect();
+            const at = Number(range.value) / (Number(range.max) || 1);
+            return { x: rect.left + at * rect.width, y: (rect.top + rect.bottom) / 2, right: rect.right };
+          })()`);
+          const timeBefore = (await cdp.evaluate(snippets.recordingAt(MINI))).time;
+          const to = Math.min(scrub.x + SCRUB_DRAG, scrub.right - 2);
+          await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: scrub.x, y: scrub.y }] });
+          for (let step = 1; step <= 8; step += 1) {
+            await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: scrub.x + ((to - scrub.x) * step) / 8, y: scrub.y }] });
+            await delay(16);
+          }
+          await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+          await delay(300);
+          const timeAfter = (await cdp.evaluate(snippets.recordingAt(MINI))).time;
+          // (d) The control: the transcript's lines, above the card.
+          if ((await chip()) !== "true") await cdp.evaluate(`document.querySelector(${JSON.stringify(`${MINI} .follow-chip`)}).click()`);
+          await scrollSettled(cdp, ".notes-main");
+          const lines = await cdp.evaluate(`(() => {
+            const main = document.querySelector('.notes-main').getBoundingClientRect();
+            const card = document.querySelector(${JSON.stringify(MINI)}).getBoundingClientRect();
+            const x = main.left + main.width / 2, y = (main.top + card.top) / 2;
+            return { x, y, onLines: Boolean(document.elementFromPoint(x, y)?.closest('.transcript')) };
+          })()`);
+          const linesBefore = { top: await cdp.evaluate(notesTop), follow: await chip() };
+          await touchDrag(lines, -TOUCH_DRAG);
+          const linesAfter = { top: await cdp.evaluate(notesTop), follow: await chip() };
+          const shot = `21-touch-${scheme}-1000x720.png`;
+          await cdp.screenshot(resolve(out, shot));
+          screenshots.push(shot);
+          const parts = {
+            plainPoint: plain !== null,
+            cardFollowFirst: cardBefore.follow === "true",
+            cardStill: plain !== null && Math.abs(cardAfter.top - cardBefore.top) < 1,
+            cardFollowOn: cardAfter.follow === "true",
+            paddingOnCard: padding.onCard,
+            paddingStill: Math.abs(padAfter.top - padBefore.top) < 1,
+            paddingFollowOn: padAfter.follow === "true",
+            scrubbed: timeAfter - timeBefore > SCRUB_MIN_S,
+            linesPoint: lines.onLines,
+            linesScrolled: Math.abs(linesAfter.top - linesBefore.top) >= 1,
+            linesLetGo: linesBefore.follow === "true" && linesAfter.follow === "false",
+          };
+          schemes[scheme] = {
+            drawn,
+            card: { point: plain, before: { ...cardBefore, top: round(cardBefore.top) }, after: { ...cardAfter, top: round(cardAfter.top) } },
+            padding: { point: { ...padding, x: round(padding.x), y: round(padding.y) }, before: { ...padBefore, top: round(padBefore.top) }, after: { ...padAfter, top: round(padAfter.top) } },
+            scrub: { from: round(timeBefore), to: round(timeAfter) },
+            lines: { point: { ...lines, x: round(lines.x), y: round(lines.y) }, before: { ...linesBefore, top: round(linesBefore.top) }, after: { ...linesAfter, top: round(linesAfter.top) } },
+            failed: Object.entries(parts).filter(([, ok]) => !ok).map(([name]) => name),
+            matches: Object.values(parts).every(Boolean),
+          };
+        } finally {
+          await cdp.send("Emulation.setTouchEmulationEnabled", { enabled: false });
+          await cdp.evaluate(`document.querySelector(${JSON.stringify(`${MINI} audio`)})?.pause()`);
+        }
       }
       return {
         measured: { schemes },

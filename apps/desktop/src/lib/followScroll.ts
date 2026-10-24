@@ -10,7 +10,12 @@
 /** Fallback for browsers without scrollend, including reveals that move nothing. */
 export const APP_SCROLL_IDLE_MS = 150;
 
-/** Ownership of one app reveal. A clock is supplied by the caller, so interrupted glides are testable. */
+/**
+ * Ownership of one app reveal. A clock is supplied by the caller, so interrupted glides are
+ * testable. It ends one of two ways, named apart so a reveal can tell them apart (KNEG-455):
+ * `ended` when the scroll itself stops (`scrollend`), `interrupted` when the person does something
+ * that moves the transcript themselves.
+ */
 export class ScrollOwnership {
   private until = Number.NEGATIVE_INFINITY;
   begin(now: number): void { this.until = now + APP_SCROLL_IDLE_MS; }
@@ -19,7 +24,78 @@ export class ScrollOwnership {
     this.until = now + APP_SCROLL_IDLE_MS;
     return true;
   }
-  end(): void { this.until = Number.NEGATIVE_INFINITY; }
+  ended(): void { this.until = Number.NEGATIVE_INFINITY; }
+  interrupted(): void { this.until = Number.NEGATIVE_INFINITY; }
+}
+
+/** How many frames a glide's scroller must hold still for the glide to count as over, once it has moved. */
+export const GLIDE_STILL_FRAMES = 3;
+/** ... and if it has not moved at all yet: a reveal of a line already where it was asked to be, or one slow to start. */
+export const GLIDE_START_FRAMES = 6;
+
+/**
+ * Whether a smooth scroll has stopped, read from its scroller's position once a frame (KNEG-455
+ * item 6). `scrollend` would say so, but does not come when the browser stops a glide short: a key
+ * typed into Find while a step's glide ran left it where it was, with no `scrollend`, in headless
+ * Edge (2026-10-24). Moves under half a pixel count as still, so a glide's slowest last frames end
+ * it a pixel or so early, which leaves its line where it was going.
+ */
+export class GlideWatch {
+  private moved = false;
+  private still = 0;
+
+  constructor(private last: number) {}
+
+  /** The scroller's `scrollTop` this frame; true once the glide is over. */
+  frame(top: number): boolean {
+    if (Math.abs(top - this.last) >= 0.5) {
+      this.moved = true;
+      this.still = 0;
+      this.last = top;
+      return false;
+    }
+    this.still += 1;
+    return this.still >= (this.moved ? GLIDE_STILL_FRAMES : GLIDE_START_FRAMES);
+  }
+}
+
+/** Scrolls jump rather than glide when the person asked for less motion. */
+export function scrollBehavior(): ScrollBehavior {
+  return typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
+}
+
+/**
+ * A line to bring into view once it can be (`useReveal`), and what to do once it has been; with
+ * `behavior`, scrolled that way rather than as `scrollBehavior` says.
+ */
+export type Reveal = { index: number; block: ScrollLogicalPosition; then?: (() => void) | undefined; behavior?: ScrollBehavior | undefined };
+
+/**
+ * The reveal waiting to be shown: one at a time, the latest asked for. One that replaces another
+ * still waiting runs that one's `then` before its own once it is shown, so a request overtaken --
+ * a summary source by Follow -- is still reported done rather than left to be shown again later.
+ */
+export class RevealQueue {
+  private pending: Reveal | null = null;
+  private asked = 0;
+
+  /** How many reveals have been asked for, so a deferred one can tell that something else was shown first. */
+  get count(): number { return this.asked; }
+
+  push(reveal: Reveal): void {
+    this.asked += 1;
+    const overtaken = this.pending?.then;
+    const then = reveal.then;
+    this.pending = { ...reveal, then: overtaken === undefined ? then : () => { overtaken(); then?.(); } };
+  }
+
+  /** The reveal waiting, taken off the queue, once `ready` says its line can be scrolled to; else null, and it waits. */
+  take(ready: (index: number) => boolean): Reveal | null {
+    const pending = this.pending;
+    if (pending === null || !ready(pending.index)) return null;
+    this.pending = null;
+    return pending;
+  }
 }
 
 /** The keys that scroll a scroller when nothing else takes them. Left and Right do not move the transcript, which never scrolls sideways. */
