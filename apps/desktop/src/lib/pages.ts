@@ -11,14 +11,14 @@ import type { ViewId } from "./navigation.js";
 export type Page = { title: string; intro: string };
 
 /**
- * One entry per screen the rail or the Settings panel can reach, `dictation`,
+ * One entry per screen the pills or the Settings sheet can reach, `dictation`,
  * `meetings` and `notes` excepted.
  *
  * `notes` is `null` rather than a page with an empty intro: the Notes screen is
  * the writing space itself -- the library down one side, and at the top of the
  * other the open note's own title field, or "Your writing space" when no note
  * is open. A page title above that would push the note down to name a screen
- * the rail already marks as current.
+ * the title bar's Notes pill already marks as current.
  *
  * `dictation` and `meetings` are `null` because each page is a task hero,
  * which already says what the page is for, beside a list panel titled with
@@ -31,19 +31,19 @@ export type Page = { title: string; intro: string };
  * (`views/Meetings.tsx`).
  *
  * Every title is the screen's current label in `lib/navigation.ts` -- the one
- * the rail or the Settings panel shows -- not a new name: a screen that read
+ * the pills or the Settings sheet show -- not a new name: a screen that read
  * one thing there and another at the top of its own content would be telling
  * a colleague there are two screens where there is one. A rename changes both
  * together.
  *
  * One exception, for the opposite reason: `meeting-settings` is "Meetings" in
- * the Settings panel, where it sits under the panel's own "Settings" title and
+ * the Settings sheet, where it sits under the sheet's own "Settings" title and
  * cannot be mistaken for anything else, and "Meeting settings" here, because a
  * header reading "Meetings" on both it and the recording page would be telling
  * a colleague there is one screen where there are two.
  *
  * `satisfies` rather than a `: Record<ViewId, Page | null>` annotation: it
- * still checks every key against `ViewId` -- so a screen added to the rail
+ * still checks every key against `ViewId` -- so a screen added to the navigation
  * without an entry here is a compile error -- without widening this constant's
  * type to the annotation.
  */

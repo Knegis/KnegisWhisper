@@ -233,7 +233,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
   const [moved, setMoved] = useState<{ id: number; title: string; reopen: boolean; shownWith: number | null } | null>(null);
   // Where focus goes once a Trash action has finished and the page has been read again. What had
   // focus -- a library row, a button of the note in Trash -- is gone by then, and focus would fall to
-  // the page's body, behind the rail and the library, with Undo out of a keyboard's reach. "undo":
+  // the page's body, behind the title bar and the library, with Undo out of a keyboard's reach. "undo":
   // the Undo beside "Moved to Trash"; "title": the open note's title, once its editor is ready and
   // the field enabled; "trash": Trash's page -- its "Choose a note" line, or, with nothing left to
   // choose, the line saying what Trash holds. A request per action, so the same target twice moves

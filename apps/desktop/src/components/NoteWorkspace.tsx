@@ -26,10 +26,12 @@ const TAB_LABELS: Record<Tab, string> = { notes: "Notes", transcript: "Transcrip
 
 /**
  * The window width at and above which the transcript is a column beside the
- * note rather than a tab. At 1280 with the list panel open the note keeps
- * about 590px beside the 340px column (1280 less the 68px rail, the card's
- * 10px of margin and border, and the 272px panel); any narrower and the
- * editor is squeezed below a readable measure to make room for it.
+ * note rather than a tab. Chosen beside the old rail, when at 1280 with the
+ * list panel open the note kept about 590px beside the 340px column (1280
+ * less the rail, the card's margin and border, and a narrower panel); any
+ * narrower and the editor is squeezed below a readable measure to make room
+ * for it. Without the rail the note has somewhat more room at the same width,
+ * and the breakpoint has not been revisited.
  */
 const WIDE = "(min-width: 1280px)";
 

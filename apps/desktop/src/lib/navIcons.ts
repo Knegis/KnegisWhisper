@@ -1,7 +1,8 @@
 /**
  * The icon for every id `lib/navigation.ts` produces: the three top-level
- * leaves and `settings`, which the rail draws; `developer`, the other group
- * header; every child under the two groups, which the Settings panel draws;
+ * leaves and `settings`, which the rail drew and the title bar's text-only
+ * pills do not; `developer`, the other group header; every child under the
+ * two groups, which the Settings sheet draws on its tiles;
  * and `notes-upload`, the one inner view, which neither lists but which a
  * `NavIconId` has to cover because it is a `ViewId`.
  *
