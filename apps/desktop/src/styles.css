@@ -1,237 +1,161 @@
 /*
- * The design language is knegis.com's, carried over rather than reinvented.
+ * The design language is oem.care's, borrowed rather than copied: its colours,
+ * shapes, type roles and motion, with none of its brand assets. The reference
+ * frames are the "KnegisWhisper after oem.care" canvas (one artboard per
+ * screen); this file is what those frames became.
  *
- * Three things define it, and all three are departures from what this file did
- * before:
+ * Four things define it:
  *
- *   1. Cards and the window card are the only boxes, at 4px. Everything else
- *      still takes its separation from whitespace, rules and fill rather than
- *      an outline, the way the site does -- except a control the Kit edges at
- *      1px: `button.secondary`, and the fields and selects of a settings page
- *      (`# Settings pages`, near the end). This file no longer claims
- *      `border-radius` never appears; it follows the Kit corner scale instead:
- *      0 on flat regions (rows, rules, panels), 2px on controls (buttons,
- *      chips, inputs, keys), 4px on cards and the window card, and nothing
- *      rounder except the round recording dot.
- *   2. What is marked is filled, not outlined. The site's one interaction is
- *      `a.line:hover { background: var(--band); color: var(--band-ink) }` -- a
- *      fill swap. `--band` here is the site's blue, the colour it reserves for
- *      a filled region rather than for text. A blue bar with paper text on it
- *      is the marked state -- the current rail item, `button.marked`, the
- *      active search result -- and `button.primary` is the same fill on the
- *      one thing to do next. Hovering is not marking: an ordinary hover is a
- *      neutral fill (`--control` on a button, `--selected` in the rail,
- *      `--panel-hover` on a panel row), and the current row in a list panel
- *      is `--selected`, so pointing at a row never makes it look current.
- *      One exception: in the title-bar search popup a hovered result takes
- *      `--band` as the active one does (`.titlebar-search-popup
- *      button:hover`), so with the pointer on one result and the arrow keys
- *      on another, both look marked.
- *   3. Two typefaces with a job each. Switzer sets prose. ProFontWindows sets
- *      anything the machine is saying about itself -- headings, navigation,
- *      identifiers, file bytes -- at the site's exact spec: 13px/16px, 0.5px
- *      tracking, uppercase where the string is a label rather than data.
+ *   1. A pale ground and black ink. The window is `--bg` (#FAFAFA in light),
+ *      and almost everything on it is black at some opacity: a control at
+ *      rest is a 10% black pill, pointed at it darkens, and the marked state
+ *      is a solid grey pill with white text (`--band`). There are no outlined
+ *      boxes; a field or a menu is a white surface lifted by a soft shadow.
+ *   2. Round. Every control is a pill (`--r-control`), a card is 24px
+ *      (`--r-card`), a sheet or a picture tile 40px (`--r-sheet`), and a few
+ *      signature tiles are squircles at 100px. A row in a list keeps a small
+ *      corner (`--r-row`) so a filled row reads as a pill lying down.
+ *   3. Colour comes from two gradients, not from a palette of flat accents.
+ *      Iris (lavender to marigold) is the one thing to do next -- a primary
+ *      button -- and the titles; Dusk (navy to orange) is time passing: the
+ *      recording tile, a live clock, words still being heard. Both drift
+ *      slowly. Flat colour is kept for meaning: mint for an offer or an
+ *      update, the pink signal dot for recording.
+ *   4. Three faces with a job each. Geist sets everything people read. Tiny5,
+ *      a pixel face, is the machine talking about itself -- dates, times,
+ *      small labels -- in the string's own case. Doto, round dot-matrix
+ *      numerals, is reserved for big clocks and counts.
+ *
+ * Motion follows the site: hovers are a .3s colour change, things that
+ * arrive drop in or rise on one ease (`--ease`), and everything that drifts
+ * stops under `prefers-reduced-motion`.
+ *
+ * Contrast was checked where text sits on these values. The site's own
+ * quiet ink and gradients are too pale for text at this size, so `--muted`,
+ * `--band` and the gradient used *as text* (`--iris-text`, `--dusk-text`) are
+ * darker variants; the gradients as fills are the site's.
  *
  * # Why the fonts are files in this repository
  *
  * The production CSP is `font-src 'self'` (`src-tauri/tauri.conf.json`). A CDN
  * link would work in `npm run dev` and fail silently in the packaged build,
- * falling back to a system sans, which is the worst of both: it looks fine
- * where it is tested and wrong where it ships. So the two faces are committed
- * and served from the bundle. Attribution is in `NOTICE`.
+ * falling back to a system sans. So the three faces are committed, subset to
+ * Latin, and served from the bundle. Attribution is in `NOTICE`; each licence
+ * sits beside its file.
  */
 
-/*
- * Switzer 400 only. The site publishes exactly one weight -- `switzer-500` and
- * `switzer-600` are 404s -- and that is a decision rather than an omission:
- * emphasis there comes from case and typeface, not from weight. This file
- * follows it, so nothing asks for a bold Switzer the browser would have to
- * counterfeit by smearing the 400.
- */
 @font-face {
-  font-family: Switzer;
+  font-family: Geist;
   font-style: normal;
-  font-weight: 400;
+  font-weight: 100 900;
   font-display: swap;
-  src: url("./fonts/switzer-400.woff2") format("woff2");
+  src: url("./fonts/geist-variable.woff2") format("woff2");
 }
 
 @font-face {
-  font-family: ProFontWindows;
+  font-family: Tiny5;
   font-style: normal;
   font-weight: 400;
   font-display: swap;
-  src: url("./fonts/ProFontWindows.ttf") format("truetype");
+  src: url("./fonts/tiny5-400.woff2") format("woff2");
+}
+
+/* Round dots only: the file is pinned to ROND 100, so no `font-variation-settings` is needed. */
+@font-face {
+  font-family: Doto;
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("./fonts/doto-round-variable.woff2") format("woff2");
 }
 
 :root {
   /*
    * The dark theme, and the default -- unchanged from this application's own
-   * default, because which theme opens first is not something the restyle
-   * should quietly decide.
-   *
-   * Values are knegis.com's `[data-theme=dark]` set, with two deliberate
-   * departures noted where they occur.
+   * default, because which theme opens first is not something a restyle
+   * should quietly decide. oem.care has no dark theme; this one keeps its
+   * shapes, gradients and type and inverts the ground and ink.
    */
-  --bg: #181818;
-  /*
-   * The same value as `--bg`, deliberately. A section is no longer a panel
-   * sitting on the page; it is a region of the page, and what separates it from
-   * its neighbour is space and a rule. The token stays rather than being
-   * inlined, so putting the panels back is one value in each theme.
-   */
-  --surface: #181818;
-  /*
-   * Neutral greys, not the warm ones. knegis.com's ink is `#e6e4dc` and its
-   * muted `#78766e` -- both carry a brown cast that reads as intentional beside
-   * a sand-coloured panel and reads as dirt once the panel is white. The whole
-   * axis is neutralised together: warming only some of the greys is what makes
-   * the rest look wrong.
-   */
-  --text: #e4e4e7;
-  --muted: #8e8e96;
-  --faint: #35353a;
-  /*
-   * The marked state is the site's blue -- `--footer-bg`, which is where
-   * knegis.com uses blue as a fill rather than as text.
-   *
-   * Lightened here, and only here. `#0015ff` against this theme's `--surface`
-   * is 1.96:1: on paper that blue is a hole punched in the page, but on
-   * `#212121` it is a dark rectangle on a dark rectangle, separated by hue
-   * alone. `#3d55ff` is the least-lightened value that clears 3:1 against the
-   * surface while still carrying `--band-ink` at 5.24:1, so the gesture stays
-   * white-on-blue in both themes rather than inverting in one of them.
-   */
-  --band: #3d55ff;
-  --band-ink: #fdfdfd;
-  /* Blue for text, which `--band` is not: #3d55ff is 3.3:1 on this `--bg`, #8c9aff is 6.9:1 (R20). */
-  --band-text: #8c9aff;
-  /*
-   * Focus rings, a caveat's edge and inline code. The Kit's blue, at the
-   * lightness `--band-text` already uses for text in this theme: 6.9:1 on
-   * `--bg`, where #0015ff is 1.96:1. It was the site's yellow until
-   * KNEG-375; the Kit has no yellow.
-   */
-  --accent: #8c9aff;
-  /*
-   * There is no `--warn`. It was `#9a5b00` in light, which is the brown that
-   * had to go: an amber dark enough to be read on white *is* brown, so there is
-   * no version of that token that survives a white page. What used it now says
-   * the same thing structurally instead -- a caveat keeps its rule in the
-   * margin, and a genuine problem is `--error`, which is what those three call
-   * sites were describing anyway.
-   */
-  --error: #ff7b7b;
+  --bg: #111112;
+  --surface: #111112;
+  --text: #f2f2f2;
+  --muted: #a3a3a8;
+  --faint: #2c2c30;
+  /* The marked state: a light pill with dark text, the inverse of light's grey one. */
+  --band: #dcdcdc;
+  --band-ink: #000;
+  --band-text: #a9bdf5;
+  /* Focus rings and links: Dusk's navy end, lightened until it reads on this ground. */
+  --accent: #a9bdf5;
+  --error: #ff8197;
 
-  /*
-   * Fills that stand in for the boxes that used to be here. A wash of the ink
-   * colour rather than of the accent: these mark a region as set apart, and
-   * tinting them with the accent would imply a relationship to the accent that
-   * does not exist.
-   */
-  --wash: rgb(228 228 231 / 6%);
-  /*
-   * A control has to read as pressable while at rest, which a 6% wash does not
-   * do -- that weight is right for a pill nobody can click and wrong for a
-   * button. Separate token rather than a stronger `--wash`, so making buttons
-   * findable does not also make every static region louder.
-   */
-  --control: rgb(228 228 231 / 13%);
+  --wash: rgb(255 255 255 / 5%);
+  /* A control at rest, as oem.care's 10% pill. */
+  --control: rgb(255 255 255 / 11%);
+  /* Pointed at: the site darkens its pill from 10% to 30%. */
+  --control-hover: rgb(255 255 255 / 22%);
 
-  /*
-   * The panel model the redesign introduces: a rail, a list panel and cards
-   * floating on a frame, as opposed to the single flat `--bg`/`--surface`
-   * pair above. Defined in both themes here, before anything in this file
-   * reads them, so the two themes cannot drift apart before the shell that
-   * uses them exists.
-   */
-  --frame: #111113;
-  --panel: #1c1c1f;
-  --rule: #2e2e33;
-  --selected: #2a2a30;
-  /*
-   * A hovered row in the list panel, halfway from `--panel` to `--selected`,
-   * so pointing at a row does not make it look like the current one. Not
-   * `--wash`: over `--panel` that lands within a couple of levels of
-   * `--selected` in both themes, which is the look-alike this replaces.
-   * Derived rather than given a hex, so it follows both themes by itself.
-   */
+  --frame: #111112;
+  /* Lifted surfaces: a list panel, a card, a menu. */
+  --panel: #1b1b1d;
+  --rule: #2a2a2e;
+  --selected: #2c2c31;
   --panel-hover: color-mix(in srgb, var(--selected) 50%, var(--panel));
-  --strip: #202024;
-  --band-wash: rgb(61 85 255 / 16%);
-  --rec: #ff7b7b;
-  --card-shadow: none;
+  --strip: #1b1b1d;
+  --band-wash: rgb(169 189 245 / 16%);
+  --rec: #ff6b86;
+  --card-shadow: 0 1px 2px rgb(0 0 0 / 30%), 0 18px 40px rgb(0 0 0 / 35%);
+  --edge: #3a3a40;
+  /* A frosted sheet over the page: the menu, a notification. */
+  --glass: rgb(27 27 29 / 72%);
+
   /*
-   * The 1px edge of a control that has one -- `button.secondary`, and a
-   * settings page's fields and selects. `--rule` here; a step darker than
-   * `--rule` in light, where `#e1e1e6` on paper is too faint to find a field
-   * by.
+   * The two gradients. As fills these are oem.care's own; `-text` is a
+   * darker or lighter variant for text, since a gradient title has to read
+   * against the ground at every point along it.
    */
-  --edge: #2e2e33;
+  --iris: linear-gradient(88deg, #7781c0, #c98eb5 20%, #f3a08d 50%, #efb158);
+  --iris-text: linear-gradient(88deg, #aab3ec, #e3a9cf 30%, #f6b4a1 60%, #f1c27a);
+  --dusk: linear-gradient(180deg, #0e3b8d 0%, #fbab7d 55%, #fdac61 78%, #ff813b 100%);
+  --dusk-text: linear-gradient(96deg, #f0a07a 0%, #c99ab8 30%, #9db4f0 58%, #b4c3f5 80%, #f0a07a 100%);
+  /* An offer or an update: the site's mint notice. */
+  --mint: #baecb7;
+  --mint-ink: #2f5532;
+  /* The recording dot, never text. */
+  --signal: #ff3f61;
+
+  --r-control: 100px;
+  --r-row: 12px;
+  --r-card: 24px;
+  --r-sheet: 40px;
+
+  /* oem.care's one ease, and the sharper one its notifications drop in on. */
+  --ease: cubic-bezier(.7, .01, .11, .96);
+  --ease-enter: cubic-bezier(.8, .01, .11, .98);
 
   /*
    * The row grid, as tokens because two other rules have to agree with it
-   * exactly: a control that spans the whole row does so by cancelling the label
-   * track with a negative margin, and a margin that disagrees with the track by
-   * a pixel is visible as a misalignment.
-   *
-   * 14rem is 210px at the 15px root, so with the 22.5px gap a row's value
-   * track is whatever `.content` has left after 232.5px and its two 56px
-   * paddings. On Transcription that is 305.5px in the default 1000x720 window
-   * with the list panel open, 577.5 with it hidden, and 675.5 once `.content`
-   * reaches its 1020px cap (measured in headless Edge against dev fixtures,
-   * not in the Tauri window). The one width it does not fit is the 720px
-   * minimum window with the panel open, where `.content` is 370px: the value
-   * track measured 25.5px, and on Shortcuts the key wrapped one character a
-   * line and pushed `.split-main` 121px wider than itself. So rows stack --
-   * label over value -- in a main area narrower than 554.5px, which is two
-   * label tracks, the gap and the two paddings: the width below which the
-   * value would be narrower than its own label. Measured at the boundary,
-   * with the panel open: a 904px window (a 554px main area) stacks, and a
-   * 905px one draws a 210.5px value beside the label. That rule is a
-   * container query on `.split-main`, after the breakout rule below, because
-   * what decides it is the main area's width, and the window's width says
-   * that only once the panel's state is known.
+   * exactly: a control that spans the whole row does so by cancelling the
+   * label track with a negative margin. Rows stack -- label over value -- in
+   * a main area narrower than two label tracks, the gap and the paddings
+   * (`@container main`, after the breakout rule).
    */
   --label-col: 14rem;
   --row-gap: 1.5rem;
 
   /*
-   * The shell's two horizontal measurements.
-   *
-   * `--nav-col` is the rail's width, the canvas' 68px: each entry is 56px wide
-   * and centred in it. The rail is in flow beside the card now, so it holds
-   * its own space open, and `.rail` is the only rule that reads this.
-   *
-   * `--content-max` caps `.content`, the column a settings or developer
-   * screen and Notes > Upload render in. It was derived from a layout that has
-   * since gone -- `.note-workspace` as a markdown editor beside a 22rem
-   * transcript, where 44.5 + 1.5 (`--row-gap`) + 22 was the point it stopped
-   * being cramped -- and is kept because it is still a good measure: wider
-   * would only stretch prose past a readable one, which is why `.row-detail`
-   * below is capped too. Notes no longer renders in `.content`; its own wide
-   * layout, the transcript as a column, is `.note-detail-wide`.
-   *
-   * What this is worth, at the current 15px root. The main area is the
-   * window less 78px -- the rail's 68 (`--nav-col`) and 10 for the card (its
-   * 8px right margin and two 1px borders) -- and less another 272 while the
-   * list panel shows (its width, which includes its 1px rule). `.content` is
-   * the main area's width, padding included, up to the cap. Measured on
-   * Providers and on Transcription (in headless Edge against dev fixtures,
-   * not in the Tauri window): in the default 1000x720 window it is 650px
-   * with the panel open and 922px with it hidden, so there the window and
-   * the panel limit it, not `--content-max`; at the 720px minimum, 370 and
-   * 642. It reaches the 1020px cap once the main area does: at 1370px with
-   * the panel open (1020 + 272 + 78), where it measured exactly 1020, and at
-   * 1098px with it hidden. At 1440x900 and 1920x1080 it measures 1020 either
-   * way.
+   * `--content-max` caps `.content`, the centred column a settings or
+   * developer screen renders in -- the FAQ-like column of the reference
+   * frames. Wider would only stretch prose past a readable measure.
    */
-  --nav-col: 68px;
-  --content-max: 68rem;
+  --content-max: 60rem;
 
-  --font-sans: Switzer, "Helvetica Neue", Arial, sans-serif;
-  --font-mono: ProFontWindows, ui-monospace, "SF Mono", Menlo, Consolas,
-    monospace;
+  --font-sans: Geist, "Helvetica Neue", Arial, sans-serif;
+  /* The pixel voice. The name is the old one's, so every label that used it follows. */
+  --font-mono: Tiny5, ui-monospace, Consolas, monospace;
+  /* Real monospace, for code and file bytes: a pixel face is no good for reading a path. */
+  --font-code: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, monospace;
+  --font-dots: Doto, ui-monospace, monospace;
 
   color-scheme: light dark;
   font-family: var(--font-sans);
@@ -239,48 +163,39 @@
   line-height: 1.5;
 }
 
-/*
- * The light theme: knegis.com's `:root` set, which is its light one.
- *
- * The accent is the Kit's blue in both themes (KNEG-375): `#0015ff` here, at
- * 8.09:1 on paper, and lightened in dark, above. It used to be the site's two
- * accents, blue here and yellow there, but the Kit the redesign follows has
- * no yellow.
- */
+/* The light theme: oem.care's own ground and ink. */
 @media (prefers-color-scheme: light) {
   :root {
-    --bg: #fdfdfd;
-    --surface: #fdfdfd;
-    --text: #1f2023;
-    --muted: #62636a;
-    /*
-     * Lighter than it was: structure now comes from panels and the card, not
-     * from the rules alone, so a rule this weight no longer has to carry the
-     * whole page's structure by itself the way it did when it was the only
-     * separator on a flat page.
-     */
-    --faint: #e1e1e6;
-    /* The site's own `--footer-bg`, unmodified. 8.09:1 against paper, and
-     * 8.09:1 for the text sitting on it. */
-    --band: #0015ff;
-    --band-ink: #fdfdfd;
-    /* The same blue as `--band` here: #0015ff on paper already reads at 8:1 as text. */
-    --band-text: #0015ff;
-    --accent: #0015ff;
-    --error: #c02626;
+    --bg: #fafafa;
+    --surface: #fafafa;
+    --text: #000;
+    /* Black at about 62% on the ground: the site's 50% is 3.9:1, this is 6.1:1. */
+    --muted: #5e5e5e;
+    --faint: #e4e4e4;
+    /* The site's active pill is #828282 with white text, 3.9:1; #6b6b6b is 5.3:1. */
+    --band: #6b6b6b;
+    --band-ink: #fff;
+    --band-text: #0e3b8d;
+    --accent: #0e3b8d;
+    --error: #c2183a;
 
-    --wash: rgb(31 32 35 / 5%);
-    --control: rgb(31 32 35 / 10%);
+    --wash: rgb(0 0 0 / 4%);
+    --control: rgb(0 0 0 / 8%);
+    --control-hover: rgb(0 0 0 / 18%);
 
-    --frame: #f3f3f5;
-    --panel: #f8f8f9;
-    --rule: #e1e1e6;
-    --selected: #ebebef;
-    --strip: #f5f5f7;
-    --band-wash: #eef0ff;
-    --rec: #c02626;
-    --card-shadow: 0 1px 2px rgb(24 24 32 / 4%), 0 12px 32px rgb(24 24 32 / 5%);
-    --edge: #cfd0d6;
+    --frame: #fafafa;
+    --panel: #fff;
+    --rule: #e6e6e6;
+    --selected: #ececec;
+    --strip: #f4f4f4;
+    --band-wash: rgb(14 59 141 / 9%);
+    --rec: #d0244a;
+    --card-shadow: 0 1px 2px rgb(20 20 40 / 4%), 0 18px 40px rgb(20 20 40 / 8%);
+    --edge: #d6d6d6;
+    --glass: rgb(250 250 250 / 72%);
+
+    --iris-text: linear-gradient(88deg, #5f6ab4, #a85f93 30%, #cc6a4e 60%, #b87418);
+    --dusk-text: linear-gradient(96deg, #c4633f 0%, #8a5a78 30%, #0e3b8d 58%, #3a4c9a 80%, #c4633f 100%);
   }
 }
 
@@ -288,20 +203,47 @@
   box-sizing: border-box;
 }
 
+@keyframes kw-drift { 0% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } 100% { background-position: 0% 50%; } }
+@keyframes kw-fade { 0% { opacity: 0; } 100% { opacity: 1; } }
+@keyframes kw-enter { 0% { opacity: 0; transform: translateY(-100%); } 100% { opacity: 1; transform: none; } }
+@keyframes kw-rise { 0% { opacity: 0; transform: translateY(14px); } 100% { opacity: 1; transform: none; } }
+@keyframes kw-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .35; transform: scale(.7); } }
+@keyframes kw-breathe { 0%, 100% { transform: scale(.82); filter: blur(10px) hue-rotate(0deg); } 50% { transform: scale(1.04); filter: blur(10px) hue-rotate(-30deg); } }
+@keyframes kw-blob { 0%, 100% { transform: translate(0, 0); } 50% { transform: translate(6%, -4%); } }
+
+/*
+ * Gradient text: a title in Iris, a live line in Dusk. The fill is the
+ * text-safe variant, drifting along a track three times its width.
+ */
+.iris-text, .dusk-text {
+  background-size: 300% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: kw-drift 18s linear infinite;
+}
+.iris-text { background-image: var(--iris-text); }
+.dusk-text { background-image: var(--dusk-text); }
+@media (prefers-reduced-motion: reduce) {
+  .iris-text, .dusk-text { animation: none; }
+}
+
 /*
  * Reserve the scrollbar's gutter for the whole session, in a window that
  * scrolls its root.
  *
  * The main window no longer does: `:root[data-window="main"]` below sets this
- * back to `auto`, because its pages scroll inside the card (`.split-main`),
- * and `.content` is left-aligned there, so a scrollbar arriving narrows the
- * page from the right without moving anything in it. This was written for the
- * layout before, where `.content` was centred with `margin: 0 auto` and the
- * ~15px a Windows scrollbar occupies came out of its two margins evenly:
- * Diagnostics is four sections and scrolls, Local API is one and does not, and
- * switching between them moved every element on the page about 7px -- too
- * small to read as a scrollbar arriving and too large not to notice. It is
- * kept for the other windows this stylesheet serves.
+ * back to `auto`, because its root never scrolls: its pages scroll inside the
+ * card (`.split-main`), which reserves no gutter of its own. This was written
+ * for a layout where the root scrolled and `.content` was centred with
+ * `margin: 0 auto`, and the ~15px a Windows scrollbar occupies came out of its
+ * two margins evenly: Diagnostics is four sections and scrolls, Local API is
+ * one and does not, and switching between them moved every element on the
+ * page about 7px -- too small to read as a scrollbar arriving and too large
+ * not to notice. `.content` is centred again, now inside `.split-main`, so
+ * `.split-main` reserves its own gutter (`scrollbar-gutter: stable`, below)
+ * for the same reason. This rule is kept for the other windows this
+ * stylesheet serves.
  *
  * `scrollbar-gutter` rather than `overflow-y: scroll`, which would also fix it:
  * this reserves the space without painting a permanently dead scrollbar down
@@ -321,81 +263,71 @@ body {
 }
 
 /*
- * The machine voice.
- *
- * ProFontWindows at the site's caption spec. Uppercase belongs only on strings
- * that are labels -- a heading, a nav item, an identifier the application chose
- * itself. It is kept off anything the user or the filesystem authored, because
- * `text-transform` is not reversible by eye: an uppercased path or error string
- * reads as shouting and hides its own casing.
+ * The machine voice: Tiny5, the pixel face, at 13px, in the string's own
+ * case. A section heading is lowercase by choice in the copy that writes it,
+ * never by `text-transform`, which is not reversible by eye: an uppercased
+ * path or error string reads as shouting and hides its own casing.
  */
 h2,
-.purposes code,
-.list code,
 .overlay {
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: 16px;
   line-height: 16px;
-  letter-spacing: 0.5px;
-  text-transform: uppercase;
+  letter-spacing: 0;
+}
+
+/* Identifiers and paths are read character by character, so they are real monospace. */
+.purposes code,
+.list code {
+  font-family: var(--font-code);
+  font-size: 12.5px;
+  line-height: 18px;
 }
 
 /*
- * The shell: the title bar across the top, and under it the frame -- the rail
- * on the left, and one card holding the page.
+ * The shell: the title bar across the top, carrying the navigation, and under
+ * it the frame holding one card, the page. There is no rail: the three jobs
+ * are pills at the title bar's left and Settings is a pill at its right that
+ * opens the Settings sheet (`.settings-sheet`, below).
  *
- * What this replaced, and why each part changed:
+ * The card is the ground itself -- no edge, no corner -- so a page reads as
+ * sitting on the window the way oem.care's sections sit on its page. What is
+ * lifted off the ground is a list panel, a card or a menu: white, rounded,
+ * with a soft shadow.
  *
- *   - **The rail is four entries, not the whole tree.** Dictation, Meetings,
- *     Notes, a divider, Settings: an icon over a label for each, in 68px. It
- *     was a 13rem column listing every screen, with Settings and Developer
- *     groups that expanded in place. The settings screens moved to the list
- *     panel below, and `lib/navigation.ts` says why Developer went with them.
- *   - **The rail never collapses.** Every entry keeps its label at 68px, so
- *     there is no narrow state worth having. The title bar's toggle hides the
- *     list panel instead, which is the column that actually takes room.
- *   - **The page is a card on the frame.** `--frame` is the window, `--bg` is
- *     the card, and the card's 4px corner and `--rule` border make it the one
- *     box at that size the Kit allows. Rail and card sit side by side in the
- *     frame's own flow, so nothing reserves space with padding the way
- *     `.shell` had to for a rail that was out of flow.
+ * The card clips (`overflow: hidden`), which means it cannot scroll: a page
+ * scrolls in a `.split-main`, with or without a list panel beside it -- or,
+ * on Notes, in `.notes-main` inside it, which is exactly as tall as
+ * `.split-main` so that a note's transcript column can keep to the window's
+ * height (`.note-detail-wide`, below).
  *
- * The card clips (`overflow: hidden`) so its corners hold, which means the
- * card cannot scroll: a page scrolls in a `.split-main`, with or without a
- * list panel beside it -- or, on Notes, in `.notes-main` inside it, which is
- * exactly as tall as `.split-main` so that a note's transcript column can
- * keep to the window's height (`.note-detail-wide`, below).
- *
- * Every hover here is written `:hover:not(:disabled)`. The generic
+ * Every pill hover is written `:hover:not(:disabled)`. The generic
  * `button:hover:not(:disabled)` further down scores (0,2,1), which beats a
- * bare `.rail-item:hover` at (0,2,0): without the `:not`, hovering the current
- * entry would repaint it `--control` and hover and "you are here" would look
- * the same -- the bug the 13rem sidebar's hover rule had before the rail
- * replaced it.
+ * bare `.nav-pill:hover` at (0,2,0): without the `:not`, hovering the current
+ * pill would repaint it and hover and "you are here" would look the same.
  */
-.frame { position: fixed; inset: var(--titlebar-height) 0 0; display: flex; background: var(--frame); }
+.frame { position: fixed; inset: var(--titlebar-height) 0 0; display: flex; background: var(--frame); animation: kw-fade .8s .1s both; }
 
-.rail { width: var(--nav-col); flex-shrink: 0; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 4px 0 10px; }
+.nav-pills { display: flex; align-items: center; gap: 8px; margin-left: 10px; flex-shrink: 0; }
+.nav-pill { display: inline-flex; align-items: center; height: 34px; margin: 0; padding: 0 16px; border: 0; border-radius: var(--r-control); background: var(--control); color: var(--text); font: inherit; font-size: 13px; letter-spacing: .04em; white-space: nowrap; transition: background-color .3s ease, color .3s ease; }
+.nav-pill:hover:not(:disabled) { background: var(--control-hover); }
 /*
- * 2px, not the canvas' 3px: a rail entry is a button, and the Kit's scale
- * gives buttons 2px -- it has no 3px step. `margin` and `padding` are zeroed
- * because the generic `button` rule gives every button both.
+ * The marked state: the pill fills solid and its text inverts, nothing drawn
+ * around it -- oem.care's active pill. `--band` marks one thing in the title
+ * bar, the section you are in. The page spends it on claims only: what is in
+ * effect (`button.marked`, once per setting, so a settings screen can show
+ * several). The one thing to do next is Iris instead (`button.primary`) --
+ * KNEG-356's rule, that the two never stand side by side, still holds.
  */
-.rail-item { width: 56px; height: 54px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; margin: 0; padding: 0; border: 0; border-radius: 2px; background: transparent; color: var(--muted); font-size: 11px; line-height: 13px; }
-.rail-item:hover:not(:disabled) { background: var(--selected); color: var(--text); }
-/*
- * The marked state: the fill inverts and the text inverts with it, nothing
- * drawn around it. In the rail `--band` marks one thing, the section you are
- * in. The page beside it spends it on claims only: what is in effect
- * (`button.marked`, once per setting, so a settings screen can show several)
- * or the one thing to do next (`button.primary`, at most one, and never beside
- * `button.marked`) -- KNEG-356.
- */
-.rail-item[aria-current="page"],
-.rail-item[aria-current="page"]:hover:not(:disabled) { background: var(--band); color: var(--band-ink); }
-.rail-divider { width: 28px; height: 1px; background: var(--rule); margin: 6px 0; }
+.nav-pill[aria-current="page"],
+.nav-pill[aria-current="page"]:hover:not(:disabled),
+.nav-pill[aria-expanded="true"] { background: var(--band); color: var(--band-ink); }
+.app-titlebar > .nav-pill { align-self: center; flex-shrink: 0; margin: 0 4px 0 8px; }
 
-.card { flex: 1; min-width: 0; display: flex; margin: 0 8px 8px 0; background: var(--bg); border: 1px solid var(--rule); border-radius: 4px; overflow: hidden; }
+.dot-mark { display: block; color: var(--text); }
+.app-titlebar-mark { display: flex; align-items: center; flex-shrink: 0; padding: 0 8px; }
+
+.card { flex: 1; min-width: 0; display: flex; margin: 0; background: var(--bg); overflow: hidden; }
 
 /*
  * A list panel beside a main area (`components/SplitView.tsx`).
@@ -405,28 +337,30 @@ h2,
  * title bar's toggle flipping an attribute nobody can see.
  *
  * `.split-main` is an inline-size container, so a page can ask how wide the
- * main area is rather than how wide the window is -- the two differ by 272px
- * depending on the panel. Only the row grid asks (`@container main`, after
+ * main area is rather than how wide the window is -- the two differ by the
+ * panel and its margin, depending on whether one is open. Only the row grid asks (`@container main`, after
  * the breakout rule). Its width comes from the flex row, never from its
  * content, so the containment should change nothing else about it -- and
  * `.content` measured the same widths with it as without, from 720 to 1920px.
  */
 .split { flex: 1; min-width: 0; display: flex; }
-.list-panel { width: 272px; flex-shrink: 0; display: flex; flex-direction: column; overflow-y: auto; background: var(--panel); border-right: 1px solid var(--rule); }
+/* The list panel is lifted off the ground: a white rounded sheet, inset from the window's edges. */
+.list-panel { width: 280px; flex-shrink: 0; display: flex; flex-direction: column; overflow-y: auto; margin: 6px 0 14px 14px; background: var(--panel); border-radius: var(--r-card); box-shadow: var(--card-shadow); }
 .list-panel[hidden] { display: none; }
-.split-main { flex: 1; min-width: 0; overflow-y: auto; position: relative; container: main / inline-size; }
+.split-main { flex: 1; min-width: 0; overflow-y: auto; scrollbar-gutter: stable; position: relative; container: main / inline-size; }
 
 /*
  * What a panel is built from (`components/Panel.tsx`). The title is an `h1`
- * -- or an `h2` beside a settings screen, which has its own `h1` -- and a
+ * -- or an `h2` beside a page with its own `h1` (`PanelHeader`'s `level`) -- and a
  * section label an `h2`, so both restate the margins and the face the
  * generic heading rules set.
  */
 .panel-head { display: flex; align-items: center; gap: 2px; padding: 16px 10px 10px 20px; }
-.panel-title { flex: 1; margin: 0; font-family: var(--font-sans); font-size: 22px; line-height: 28px; font-weight: 400; letter-spacing: -0.01em; text-transform: none; color: var(--text); }
-.panel-label { margin: 0; padding: 20px 20px 6px; font: 12px/16px var(--font-mono); letter-spacing: .5px; text-transform: uppercase; color: var(--muted); }
+.panel-title { flex: 1; margin: 0; font-family: var(--font-sans); font-size: 22px; line-height: 28px; font-weight: 400; letter-spacing: .02em; text-transform: none; color: var(--text); }
+/* A section label in the pixel voice, navy as the reference frames draw it. */
+.panel-label { margin: 0; padding: 20px 20px 6px; font: 16px/18px var(--font-mono); color: var(--band-text); }
 .panel-list { display: flex; flex-direction: column; gap: 1px; padding: 0 8px; }
-.panel-item, .panel-action { width: 100%; display: flex; margin: 0; border: 0; border-radius: 2px; background: transparent; color: var(--text); text-align: left; }
+.panel-item, .panel-action { width: 100%; display: flex; margin: 0; border: 0; border-radius: var(--r-row); background: transparent; color: var(--text); text-align: left; transition: background-color .3s ease; }
 .panel-item { flex-direction: column; align-items: flex-start; gap: 1px; padding: 7px 12px; }
 .panel-action { align-items: center; gap: 10px; height: 36px; padding: 0 12px; }
 /*
@@ -443,7 +377,7 @@ h2,
 .panel-item-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .panel-item-muted .panel-item-title { color: var(--muted); }
 .panel-action-label { flex: 1; min-width: 0; font-size: 14px; line-height: 20px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.panel-action-hint { font: 12px/16px var(--font-mono); letter-spacing: .5px; color: var(--muted); }
+.panel-action-hint { font: 15px/18px var(--font-mono); letter-spacing: .5px; color: var(--muted); }
 .panel-foot { margin-top: auto; display: flex; align-items: center; gap: 8px; padding: 12px 20px; border-top: 1px solid var(--rule); font-size: 12.5px; color: var(--muted); }
 /*
  * A panel whose content carries a `data-surface` wrapper (Dictation's
@@ -464,7 +398,7 @@ h2,
 .panel-foot .learn-more-body { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
 .panel-foot .learn-more-body label { color: var(--text); }
 .panel-foot .learn-more-body p { margin: 0 0 6px; }
-.panel-foot .learn-more-body button { margin: 0 0 0 -8px; padding: 4px 8px; border-radius: 2px; }
+.panel-foot .learn-more-body button { margin: 0 0 0 -8px; padding: 4px 8px; border-radius: var(--r-control); }
 
 /*
  * A task page (`views/Dictation.tsx`, `views/Meetings.tsx`): the hero centred in
@@ -483,40 +417,53 @@ h2,
 .card > .view { flex: 1; min-width: 0; overflow-y: auto; padding: 40px 56px 48px; }
 
 /*
- * The hero (`components/TaskHero.tsx`). The canvas' measurements: a 60px
- * icon drawn at stroke 1, the status 28px under it, a 40/54 heading and a
- * 16/24 sentence. The status mark is the shape of the state -- a filled
- * square for ready, a round dot for recording, a hollow square for needs
- * setup -- so the state never rests on colour alone.
+ * The hero (`components/TaskHero.tsx`): a breathing orb behind the icon, the
+ * status on a pill under it, a large heading in the Dusk gradient and a
+ * 16/24 sentence. The status mark is the shape of the state -- a filled dot
+ * for ready, the pink signal dot pulsing for recording, a hollow ring for
+ * needs setup -- so the state never rests on colour alone.
  *
- * Ready's square is `--muted`, not a colour: the owner's ruling of
- * 2026-10-07 (KNEG-331). The palette has no "OK" colour on purpose, and
- * `--band` already means marked, so a blue Ready read as selected. Colour is
- * kept for the state that needs you: recording's `--rec` dot.
+ * Ready's dot is `--muted`, not a colour: the owner's ruling of 2026-10-07
+ * (KNEG-331). The palette has no "OK" colour on purpose. Colour is kept for
+ * the state that needs you: recording's signal dot.
+ *
+ * The orb is oem.care's "breathe" tile reduced to its picture: a blurred
+ * radial gradient that swells and shifts hue. Its pace is the state --
+ * `[data-tone]` on `.hero` -- and reduced motion stills it.
  */
-.hero { display: flex; flex-direction: column; align-items: center; max-width: 720px; }
-.hero-icon { display: flex; color: var(--text); }
-.hero-icon .icon { stroke-width: 1; }
-.hero-status { display: flex; align-items: center; gap: 8px; margin: 28px 0 0; font: 12px/16px var(--font-mono); letter-spacing: .5px; text-transform: uppercase; color: var(--text); }
-.hero-mark { width: 7px; height: 7px; flex-shrink: 0; }
+.hero { display: flex; flex-direction: column; align-items: center; max-width: 760px; animation: kw-rise .85s .2s var(--ease) both; }
+.hero-icon { position: relative; display: flex; align-items: center; justify-content: center; width: 150px; height: 150px; color: #000; }
+.hero-icon .icon { position: relative; stroke-width: 1.1; }
+.hero-orb { position: absolute; inset: 0; border-radius: 50%; background: radial-gradient(circle at 50% 50%, #4fbf7f 0%, #86d2a8 28%, #9cc9f0 52%, #c9b8f2 76%, rgb(200 182 244 / 0) 100%); animation: kw-breathe 6s ease-in-out infinite; }
+.hero[data-tone="recording"] .hero-orb { background: radial-gradient(circle at 50% 50%, #ff813b 0%, #fdac61 26%, #fbab7d 46%, #c98eb5 70%, rgb(119 129 192 / 0) 100%); animation-duration: 2.2s; }
+.hero[data-tone="busy"] .hero-orb { background: radial-gradient(circle at 50% 50%, #efb158 0%, #f3a08d 30%, #c98eb5 55%, #7781c0 78%, rgb(119 129 192 / 0) 100%); animation-duration: 1.4s; }
+.hero[data-tone="setup"] .hero-orb { background: radial-gradient(circle at 50% 50%, #e4e4e4 0%, #d6d6d6 40%, rgb(214 214 214 / 0) 100%); animation: none; transform: scale(.85); filter: blur(10px); }
+.hero-status { display: flex; align-items: center; gap: 9px; margin: 18px 0 0; padding: 6px 14px; border-radius: var(--r-control); background: var(--control); font: 15px/18px var(--font-mono); color: var(--text); }
+.hero-mark { width: 7px; height: 7px; flex-shrink: 0; border-radius: 50%; }
 .hero-status-ready .hero-mark { background: var(--muted); }
 .hero-status-recording { color: var(--rec); }
-.hero-status-recording .hero-mark { width: 8px; height: 8px; border-radius: 50%; background: var(--rec); }
+.hero-status-recording .hero-mark { width: 8px; height: 8px; background: var(--signal); animation: kw-pulse 1.6s ease-in-out infinite; }
 .hero-status-setup .hero-mark { border: 1px solid var(--text); }
 .hero-extra { color: var(--text); font-variant-numeric: tabular-nums; }
-.hero-heading { margin: 14px 0 0; font-family: var(--font-sans); font-size: 40px; line-height: 54px; letter-spacing: -0.5px; text-transform: none; color: var(--text); }
+/* The heading in Dusk, drifting. A key inside it keeps its own ink on its own pill. */
+.hero-heading { margin: 18px 0 0; font-family: var(--font-sans); font-size: 52px; line-height: 64px; font-weight: 400; letter-spacing: .03em; text-transform: none; background-image: var(--dusk-text); background-size: 300% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: kw-drift 18s linear infinite; }
+.hero[data-tone="recording"] .hero-heading { animation-duration: 6s; }
+.hero[data-tone="busy"] .hero-heading { animation-duration: 3s; }
+@media (prefers-reduced-motion: reduce) {
+  .hero, .hero-orb, .hero-heading, .hero-status-recording .hero-mark { animation: none; }
+}
 .hero-sub { margin: 10px 0 0; max-width: 60ch; font-size: 16px; line-height: 24px; color: var(--muted); }
 .hero-sub > p { margin: 0; }
 .hero-sub > .hero-note { margin-top: 8px; font-size: 14px; line-height: 20px; }
 .hero-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 16px; margin-top: 24px; }
-.hero-actions > button { margin: 0; height: 38px; padding: 0 16px; border-radius: 2px; font-size: 14.5px; }
+.hero-actions > button { margin: 0; height: 38px; padding: 0 16px; border-radius: var(--r-control); font-size: 14.5px; }
 .hero-actions > .learn-more { margin: 0; }
 
 /*
- * A capture's live level (`components/LevelMeter.tsx`, KNEG-371): flat square
- * segments in a row, lit from the left. Lit is `--band`, as the live
- * transcript's caret is (`.live-caret`): a live fill beside a recording, not
- * the marked state, which is a band with text on it. Unlit is `--faint`, so
+ * A capture's live level (`components/LevelMeter.tsx`, KNEG-371): round
+ * segments in a row, lit from the left. Lit is ink (`--text`), not `--band`:
+ * a live fill beside a recording, not the marked state, which is a pill with
+ * text on it. Unlit is `--faint`, so
  * the meter's length shows at silence and a quiet room reads as quiet rather
  * than as a meter that is missing. The one
  * transition is the fill swap, 80ms -- short enough that ten readings a
@@ -524,8 +471,9 @@ h2,
  * `useAudioLevel` holds the meter to four changes a second.
  */
 .level-meter { display: inline-flex; align-items: center; gap: 2px; flex: none; vertical-align: middle; }
-.level-segment { display: block; width: 6px; height: 10px; background: var(--faint); transition: background-color 80ms linear; }
-.level-segment-lit { background: var(--band); }
+/* Dots, not bars: the dot-matrix motif. Unlit is `--faint`, lit is ink. */
+.level-segment { display: block; width: 7px; height: 7px; border-radius: 50%; background: var(--faint); transition: background-color 80ms linear; }
+.level-segment-lit { background: var(--text); }
 @media (prefers-reduced-motion: reduce) { .level-segment { transition: none; } }
 /* Dictation's, under "Listening…": wide enough to see from across the desk. */
 .hero-meter { display: flex; margin-top: 14px; }
@@ -533,9 +481,10 @@ h2,
 
 /*
  * A shortcut's keys may break onto the next line between keys, never inside
- * one. They were kept on one line together, and a four-key accelerator at
- * 22px is 330-380px: `Control+Shift+Alt+Backspace` measured 374px, wider
- * than the 306px hero in a 720x720 window with the panel opened by hand, and
+ * one. They were kept on one line together, and in the previous design's
+ * faces a four-key accelerator at 22px was 330-380px:
+ * `Control+Shift+Alt+Backspace` measured 374px, wider than the hero in a
+ * 720x720 window with the panel opened by hand beside the old rail, and
  * scrolled `.split-main` sideways (headless Edge, dev fixtures). `kbd` is an
  * inline-block, so there is a break opportunity between two of them only
  * while their parent allows wrapping; the key's own text is `nowrap` below.
@@ -543,22 +492,29 @@ h2,
 .keycaps { white-space: normal; }
 
 /*
- * A key, as the Kit draws it: the machine voice on the page colour, a
- * `--rule` edge with a heavier bottom. 2px, not the canvas' 3px -- a key is a
- * control, and the Kit's corner scale has no 3px step.
+ * A key: the machine voice on a `--panel` pill, lifted by a 1px inset
+ * `--edge` and a soft shadow. A key is a control, so it takes the control
+ * corner, `--r-control`.
  */
-kbd { display: inline-block; white-space: nowrap; border: 1px solid var(--rule); border-bottom-width: 3px; border-radius: 2px; background: var(--bg); color: var(--text); font-family: var(--font-mono); font-size: 0.85em; line-height: 1.4; padding: 0 0.4em; }
+kbd { display: inline-block; white-space: nowrap; border: 0; border-radius: var(--r-control); background: var(--panel); box-shadow: inset 0 0 0 1px var(--edge), 0 1px 6px rgb(0 0 0 / 5%); color: var(--text); font-family: var(--font-mono); font-size: 1em; line-height: 1.5; padding: 0 0.6em; }
 /* Caps in a row stood edge to edge on Settings > Shortcuts (KNEG-331). 3px, the hero's own spacing, which this matches there. */
 .keycaps > kbd + kbd { margin-left: 3px; }
-.hero-heading kbd { margin: 0 3px; padding: 3px 12px 1px; font-size: 22px; line-height: 30px; vertical-align: 6px; }
+.hero-heading kbd { margin: 0 4px; padding: 6px 18px 4px; font-size: 26px; line-height: 34px; vertical-align: 8px; color: var(--text); }
 
 /*
- * A short window -- the 720x520 minimum, where the main area is about 470px
- * tall -- would push the control bar and its Start button below the fold
+ * A short window -- the 720x520 minimum, where the main area is what the
+ * title bar leaves of 520px -- would push the control bar and its Start button below the fold
  * behind the canvas' 1440x900 spacing. The hero gives up its icon and its
  * 40px heading first, since the bar is where the controls are. After the
  * rules above, which it has to outrank at equal specificity.
  */
+/* The default 1000x720 window: a smaller orb and heading, so hero and bar both fit. */
+@media (max-height: 820px) {
+  .hero-icon { width: 108px; height: 108px; }
+  .hero-icon .icon { width: 40px; height: 40px; }
+  .hero-heading { font-size: 40px; line-height: 52px; }
+  .hero-heading kbd { padding: 3px 14px 2px; font-size: 20px; line-height: 28px; vertical-align: 5px; }
+}
 @media (max-height: 640px) {
   .task-hero { padding-top: 16px; padding-bottom: 16px; }
   .hero-icon { display: none; }
@@ -569,14 +525,16 @@ kbd { display: inline-block; white-space: nowrap; border: 1px solid var(--rule);
 }
 
 /*
- * A chip (`components/Chip.tsx`, or the chip a `ChipMenu` draws): a 30px
- * control with the 2px corner, unfilled at rest like every other button. A
+ * A chip (`components/Chip.tsx`, or the chip a `ChipMenu` draws): a 34px
+ * pill on the faint `--wash`, a step lighter at rest than a button's
+ * `--control`, which is what it fills to under the pointer. A
  * chip that does not fit beside the others goes onto the next line of the
  * strip whole (`.control-chips`, below); it shrinks only where it is alone on
  * a line and still too wide, and the label ellipsises inside a 260px cap
  * either way; the full label is the `title`.
  */
-.chip { display: inline-flex; align-items: center; gap: 7px; flex: 0 1 auto; min-width: 0; max-width: 260px; height: 30px; margin: 0; padding: 0 9px; border: 0; border-radius: 2px; background: transparent; color: var(--text); font: inherit; font-size: 13.5px; line-height: 18px; white-space: nowrap; }
+.chip { display: inline-flex; align-items: center; gap: 7px; flex: 0 1 auto; min-width: 0; max-width: 260px; height: 34px; margin: 0; padding: 0 14px; border: 0; border-radius: var(--r-control); background: var(--wash); color: var(--text); font: inherit; font-size: 13.5px; line-height: 18px; white-space: nowrap; transition: background-color .3s ease; }
+.chip:hover:not(:disabled):not(.chip-static) { background: var(--control); }
 .chip-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .chip-chevron { display: flex; color: var(--muted); }
 .chip[aria-pressed="true"], .chip[aria-pressed="true"]:hover:not(:disabled) { background: var(--band-wash); }
@@ -595,12 +553,12 @@ kbd { display: inline-block; white-space: nowrap; border: 1px solid var(--rule);
  */
 .chip[aria-expanded="true"] { background: var(--control); }
 .chip[aria-disabled="true"] { opacity: 0.55; cursor: default; }
-.chip[aria-disabled="true"]:hover { background: transparent; }
+.chip[aria-disabled="true"]:hover { background: var(--wash); }
 
 /*
- * A chip's menu (`components/ChipMenu.tsx`). A card, so the Kit's 4px corner,
- * a `--rule` edge and `--card-shadow`, on the page colour; its rows are
- * square, as a list panel's are, and are filled as those are: `--panel-hover`
+ * A chip's menu (`components/ChipMenu.tsx`). A card, so `--r-card` and no
+ * edge, `--panel` lifted by `--card-shadow`; its rows take `--r-row`, as a
+ * list panel's do, and are filled as those are: `--panel-hover`
  * under the pointer, `--selected` on the value in effect, which is also
  * ticked. A greyed row is muted and takes no fill under the pointer, but it
  * takes focus, and its reason sits at the row's end.
@@ -614,10 +572,11 @@ kbd { display: inline-block; white-space: nowrap; border: 1px solid var(--rule);
  *
  * Focus is a ring inside the row, since the card clips anything outside it.
  */
-.chip-menu { position: fixed; z-index: 1100; display: flex; flex-direction: column; width: max-content; min-width: 220px; max-width: min(360px, calc(100vw - 12px)); padding: 4px 0; background: var(--bg); color: var(--text); border: 1px solid var(--rule); border-radius: 4px; box-shadow: var(--card-shadow); font-size: 14px; line-height: 20px; text-align: left; }
+.chip-menu { position: fixed; z-index: 1100; display: flex; flex-direction: column; width: max-content; min-width: 220px; max-width: min(360px, calc(100vw - 12px)); padding: 8px; background: var(--panel); color: var(--text); border: 0; border-radius: var(--r-card); box-shadow: var(--card-shadow); font-size: 14px; line-height: 20px; text-align: left; animation: kw-rise .35s var(--ease) both; }
+.chip-menu-option, button.chip-menu-footer { border-radius: var(--r-row); }
 .chip-menu-list, .chip-menu-body { min-height: 0; overflow-y: auto; }
 .chip-menu-body { padding: 8px 12px; }
-.chip-menu-label { padding: 10px 12px 4px; font: 12px/16px var(--font-mono); letter-spacing: .5px; text-transform: uppercase; color: var(--muted); }
+.chip-menu-label { padding: 10px 12px 4px; font: 15px/18px var(--font-mono); letter-spacing: .5px; color: var(--muted); }
 .chip-menu-option { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 0 8px; padding: 7px 12px; cursor: pointer; }
 .chip-menu-option:hover { background: var(--panel-hover); }
 .chip-menu-option[aria-selected="true"], .chip-menu-option[aria-selected="true"]:hover { background: var(--selected); }
@@ -637,35 +596,38 @@ button.chip-menu-footer:hover:not(:disabled) { background: var(--panel-hover); }
  * privacy line on `--strip`, then the body. The strip wraps rather than
  * truncating the privacy line -- at the 720px minimum the sentences drop to
  * a line of their own -- and the chips wrap among themselves rather than
- * shrinking: at the default 1000x720 window with the panel open, a long
+ * shrinking: at the default 1000x720 window with the panel open beside the
+ * old rail, a long
  * provider and language name ellipsised all four of Meetings' chips at once,
  * where two lines hold them, the longest at its 260px cap (KNEG-376;
  * measured in headless Edge against dev fixtures). The row gap is the
  * strip's padding, so two lines of chips read as one strip rather than two.
  */
-.control-bar { width: min(840px, 100%); background: var(--bg); border: 1px solid var(--rule); border-radius: 4px; box-shadow: var(--card-shadow); overflow: hidden; text-align: left; }
-.control-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; padding: 6px 8px; background: var(--strip); border-bottom: 1px solid var(--rule); }
-.control-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 2px; flex: 0 1 auto; min-width: 0; }
+/* The control bar is the reference frame's white card: a 40px sheet lifted off the ground, its strip divided from its body by a rule rather than a fill. */
+.control-bar { width: min(860px, 100%); background: var(--panel); border-radius: var(--r-sheet); box-shadow: var(--card-shadow); overflow: hidden; text-align: left; animation: kw-rise .85s .35s var(--ease) both; }
+.control-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 22px; padding: 18px 0 12px; border-bottom: 1px solid var(--rule); }
+.control-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; flex: 0 1 auto; min-width: 0; }
 .control-spacer { flex: 1 0 0; }
 .control-privacy { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 14px; min-width: 0; margin: 0; padding: 6px 8px; list-style: none; font-size: 13px; line-height: 18px; color: var(--muted); }
 .control-privacy li { display: inline-flex; align-items: center; gap: 6px; }
-.control-body { display: flex; flex-direction: column; gap: 14px; padding: 16px 18px 14px; }
+.control-body { display: flex; flex-direction: column; gap: 14px; padding: 18px 26px 22px; }
+@media (prefers-reduced-motion: reduce) { .control-bar { animation: none; } }
 .control-body > .error { margin: 0; }
 .control-note { margin: 0; font-size: 13px; line-height: 18px; color: var(--muted); overflow-wrap: anywhere; }
 .control-note.error { color: var(--error); }
 .control-result { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .control-result-head { display: flex; align-items: center; gap: 8px; }
-.control-result-label { flex: 1; min-width: 0; font: 12px/16px var(--font-mono); letter-spacing: .5px; text-transform: uppercase; color: var(--muted); }
+.control-result-label { flex: 1; min-width: 0; font: 15px/18px var(--font-mono); letter-spacing: .5px; color: var(--muted); }
 /* Four lines of the last dictation, then it scrolls: a long one must not push Start off the card. */
 .control-result-text { margin: 0; max-height: 104px; overflow-y: auto; font-size: 17px; line-height: 26px; overflow-wrap: anywhere; }
 .control-result-empty { margin: 0; padding: 15px 0; font-size: 17px; line-height: 26px; color: var(--muted); }
-button.control-copy { display: inline-flex; align-items: center; gap: 6px; height: 26px; margin: 0; padding: 0 8px; border-radius: 2px; font-size: 13px; }
+button.control-copy { display: inline-flex; align-items: center; gap: 6px; height: 26px; margin: 0; padding: 0 8px; border-radius: var(--r-control); font-size: 13px; }
 .control-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 /* The Tidy up chip's label lines up with the text above it. */
-.control-row > .chip { margin-left: -9px; }
-.control-row > button:not(.chip) { height: 38px; margin: 0; padding: 0 14px; border-radius: 2px; font-size: 14.5px; white-space: nowrap; }
+.control-row > .chip { margin-left: 0; }
+.control-row > button:not(.chip) { height: 38px; margin: 0; padding: 0 14px; border-radius: var(--r-control); font-size: 14.5px; white-space: nowrap; }
 .control-row > button.control-start { display: inline-flex; align-items: center; gap: 9px; padding: 0 16px; }
-/* Dictation's Discard, drawn as Meetings' is (`.live-actions`): the Kit's secondary edge, and its icon. */
+/* Dictation's Discard, drawn as Meetings' is (`.live-actions`): `button.secondary`'s filled pill, and its icon. */
 .control-row > button.secondary { display: inline-flex; align-items: center; gap: 8px; }
 /* The body's gap spaces its children; a caveat's or a disclosure's own top margin would double it. */
 .control-body > .caveat, .control-body > .learn-more, .control-body > .failure-line { margin: 0; }
@@ -679,27 +641,28 @@ button.control-copy { display: inline-flex; align-items: center; gap: 6px; heigh
 .microphone-check > .caveat { flex: 1 1 100%; }
 /*
  * Meetings' name field (KNEG-365), in the room left of Start, at the row's
- * 38px and the Kit's 2px corner. Its fill is every text field's (`# Text
+ * 38px and a pill, as its buttons are. Its fill is every text field's (`# Text
  * fields keep theirs`, below). It wraps onto a line of its own, whole, where
  * the row is too narrow for both.
  */
-.control-row > input.meeting-name { flex: 1 1 220px; min-width: 0; height: 38px; margin: 0; border-radius: 2px; }
-/* Meetings' Start carries the recording mark, the one round shape the Kit allows. */
+.control-row > input.meeting-name { flex: 1 1 220px; min-width: 0; height: 38px; margin: 0; border-radius: var(--r-control); }
+/* Meetings' Start carries the recording mark: a round dot in the button's own ink. */
 .start-dot { width: 10px; height: 10px; flex-shrink: 0; border-radius: 50%; background: currentColor; }
 
 /*
  * Meetings' call card (`views/Meetings.tsx`): under the hero while a meeting
- * application is in a call. A card, so the Kit's 4px corner and a `--rule`
- * edge; 580px as the canvas draws it, and never wider than the column at
- * the 720px minimum window.
+ * application is in a call. 580px as the canvas draws it, and never wider
+ * than the column at the 720px minimum window.
  */
-.call-card { width: min(580px, 100%); display: flex; flex-wrap: wrap; align-items: center; gap: 14px; margin-top: 36px; padding: 14px 14px 14px 16px; border: 1px solid var(--rule); border-radius: 4px; background: var(--bg); text-align: left; }
-.call-card-icon { width: 40px; height: 40px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; border-radius: 2px; background: var(--selected); color: var(--text); }
-/* With the list panel open at 720px the card is about 300px: the button goes under the text rather than squeezing it to a word a line. */
+/* The call card is oem.care's glass notification: a 10% fill, blurred, dropping in from above. */
+.call-card { width: min(580px, 100%); display: flex; flex-wrap: wrap; align-items: center; gap: 14px; margin-top: 30px; padding: 12px 12px 12px 14px; border: 0; border-radius: var(--r-card); background: var(--control); backdrop-filter: blur(22px); -webkit-backdrop-filter: blur(22px); text-align: left; animation: kw-enter .5s .6s var(--ease-enter) both; }
+.call-card-icon { width: 40px; height: 40px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; border-radius: 50%; background: var(--panel); color: var(--text); }
+@media (prefers-reduced-motion: reduce) { .call-card { animation: none; } }
+/* With the list panel open at 720px the card is narrow: the button goes under the text rather than squeezing it to a word a line. */
 .call-card-text { flex: 1 1 200px; min-width: 0; display: flex; flex-direction: column; }
 .call-card-title { font-size: 15px; line-height: 22px; color: var(--text); overflow-wrap: anywhere; }
 .call-card-detail { font-size: 13px; line-height: 19px; color: var(--muted); }
-.call-card > button { flex-shrink: 0; height: 36px; margin: 0 0 0 auto; padding: 0 14px; border-radius: 2px; font-size: 14px; white-space: nowrap; }
+.call-card > button { flex-shrink: 0; height: 36px; margin: 0 0 0 auto; padding: 0 14px; border-radius: var(--r-control); font-size: 14px; white-space: nowrap; }
 @media (max-height: 640px) { .call-card { margin-top: 20px; } }
 
 /*
@@ -710,41 +673,56 @@ button.control-copy { display: inline-flex; align-items: center; gap: 6px; heigh
  * short window with a long caveat -- the main area scrolls instead.
  */
 .meeting-live { height: 100%; display: flex; flex-direction: column; margin: 0; background: none; }
-.live-head { padding: 22px 28px 18px; border-bottom: 1px solid var(--rule); }
-.live-status { display: flex; align-items: center; gap: 8px; margin: 0; font: 12px/16px var(--font-mono); letter-spacing: .5px; text-transform: uppercase; color: var(--rec); }
+/*
+ * The recording's head is the Dusk tile: a 40px card, navy where its words
+ * are and warming to orange in the far corner, so white text stays on the
+ * dark end. The clock is Doto, round dot-matrix numerals.
+ */
+.live-head { margin: 8px 14px 0; padding: 24px 32px 22px; border-radius: var(--r-sheet); background: linear-gradient(160deg, #0e3b8d 0%, #0e3b8d 38%, #8a5a78 66%, #fbab7d 88%, #ff813b 100%); color: #fff; }
+.live-head .live-status, .live-head .live-status-stalled, .live-head .live-clock, .live-head .live-title { color: #fff; }
+.live-head .live-sub, .live-head .live-level-label { color: rgb(255 255 255 / 80%); }
+.live-head .rec-dot { background: var(--signal); animation: kw-pulse 1.6s ease-in-out infinite; }
+.live-head .level-segment { background: rgb(255 255 255 / 28%); }
+.live-head .level-segment-lit { background: #fff; }
+.live-head .mark-hollow { border-color: #fff; }
+.live-head .live-clock { font-family: var(--font-dots); font-weight: 800; font-size: 22px; letter-spacing: .04em; }
+@media (prefers-reduced-motion: reduce) { .live-head .rec-dot { animation: none; } }
+.live-status { display: flex; align-items: center; gap: 8px; margin: 0; font: 15px/18px var(--font-mono); letter-spacing: .5px; color: var(--rec); }
 /* Stalled records nothing, so neither the recording red nor its dot: `--text` and the hollow square (decision 6). */
 .live-status-stalled { color: var(--text); }
 .live-clock { color: var(--text); font-variant-numeric: tabular-nums; }
 .rec-dot { width: 8px; height: 8px; flex-shrink: 0; border-radius: 50%; background: var(--rec); }
-.live-title { margin: 8px 0 0; font-family: var(--font-sans); font-size: 28px; line-height: 36px; letter-spacing: -0.3px; text-transform: none; color: var(--text); overflow-wrap: anywhere; }
+.live-title { margin: 10px 0 0; font-family: var(--font-sans); font-size: 32px; line-height: 40px; letter-spacing: .02em; text-transform: none; color: var(--text); overflow-wrap: anywhere; }
 .live-sub { margin: 2px 0 0; font-size: 13.5px; line-height: 20px; color: var(--muted); overflow-wrap: anywhere; }
 /* The two captures' levels, each named in the machine voice, wrapping under each other in a narrow window. */
 .live-levels { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 24px; margin-top: 10px; }
 .live-level { display: inline-flex; align-items: center; gap: 10px; }
-.live-level-label { min-width: 6ch; font: 12px/16px var(--font-mono); letter-spacing: .5px; text-transform: uppercase; color: var(--muted); }
+.live-level-label { min-width: 6ch; font: 15px/18px var(--font-mono); letter-spacing: .5px; color: var(--muted); }
 .live-caveats { display: flex; flex-direction: column; gap: 10px; padding: 14px 28px 0; }
 .live-caveats > .caveat, .live-caveats > .error { margin: 0; }
 .live-transcript { flex: 1; min-height: 160px; display: flex; flex-direction: column; padding: 18px 28px 0; }
-.live-label { margin: 0 0 6px; font: 12px/16px var(--font-mono); letter-spacing: .5px; text-transform: uppercase; color: var(--muted); }
+.live-label { margin: 0 0 6px; font: 15px/18px var(--font-mono); letter-spacing: .5px; color: var(--muted); }
 .live-note { margin: 0 0 8px; max-width: 76ch; font-size: 13px; line-height: 18px; color: var(--muted); }
 /* A rule on top, so a line scrolled half out of the list reads as cut by its edge rather than as running into the note. */
 .live-rows { flex: 1; min-height: 0; overflow-y: auto; margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--faint); }
 /* The canvas' three columns: clock, speaker, words. */
 .live-row { display: grid; grid-template-columns: 76px 72px minmax(0, 1fr); column-gap: 14px; padding: 11px 0; border-bottom: 1px solid var(--faint); font-size: 15px; line-height: 23px; }
 .live-row:last-child { border-bottom: 0; }
-.live-time { font: 12px/23px var(--font-mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+.live-time { font: 15px/23px var(--font-mono); color: var(--muted); font-variant-numeric: tabular-nums; }
 .live-speaker { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
 .live-speaker-you { color: var(--band-text); }
 .live-text { overflow-wrap: anywhere; }
 /* A line still being heard: muted, and ending where the next word will go. */
-.live-row-open .live-text { color: var(--muted); }
-.live-caret { display: inline-block; width: 2px; height: 18px; margin-left: 3px; background: var(--band); vertical-align: -3px; }
-.live-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 12px 16px 12px 20px; border-top: 1px solid var(--rule); background: var(--strip); }
+/* Words still being heard arrive in Dusk and settle to ink once the line closes. */
+.live-row-open .live-text { background-image: var(--dusk-text); background-size: 300% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: kw-drift 6s linear infinite; }
+.live-caret { display: inline-block; width: 2px; height: 18px; margin-left: 3px; background: var(--signal); vertical-align: -3px; }
+@media (prefers-reduced-motion: reduce) { .live-row-open .live-text { animation: none; } }
+.live-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin: 0 14px 14px; padding: 12px 14px 12px 22px; border-radius: var(--r-sheet); background: var(--panel); box-shadow: var(--card-shadow); }
 /* One line, the chips ellipsising as the control bar's do, so a narrow window keeps its height for the lines. */
-.live-chips { display: flex; flex: 0 1 auto; align-items: center; gap: 2px; min-width: 0; margin-left: -9px; }
+.live-chips { display: flex; flex: 0 1 auto; align-items: center; gap: 6px; min-width: 0; margin-left: 0; }
 .live-bar > .control-privacy { padding-left: 0; }
 .live-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.live-actions > button { display: inline-flex; align-items: center; gap: 8px; height: 38px; margin: 0; padding: 0 14px; border-radius: 2px; font-size: 14.5px; white-space: nowrap; }
+.live-actions > button { display: inline-flex; align-items: center; gap: 8px; height: 38px; margin: 0; padding: 0 14px; border-radius: var(--r-control); font-size: 14.5px; white-space: nowrap; }
 .live-actions > button.primary { gap: 9px; padding: 0 16px; }
 /* A short window gives the live lines what the canvas' spacing would spend on margins. */
 @media (max-height: 640px) {
@@ -760,8 +738,9 @@ button.control-copy { display: inline-flex; align-items: center; gap: 6px; heigh
  * Rows the Meetings panel carries besides `PanelItem`s. The Now row's meta is
  * `--rec` with the round dot, as the hero draws recording -- or, stalled, the
  * hollow square in `--text`, since nothing is being recorded. An Interrupted
- * row is not a button, because Recover inside it is; its marker is the hollow
- * square Needs setup uses -- `--text`, not orange (decision 6). Recent's
+ * row is not a button, because Recover inside it is; its marker is a hollow
+ * square, hollow as the hero's Needs setup ring is -- `--text`, not orange
+ * (decision 6). Recent's
  * error sits with its Try again under it.
  */
 .panel-rec { display: inline-flex; align-items: center; gap: 6px; color: var(--rec); font-variant-numeric: tabular-nums; }
@@ -773,7 +752,7 @@ button.control-copy { display: inline-flex; align-items: center; gap: 6px; heigh
 .panel-row { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; padding: 7px 12px; }
 .panel-row-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; color: var(--text); }
 .mark-hollow { width: 7px; height: 7px; flex-shrink: 0; border: 1px solid var(--text); }
-button.panel-inline { height: 24px; margin: 0 0 0 4px; padding: 0 8px; border: 1px solid var(--rule); border-radius: 2px; background: var(--bg); font-size: 12.5px; line-height: 18px; }
+button.panel-inline { height: 24px; margin: 0 0 0 4px; padding: 0 8px; border: 1px solid var(--rule); border-radius: var(--r-control); background: var(--bg); font-size: 12.5px; line-height: 18px; }
 button.panel-inline:hover:not(:disabled) { border-color: var(--muted); background: var(--bg); }
 
 /*
@@ -783,8 +762,8 @@ button.panel-inline:hover:not(:disabled) { border-color: var(--muted); backgroun
  * The main window's `minWidth` is 720px (45rem, `src-tauri/tauri.conf.json`), so
  * this block is unreachable in the shipped window and reachable only in
  * `npm run dev` in a browser. That is a reason to keep it honest, not a reason
- * to delete it: the list panel goes, whatever the toggle says, because beside
- * the rail it would leave the page about half the window; the rail stays.
+ * to delete it: the list panel goes, whatever the toggle says, because at
+ * that width it would leave the page little more than half the window.
  *
  * This block also used to narrow `.content`'s padding and stack the rows.
  * Neither ever applied -- the rules they override come later in the file at
@@ -801,19 +780,20 @@ button.panel-inline:hover:not(:disabled) { border-color: var(--muted); backgroun
 }
 
 /*
- * The page: left-aligned in the main area, as the canvas draws it, and capped.
+ * The page: a column centred in the main area, as the reference frames draw
+ * it, and capped at `--content-max`.
  *
- * Not centred any more. It was `margin: 0 auto` in the space right of the old
- * rail; beside a list panel a centred column floats away from the list it was
- * chosen from, and left-aligned it keeps its left edge when a scrollbar
- * arrives. `min-width: 0` is not needed: a block's min-width is already 0,
- * and the `minmax(0, 1fr)` track inside `.row` is where a long path or a
- * wide <pre> is actually contained. The 56px sides drop to 24px in a main
- * area too narrow for the row grid -- the container query after the
- * breakout rule, which `--label-col` works out -- where they would otherwise
- * take 112 of the 370px the minimum window leaves beside the list panel.
+ * Centred again. It was left-aligned while settings screens sat beside the
+ * Settings list panel, where a centred column floated away from the list it
+ * was chosen from; a settings screen has no list panel now, so there is
+ * nothing for it to float away from. `min-width: 0` is not needed: a block's
+ * min-width is already 0, and the `minmax(0, 1fr)` track inside `.row` is
+ * where a long path or a wide <pre> is actually contained. The 56px sides
+ * drop to 24px in a main area too narrow for the row grid -- the container
+ * query after the breakout rule, which `--label-col` works out -- where they
+ * would otherwise take 112px of a column already too narrow for two tracks.
  */
-.content { max-width: var(--content-max); padding: 40px 56px 48px; }
+.content { max-width: var(--content-max); margin: 0 auto; padding: 28px 56px 64px; animation: kw-rise .7s .1s var(--ease) both; }
 
 /* The first section in a view sits directly under the page header. */
 .view > section:first-of-type,
@@ -834,10 +814,9 @@ h2 {
   color: var(--muted);
 }
 
-/* Falls back to bold without this -- Switzer ships one weight, 400, and a
- * browser asked for a heavier one than that counterfeits it by smearing the
- * 400, which is exactly what this file elsewhere spends a comment warning
- * against. */
+/* Falls back to bold without this. Geist is variable and would draw a real
+ * bold, but the design sets headings at one flat weight, 400, and lets size
+ * and face carry the hierarchy. */
 h3 {
   margin: 1.5rem 0 0.5rem;
   font-size: 1.0667rem;
@@ -860,44 +839,86 @@ h3 {
   margin: 0 0 2.25rem;
 }
 
-/* The canvas' 32/40px, in px rather than rem so it matches it exactly. */
+/*
+ * A screen's title in Iris, as the reference frames set every settings
+ * title: large, light tracking, the text-safe gradient drifting through it.
+ */
 .page-header h1 {
-  font-size: 32px;
-  line-height: 40px;
+  width: fit-content;
+  font-size: 44px;
+  line-height: 52px;
+  letter-spacing: .02em;
+  background-image: var(--iris-text);
+  background-size: 300% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: kw-drift 18s linear infinite;
 }
+@media (prefers-reduced-motion: reduce) { .page-header h1 { animation: none; } }
 
 .page-intro {
-  margin: 0.4rem 0 0;
+  margin: 0.6rem 0 0;
   color: var(--muted);
   max-width: 60ch;
+  font-size: 16px;
 }
+
+/* The way back to the Settings sheet, above a settings screen's title. */
+button.back-to-settings { display: inline-flex; align-items: center; gap: 8px; height: 34px; margin: 0 0 22px; padding: 0 16px 0 12px; border-radius: var(--r-control); background: var(--control); font-size: 13px; letter-spacing: .04em; transition: background-color .3s ease; }
+button.back-to-settings:hover:not(:disabled) { background: var(--control-hover); }
 
 .learn-more {
   margin: 0.5rem 0 0;
   max-width: 76ch;
 }
 
+/*
+ * A disclosure, as oem.care's FAQ rows draw one: the words, then a small
+ * round button with a plus that turns into a minus while it is open.
+ */
 .learn-more > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
   cursor: pointer;
   color: var(--muted);
   width: fit-content;
   list-style: none;
+  transition: color .3s ease;
 }
 
 .learn-more > summary::-webkit-details-marker {
   display: none;
 }
 
-.learn-more > summary::before {
-  content: "+ ";
+.learn-more > summary::after {
+  content: "+";
+  order: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--control);
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1;
+  transition: background-color .3s ease, transform .5s var(--ease);
 }
 
-.learn-more[open] > summary::before {
-  content: "− ";
+.learn-more[open] > summary::after {
+  content: "−";
+  transform: rotate(180deg);
 }
 
 .learn-more > summary:hover {
   color: var(--text);
+}
+
+.learn-more > summary:hover::after {
+  background: var(--control-hover);
 }
 
 .learn-more > summary:focus-visible {
@@ -924,8 +945,8 @@ h3 {
  * The horizontal padding is gone with the fill it used to sit inside: 1.5rem of
  * inset against an invisible edge is an indent with nothing to indent from, and
  * it pushed every section out of line with the `h1` above it.
- * The separation is the margin now, which is why the margin grew -- to the
- * Kit's 40px, in px so it does not move with the root size.
+ * The separation is the margin now, which is why the margin grew -- to 40px,
+ * in px so it does not move with the root size.
  */
 section {
   margin-top: 40px;
@@ -951,9 +972,9 @@ section {
 /*
  * A rule between rows, which is a different thing from a box around one: it
  * separates two pieces of data from each other rather than fencing the pair off
- * from the page. `--rule`, the Kit's weight for a line between rows -- it was
- * `--faint`, the site's value, which is the same grey in light and a shade
- * lighter in dark.
+ * from the page. `--rule`, this file's weight for a line between rows -- it was
+ * `--faint`, which is about the same grey in light and a shade lighter in
+ * dark.
  */
 /*
  * A grid, not `justify-content: space-between`.
@@ -966,6 +987,7 @@ section {
  */
 .row {
   display: grid;
+  transition: background-color .3s ease;
   /*
    * A fixed first track, not `minmax(0, 14rem)`. The minmax form resolves
    * against each row's own content, so the label column was only incidentally
@@ -975,7 +997,7 @@ section {
   grid-template-columns: var(--label-col) minmax(0, 1fr);
   gap: var(--row-gap);
   align-items: baseline;
-  /* The Kit's 14px, in px for the same reason `section`'s 40px is. */
+  /* 14px, in px for the same reason `section`'s 40px is. */
   padding: 14px 0;
   border-top: 1px solid var(--rule);
 }
@@ -1037,7 +1059,7 @@ section {
  *
  * `font-style: normal` because the markup reaching this class is `<em>` --
  * chosen for the semantic emphasis, not for the browser's default italic,
- * which upright Switzer has no italic cut to render anyway.
+ * which Geist, declared here upright only, would render as a synthesised slant.
  */
 .row-detail {
   max-width: 76ch;
@@ -1050,11 +1072,11 @@ section {
 }
 
 .row-detail code {
-  font-family: var(--font-mono);
+  font-family: var(--font-code);
 }
 
-/* The same measure for a section's own prose, which is Switzer rather than
- * ProFontWindows and so runs a little further per character. */
+/* The same measure for a section's own prose, which is the same face as
+ * `.row-detail`'s. */
 section > .muted {
   max-width: 76ch;
 }
@@ -1066,7 +1088,8 @@ section > .muted {
  * Rendering that message conditionally is what made the section jump: the
  * element appeared, the row containing it grew, and every control below moved
  * out from under the pointer at the moment the pointer was over them. Two lines
- * is what the longest of these sentences wraps to at the default 1000px window.
+ * is what the longest of these sentences wrapped to at the default 1000px
+ * window, beside the old rail and Settings list panel; the column is wider now.
  * A window dragged near the 720px minimum can still push it to three, which
  * moves the section below by one line -- but never the buttons above it, which
  * is where the hand is.
@@ -1101,7 +1124,7 @@ section > .muted {
   font-size: 0.9375rem;
 }
 
-/* Switzer ships at 400 only, so bold here is faked; this also un-bolds the Meetings and Cleanup & summaries caveat lead-ins, deliberately. */
+/* Kept at the design's flat 400 though Geist could draw a real bold; this also un-bolds the Meetings and Cleanup & summaries caveat lead-ins, deliberately. */
 .caveat strong {
   font-weight: 400;
 }
@@ -1131,8 +1154,8 @@ section > .muted {
   gap: 0.35rem;
 }
 
-/* Identifiers the application chose, so: machine voice, and filled rather than
- * outlined. */
+/* Identifiers the application chose, so: monospace (`--font-code`, above), and
+ * filled rather than outlined. */
 .purposes code,
 .list code {
   display: inline-block;
@@ -1214,12 +1237,12 @@ section > .muted {
 /*
  * The marked button: this is the one currently in effect.
  *
- * Same gesture as the rail's current entry (`.rail-item[aria-current]`) and
+ * Same gesture as the title bar's current pill (`.nav-pill[aria-current]`) and
  * for the same reason -- the
- * fill inverts, the text inverts with it, nothing is drawn around it -- so
+ * fill goes solid, the text inverts with it, nothing is drawn around it -- so
  * "this is the current one" reads identically wherever it appears. `--band` is
- * the site's blue and is already contrast-checked in both themes, which a new
- * colour picked for one row would not be.
+ * already contrast-checked in both themes, which a new colour picked for one
+ * row would not be.
  *
  * It marks state, not availability. The control stays pressable: re-asserting a
  * route that is already in effect is harmless, and a button that greys out the
@@ -1265,13 +1288,14 @@ button.marked:hover:not(:disabled) {
   --crepe-color-inline-area: var(--control);
   --crepe-font-default: var(--font-sans);
   --crepe-font-title: var(--font-sans);
-  --crepe-font-code: var(--font-mono);
+  --crepe-font-code: var(--font-code);
   --crepe-base-font-size: 14px;
 }
 /* Marked text and a block-selected row (the drag handle pressed, before it moves) take the grey
  * Milkdown uses for its own pressed and hovered controls -- the handle, the slash menu rows --
- * rather than Crepe's default, which is the selected colour: here the site blue, solid under
- * marked text and under a selected list row, which swallowed the text. The owner chose the grey
+ * rather than Crepe's default, which is the selected colour: here `--band`, blue in the design
+ * this was written under, solid under marked text and under a selected list row, which
+ * swallowed the text. The owner chose the grey
  * on 2026-09-26. `--crepe-color-hover` is `--control` in both themes. */
 .note-editor .milkdown .ProseMirror *::selection { background: var(--crepe-color-hover); }
 .note-editor .milkdown .ProseMirror *::-moz-selection { background: var(--crepe-color-hover); }
@@ -1280,7 +1304,7 @@ button.marked:hover:not(:disabled) {
 /*
  * The note's title is the page's heading, at the canvas' 32px, and it is a
  * field: borderless and unfilled, so it reads as the heading it is until the
- * caret is in it. Weight 400, because that is the only weight Switzer ships.
+ * caret is in it. Weight 400, the design's flat weight, though Geist could draw heavier.
  * `.note-detail` in the selector because the generic text-field rule further
  * down, `input:not([type="checkbox"]):not([type="radio"])`, is as specific as
  * the rest of it and comes later: without it the title took that rule's fill,
@@ -1301,7 +1325,7 @@ button.marked:hover:not(:disabled) {
   text-overflow: ellipsis;
   background: transparent;
   border: 0;
-  border-radius: 2px;
+  border-radius: var(--r-control);
 }
 
 /*
@@ -1379,7 +1403,7 @@ button.marked:hover:not(:disabled) {
 .transcript-clock,
 .recording-clock {
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: 15px;
   line-height: 16px;
   letter-spacing: 0.5px;
 }
@@ -1435,32 +1459,32 @@ button.transcript-speaker:focus-visible {
  * on the article), clear of the card floating over the column's foot or the mini player held to
  * the note's.
  */
-.transcript-head { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 8px; height: 52px; margin: 0; padding: 0 20px; background: var(--bg); font: 12px/16px var(--font-mono); letter-spacing: .5px; text-transform: uppercase; color: var(--muted); }
+.transcript-head { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 8px; height: 52px; margin: 0; padding: 0 20px; background: var(--bg); font: 15px/18px var(--font-mono); letter-spacing: .5px; color: var(--muted); }
 .note-side .transcript-head { background: var(--panel); }
 .transcript-label { flex: 1; min-width: 0; margin: 0; font: inherit; letter-spacing: inherit; text-transform: inherit; color: inherit; }
 /* 6px into the head's padding, so the glyph rather than the button's box ends where the lines' text does. */
 button.transcript-find { flex: none; display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; margin: 0 -6px 0 0; padding: 0; color: var(--muted); }
 /*
  * Find in this transcript (KNEG-448), in the head in place of the label while it is open, at the
- * head's 52px: a field as a settings page draws one -- a 1px `--edge`, the 2px corner, the page's
- * `--bg` -- with the search icon and the count in it, the count in the machine voice and muted,
- * then Previous, Next and Close, 28px, transparent, with the neutral hover every button has. The
- * field's ring is the box's, not the bare input's inside it. Not uppercase: the head's case is
- * for its label, and the query and the status read as written. Close ends where the Find button
+ * head's 52px: a field drawn as a settings page draws one -- a 1px `--edge` and a pill -- but on
+ * the page's `--bg`, with the search icon and the count in it, the count in the machine voice and
+ * muted, then Previous, Next and Close, 28px, transparent, with the neutral hover every button
+ * has. The field's ring is the box's, not the bare input's inside it. No case transform: the
+ * query and the status read as written. Close ends where the Find button
  * did, 6px into the head's padding.
  */
 .transcript-findbar { flex: 1; min-width: 0; display: flex; align-items: center; gap: 2px; margin: 0 -6px 0 0; letter-spacing: normal; text-transform: none; }
-.transcript-find-field { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; height: 28px; margin: 0 4px 0 0; padding: 0 8px; border: 1px solid var(--edge); border-radius: 2px; background: var(--bg); color: var(--muted); cursor: text; }
+.transcript-find-field { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; height: 28px; margin: 0 4px 0 0; padding: 0 8px; border: 1px solid var(--edge); border-radius: var(--r-control); background: var(--bg); color: var(--muted); cursor: text; }
 .transcript-find-field:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
 .transcript-find-field > .icon { flex: none; }
 /* Over the unscoped field rules, which fill and pad every input and ring it on focus. */
 .transcript .transcript-find-field input.transcript-find-input { flex: 1; min-width: 0; height: 26px; margin: 0; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--text); font: 13px/18px var(--font-sans); outline: none; }
-.transcript-find-count { flex: none; font: 12px/16px var(--font-mono); letter-spacing: .5px; color: var(--muted); }
+.transcript-find-count { flex: none; font: 15px/18px var(--font-mono); letter-spacing: .5px; color: var(--muted); }
 button.transcript-find-step { flex: none; display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; margin: 0; padding: 0; color: var(--muted); }
 /* `section` and `h3` carry the settings screens' margins and `--surface` fill. */
 .transcript .transcript-section { margin: 0; background: transparent; }
 .transcript .transcript-section-head { margin: 0; font: inherit; }
-.transcript button.transcript-section-toggle { display: flex; align-items: center; gap: 8px; width: 100%; height: 36px; margin: 0; padding: 0 20px; border-top: 1px solid var(--rule); border-radius: 0; color: var(--text); text-align: left; font: 12px/16px var(--font-mono); letter-spacing: .5px; }
+.transcript button.transcript-section-toggle { display: flex; align-items: center; gap: 8px; width: 100%; height: 36px; margin: 0; padding: 0 20px; border-top: 1px solid var(--rule); border-radius: 0; color: var(--text); text-align: left; font: 15px/18px var(--font-mono); letter-spacing: .5px; }
 .transcript button.transcript-section-toggle:hover:not(:disabled) { background: var(--panel-hover); }
 /* Full width inside a scroller, which would clip a ring drawn outside it. */
 .transcript button.transcript-section-toggle:focus-visible { outline-offset: -2px; }
@@ -1500,7 +1524,7 @@ button.transcript-find-step { flex: none; display: flex; align-items: center; ju
  * under reduced motion the fill jumps from word to word rather than fading.
  */
 .transcript-word {
-  border-radius: 2px;
+  border-radius: var(--r-control);
   cursor: pointer;
   transition: background-color 120ms ease-out, color 120ms ease-out, box-shadow 120ms ease-out;
 }
@@ -1514,9 +1538,9 @@ button.transcript-find-step { flex: none; display: flex; align-items: center; ju
  * shadow: a match is often part of a word ("Möte" in "Mötet"), and a shadow would paint over the
  * letters beside it. The rest are `--band-wash` with `--band-text`, and underlined, because on
  * the playing line, whose fill is the same wash, the wash alone would not show. The `mark`
- * element's own yellow is replaced; corners are a control's 2px.
+ * element's own yellow is replaced; corners are a control's, `--r-control`.
  */
-.transcript mark.transcript-match { padding: 0; border-radius: 2px; background: var(--band-wash); color: var(--band-text); text-decoration: underline; text-underline-offset: 3px; }
+.transcript mark.transcript-match { padding: 0; border-radius: var(--r-control); background: var(--band-wash); color: var(--band-text); text-decoration: underline; text-underline-offset: 3px; }
 .transcript mark.transcript-match-current { background: var(--band); color: var(--band-ink); text-decoration: none; }
 
 /* Wrap on narrow notes while keeping the field and actions beside their label when space permits. */
@@ -1578,8 +1602,9 @@ button.transcript-find-step { flex: none; display: flex; align-items: center; ju
 /* A range that cannot be moved has no times to point at. */
 .recording-scrubber:has(> input:disabled) .recording-marks { display: none; }
 
-/* Wraps rather than overflows in a slot too narrow for one row. The column's card, 291px inside,
- * holds even an hour-long clock, "1:02:03 / 1:31:04", on one (measured headless, KNEG-448). */
+/* Wraps rather than overflows in a slot too narrow for one row. The column's card, then 291px
+ * inside, held even an hour-long clock, "1:02:03 / 1:31:04", on one (measured headless, KNEG-448,
+ * in the previous design's faces and padding; not re-measured since). */
 .recording-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; min-height: 36px; }
 /* `margin: 0` against the generic button's `.75rem` top margin, which held Play 11px low. */
 .recording-controls button { flex: none; margin: 0; }
@@ -1587,14 +1612,14 @@ button.recording-play { display: flex; align-items: center; justify-content: cen
 /* Filled at rest, so its hover is the same neutral wash laid twice: a stronger wash in both
  * schemes, darker in light and lighter in dark. */
 button.recording-play:hover:not(:disabled) { background: linear-gradient(var(--control), var(--control)), var(--control); }
-button.recording-skip { height: 30px; padding: 0 6px; font: 12px/16px var(--font-mono); letter-spacing: 0.5px; }
+button.recording-skip { height: 30px; padding: 0 6px; font: 15px/18px var(--font-mono); letter-spacing: 0.5px; }
 button.recording-skip + button.recording-skip { margin-right: 8px; }
 .recording-controls .recording-clock { font-size: 12px; white-space: nowrap; }
 .recording-clock-total { color: var(--muted); }
 .recording-speed { display: flex; margin-left: auto; }
 /* `align-items` for `appearance: base-select`, which lays the select out as a flex box whose value
  * would otherwise sit at its top; a native select centres its value itself. */
-.recording-speed select { align-items: center; height: 30px; padding: 0 6px; border-radius: 2px; font: 12px/16px var(--font-mono); letter-spacing: 0.5px; }
+.recording-speed select { align-items: center; height: 30px; padding: 0 6px; border-radius: var(--r-control); font: 15px/18px var(--font-mono); letter-spacing: 0.5px; }
 
 .recording-player .error { margin: 4px 0 0; }
 
@@ -1613,10 +1638,10 @@ button.recording-skip + button.recording-skip { margin-right: 8px; }
 .player-header-speaker { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 12.5px; line-height: 18px; }
 button.player-header-play { flex: 0 1 auto; min-width: 0; height: 24px; margin: 0; padding: 0 8px; overflow: hidden; text-overflow: ellipsis; background: var(--control); font-size: 12.5px; line-height: 24px; }
 button.player-header-play:hover:not(:disabled) { background: linear-gradient(var(--control), var(--control)), var(--control); }
-.player-header-range { font: 12px/24px var(--font-mono); letter-spacing: 0.5px; }
+.player-header-range { font: 15px/24px var(--font-mono); letter-spacing: 0.5px; }
 button.player-header-clear { flex: none; display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; margin: 0; padding: 0; color: var(--muted); }
 button.player-header-clear:hover:not(:disabled) { color: var(--text); }
-button.follow-chip { flex: none; height: 22px; margin: 0 0 0 auto; padding: 0 7px; color: var(--muted); font: 11px/16px var(--font-mono); letter-spacing: 0.5px; text-transform: uppercase; }
+button.follow-chip { flex: none; height: 22px; margin: 0 0 0 auto; padding: 0 7px; color: var(--muted); font: 14px/16px var(--font-mono); letter-spacing: 0.5px; }
 button.follow-chip:hover:not(:disabled) { background: var(--control); color: var(--text); }
 button.follow-chip[aria-pressed="true"],
 button.follow-chip[aria-pressed="true"]:hover:not(:disabled) { background: var(--band); color: var(--band-ink); }
@@ -1635,10 +1660,11 @@ button.follow-chip[aria-pressed="true"]:hover:not(:disabled) { background: var(-
  * column, as below the width. The note and the column each scroll on their own there,
  * so the article is exactly as tall as `.notes-main` and neither of them is.
  *
- * Why 1280: beside the 68px rail, the card's 10px of margin and border and
- * the 272px list panel, a 1280px window leaves the note about 590px next to
- * the column; narrower, and the editor goes below a readable measure to make
- * room. Below the width the article is a one-track grid, so the measured
+ * Why 1280: it was chosen beside the old rail, the card's margin and border
+ * and a narrower list panel, where a 1280px window left the note about 590px
+ * next to the column; narrower, and the editor goes below a readable measure
+ * to make room. Without the rail the note has somewhat more room at the same
+ * width, and the breakpoint has not been revisited. Below the width the article is a one-track grid, so the measured
  * claim is the same either way -- one track, or two.
  */
 .note-detail { display: grid; grid-template-columns: minmax(0, 1fr); flex: none; }
@@ -1661,7 +1687,7 @@ button.follow-chip[aria-pressed="true"]:hover:not(:disabled) { background: var(-
 /* The player floats over the foot of the column as a card, 12px in from the column's sides and
  * bottom, the transcript scrolling on under it (KNEG-448). Over the column's scrollbar too: the
  * card is the column's width less its insets, as the canvas draws it. */
-.note-side-player { position: absolute; left: 12px; right: 12px; bottom: 12px; z-index: 2; padding: 10px 10px 8px 12px; border: 1px solid var(--rule); border-radius: 4px; background: var(--bg); box-shadow: var(--card-shadow); }
+.note-side-player { position: absolute; left: 12px; right: 12px; bottom: 12px; z-index: 2; padding: 12px 14px 10px 16px; border: 0; border-radius: var(--r-sheet); background: var(--panel); box-shadow: var(--card-shadow); }
 
 /*
  * Several controls on one settings row lay out across, not down.
@@ -1730,8 +1756,10 @@ button.follow-chip[aria-pressed="true"]:hover:not(:disabled) { background: var(-
 
 /*
  * Rows stack in a main area too narrow for two tracks: below 554.5px, the
- * width `--label-col` works out, which only windows from 720 to 904px
- * reach, and only with the list panel open. The label goes over its value,
+ * width `--label-col` works out. A settings screen has no list panel beside
+ * it, so its main area is that narrow only below the 720px minimum window --
+ * in `npm run dev` in a browser; with a list panel open, narrower windows
+ * reach it too. The label goes over its value,
  * the value takes the whole column, and a lone value or a row-spanning
  * control has no label track left to sit beside or cancel -- the negative
  * margin above would hang it off the page's left edge. `.content` gives up
@@ -1821,8 +1849,8 @@ label:has(> input[type="checkbox"]) {
 /*
  * The export preview is the file's exact bytes, so it must not be reflowed:
  * SRT and VTT are line-oriented formats and a wrapped preview would not be a
- * preview of what gets written. Machine voice, and not uppercase -- these are
- * the bytes.
+ * preview of what gets written. Real monospace (`--font-code`), not the pixel
+ * face, and no case transform -- these are the bytes.
  */
 .preview {
   margin: 0.75rem 0 0;
@@ -1830,7 +1858,8 @@ label:has(> input[type="checkbox"]) {
   max-height: 18rem;
   overflow: auto;
   background: var(--wash);
-  font-family: var(--font-mono);
+  border-radius: var(--r-row);
+  font-family: var(--font-code);
   font-size: 13px;
   line-height: 16px;
   letter-spacing: 0.5px;
@@ -1883,12 +1912,12 @@ label:has(> input[type="checkbox"]) {
 /*
  * The overlay window is transparent, so the panel paints its own background.
  * It now follows the theme tokens and the OS colour scheme, the same decision
- * this redesign makes for `.notify` below: the card's own 1px rule and shadow
- * give it a legible edge over anything behind it, so it no longer has to carry
+ * this redesign makes for `.notify` below: the card's own 1px hairline gives
+ * it a legible edge over anything behind it, so it no longer has to carry
  * a fixed dark background of its own to stay readable regardless of theme.
  *
- * The square corners are the site's -- 4px, the window card's own value; the
- * typeface is the one it uses for a wordmark, which is what this is.
+ * The corners are oem.care's notification card's, 15px; the typeface is the
+ * pixel face (`h2, .overlay`, above), the machine talking about itself.
  */
 
 .overlay {
@@ -1896,26 +1925,27 @@ label:has(> input[type="checkbox"]) {
   align-items: center;
   gap: 0.6rem;
   height: 100%;
-  padding: 0 1rem;
-  background: var(--bg);
+  padding: 0 1.1rem;
+  background: var(--panel);
   color: var(--text);
-  border: 1px solid var(--rule);
-  border-radius: 4px;
-  box-shadow: var(--card-shadow);
+  border: 0;
+  /* oem.care's notification card: 15px, and a hairline instead of a shadow the transparent window would clip. */
+  border-radius: 15px;
+  box-shadow: inset 0 0 0 1px var(--rule);
   /* The overlay must never intercept a click meant for the window beneath. */
   user-select: none;
 }
 
 /*
- * The status mark the rest of the Kit uses: a filled 7px `--band` square at
- * rest, a round 8px `--rec` dot -- the one round mark the Kit allows -- while
- * recording. `.notify` below overrides the resting fill to `--muted`, since
+ * The status mark: a filled 8px `--band` dot at rest, and the pulsing 8px
+ * `--signal` dot while recording. `.notify` below overrides the resting fill to `--muted`, since
  * nothing there is claiming "ready".
  */
 .indicator {
-  width: 7px;
-  height: 7px;
+  width: 8px;
+  height: 8px;
   flex: none;
+  border-radius: 50%;
   background: var(--band);
 }
 
@@ -1923,7 +1953,7 @@ label:has(> input[type="checkbox"]) {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--rec);
+  background: var(--signal);
   animation: pulse 1.4s ease-in-out infinite;
 }
 
@@ -1973,10 +2003,12 @@ label:has(> input[type="checkbox"]) {
   align-items: center;
   gap: 0.7rem;
   height: 100%;
-  padding: 0 0.9rem;
-  background: var(--bg);
+  padding: 0 0.9rem 0 1.1rem;
+  background: var(--panel);
   color: var(--text);
-  border: 1px solid var(--rule);
+  border: 0;
+  border-radius: 15px;
+  box-shadow: inset 0 0 0 1px var(--rule);
   font-family: var(--font-sans);
   font-size: 13px;
   line-height: 1.4;
@@ -1985,7 +2017,7 @@ label:has(> input[type="checkbox"]) {
   user-select: none;
 }
 
-/* The neutral square belongs to these panels: nothing here is claiming
+/* The neutral dot belongs to these panels: nothing here is claiming
  * "ready", so it is `--muted` rather than `--band`. */
 .notify .indicator:not(.indicator-recording) {
   background: var(--muted);
@@ -2007,8 +2039,16 @@ label:has(> input[type="checkbox"]) {
 /* Hidden by the window, not by CSS. This only shows through a stray render. */
 .notify-empty {
   background: transparent;
-  border-color: transparent;
+  box-shadow: none;
 }
+
+/* The update card is oem.care's mint notice: a white dot, dark green words. */
+:root[data-window="update"] .notify:not(.notify-empty) { background: var(--mint); box-shadow: none; color: var(--mint-ink); }
+:root[data-window="update"] .notify .indicator { background: #fff; }
+:root[data-window="update"] .notify-body strong, :root[data-window="update"] .notify-detail { color: var(--mint-ink); }
+:root[data-window="update"] .notify button { background: rgb(255 255 255 / 70%); color: #000; }
+:root[data-window="update"] .notify button:hover:not(:disabled) { background: #fff; }
+:root[data-window="update"] .notify::after { display: none; }
 
 /* Display contents keeps the original 392x92 row layout and spacing. */
 .notify-header {
@@ -2027,10 +2067,9 @@ label:has(> input[type="checkbox"]) {
 /* The title carries the information, so its heading voice uses full-strength ink. */
 .notify-body strong {
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: 15px;
   line-height: 16px;
   letter-spacing: 0.5px;
-  text-transform: uppercase;
   font-weight: 400;
   color: var(--text);
 }
@@ -2047,8 +2086,18 @@ label:has(> input[type="checkbox"]) {
 
 .notify button {
   margin-top: 0;
-  padding: 0.35rem 0.7rem;
+  padding: 0.35rem 0.9rem;
   flex: none;
+  background: var(--control);
+}
+
+.notify button:hover:not(:disabled) {
+  background: var(--control-hover);
+}
+
+.notify button.primary {
+  background: var(--iris);
+  background-size: 250% 250%;
 }
 
 /*
@@ -2059,13 +2108,13 @@ label:has(> input[type="checkbox"]) {
  * unknown", when reading the live status threw; `MeetingPanel` uses it for a
  * stalled recording thread or a live transcript whose provider connection
  * died. None of them is "needs attention, nothing has failed" -- so, as
- * `.row-detail.warn` already found (`# there is no --warn`, near the top),
- * this is `--error`, not the amber it used to be.
+ * `.row-detail.warn` already found (above), this is `--error`, not the amber
+ * it used to be.
  *
- * The round `--rec` dot beside this text still means *recording*, and stays
- * true the whole time this line is shown -- painting the text does not
- * repaint the dot. `--rec` and `--error` are the same value in both themes,
- * by design (`# there is no --warn`), so the two can share a colour without
+ * The round `--signal` dot beside this text still means *recording*, and
+ * stays true the whole time this line is shown -- painting the text does not
+ * repaint the dot. The recording reds and `--error` are close reds in both
+ * themes, so the two can share a hue without
  * being confused for each other: one is a round mark, this is prose, and
  * `.live-status`'s `--rec` text beside `.rec-dot` already pairs them the same
  * way elsewhere in this file.
@@ -2077,7 +2126,7 @@ label:has(> input[type="checkbox"]) {
 .notify-recording {
   /* A red edge, so "recording" reads at a glance and not only in words. An
    * inset shadow rather than a border keeps the content size unchanged. */
-  box-shadow: inset 0 0 0 1.5px var(--rec);
+  box-shadow: inset 0 0 0 1.5px var(--signal);
 }
 
 /* The larger recording window gives notes and transcript their own body while
@@ -2114,8 +2163,8 @@ label:has(> input[type="checkbox"]) {
  * inconsistency read as a rendering glitch rather than as a missing selector.
  * Naming what is *not* a text field cannot go stale the same way.
  *
- * A settings page's fields and selects take the Kit's 36px, 1px edge and 2px
- * corner instead, on the page colour (`# Settings pages`, near the end); these
+ * A settings page's fields and selects are 36px pills with a 1px edge
+ * instead, a field on `--panel` (`# Settings pages`, near the end); these
  * rules still hold everywhere else.
  */
 input:not([type="checkbox"]):not([type="radio"]),
@@ -2297,14 +2346,14 @@ option:checked:hover {
 
 /*
  * Unfilled at rest; the fill arrives under the pointer -- unless the button is
- * `.primary`, where it is there from the start.
+ * `.primary` or `.secondary`, or a plain button on a settings screen
+ * (`# Settings pages`, near the end), where it is there from the start.
  *
- * This is the site's own gesture rather than a departure from it: knegis.com
- * gives its links no resting chrome at all and paints them only on hover. A
- * screen of settings is mostly things you are reading, and a grey box drawn
- * around every ordinary button competed with the values they act on.
+ * An ordinary button elsewhere -- in a panel, a list row, a menu -- sits among
+ * things you are reading, and a grey pill drawn around every one of them
+ * competed with the values they act on.
  *
- * Beside the rail's mark for the screen you are on, `--band` is spent only on
+ * Beside the title bar's mark for the section you are in, `--band` is spent only on
  * claims, and never by a hover state: what is true now, by `button.marked`,
  * once for each setting it marks -- Settings > Transcription can show two or
  * three at once -- or, failing that, the one thing to do next, by at most one
@@ -2315,12 +2364,12 @@ button {
   margin-top: 0.75rem;
   padding: 0.45rem 0.9rem;
   border: 0;
-  /* The Kit's control corner, which a filled hover or a `.secondary` edge shows. */
-  border-radius: 2px;
+  border-radius: var(--r-control);
   background: transparent;
   color: var(--text);
   font: inherit;
   cursor: pointer;
+  transition: background-color .3s ease, color .3s ease;
 }
 
 button:hover:not(:disabled) {
@@ -2329,38 +2378,39 @@ button:hover:not(:disabled) {
 }
 
 /*
- * The one thing to do next, filled from the start rather than on hover -- the
- * other half of the rule above. At most one per screen, and never on a screen
+ * The one thing to do next: Iris, drifting, with black text -- oem.care's
+ * gradient call to action. At most one per screen, and never on a screen
  * that already shows `button.marked`: that screen's "one thing" is state
- * already in effect, not a press still waiting to happen, and the two fills
- * would make competing claims in the same colour.
+ * already in effect, not a press still waiting to happen. Black on Iris is
+ * at least 6.4:1 at its palest point, in both themes.
  */
 button.primary {
-  background: var(--band);
-  color: var(--band-ink);
+  background: var(--iris);
+  background-size: 250% 250%;
+  color: #000;
+  animation: kw-drift 14s linear infinite;
 }
 
 button.primary:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--band) 88%, var(--band-ink));
-  color: var(--band-ink);
+  background: var(--iris);
+  background-size: 250% 250%;
+  color: #000;
+  filter: saturate(1.25) brightness(1.04);
 }
+@media (prefers-reduced-motion: reduce) { button.primary { animation: none; } }
 
 /*
- * The Kit's secondary button: an action beside the primary one that is not
- * the next thing to do -- Meetings' Discard and "Record this call",
- * Providers' Test connections, Change and Clear. Edged rather than filled, so
- * it cannot be read as the primary, and its hover darkens the edge instead of
- * washing the fill. The edge is `--edge`: `#cfd0d6` in light, `--rule`'s
- * value in dark.
+ * A secondary button: an action beside the primary one that is not the next
+ * thing to do -- Meetings' Discard and "Record this call", Providers' Test
+ * connections, Change and Clear. The resting pill, filled, so it cannot be
+ * read as the primary; pointed at, it darkens as every pill does.
  */
 button.secondary {
-  border: 1px solid var(--edge);
-  background: var(--bg);
+  background: var(--control);
 }
 
 button.secondary:hover:not(:disabled) {
-  border-color: var(--muted);
-  background: var(--bg);
+  background: var(--control-hover);
 }
 
 section > button.primary,
@@ -2379,7 +2429,7 @@ section > button.primary,
  * controls or at the end of a list row is positioned by its neighbours.
  */
 section > button {
-  margin-left: -0.9rem;
+  margin-left: 0;
 }
 
 /*
@@ -2408,9 +2458,9 @@ button:disabled {
 
 /*
  * The title bar's own buttons -- the list-panel toggle, back and forward --
- * as the canvas draws them: 32px squares with the 2px corner every button
- * has, the first 10px in from the window's edge. `margin` and `padding` are
- * zeroed because the generic `button` rule gives every button both.
+ * as round 34px buttons on a faint fill, the first 14px in from the
+ * window's edge. `margin` and `padding` are zeroed because the generic
+ * `button` rule gives every button both.
  */
 .app-titlebar button.titlebar-button {
   display: flex;
@@ -2418,16 +2468,17 @@ button:disabled {
   justify-content: center;
   flex-shrink: 0;
   align-self: center;
-  width: 32px;
-  height: 32px;
+  width: 34px;
+  height: 34px;
   margin: 0;
   padding: 0;
-  border-radius: 2px;
+  border-radius: 50%;
+  background: var(--wash);
   color: var(--text);
 }
 
 .app-titlebar > button.titlebar-button:first-child {
-  margin-left: 10px;
+  margin-left: 14px;
 }
 
 .app-titlebar button.titlebar-button:disabled {
@@ -2436,12 +2487,13 @@ button:disabled {
 }
 
 /*
- * The Kit icon set (`lib/icons.ts`, drawn by `components/Icon.tsx`):
- * square-ended strokes for controls, a solid fill for the two states that are
- * a fill rather than a stroke. Replaces the old `.nav-icon`/`.nav-icon-*`
- * masks, which existed only because some icons shipped as separate SVG files
- * under `src/assets/navigation` -- every icon is now this one path-based
- * component instead, the rail's and the title bar's included.
+ * The icon set (`lib/icons.ts`, drawn by `components/Icon.tsx`), which
+ * predates this design and keeps its own square-ended strokes for controls,
+ * a solid fill for the two states that are a fill rather than a stroke.
+ * Replaces the old `.nav-icon`/`.nav-icon-*` masks, which existed only
+ * because some icons shipped as separate SVG files under
+ * `src/assets/navigation` -- every icon is now this one path-based
+ * component instead, the title bar's and the Settings sheet's included.
  */
 .icon { fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: square; stroke-linejoin: miter; flex-shrink: 0; }
 .icon-filled { fill: currentColor; stroke: none; }
@@ -2449,7 +2501,7 @@ button:disabled {
 /* Persistent dictation control: native window retains WS_EX_NOACTIVATE. */
 .microphone-overlay { height: 100%; overflow: clip; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; padding: 0; gap: 6px; user-select: none; }
 /* Keep the hit target and layout fixed as the visible pill expands. */
-.floating-microphone { position: relative; display: flex; align-items: center; justify-content: center; width: 52px; height: 32px; min-height: 32px; padding: 0; flex-shrink: 0; border-radius: 2px; background: transparent; color: white; box-shadow: none; border: 0; cursor: pointer; touch-action: none; }
+.floating-microphone { position: relative; display: flex; align-items: center; justify-content: center; width: 52px; height: 32px; min-height: 32px; padding: 0; flex-shrink: 0; border-radius: var(--r-control); background: transparent; color: white; box-shadow: none; border: 0; cursor: pointer; touch-action: none; }
 button.floating-microphone:hover:not(:disabled) { background: transparent; color: white; border-color: transparent; box-shadow: none; }
 .floating-microphone:focus-visible { outline: 2px solid #858985; outline-offset: 2px; }
 .floating-microphone[aria-disabled="true"] { cursor: progress; }
@@ -2463,7 +2515,7 @@ button.floating-microphone:hover:not(:disabled) { background: transparent; color
 .microphone-spinner { position: relative; display: block; width: 18px; height: 18px; border: 2px solid #8888; border-top-color: currentColor; border-radius: 50%; animation: microphone-spin 1s linear infinite; }
 @keyframes microphone-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .microphone-spinner { animation: none; } .microphone-controls::before, .microphone-glyph { transition: none; } }
-.microphone-error { display: flex; gap: 6px; align-items: flex-start; padding: 8px; background: var(--bg); color: var(--text, #eee); font-size: 12px; width: 100%; max-height: 72px; overflow: auto; border-radius: 4px; box-shadow: 0 2px 6px #0005; }
+.microphone-error { display: flex; gap: 6px; align-items: flex-start; padding: 8px; background: var(--bg); color: var(--text, #eee); font-size: 12px; width: 100%; max-height: 72px; overflow: auto; border-radius: var(--r-card); box-shadow: 0 2px 6px #0005; }
 .microphone-error span { flex: 1; overflow-wrap: anywhere; }
 .microphone-error button { padding: 0 4px; min-height: 20px; }
 .microphone-status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
@@ -2481,14 +2533,14 @@ button.floating-microphone:hover:not(:disabled) { background: transparent; color
 button.microphone-language-toggle { position: absolute; left: 74px; top: 34px; width: 16px; height: 28px; min-height: 28px; margin: 0; padding: 0; border: 0; border-radius: 0 2px 2px 0; background: transparent; color: white; font-size: 16px; line-height: 1; }
 button.microphone-language-toggle:hover:not(:disabled) { background: transparent; color: white; }
 .is-vertical .microphone-language-toggle { left: 34px; top: 74px; width: 28px; height: 16px; min-height: 16px; border-radius: 0 0 2px 2px; }
-.microphone-language-menu { width: calc(100% - 12px); max-height: 252px; overflow: auto; padding: 10px; border-radius: 4px; background: var(--bg); color: var(--text); font-size: 12px; line-height: 1.4; box-shadow: 0 2px 6px #0005; }
+.microphone-language-menu { width: calc(100% - 12px); max-height: 252px; overflow: auto; padding: 12px 14px; border-radius: var(--r-card); background: var(--panel); color: var(--text); font-size: 12px; line-height: 1.4; box-shadow: inset 0 0 0 1px var(--rule); }
 .local-language-picker { border: 0; padding: 0; margin: 0; min-width: 0; }
-/* Switzer ships at 400 only, so bold here was faked. */
+/* The design's flat 400; Geist would draw a real bold, but nothing here asks for one. */
 .local-language-picker legend { font-weight: 400; margin-bottom: 6px; }
 .local-language-picker p { margin: 6px 0; }
 .local-language-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 12px; margin-top: 8px; max-width: 320px; }
 .local-language-options label { display: flex; align-items: center; gap: 6px; }
-.microphone-language-menu button { margin: 0; min-height: 24px; padding: 3px 8px; font-size: 12px; }
+.microphone-language-menu button { margin: 0; min-height: 26px; padding: 3px 11px; border-radius: var(--r-control); background: var(--control); font-size: 12px; }
 .microphone-language-menu input { width: 14px; height: 14px; }
 
 .microphone-language-toggle { opacity: 0; pointer-events: none; transition: opacity 120ms ease; }
@@ -2501,11 +2553,11 @@ button.microphone-language-toggle:hover:not(:disabled) { background: transparent
 .is-vertical .microphone-language-toggle span { transform: rotate(90deg); }
 
 /* One animated surface, with separate dictation and language hit targets. */
-.microphone-controls::before { content: ""; position: absolute; left: 48px; top: 48px; width: 32px; height: 6px; border-radius: 2px; background: #858985; --surface-shift: 0px; --surface-angle: 0deg; transform: translate(-50%, -50%) rotate(var(--surface-angle)) translateX(var(--surface-shift)); transition: width 160ms ease, height 160ms ease, transform 160ms ease, background-color 160ms ease; pointer-events: none; }
+.microphone-controls::before { content: ""; position: absolute; left: 48px; top: 48px; width: 32px; height: 6px; border-radius: var(--r-control); background: #858985; --surface-shift: 0px; --surface-angle: 0deg; transform: translate(-50%, -50%) rotate(var(--surface-angle)) translateX(var(--surface-shift)); transition: width 160ms ease, height 160ms ease, transform 160ms ease, background-color 160ms ease; pointer-events: none; }
 .is-vertical .microphone-controls::before { --surface-angle: 90deg; }
-.microphone-controls:has(.floating-microphone[data-expanded="true"])::before { width: 68px; height: 28px; --surface-shift: 8px; border-radius: 2px; background: #303430; }
-.microphone-controls:is(:hover, .hold-hover, :has(:focus-visible))::before { width: 68px; height: 28px; --surface-shift: 8px; border-radius: 2px; background: #303430; }
-.microphone-controls:has(.floating-microphone.is-recording)::before { background: var(--band); }
+.microphone-controls:has(.floating-microphone[data-expanded="true"])::before { width: 68px; height: 28px; --surface-shift: 8px; border-radius: var(--r-control); background: rgb(20 20 24 / 84%); }
+.microphone-controls:is(:hover, .hold-hover, :has(:focus-visible))::before { width: 68px; height: 28px; --surface-shift: 8px; border-radius: var(--r-control); background: rgb(20 20 24 / 84%); }
+.microphone-controls:has(.floating-microphone.is-recording)::before { background: var(--signal); }
 .microphone-controls:has(:focus-visible) .microphone-language-toggle { opacity: 1; pointer-events: auto; }
 .microphone-controls:has(:focus-visible) .microphone-glyph { opacity: 1; transform: scale(1); }
 @media (prefers-reduced-motion: reduce) { .microphone-controls::before { transition: none; } }
@@ -2514,35 +2566,38 @@ button.microphone-language-toggle:hover:not(:disabled) { background: transparent
 .language-popup .microphone-language-menu { width: 100%; max-height: 100%; }
 
 /* Custom chrome belongs only to the main window; floating panels stay borderless. */
-:root[data-window="main"] { --titlebar-height: 38px; overflow: hidden; scrollbar-gutter: auto; }
+:root[data-window="main"] { --titlebar-height: 60px; overflow: hidden; scrollbar-gutter: auto; }
 /*
- * The title bar sits on the frame, not on the card: `--frame`, and no rule
- * under it, so the bar and the frame read as one window around the card
- * rather than a white strip above a grey one.
+ * The title bar sits on the ground with no rule under it, so the bar and the
+ * page read as one surface, as oem.care's header floats over its page. It is
+ * the window's navigation as well as its chrome: see `components/TitleBar.tsx`.
  */
 .app-titlebar { position: fixed; inset: 0 0 auto; height: var(--titlebar-height); display: flex; align-items: stretch; z-index: 1000; background: var(--frame); color: var(--text); user-select: none; }
-.app-titlebar-drag { flex: 1; min-width: 0; display: flex; align-items: center; padding-left: 16px; font-size: 13px; cursor: default; }
-.app-titlebar-buttons { display: flex; flex-shrink: 0; }
-.app-titlebar-buttons button { display: flex; align-items: center; justify-content: center; width: 46px; height: 100%; min-height: 0; margin: 0; padding: 0; border: 0; border-radius: 0; background: transparent; color: inherit; box-shadow: none; }
-.app-titlebar-buttons button:hover:not(:disabled) { background: var(--faint); color: inherit; }
+.app-titlebar-drag { flex: 1; min-width: 8px; display: flex; align-items: center; font-size: 13px; cursor: default; }
+/* The window buttons are round, a step apart, and the last sits 10px in from the edge. */
+.app-titlebar-buttons { display: flex; align-items: center; gap: 2px; flex-shrink: 0; padding: 0 10px 0 6px; }
+.app-titlebar-buttons button { display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; min-height: 0; margin: 0; padding: 0; border: 0; border-radius: 50%; background: transparent; color: inherit; box-shadow: none; transition: background-color .3s ease, color .3s ease; }
+.app-titlebar-buttons button:hover:not(:disabled) { background: var(--control); color: inherit; }
 .app-titlebar-buttons button:active:not(:disabled) { background: var(--band); color: var(--band-ink); }
-.app-titlebar-buttons button.window-close:hover:not(:disabled) { background: #c42b1c; color: white; }
-.app-titlebar-buttons button:focus-visible { outline: 2px solid var(--band); outline-offset: -3px; }
-.window-control-error { position: fixed; top: var(--titlebar-height); right: 0; z-index: 1001; max-width: 32rem; padding: 12px; background: var(--bg); color: var(--text); border: 1px solid var(--faint); }
+.app-titlebar-buttons button.window-close:hover:not(:disabled) { background: var(--signal); color: #000; }
+.app-titlebar-buttons button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.window-control-error { position: fixed; top: var(--titlebar-height); right: 12px; z-index: 1001; max-width: 32rem; padding: 12px 16px; background: var(--panel); color: var(--text); border-radius: var(--r-card); box-shadow: var(--card-shadow); animation: kw-enter .5s var(--ease-enter) both; }
 
 /*
- * The search field: always drawn, 380px of `--selected` with the 2px control
- * corner, centred between the two drag regions. The icon and the CTRL K hint
- * sit over the field's own padding with `pointer-events: none`, so a press on
- * either lands in the field. It shrinks rather than push the window buttons
- * off a narrow window. Focus is the generic `input:focus-visible` ring. The
- * results open directly under it at exactly its width (`left: 0; right: 0`),
- * so the two share both edges at any window size.
+ * The search field: always drawn, a 34px pill on the faint fill at the title
+ * bar's right, which turns white and widens a little while it has focus, as
+ * oem.care's own search does. The icon and the CTRL K hint sit over the
+ * field's own padding with `pointer-events: none`, so a press on either lands
+ * in the field. It shrinks rather than push the window buttons off a narrow
+ * window. The results open directly under it at exactly its width (`left: 0;
+ * right: 0`), so the two share both edges at any window size.
  */
-.titlebar-search { position: relative; align-self: center; flex: 0 1 380px; min-width: 0; height: 28px; }
-.titlebar-search > .icon { position: absolute; left: 10px; top: 6.5px; color: var(--muted); pointer-events: none; }
-.app-titlebar .titlebar-search input { width: 100%; height: 28px; min-height: 0; margin: 0; padding: 0 60px 0 33px; border: 0; border-radius: 2px; background: var(--selected); color: var(--text); font: inherit; font-size: 13px; }
-.titlebar-search-key { position: absolute; top: 0; right: 10px; font: 12px/28px var(--font-mono); letter-spacing: .5px; color: var(--muted); pointer-events: none; }
+.titlebar-search { position: relative; align-self: center; flex: 0 1 280px; min-width: 0; height: 34px; transition: flex-basis .5s var(--ease); }
+.titlebar-search:focus-within { flex-basis: 340px; }
+.titlebar-search > .icon { position: absolute; left: 13px; top: 9.5px; color: var(--muted); pointer-events: none; }
+.app-titlebar .titlebar-search input { width: 100%; height: 34px; min-height: 0; margin: 0; padding: 0 64px 0 36px; border: 0; border-radius: var(--r-control); background: var(--control); color: var(--text); font: inherit; font-size: 13px; transition: background-color .3s ease, box-shadow .3s ease; }
+.app-titlebar .titlebar-search input:focus { background: var(--panel); box-shadow: 0 1px 8px rgb(0 0 0 / 6%); }
+.titlebar-search-key { position: absolute; top: 0; right: 14px; font: 15px/34px var(--font-mono); color: var(--muted); pointer-events: none; }
 .titlebar-search input::-webkit-search-cancel-button {
   -webkit-appearance: none;
   width: 16px;
@@ -2551,9 +2606,9 @@ button.microphone-language-toggle:hover:not(:disabled) { background: transparent
   mask: url('./assets/window/xmark.svg') center / contain no-repeat;
   cursor: pointer;
 }
-.titlebar-search-popup { position: absolute; top: calc(100% + 6px); left: 0; right: 0; max-height: min(420px, calc(100vh - 60px)); overflow-y: auto; padding: 6px; border: 1px solid var(--faint); border-radius: 2px; background: var(--bg); color: var(--text); box-shadow: 0 6px 18px #0002; }
-.titlebar-search-status { padding: 6px 8px; font-size: 12px; color: var(--muted); }
-.titlebar-search-popup button { display: flex; flex-direction: column; gap: 3px; width: 100%; margin: 0; padding: 8px; text-align: left; border: 0; border-radius: 2px; background: transparent; color: var(--text); font-size: 13px; }
+.titlebar-search-popup { position: absolute; top: calc(100% + 8px); left: 0; right: 0; max-height: min(420px, calc(100vh - 80px)); overflow-y: auto; padding: 8px; border-radius: var(--r-card); background: var(--panel); color: var(--text); box-shadow: var(--card-shadow); animation: kw-rise .4s var(--ease) both; }
+.titlebar-search-status { padding: 6px 10px; font-size: 12px; color: var(--muted); }
+.titlebar-search-popup button { display: flex; flex-direction: column; gap: 3px; width: 100%; margin: 0; padding: 9px 12px; text-align: left; border: 0; border-radius: var(--r-row); background: transparent; color: var(--text); font-size: 13px; }
 .titlebar-search-popup button[aria-selected="true"], .titlebar-search-popup button:hover { background: var(--band); color: var(--band-ink); }
 .titlebar-search-popup button strong, .titlebar-search-popup button span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .titlebar-search-popup button strong { white-space: nowrap; }
@@ -2604,29 +2659,29 @@ button.microphone-language-toggle:hover:not(:disabled) { background: transparent
 
 /*
  * The library, as the canvas draws it: New note and Import as panel actions,
- * a boxed search field, a Folders heading with its three buttons, each folder
+ * a search field on a faint pill, a Folders heading with its three buttons, each folder
  * a 32px row -- disclosure, folder, name, count -- with its notes indented
  * 45px under it, and the notes in no folder under their own heading.
  *
  * A note row is a `PanelItem` (`notes-entry` is the smoke scripts' handle on
  * it), its title one line and ellipsised, its meta the Meetings list's. The
  * current note is `--selected`, as a current row is in every panel; it was
- * the `--band` fill, which the rail's own current entry already spends.
+ * the `--band` fill, which the title bar's current pill already spends.
  */
-.panel-search { display: flex; align-items: center; gap: 8px; height: 34px; margin: 10px 12px 0; padding: 0 10px; border: 1px solid var(--rule); border-radius: 2px; background: var(--bg); color: var(--muted); }
+.panel-search { display: flex; align-items: center; gap: 8px; height: 34px; margin: 10px 12px 0; padding: 0 10px; border: 0; border-radius: var(--r-control); background: var(--wash); color: var(--muted); }
 .panel-search:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
 .panel-search input[type="search"] { flex: 1; min-width: 0; height: 100%; margin: 0; padding: 0; border: 0; background: transparent; color: var(--text); font-size: 13.5px; }
 .panel-search input[type="search"]:focus-visible { outline: none; }
 .notes-folders-head { display: flex; align-items: center; gap: 2px; padding: 18px 10px 4px 20px; }
 .notes-folders-head > .panel-label { flex: 1; padding: 0; }
-button.panel-tool { flex: none; display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; margin: 0; padding: 0; border-radius: 2px; }
+button.panel-tool { flex: none; display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; margin: 0; padding: 0; border-radius: var(--r-control); }
 button.panel-tool[aria-expanded="true"],
 button.panel-tool[aria-expanded="true"]:hover:not(:disabled) { background: var(--selected); }
 .notes-tool-panel { display: flex; flex-direction: column; gap: 8px; margin: 4px 20px 10px; }
 .notes-tool-panel input { width: 100%; min-width: 0; }
-.notes-tool-panel button { align-self: flex-start; margin: 0; border-radius: 2px; }
+.notes-tool-panel button { align-self: flex-start; margin: 0; border-radius: var(--r-control); }
 .notes-folder { margin: 0; background: transparent; }
-button.notes-folder-toggle { display: flex; align-items: center; gap: 7px; width: 100%; height: 32px; margin: 0; padding: 0 10px; border-radius: 2px; text-align: left; font-size: 14px; line-height: 20px; }
+button.notes-folder-toggle { display: flex; align-items: center; gap: 7px; width: 100%; height: 32px; margin: 0; padding: 0 10px; border-radius: var(--r-control); text-align: left; font-size: 14px; line-height: 20px; }
 /* A folder is never current, so its hover is a panel row's hover, not the current row's fill. */
 button.notes-folder-toggle:hover:not(:disabled) { background: var(--panel-hover); }
 .notes-folder-toggle > .icon:first-child { color: var(--muted); }
@@ -2641,21 +2696,22 @@ button.notes-folder-toggle:hover:not(:disabled) { background: var(--panel-hover)
  * narrows the library while pressed, filled as a current row is. */
 /* Trash, at the foot of the panel (KNEG-401), is the same row: icon, name, count, filled while
  * its notes replace the tree. Its own classes, so nothing counting people counts it. */
-button:is(.notes-person, .notes-trash) { display: flex; align-items: center; gap: 7px; width: 100%; height: 32px; margin: 0; padding: 0 10px 0 12px; border-radius: 2px; text-align: left; font-size: 14px; line-height: 20px; }
+button:is(.notes-person, .notes-trash) { display: flex; align-items: center; gap: 7px; width: 100%; height: 32px; margin: 0; padding: 0 10px 0 12px; border-radius: var(--r-control); text-align: left; font-size: 14px; line-height: 20px; }
 button:is(.notes-person, .notes-trash):hover:not(:disabled) { background: var(--panel-hover); }
 button:is(.notes-person, .notes-trash)[aria-pressed="true"], button:is(.notes-person, .notes-trash)[aria-pressed="true"]:hover:not(:disabled) { background: var(--selected); }
 :is(.notes-person, .notes-trash) > .icon:first-child { color: var(--muted); }
 :is(.notes-person-name, .notes-trash-label) { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-/* Filing by drag: the note in the air fades, the group under the pointer gets the site blue as
- * an outline, and a "No folder" strip appears below the folders while a filed note is being
+/* Filing by drag: the note in the air fades, the group under the pointer gets a `--band`
+ * outline, and a "No folder" strip appears below the folders while a filed note is being
  * dragged, so taking a note out of a folder has somewhere to land even when nothing is unfiled.
- * The strip's words take `--band-text` when it is the target: `--band` as text is 3.3:1 in dark. */
+ * The strip's words take `--band-text` when it is the target, the text colour of the marked
+ * state, rather than `--band`, which is a fill. */
 .notes-entry[data-dragging] { opacity: 0.45; }
-.notes-folder[data-drop-target] { outline: 1px solid var(--band); outline-offset: 2px; border-radius: 2px; }
-.notes-drop-unfiled { margin: 4px 0; padding: 6px 10px; border: 1px dashed var(--faint); border-radius: 2px; font: 12px/16px var(--font-mono); letter-spacing: .5px; text-transform: uppercase; color: var(--muted); text-align: center; }
+.notes-folder[data-drop-target] { outline: 1px solid var(--band); outline-offset: 2px; border-radius: var(--r-control); }
+.notes-drop-unfiled { margin: 4px 0; padding: 6px 10px; border: 1px dashed var(--faint); border-radius: var(--r-control); font: 15px/18px var(--font-mono); letter-spacing: .5px; color: var(--muted); text-align: center; }
 .notes-drop-unfiled[data-drop-target] { border-style: solid; border-color: var(--band); color: var(--band-text); }
-.notes-context-menu { position: fixed; z-index: 1100; width: 15rem; max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); overflow: auto; padding: 0.35rem; background: var(--bg); color: var(--text); border: 1px solid var(--faint); border-radius: 2px; box-shadow: 0 6px 18px #0002; }
-.notes-context-menu > button { display: block; width: 100%; margin: 0; padding: 0.5rem 0.65rem; text-align: left; border-radius: 2px; }
+.notes-context-menu { position: fixed; z-index: 1100; width: 15rem; max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); overflow: auto; padding: 8px; background: var(--panel); color: var(--text); border: 0; border-radius: var(--r-card); box-shadow: var(--card-shadow); animation: kw-rise .35s var(--ease) both; }
+.notes-context-menu > button { display: block; width: 100%; margin: 0; padding: 0.5rem 0.65rem; text-align: left; border-radius: var(--r-control); }
 .notes-context-menu .row { display: flex; flex-direction: column; gap: 0.35rem; padding: 0.5rem 0.65rem; }
 .notes-context-menu select { width: 100%; min-width: 0; }
 
@@ -2675,16 +2731,16 @@ button:is(.notes-person, .notes-trash)[aria-pressed="true"], button:is(.notes-pe
 .vocabulary-support { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr)); gap: 1rem; }
 .vocabulary-usage details { max-height: 14rem; overflow: auto; overflow-wrap: anywhere; }
 
-/* Back and forward, 2px after the toggle and 2px apart, as the canvas spaces them -- or, on a
- * page with no list panel and so no toggle, the 10px in from the window's edge the toggle takes. */
-.titlebar-history { display: flex; align-items: center; flex-shrink: 0; gap: 2px; margin-left: 2px; }
-.app-titlebar > .titlebar-history:first-child { margin-left: 10px; }
+/* Back and forward, 6px after the toggle and 6px apart -- or, on a page with no
+ * list panel and so no toggle, the 14px in from the window's edge the toggle takes. */
+.titlebar-history { display: flex; align-items: center; flex-shrink: 0; gap: 6px; margin-left: 6px; }
+.app-titlebar > .titlebar-history:first-child { margin-left: 14px; }
 
 /* Separate summary and note editors retain the existing transcript workspace. */
 .note-prose, .summary-pane { min-width: 0; flex: 1; }
 .note-prose[hidden], .summary-pane[hidden] { display: none; }
 .summary-tabs { display: flex; gap: 8px; padding: 12px 0; }
-/* Square: the underline is a rule, and `button`'s 2px corner would round its ends. */
+/* Square: the underline is a rule, and `button`'s pill corner would round its ends. */
 .summary-tabs [role="tab"] { color: var(--muted); border-radius: 0; }
 .summary-tabs [aria-selected="true"] { color: var(--text); border-bottom: 2px solid var(--band); }
 .summary-toolbar { display: flex; flex-wrap: wrap; gap: 8px; padding-block: 8px; }
@@ -2715,7 +2771,7 @@ button:is(.notes-person, .notes-trash)[aria-pressed="true"], button:is(.notes-pe
 .note-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 0 16px; margin-top: 26px; border-bottom: 1px solid var(--rule); }
 .note-actions { display: flex; align-items: center; gap: 4px; margin-left: auto; }
 .note-actions .save-status { flex: none; margin: 0 8px 0 0; font-size: 12.5px; }
-button.note-action-button { flex: none; display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; margin: 0; padding: 0; border-radius: 2px; }
+button.note-action-button { flex: none; display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; margin: 0; padding: 0; border-radius: var(--r-control); }
 .note-page, .notes-notices > *, .trash-space, .trash-choose { max-width: 760px; margin-inline: auto; padding-right: 40px; padding-left: clamp(40px, calc(468px - 50%), 88px); }
 /*
  * Trash's page (KNEG-401): what its recordings take and Empty trash, in the note's measure, above
@@ -2728,7 +2784,7 @@ button.note-action-button { flex: none; display: flex; align-items: center; just
 .trash-space > button { margin: 8px 0 0; }
 .trash-choose { width: 100%; margin-block: 24px 0; }
 .trashed-note { flex: none; }
-.trashed-note-banner { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 10px 14px; border: 1px solid var(--rule); border-radius: 2px; }
+.trashed-note-banner { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 10px 14px; border: 0; border-radius: var(--r-card); background: var(--wash); }
 .trashed-note-banner > p { flex: 1 1 12rem; margin: 0; }
 .trashed-note-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .trashed-note-actions > button { margin: 0; }
@@ -2736,7 +2792,7 @@ button.note-action-button { flex: none; display: flex; align-items: center; just
 .trashed-note-title { margin: 22px 0 0; color: var(--text); font-family: inherit; font-size: 32px; line-height: 40px; letter-spacing: -0.4px; text-transform: none; overflow-wrap: anywhere; }
 .trashed-note-text { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.6; }
 /* "Your notes" in the machine voice the workspace's `h2` gives it; an `h3` here, under the title's `h2`. */
-.trashed-note .note-section-heading { margin-top: 24px; font-family: var(--font-mono); line-height: 16px; letter-spacing: 0.5px; text-transform: uppercase; }
+.trashed-note .note-section-heading { margin-top: 24px; font-family: var(--font-mono); line-height: 16px; letter-spacing: 0.5px; }
 .note-page { padding-top: 14px; padding-bottom: 32px; }
 .note-page > .save-status.error { margin: 0 0 12px; }
 .note-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 18px; margin: 12px 0 0; padding: 0; list-style: none; font-size: 13.5px; line-height: 20px; color: var(--muted); }
@@ -2751,7 +2807,7 @@ button.note-action-button { flex: none; display: flex; align-items: center; just
 .note-meta li.note-people { flex-wrap: wrap; row-gap: 6px; }
 .note-meta li.note-people[data-open], .note-meta li.note-people[data-error] { flex-basis: 100%; }
 .note-people-list { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; margin: 0; padding: 0; list-style: none; }
-.note-meta li.note-person { gap: 0; height: 24px; padding: 0 0 0 8px; border: 1px solid var(--rule); border-radius: 2px; color: var(--text); }
+.note-meta li.note-person { gap: 0; height: 24px; padding: 0 0 0 8px; border: 0; border-radius: var(--r-control); background: var(--wash); color: var(--text); }
 .note-person-name { min-width: 0; max-width: 240px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 button.note-person-remove { display: flex; align-items: center; justify-content: center; width: 22px; height: 22px; margin: 0; padding: 0; color: var(--muted); }
 button.note-person-remove:hover:not(:disabled) { color: var(--text); }
@@ -2777,7 +2833,7 @@ button.note-people-add:hover:not(:disabled), button.note-people-add[aria-expande
 .note-tabs { flex-wrap: wrap; padding: 0 0 4px; }
 .note-tabs > button { margin-top: 0; }
 .note-detail .note-workspace { margin-top: 18px; }
-/* Switzer ships at 400 only, so bold here was faked. */
+/* The design's flat 400; Geist would draw a real bold, but the heading is set apart by size and colour instead. */
 .note-section-heading { font-size: .85rem; font-weight: 400; color: var(--muted); margin: 1rem 0; }
 .note-prose > .note-section-heading:first-child { margin-top: .5rem; }
 .note-workspace > section { min-width: 0; margin-top: 0; }
@@ -2787,15 +2843,16 @@ button.note-people-add:hover:not(:disabled), button.note-people-add[aria-expande
  * on Notes once playback has started (KNEG-448). A wide window keeps it in full above Replay, and
  * otherwise moves it to the foot of the transcript column (`.note-side-player`, above).
  * The mini player is the same card as the column's (KNEG-448), held to the foot of the note rather
- * than floated: a `--rule` edge, the card corner, the page colour and `--card-shadow`.
+ * than floated: no edge, the sheet corner (`--r-sheet`), `--panel` and `--card-shadow`.
  * A touch drag on it is the card's: held over `.notes-main`, it would otherwise scroll the transcript
  * under it, and the scrubber takes its own drags either way (KNEG-455 item 8). */
-.note-mini-player { position: sticky; bottom: 0; grid-row: 3; padding: 10px 10px 8px 12px; background: var(--bg); border: 1px solid var(--rule); border-radius: 4px; box-shadow: var(--card-shadow); z-index: 3; touch-action: none; }
+.note-mini-player { position: sticky; bottom: 0; grid-row: 3; padding: 12px 14px 10px 16px; background: var(--panel); border: 0; border-radius: var(--r-sheet); box-shadow: var(--card-shadow); z-index: 3; touch-action: none; }
 .note-full-player { grid-row: 1; }
 /*
- * The position slider, drawn to the Kit rather than by the platform: the platform's thumb is a round
- * knob, rounder than anything the Kit allows but the recording dot. A 2px `--rule` track with the
- * played part in `--band`, and a 10px square `--band` thumb. `--played` is the fraction played,
+ * The position slider, drawn here rather than by the platform, whose thumb is a round knob. A 2px
+ * `--rule` track with the played part in `--band`, and a 10px square `--band` thumb -- square
+ * because the design before this one allowed no round mark but the recording dot; it has not been
+ * redrawn since. `--played` is the fraction played,
  * set by `RecordingPlayer`; the stop sits under the thumb's centre, which travels 5px in from each
  * end. The box stays 18px tall so the thumb is as easy to catch as the platform's was, and the
  * focus ring is the generic `input:focus-visible` one around that box. Here rather than beside the
@@ -2820,30 +2877,29 @@ button.note-people-add:hover:not(:disabled), button.note-people-add[aria-expande
 .start-from-transcript { margin-bottom: 1rem; }
 .note-workspace .note-editor, .note-workspace .note-editor .milkdown .ProseMirror { min-height: 12rem; }
 
-/* The window's one tooltip (components/Tooltip.tsx): the page's own background
- * and text, the site blue as a hairline, and an arrow at whatever it names. */
-.tooltip { position: fixed; z-index: 1200; max-width: 20rem; padding: 4px 8px; border: 1px solid var(--band); border-radius: 4px; background: var(--bg); color: var(--text); font-family: var(--font-sans); font-size: 0.8rem; font-weight: 400; line-height: 1.35; box-shadow: 0 4px 12px #0002; pointer-events: none; white-space: pre-line; overflow-wrap: anywhere; }
-/* The arrow is two clipped triangles, the blue one a hair taller than the one in the page colour,
+/* The window's one tooltip (components/Tooltip.tsx): a dark frosted pill with
+ * white text, no edge, and an arrow at whatever it names. */
+.tooltip { position: fixed; z-index: 1200; max-width: 20rem; padding: 6px 12px; border: 0; border-radius: 15px; background: rgb(20 20 24 / 88%); color: #fff; font-family: var(--font-sans); font-size: 0.8rem; font-weight: 400; line-height: 1.35; box-shadow: 0 6px 18px rgb(0 0 0 / 14%); backdrop-filter: blur(22px); -webkit-backdrop-filter: blur(22px); pointer-events: none; white-space: pre-line; overflow-wrap: anywhere; }
+/* The arrow is two clipped triangles, the `--band` one a hair taller than the one in `--bg`,
  * rather than a rotated bordered square: at 150% scaling the square's rotated hairlines came out
- * anti-aliased and its base met the box's border with visible notches. The inner triangle also
- * paints over the box's border for the width of the base, so the outline runs unbroken from the
- * box up the arrow and back. */
+ * anti-aliased and its base met the box's border with visible notches. The box has no border
+ * now, so both triangles take the box's own dark glass and the arrow reads as part of it. */
 .tooltip-arrow { position: absolute; width: 12px; height: 7px; transform: translateX(-50%); }
 .tooltip-arrow::before, .tooltip-arrow::after { content: ""; position: absolute; left: 0; width: 12px; height: 7px; clip-path: polygon(50% 0, 100% 100%, 0 100%); }
-.tooltip-arrow::before { top: 0; background: var(--band); }
-.tooltip-arrow::after { top: 1.5px; background: var(--bg); }
+.tooltip-arrow::before { top: 0; background: rgb(20 20 24 / 88%); }
+.tooltip-arrow::after { top: 0; background: transparent; }
 .tooltip[data-side="below"] .tooltip-arrow { top: -7px; }
 .tooltip[data-side="above"] .tooltip-arrow { bottom: -7px; }
 .tooltip[data-side="above"] .tooltip-arrow::before, .tooltip[data-side="above"] .tooltip-arrow::after { clip-path: polygon(50% 100%, 100% 0, 0 0); }
-.tooltip[data-side="above"] .tooltip-arrow::after { top: -1.5px; }
+.tooltip[data-side="above"] .tooltip-arrow::after { top: 0; }
 
 /*
  * # Settings pages
  *
- * The settings and developer screens in the Kit (KNEG-363), done in CSS alone:
+ * The settings and developer screens (KNEG-363), done in CSS alone:
  * every page keeps its markup, and these rules reach it through the classes
  * they already share. `section`'s 40px, `.row`'s 14px and `--rule`, and
- * `button`'s 2px corner are set where those rules are, above; what is here is
+ * `button`'s pill are set where those rules are, above; what is here is
  * scoped to `.content`, the column these screens (and Notes > Upload) render
  * in, so Notes' title field, the task pages' chips and the list panels keep
  * their own. Last in the file because a scoped rule and an unscoped one of
@@ -2852,9 +2908,8 @@ button.note-people-add:hover:not(:disabled), button.note-people-add[aria-expande
  * - **A section label** keeps the machine voice and gains a `--rule` under
  *   it. Only a bare `h2`: every `h2` with a class -- a hero heading, a panel
  *   label -- has its own rule set.
- * - **Fields and selects** are 36px, with a 1px `--edge` and the 2px corner,
- *   on the page colour rather than the `--control` fill, as the canvas draws
- *   them. `:not()` with a list, so the rule is exactly as specific as the
+ * - **Fields and selects** are 36px pills with a 1px `--edge`, and a field
+ *   sits on `--panel` rather than the `--control` fill. `:not()` with a list, so the rule is exactly as specific as the
  *   unscoped one it follows and a page's own field rule (Providers' search)
  *   can still outrank it. A select keeps its hover and focus fill.
  * - **A checkbox** is a 16px square filled `--band` when checked: the native
@@ -2862,17 +2917,32 @@ button.note-people-add:hover:not(:disabled), button.note-people-add[aria-expande
  *   keeps the platform's own check, focus ring hook and disabled look, and
  *   reads as a checkbox to everything that reads one.
  */
-.content h2:not([class]) { padding-bottom: 8px; border-bottom: 1px solid var(--rule); }
+/*
+ * A settings screen's top-level section is a white card on the ground, the
+ * way the reference frames lay out every settings column; its label is the
+ * pixel voice in navy, over a rule. A section inside a section stays flat.
+ */
+.content .view section { padding: 22px 28px 18px; border-radius: var(--r-card); background: var(--panel); box-shadow: var(--card-shadow); }
+.content .view section section { padding: 0; border-radius: 0; background: none; box-shadow: none; }
+/* A link-like button written before its section's label (Transcription's Manage vocabulary) sits at the label's right, over its rule. */
+.content .view section > button:first-child:not([class]) { float: right; margin: -7px 0 0 12px; }
+.content h2:not([class]) { padding-bottom: 10px; border-bottom: 1px solid var(--rule); color: var(--band-text); }
+
+/* A plain button on a settings screen is the resting pill, filled. */
+.content button:not([class]) { padding: 0 16px; min-height: 34px; background: var(--control); font-size: 14px; }
+.content button:not([class]):hover:not(:disabled) { background: var(--control-hover); }
+.content button.primary, .content button.secondary, .content button.marked { padding: 0 16px; min-height: 34px; font-size: 14px; }
 
 .content input:not([type="checkbox"], [type="radio"], [type="range"]),
 .content select {
   height: 36px;
-  padding: 0 10px;
+  padding: 0 14px;
   border: 1px solid var(--edge);
-  border-radius: 2px;
+  border-radius: var(--r-control);
 }
-.content input:not([type="checkbox"], [type="radio"], [type="range"]) { background: var(--bg); }
-.content textarea { padding: 6px 10px; border: 1px solid var(--edge); border-radius: 2px; background: var(--bg); color: var(--text); }
+.content input:not([type="checkbox"], [type="radio"], [type="range"]) { background: var(--panel); transition: border-color .3s ease, box-shadow .3s ease; }
+.content input:not([type="checkbox"], [type="radio"], [type="range"]):focus { border-color: var(--muted); box-shadow: 0 1px 8px rgb(0 0 0 / 6%); }
+.content textarea { padding: 10px 14px; border: 1px solid var(--edge); border-radius: var(--r-row); background: var(--panel); color: var(--text); }
 /* `flex: none`: beside a label long enough to wrap, a flex item's box shrank to 14px wide. */
 .content input[type="checkbox"] { flex: none; width: 16px; height: 16px; margin: 0; accent-color: var(--band); }
 /*
@@ -2889,20 +2959,19 @@ button.note-people-add:hover:not(:disabled), button.note-people-add[aria-expande
  * fixtures, not in the Tauri window).
  */
 .content .row-value, .content .row-detail { overflow-wrap: anywhere; }
-/* Vocabulary's omitted terms: Switzer has no bold for `strong` to use, so the browser counterfeited one. */
+/* Vocabulary's omitted terms: kept at the design's flat 400, as `.caveat strong` is, though Geist could draw a real bold. */
 .vocabulary-usage strong { font-weight: 400; }
 
 /*
  * Providers (`views/SettingsProviders.tsx`): the header's search and Test
  * connections, the filter tabs, the lock line, and the rows in two columns
- * where the page has the width -- one below about 816px of column, which is
- * the default 1000x720 window with the Settings panel open.
+ * where the page has the width -- one below about 816px of column.
  *
  * A row is the canvas': a 44px tile, the name over its purposes, and one
  * thing on the right -- "Key saved" and Change, a +, or "Not supported yet".
  * Its form, its result line and any detail sit under the name, in the same
- * track. The tile is 2px, not the canvas' 3px: the Kit has no 3px step, and a
- * tile is a key-sized mark rather than a card.
+ * track. The tile is round, `--r-control`, as a key is: a tile is a key-sized
+ * mark rather than a card.
  */
 .page-header-actions { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 16px 24px; }
 .page-heading { flex: 1 1 18rem; min-width: 0; }
@@ -2933,7 +3002,7 @@ button.note-people-add:hover:not(:disabled), button.note-people-add[aria-expande
 .providers-note { max-width: 76ch; margin: 10px 0 2px; font-size: 13.5px; line-height: 20px; }
 .provider-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 24rem), 1fr)); column-gap: 48px; align-items: start; margin: 0; padding: 0; list-style: none; }
 .provider-row { display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; align-items: center; gap: 6px 14px; min-width: 0; padding: 14px 0; border-bottom: 1px solid var(--rule); }
-.provider-tile { width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; border: 1px solid var(--rule); border-radius: 2px; background: var(--panel); color: var(--text); font: 18px/1 var(--font-mono); }
+.provider-tile { width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; border: 1px solid var(--rule); border-radius: var(--r-control); background: var(--panel); color: var(--text); font: 18px/1 var(--font-mono); }
 .provider-tile-local { border-color: var(--band); background: var(--band); color: var(--band-ink); }
 .provider-text { display: flex; flex-direction: column; align-items: flex-start; min-width: 0; }
 .provider-name { font-size: 15px; line-height: 22px; overflow-wrap: anywhere; }
@@ -2944,11 +3013,11 @@ button.note-people-add:hover:not(:disabled), button.note-people-add[aria-expande
 .provider-state { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; line-height: 19px; color: var(--text); white-space: nowrap; }
 .provider-state > .icon { color: var(--band); }
 .provider-state-failed { color: var(--error); }
-.provider-unsupported { padding-right: 8px; font: 12px/16px var(--font-mono); letter-spacing: .5px; text-transform: uppercase; color: var(--muted); white-space: nowrap; }
+.provider-unsupported { padding-right: 8px; font: 15px/18px var(--font-mono); letter-spacing: .5px; color: var(--muted); white-space: nowrap; }
 button.provider-add { display: flex; align-items: center; justify-content: center; width: 36px; height: 36px; margin: 0; padding: 0; }
 button.provider-add[aria-expanded="true"] { background: var(--selected); }
 button.provider-change { height: 30px; margin: 0; padding: 0 10px; font-size: 13px; }
-/* Blue words, so the text-safe blue: `--band` is 3.3:1 on the dark card. */
+/* Blue words, in `--band-text`: `--band` is the marked state's grey fill, not a text colour. */
 button.provider-link { margin: 0; padding: 0; background: none; color: var(--band-text); font-size: 13px; line-height: 19px; text-align: left; }
 button.provider-link:hover:not(:disabled) { background: none; color: var(--band-text); text-decoration: underline; text-underline-offset: 2px; }
 .provider-detail, .provider-form { grid-column: 2 / -1; margin: 0; }
@@ -2963,7 +3032,57 @@ button.provider-link:hover:not(:disabled) { background: none; color: var(--band-
 .hero-sub .meeting-progress { justify-content: center; }
 .notify-detail .meeting-progress { gap: 6px; font-size: 12px; white-space: nowrap; }
 
-.settings-drafts-dialog { max-width: min(480px, calc(100vw - 40px)); border: 1px solid var(--rule); border-radius: 8px; color: var(--text); background: var(--bg); padding: 24px; }
+.settings-drafts-dialog { max-width: min(480px, calc(100vw - 40px)); border: 1px solid var(--rule); border-radius: var(--r-card); color: var(--text); background: var(--bg); padding: 24px; }
 .settings-drafts-dialog::backdrop { background: rgb(0 0 0 / 35%); }
 .settings-draft-status { display: block; font-size: 12px; margin-top: 6px; }
 .settings-draft-error { display: block; }
+
+/*
+ * The Settings sheet (`components/SettingsSheet.tsx`): oem.care's menu, a
+ * frosted sheet over the whole window holding a grid of picture tiles. A
+ * modal `<dialog>`, so its backdrop is the browser's own; the sheet itself
+ * fills the window under the title bar with a 14px margin.
+ *
+ * Each tile's picture is drawn here, per screen (`[data-art]`): gradients and
+ * soft shapes in the design's palette, the screen's icon in a frosted dot at
+ * the corner. No photographs.
+ */
+dialog.settings-sheet { position: fixed; inset: calc(var(--titlebar-height) - 6px) 14px 14px; width: auto; height: auto; max-width: none; max-height: none; margin: 0; padding: 0; border: 0; border-radius: var(--r-sheet); background: var(--glass); color: var(--text); backdrop-filter: blur(64px) saturate(1.2); -webkit-backdrop-filter: blur(64px) saturate(1.2); box-shadow: var(--card-shadow); overflow-y: auto; }
+dialog.settings-sheet[open] { animation: kw-rise .6s var(--ease) both; }
+dialog.settings-sheet::backdrop { background: rgb(0 0 0 / 8%); }
+.settings-sheet-body { max-width: 1100px; margin: 0 auto; padding: 28px 32px 40px; }
+.settings-sheet-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 22px; }
+.settings-sheet-title { margin: 0; font-family: var(--font-sans); font-size: 44px; line-height: 52px; letter-spacing: .02em; width: fit-content; background-image: var(--iris-text); background-size: 300% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: kw-drift 18s linear infinite; }
+button.sheet-close { display: inline-flex; align-items: center; gap: 14px; height: 40px; margin: 0; padding: 0 5px 0 18px; border-radius: var(--r-control); background: var(--control); font-size: 14px; }
+button.sheet-close:hover:not(:disabled) { background: var(--control-hover); }
+.sheet-close-mark { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; border-radius: 50%; background: var(--panel); transition: transform .5s var(--ease); }
+button.sheet-close:hover .sheet-close-mark { transform: rotate(90deg); }
+.settings-sheet-section { margin: 0 0 28px; padding: 0; background: none; }
+.settings-sheet-label { margin: 0 0 12px; font: 16px/18px var(--font-mono); color: var(--band-text); }
+.settings-sheet-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 14px; margin: 0; padding: 0; list-style: none; }
+button.sheet-tile { display: flex; flex-direction: column; gap: 10px; width: 100%; margin: 0; padding: 0; border-radius: 0; background: none; text-align: left; }
+button.sheet-tile:hover:not(:disabled) { background: none; }
+.sheet-tile-art { position: relative; display: block; aspect-ratio: 4 / 3; border-radius: var(--r-sheet); overflow: hidden; background: #c8b6f4; transition: transform .5s var(--ease), border-radius .5s var(--ease); }
+.sheet-tile-art > .icon { position: absolute; left: 14px; bottom: 14px; box-sizing: content-box; padding: 9px; border-radius: 50%; background: rgb(255 255 255 / 55%); color: #000; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+button.sheet-tile:hover .sheet-tile-art { transform: scale(1.02); border-radius: 56px; }
+.sheet-tile-label { display: flex; align-items: center; gap: 8px; padding: 0 6px; font-size: 15px; }
+button.sheet-tile[aria-current="page"] .sheet-tile-label::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--text); }
+button.sheet-tile:focus-visible { outline: none; }
+button.sheet-tile:focus-visible .sheet-tile-art { outline: 2px solid var(--accent); outline-offset: 3px; }
+@media (prefers-reduced-motion: reduce) {
+  dialog.settings-sheet[open], .settings-sheet-title { animation: none; }
+  .sheet-tile-art { transition: none; }
+}
+
+.sheet-tile-art[data-art="shortcuts"] { background: radial-gradient(circle at 30% 35%, #f3a08d 0 18%, transparent 19%), radial-gradient(circle at 62% 58%, #efb158 0 22%, transparent 23%), linear-gradient(160deg, #f6e7da, #e9d3f0); }
+.sheet-tile-art[data-art="meeting-settings"] { background: var(--dusk); }
+.sheet-tile-art[data-art="vocabulary"] { background: radial-gradient(ellipse at 50% 110%, #baecb7 0 45%, transparent 46%), linear-gradient(180deg, #e8f3ea, #d5e8dd); }
+.sheet-tile-art[data-art="transcription"] { background: radial-gradient(circle at 50% 50%, #4fbf7f 0%, #86d2a8 26%, #9cc9f0 50%, #c9b8f2 76%, #c8b6f4 100%); }
+.sheet-tile-art[data-art="intelligence"] { background: var(--iris); }
+.sheet-tile-art[data-art="local-llm"] { background: radial-gradient(circle at 35% 30%, #fff 0 6%, #d9dde6 14%, #8c93a6 40%, #3d4253 70%, #1a1d26 100%); }
+.sheet-tile-art[data-art="providers"] { background: repeating-linear-gradient(90deg, rgb(255 255 255 / 0) 0 10px, rgb(255 255 255 / 35%) 10px 12px), linear-gradient(120deg, #7781c0, #c98eb5); }
+.sheet-tile-art[data-art="calendar"] { background: linear-gradient(180deg, #0e3b8d 0%, #3a4c9a 40%, #fbab7d 100%); }
+.sheet-tile-art[data-art="api"] { background: radial-gradient(circle at 70% 30%, #ff813b 0 16%, transparent 17%), linear-gradient(200deg, #2a2d3a, #4b4f66); }
+.sheet-tile-art[data-art="cli"] { background: radial-gradient(circle, rgb(255 255 255 / 55%) 0 1.5px, transparent 2px) 0 0 / 10px 10px, #1f2230; }
+.sheet-tile-art[data-art="mcp"] { background: radial-gradient(ellipse at 20% 80%, #c98eb5 0 30%, transparent 31%), radial-gradient(ellipse at 80% 20%, #9cc9f0 0 30%, transparent 31%), #ece6f4; }
+.sheet-tile-art[data-art="diagnostics"] { background: radial-gradient(circle at 50% 50%, #ff3f61 0 8%, transparent 9%), radial-gradient(circle at 50% 50%, transparent 0 22%, rgb(0 0 0 / 10%) 23% 24%, transparent 25% 40%, rgb(0 0 0 / 10%) 41% 42%, transparent 43%), #f1eeec; }

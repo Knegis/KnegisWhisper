@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { NAV, INNER_VIEWS, DEFAULT_VIEW, RAIL, SETTINGS_HOME, SETTINGS_PANEL, childrenOf, groupOf, isGroup, railOf, srSuffixOf } from "../src/lib/navigation.js";
+import { NAV, INNER_VIEWS, DEFAULT_VIEW, RAIL, SETTINGS_PANEL, childrenOf, groupOf, isGroup, railOf, srSuffixOf } from "../src/lib/navigation.js";
 
 const topLevel = ["dictation", "meetings", "notes"];
 const groups = {
@@ -77,12 +77,6 @@ test("the Settings panel lists both groups, Developer under its own heading", ()
   assert.equal(SETTINGS_PANEL[1].heading, developer?.label);
 });
 
-test("SETTINGS_HOME is a Settings child, so the rail's Settings opens a screen", () => {
-  const settings = NAV.filter(isGroup).find((group) => group.id === "settings");
-  assert.ok(settings);
-  assert.ok(childrenOf(settings).some((child) => child.id === SETTINGS_HOME));
-  assert.equal(railOf(SETTINGS_HOME), "settings");
-});
 
 test("the Settings child Meetings is named apart from the top-level Meetings, and only it", () => {
   const leaves = NAV.flatMap((entry) => isGroup(entry) ? [...childrenOf(entry)] : [entry]);

@@ -36,7 +36,7 @@
  *
  * Dictation state arrives from Rust by event rather than being tracked here: the
  * hotkey works while this window is hidden, so the window cannot be the thing
- * that knows. The rail carries no recording mark; the hero says it.
+ * that knows. The title bar's Dictation pill carries no recording mark; the hero says it.
  *
  * Rendered by `App.tsx` straight into the card, with no `PageHeader`: the
  * panel's title is the page's `h1` -- `SplitView`'s `heading` stands in for

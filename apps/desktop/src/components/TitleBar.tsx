@@ -1,26 +1,26 @@
 import { TitleBarSearch } from "./TitleBarSearch";
 import { Icon } from "./Icon";
+import { DotMark, JobPills, SettingsPill } from "./NavPills";
+import type { ViewId } from "../lib/navigation";
 import { useEffect, useState } from "react";
 import { getCurrentWindow, type Window as AppWindow } from "@tauri-apps/api/window";
 
 /**
- * The main window's own title bar: the list-panel toggle, back and forward, the
- * search field centred between two drag regions, and the window buttons.
+ * The main window's own title bar, which is also its navigation: on the left
+ * the list-panel toggle, back and forward and the three job pills; the
+ * KnegisWhisper dot mark in the middle, between two drag regions; on the right
+ * the search field, the Settings pill and the window buttons.
  *
  * The toggle shows and hides the list panel beside the page (`SplitView`'s
- * `#list-panel`), never the rail -- the rail is always drawn. It is the only
- * such toggle: Notes' library is that list panel now, and its own toggle and
- * the title-bar slot it was portalled into have gone.
- *
- * On a page with no panel (`hasListPanel` false -- Notes > Upload, the card
- * while it loads or after it failed to, and Dictation, Meetings or Notes
- * while the error boundary stands in for the page) the toggle is not drawn
- * at all, rather than drawn pointing its `aria-controls` at an element that
- * is not in the document. The collapsed
+ * `#list-panel`). On a page with no panel (`hasListPanel` false -- a settings
+ * screen, Notes > Upload, the card while it loads or after it failed to, and
+ * Dictation, Meetings or Notes while the error boundary stands in for the
+ * page) the toggle is not drawn at all, rather than drawn pointing its
+ * `aria-controls` at an element that is not in the document. The collapsed
  * state it flips belongs to the whole window and outlives the page, so the
  * next page with a panel still opens the way it was left.
  */
-export function TitleBar({ panelCollapsed, hasListPanel, onTogglePanel, onOpenNote, canGoBack, canGoForward, onBack, onForward }: { panelCollapsed: boolean; hasListPanel: boolean; onTogglePanel: () => void; onOpenNote: (id: number, transcriptRow?: number) => void; canGoBack: boolean; canGoForward: boolean; onBack: () => void; onForward: () => void }) {
+export function TitleBar({ view, onSelect, sheetOpen, onOpenSheet, panelCollapsed, hasListPanel, onTogglePanel, onOpenNote, canGoBack, canGoForward, onBack, onForward }: { view: ViewId; onSelect: (id: ViewId) => void; sheetOpen: boolean; onOpenSheet: () => void; panelCollapsed: boolean; hasListPanel: boolean; onTogglePanel: () => void; onOpenNote: (id: number, transcriptRow?: number) => void; canGoBack: boolean; canGoForward: boolean; onBack: () => void; onForward: () => void }) {
   const [maximized, setMaximized] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const native = "__TAURI_INTERNALS__" in window;
@@ -75,9 +75,12 @@ export function TitleBar({ panelCollapsed, hasListPanel, onTogglePanel, onOpenNo
           <Icon name="forward" />
         </button>
       </div>
+      <JobPills view={view} onSelect={onSelect} />
+      <div className="app-titlebar-drag" data-tauri-drag-region />
+      <span className="app-titlebar-mark" data-tauri-drag-region><DotMark size={26} /></span>
       <div className="app-titlebar-drag" data-tauri-drag-region />
       <TitleBarSearch onOpenNote={onOpenNote} />
-      <div className="app-titlebar-drag" data-tauri-drag-region />
+      <SettingsPill view={view} open={sheetOpen} onOpen={onOpenSheet} />
       <div className="app-titlebar-buttons">
         <button type="button" disabled={!native} aria-label="Minimize window" title="Minimize" onClick={() => void act(w => w.minimize())}><Icon name="minimise" size={16} /></button>
         <button type="button" disabled={!native} aria-label={maximized ? "Restore window" : "Maximize window"} title={maximized ? "Restore" : "Maximize"} onClick={() => void act(w => w.toggleMaximize())}><Icon name={maximized ? "restore" : "maximise"} size={16} /></button>

@@ -1,8 +1,8 @@
 /**
  * A chip that changes its value in place: the chip, and a menu it opens.
  *
- * The chip is drawn as `Chip` draws one -- icon, label, chevron, the 2px
- * corner -- so a strip of links, toggles and menus reads as one row. It is
+ * The chip is drawn as `Chip` draws one -- icon, label, chevron, a pill --
+ * so a strip of links, toggles and menus reads as one row. It is
  * named "<name>: <label>", the pattern every named chip follows, so the value
  * has something to be the value of and the words on screen are still inside
  * the name a speech user says (WCAG 2.5.3). `title` defaults to the label,
@@ -11,7 +11,7 @@
  * Two kinds of menu:
  *
  *   - **Options** (`options` and `onChoose`): a `listbox` of `MenuOption`s
- *     (`lib/chipMenu.ts`), under mono uppercase group headings where the
+ *     (`lib/chipMenu.ts`), under group headings in the pixel voice where the
  *     options name groups. The value in effect is ticked and
  *     `aria-selected`. A greyed row takes focus and says `aria-disabled`, with
  *     its reason as its description, but cannot be chosen.

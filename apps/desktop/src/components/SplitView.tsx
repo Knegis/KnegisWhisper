@@ -29,8 +29,9 @@ export const PanelCollapsed = createContext(false);
  * its panel's title. A hidden panel is out of the accessibility tree, and
  * the page would have no `h1` at all; so while the panel is collapsed the
  * main area carries one, visually hidden, with the same words. Only then, so
- * the page has exactly one either way. A settings screen passes none: its
- * `h1` is its `PageHeader`, and the Settings panel's title is an `h2`.
+ * the page has exactly one either way. Optional because a settings screen
+ * passed none while it sat beside the Settings list panel -- its `h1` was its
+ * `PageHeader` -- and settings screens have no `SplitView` now.
  */
 export function SplitView({ label, heading, panel, children }: { label: string; heading?: string; panel: ReactNode; children: ReactNode }) {
   const collapsed = useContext(PanelCollapsed);
