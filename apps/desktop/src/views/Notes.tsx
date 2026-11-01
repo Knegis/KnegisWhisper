@@ -61,6 +61,7 @@ import {
 
 import { createPortal } from "react-dom";
 
+import { askConfirm } from "../components/ConfirmDialog";
 import { Icon } from "../components/Icon";
 import { FolderSharing } from "../components/FolderSharing";
 import { NoteWorkspace, type NoteWorkspaceHandle } from "../components/NoteWorkspace";
@@ -463,7 +464,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
     const interactionAtStart = interaction.current;
     void finished(async () => {
       const entry = (await getTrash()).notes.find(item => item.id === id);
-      if (!entry || !window.confirm(deleteForeverQuestion(entry))) return false;
+      if (!entry || !(await askConfirm(deleteForeverQuestion(entry), { confirm: "Delete forever", destructive: true }))) return false;
       if (!(await deleteNoteForever(id))) return false;
       setMoved(current => (current?.id === id ? null : current));
       if (id === openNoteId) await openNewest(inTrash);
@@ -477,7 +478,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
     const interactionAtStart = interaction.current;
     void finished(async () => {
       const held = await getTrash();
-      if (held.notes.length === 0 || !window.confirm(emptyTrashQuestion(held))) return false;
+      if (held.notes.length === 0 || !(await askConfirm(emptyTrashQuestion(held), { confirm: "Empty Trash", destructive: true }))) return false;
       try {
         await emptyTrash(held.notes.map(item => item.id));
       } catch (cause) {
@@ -891,8 +892,10 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
           setContext(null);
           // Deleting a folder never deletes a note: the database sets the
           // note's folder to null, so the confirmation says so.
-          if (!window.confirm(`Delete folder “${folder.name}”? Its notes are kept and become unfiled.`)) return;
-          void guard(async () => { await deleteFolder(folder.id); });
+          void guard(async () => {
+            if (!(await askConfirm(`Delete folder “${folder.name}”? Its notes are kept and become unfiled.`, { confirm: "Delete folder", destructive: true }))) return;
+            await deleteFolder(folder.id);
+          });
         }}>Delete folder</button></>}
       </div>, document.body)}
       <FolderSharing folder={shareFolder} trigger={shareTrigger.current} importRequest={shareImportRequest} close={() => setShareFolder(null)} flush={async () => { await workspaceRef.current?.flush(); }} imported={async folderId => { await workspaceRef.current?.flush(); await reload(); reveal(folderId); setQuery(""); setHits(null); setPersonEmail(null); const notes = await getNoteSummaries({ folderId, limit: 1 }); if (notes[0]) await selectNote(notes[0].id); }} />

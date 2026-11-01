@@ -1,5 +1,6 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { NoteEditor } from "./NoteEditor";
+import { askConfirm } from "./ConfirmDialog";
 import { getNoteSummary, getSummaryReadiness, generateNoteSummary, cancelNoteSummary, updateNoteSummary, exportNoteSummary, onNoteSummaryChanged, type SummaryState, type SummaryReadiness, type SummarySetupTarget } from "../lib/ipc";
 import { summaryProgressText } from "../lib/summaryProgress";
 import { summaryModelName } from "../lib/meetingView";
@@ -87,7 +88,7 @@ export const SummaryPane = forwardRef<SummaryPaneHandle, { noteId: number; visib
     if (ready.state === "needs-setup") { await onSetup(ready.target); return; }
     const latest = await getNoteSummary(noteId);
     const replace = latest.edited || latest.legacy;
-    if (replace && !window.confirm("Replace your edited summary? The current version will stay until the new summary succeeds.")) return;
+    if (replace && !(await askConfirm("Replace your edited summary? The current version will stay until the new summary succeeds.", { confirm: "Replace summary" }))) return;
     const retry = latest.status === "failed" || latest.status === "interrupted";
     const next = await generateNoteSummary(noteId, latest.revision, replace, retry);
     if (current.current?.content !== next.content) setEditorKey(key => key + 1);

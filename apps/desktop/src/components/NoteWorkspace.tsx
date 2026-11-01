@@ -9,6 +9,7 @@ import { timeOfDay } from "../lib/dayGroups";
 import { hasStoredTranscript, noteMeta } from "../lib/noteMeta";
 import { lastStartedLine, NO_SELECTION, sectionMarks, selectionInterval, transcriptSections, type LineSelection } from "../lib/transcriptLayout";
 import { message } from "../lib/useRefresh";
+import { askConfirm } from "./ConfirmDialog";
 import { Icon } from "./Icon";
 import { NoteEditor } from "./NoteEditor";
 import { NotePeople } from "./NotePeople";
@@ -636,7 +637,7 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
           <button type="button" onClick={() => { void navigator.clipboard.writeText(`# ${draft.current.title}\n\n${draft.current.content}\n\n${summaryRef.current?.draft() ?? ""}`).then(() => setDraftNotice("Draft copied")).catch(cause => setError(message(cause))); }}>Copy draft</button>
           {blocked === "trashed" && <button type="button" onClick={() => { void restoreNote(note.id).then(restored => { if (!restored) throw new Error("The note could not be restored."); blockedRef.current = "restored"; setBlocked("restored"); }).catch(cause => setError(message(cause))); }}>Restore note</button>}
           {blocked === "restored" && <button type="button" onClick={() => { blockedRef.current = null; setBlocked(null); autosave.schedule({ ...draft.current }); setTimeout(() => { void flush().catch(cause => setError(message(cause))); }, 0); }}>Save retained draft</button>}
-          <button type="button" onClick={() => { if (window.confirm("Discard the unsaved draft? Copy it first if you want to keep it.")) { autosave.discard(); summaryRef.current?.discardDraft(); setDraftNotice("Unsaved draft discarded. You can open another note."); } }}>Discard unsaved draft</button>
+          <button type="button" onClick={() => { void askConfirm("Discard the unsaved draft? Copy it first if you want to keep it.", { confirm: "Discard draft", destructive: true }).then((yes) => { if (!yes) return; autosave.discard(); summaryRef.current?.discardDraft(); setDraftNotice("Unsaved draft discarded. You can open another note."); }); }}>Discard unsaved draft</button>
           {draftNotice && <p>{draftNotice}</p>}
         </div>}
         {error && <p className="error" role="alert">{error}</p>}
