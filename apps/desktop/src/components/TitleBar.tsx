@@ -15,10 +15,13 @@ import { getCurrentWindow, type Window as AppWindow } from "@tauri-apps/api/wind
  * `#list-panel`). On a page with no panel (`hasListPanel` false -- a settings
  * screen, Notes > Upload, the card while it loads or after it failed to, and
  * Dictation, Meetings or Notes while the error boundary stands in for the
- * page) the toggle is not drawn at all, rather than drawn pointing its
- * `aria-controls` at an element that is not in the document. The collapsed
- * state it flips belongs to the whole window and outlives the page, so the
- * next page with a panel still opens the way it was left.
+ * page) the toggle is not drawn, rather than drawn pointing its
+ * `aria-controls` at an element that is not in the document -- but its place
+ * is kept by an empty slot of the same width, so the back and forward buttons
+ * and the job pills stay where the hand left them instead of jumping 40px
+ * left on every settings screen. The collapsed state it flips belongs to the
+ * whole window and outlives the page, so the next page with a panel still
+ * opens the way it was left.
  */
 export function TitleBar({ view, onSelect, sheetOpen, onOpenSheet, panelCollapsed, hasListPanel, onTogglePanel, onOpenNote, canGoBack, canGoForward, onBack, onForward }: { view: ViewId; onSelect: (id: ViewId) => void; sheetOpen: boolean; onOpenSheet: () => void; panelCollapsed: boolean; hasListPanel: boolean; onTogglePanel: () => void; onOpenNote: (id: number, transcriptRow?: number) => void; canGoBack: boolean; canGoForward: boolean; onBack: () => void; onForward: () => void }) {
   const [maximized, setMaximized] = useState(false);
@@ -66,7 +69,7 @@ export function TitleBar({ view, onSelect, sheetOpen, onOpenSheet, panelCollapse
         >
           <Icon name="panel" />
         </button>
-      ) : null}
+      ) : <span className="titlebar-button-slot" aria-hidden="true" />}
       <div className="titlebar-history" role="group" aria-label="Navigation history">
         <button type="button" className="titlebar-button" aria-label="Go back" title="Go back" disabled={!canGoBack} onClick={onBack}>
           <Icon name="back" />

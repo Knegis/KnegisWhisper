@@ -47,6 +47,7 @@ import {
   acceleratorLabel,
   acceleratorText,
   changeLabel,
+  hotkeyActionLabel,
   hotkeyModeLabel,
   outcomeLabel,
   registrationFor,
@@ -212,7 +213,7 @@ export function SettingsShortcuts({
         ))}
         {hotkeys.bindings.map((b) => (
           <div key={b.action} className="row">
-            <span className="row-label">{b.action}</span>
+            <span className="row-label">{hotkeyActionLabel(b.action)}</span>
             <span className="row-value">
               {/*
                 First, and ahead of the accelerator, because it outranks anything
@@ -273,8 +274,15 @@ export function SettingsShortcuts({
                 empty, and pressing it did nothing and said nothing. That cost a real
                 bench check.
               */}
+              {/*
+                The editor on one line -- the keys, Record, Set, and the mode --
+                so a row reads as its current keys, then one strip of controls
+                to change them, rather than four controls stacked as tall as
+                the explanations around them.
+              */}
+              <span className="shortcut-editor">
               <input
-                aria-label={`accelerator for ${b.action}`}
+                aria-label={`Keys for ${hotkeyActionLabel(b.action)}`}
                 disabled={captureBusy}
                 value={draftKeys[b.action] ?? acceleratorText(b)}
                 onChange={(e) => {
@@ -307,7 +315,7 @@ export function SettingsShortcuts({
                 not come from here.
               */}
               <select
-                aria-label={`mode for ${b.action}`}
+                aria-label={`Mode for ${hotkeyActionLabel(b.action)}`}
                 disabled={captureBusy}
                 value={b.mode}
                 onChange={(e) => applyMode(b, e.target.value as HotkeyMode)}
@@ -318,6 +326,7 @@ export function SettingsShortcuts({
                   </option>
                 ))}
               </select>
+              </span>
               <em className="row-detail">{hotkeyModeLabel(b.mode).detail}</em>
               {hotkeyResult[b.action] ? (
                 <em className="row-detail">{hotkeyResult[b.action]}</em>

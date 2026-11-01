@@ -13,8 +13,8 @@
  * as equally important because every screen was one indistinguishable row.
  *
  * `Settings` opens a sheet of tiles over the window (`SETTINGS_PANEL`), and
- * every screen under either of `NAV`'s two groups is a tile there.
- * **Developer is a heading inside that sheet, not a pill**: four
+ * every screen under either of `NAV`'s two groups is a tile there, in one of
+ * four sections. **Developer is a section inside that sheet, not a pill**: four
  * machine-facing screens are not a fifth job, and a pill of their own would
  * put them level with the three that are. The groups themselves are unchanged
  * -- `NAV` is still the source of their order and of every label, and
@@ -51,14 +51,12 @@
  *
  * # The Settings order
  *
- * The settings for the three jobs come first -- Shortcuts (Dictation's),
- * Meetings, and Vocabulary, which dictation and meetings both read -- and
- * the setup screens after them: Transcription, Cleanup & summaries, Local
- * text models. A colleague who came from a task page to change something
- * about that task finds it near the top of the sheet.
- *
- * Providers moves down, next to Calendar, because API keys are only needed
- * for cloud services, and local-first use needs none.
+ * `NAV`'s order is the settings for the three jobs first -- Shortcuts
+ * (Dictation's), Meetings, and Vocabulary, which dictation and meetings both
+ * read -- and the setup screens after them: Transcription, Cleanup &
+ * summaries, Local text models, then Providers and Calendar. The sheet lays
+ * the same screens out by part of the application instead (`SETTINGS_PANEL`):
+ * speech to text, meetings and calendar, AI and cloud services, developer.
  *
  * # The ids are mostly unchanged
  *
@@ -118,8 +116,10 @@ export const NAV = [
     label: "Developer",
     children: [
       { id: "api", label: "Local API" },
-      { id: "cli", label: "CLI" },
-      { id: "mcp", label: "MCP" },
+      // Named for what they are to someone who has not met the acronym;
+      // the acronym stays where it is the thing you would search for.
+      { id: "cli", label: "Command line" },
+      { id: "mcp", label: "AI assistants (MCP)" },
       { id: "diagnostics", label: "Diagnostics" },
     ],
   },
@@ -279,14 +279,20 @@ export function railOf(view: ViewId): RailId {
 }
 
 /**
- * The Settings sheet's sections, in order: one per `NAV` group.
+ * The Settings sheet's sections, in order, and the screens in each.
  *
- * `settings` has no heading because the sheet's own title already says
- * "Settings"; a heading repeating it over the first grid would name the same
- * thing twice. `developer`'s heading is the group's label, so the tree and the
- * sheet cannot drift apart on what the section is called.
+ * Twelve tiles in two blocks was a gallery: eight equal tiles under no
+ * heading asked a reader to recognise every one by name. Four sections of
+ * two to four tiles let them find the part of the application first and the
+ * screen second. The sections are the sheet's own grouping, not `NAV`'s:
+ * `NAV` still holds the two groups `config/ui-surfaces.json` files these
+ * surfaces under, and `Developer` is still exactly that group, in its order,
+ * under its label. The navigation test holds the rest -- every screen of
+ * both groups on exactly one tile.
  */
 export const SETTINGS_PANEL = [
-  { group: "settings", heading: null },
-  { group: "developer", heading: "Developer" },
-] as const satisfies readonly { group: NavGroup["id"]; heading: string | null }[];
+  { heading: "Speech to text", views: ["transcription", "vocabulary", "shortcuts"] },
+  { heading: "Meetings and calendar", views: ["meeting-settings", "calendar"] },
+  { heading: "AI and cloud services", views: ["intelligence", "local-llm", "providers"] },
+  { heading: "Developer", views: ["api", "cli", "mcp", "diagnostics"] },
+] as const satisfies readonly { heading: string; views: readonly ViewId[] }[];

@@ -64,10 +64,11 @@ import { LanguagePopup } from "./components/LanguagePopup";
  * died.
  */
 
-import { Component, useCallback, useEffect, useMemo, useReducer, useState, type ReactNode } from "react";
+import { Component, useCallback, useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from "react";
 
 import { PageHeader } from "./components/PageHeader";
 import { BackToSettings, SettingsSheet } from "./components/SettingsSheet";
+import { ConfirmHost } from "./components/ConfirmDialog";
 import { PanelCollapsed } from "./components/SplitView";
 import { getDiagnostics, type Diagnostics } from "./lib/ipc";
 import { railOf, type ViewId } from "./lib/navigation";
@@ -282,6 +283,27 @@ function Shell({ panelCollapsed, onTogglePanel }: { panelCollapsed: boolean; onT
   const [sheetOpen, setSheetOpen] = useState(false);
   const openSheet = useCallback(() => setSheetOpen(true), []);
 
+  // A screen chosen from the sheet takes focus on its title. Closing the
+  // dialog hands focus back to whatever opened it -- the Settings pill, or a
+  // settings screen's "Settings" pill that the new screen is about to replace
+  // -- so without this a keyboard or screen-reader user arrives on the new
+  // screen with focus behind them, or on nothing. A timestamp rather than a
+  // flag, so a navigation the unsaved-changes guard refused cannot leave a
+  // stale request to fire on some later, unrelated screen change.
+  const headingFocusAt = useRef(0);
+  const selectFromSheet = useCallback((id: ViewId) => {
+    headingFocusAt.current = Date.now();
+    select(id);
+  }, [select]);
+  useEffect(() => {
+    if (Date.now() - headingFocusAt.current > 2000) return;
+    headingFocusAt.current = 0;
+    const heading = document.querySelector<HTMLElement>(".split-main h1");
+    if (!heading) return;
+    heading.tabIndex = -1;
+    heading.focus({ preventScroll: true });
+  }, [view]);
+
   // Whether the page that failed to render is one that draws its own panel.
   const [boundaryFailed, setBoundaryFailed] = useState(false);
   const ownsPanel = view === "dictation" || view === "meetings" || view === "notes";
@@ -305,7 +327,7 @@ function Shell({ panelCollapsed, onTogglePanel }: { panelCollapsed: boolean; onT
         <main className="card">{card}</main>
       </div>
     </PanelCollapsed.Provider>
-    <SettingsSheet open={sheetOpen} view={view} onSelect={select} onClose={() => setSheetOpen(false)} /></>
+    <SettingsSheet open={sheetOpen} view={view} onSelect={selectFromSheet} onClose={() => setSheetOpen(false)} /></>
   );
 
   if (!diagnostics) {
@@ -374,7 +396,7 @@ function MainWindow() {
     return () => narrow.removeEventListener("change", collapse);
   }, []);
   const togglePanel = useCallback(() => setPanelCollapsed(collapsed => !collapsed), []);
-  return <><Shell panelCollapsed={panelCollapsed} onTogglePanel={togglePanel} /><Tooltips /></>;
+  return <><Shell panelCollapsed={panelCollapsed} onTogglePanel={togglePanel} /><Tooltips /><ConfirmHost /></>;
 }
 
 export default function App() {

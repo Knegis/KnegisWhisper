@@ -19,16 +19,22 @@
  *      Iris (lavender to marigold) is the one thing to do next -- a primary
  *      button -- and the titles; Dusk (navy to orange) is time passing: the
  *      recording tile, a live clock, words still being heard. Both drift
- *      slowly. Flat colour is kept for meaning: mint for an offer or an
+ *      only while something is happening (see motion, below). Flat colour
+ *      is kept for meaning: mint for an offer or an
  *      update, the pink signal dot for recording.
  *   4. Three faces with a job each. Geist sets everything people read. Tiny5,
  *      a pixel face, is the machine talking about itself -- dates, times,
  *      small labels -- in the string's own case. Doto, round dot-matrix
  *      numerals, is reserved for big clocks and counts.
  *
- * Motion follows the site: hovers are a .3s colour change, things that
- * arrive drop in or rise on one ease (`--ease`), and everything that drifts
- * stops under `prefers-reduced-motion`.
+ * Motion is kept for meaning. This window stays open all day, so nothing
+ * moves while the application is simply ready: gradients rest at one
+ * position and the hero's orb is still. Motion says something is happening --
+ * the orb breathes and the heading drifts while recording or working, a live
+ * line drifts while it may still change, the recording dot pulses. Hovers are
+ * a .3s colour change; a view settles in about a third of a second on
+ * `--ease-out`, with no delay before it starts. Under
+ * `prefers-reduced-motion` one rule (below the keyframes) stills all of it.
  *
  * Contrast was checked where text sits on these values. The site's own
  * quiet ink and gradients are too pale for text at this size, so `--muted`,
@@ -132,6 +138,12 @@
   /* oem.care's one ease, and the sharper one its notifications drop in on. */
   --ease: cubic-bezier(.7, .01, .11, .96);
   --ease-enter: cubic-bezier(.8, .01, .11, .98);
+  /*
+   * What a screen settles on when it changes. The site's ease starts slowly,
+   * which on a page loaded once reads as poise and on a view switched to fifty
+   * times a day reads as lag: this one is at speed from the first frame.
+   */
+  --ease-out: cubic-bezier(.16, 1, .3, 1);
 
   /*
    * The row grid, as tokens because two other rules have to agree with it
@@ -208,25 +220,44 @@
 @keyframes kw-enter { 0% { opacity: 0; transform: translateY(-100%); } 100% { opacity: 1; transform: none; } }
 @keyframes kw-rise { 0% { opacity: 0; transform: translateY(14px); } 100% { opacity: 1; transform: none; } }
 @keyframes kw-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .35; transform: scale(.7); } }
-@keyframes kw-breathe { 0%, 100% { transform: scale(.82); filter: blur(10px) hue-rotate(0deg); } 50% { transform: scale(1.04); filter: blur(10px) hue-rotate(-30deg); } }
+/*
+ * Transform and opacity only, so the compositor runs it: the orb's blur is a
+ * static filter on the element, painted once, not a filter re-run every frame.
+ */
+@keyframes kw-breathe { 0%, 100% { transform: scale(.84); opacity: .85; } 50% { transform: scale(1.04); opacity: 1; } }
 @keyframes kw-blob { 0%, 100% { transform: translate(0, 0); } 50% { transform: translate(6%, -4%); } }
 
 /*
+ * One switch for reduced motion. The per-rule `animation: none` lines further
+ * down predate it and still hold; this catches every rule that has none --
+ * the frame's fade, the content's rise, the menus and the search popup. A
+ * near-zero duration rather than `none`, so an animation's end state (and any
+ * `animationend` a component waits on) still arrives.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-delay: 0s !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+    transition-delay: 0s !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/*
  * Gradient text: a title in Iris, a live line in Dusk. The fill is the
- * text-safe variant, drifting along a track three times its width.
+ * text-safe variant on a track three times its width, at rest unless a rule
+ * gives it something to say (see the motion note above).
  */
 .iris-text, .dusk-text {
   background-size: 300% 100%;
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
-  animation: kw-drift 18s linear infinite;
 }
 .iris-text { background-image: var(--iris-text); }
 .dusk-text { background-image: var(--dusk-text); }
-@media (prefers-reduced-motion: reduce) {
-  .iris-text, .dusk-text { animation: none; }
-}
 
 /*
  * Reserve the scrollbar's gutter for the whole session, in a window that
@@ -263,12 +294,13 @@ body {
 }
 
 /*
- * The machine voice: Tiny5, the pixel face, at 13px, in the string's own
- * case. A section heading is lowercase by choice in the copy that writes it,
- * never by `text-transform`, which is not reversible by eye: an uppercased
- * path or error string reads as shouting and hides its own casing.
+ * The machine voice: Tiny5, the pixel face, in the string's own case -- never
+ * by `text-transform`, which is not reversible by eye: an uppercased path or
+ * error string reads as shouting and hides its own casing. It is for the
+ * machine talking about itself: times, counts, states, small labels. Never
+ * below 15px, where its 5-pixel cap height stops reading as letters, and
+ * never a heading people navigate by: those are Geist (`h2`, below).
  */
-h2,
 .overlay {
   font-family: var(--font-mono);
   font-size: 16px;
@@ -306,7 +338,7 @@ h2,
  * bare `.nav-pill:hover` at (0,2,0): without the `:not`, hovering the current
  * pill would repaint it and hover and "you are here" would look the same.
  */
-.frame { position: fixed; inset: var(--titlebar-height) 0 0; display: flex; background: var(--frame); animation: kw-fade .8s .1s both; }
+.frame { position: fixed; inset: var(--titlebar-height) 0 0; display: flex; background: var(--frame); animation: kw-fade .3s both; }
 
 .nav-pills { display: flex; align-items: center; gap: 8px; margin-left: 10px; flex-shrink: 0; }
 .nav-pill { display: inline-flex; align-items: center; height: 34px; margin: 0; padding: 0 16px; border: 0; border-radius: var(--r-control); background: var(--control); color: var(--text); font: inherit; font-size: 13px; letter-spacing: .04em; white-space: nowrap; transition: background-color .3s ease, color .3s ease; }
@@ -428,16 +460,19 @@ h2,
  * the state that needs you: recording's signal dot.
  *
  * The orb is oem.care's "breathe" tile reduced to its picture: a blurred
- * radial gradient that swells and shifts hue. Its pace is the state --
- * `[data-tone]` on `.hero` -- and reduced motion stills it.
+ * radial gradient. Its colour is the state -- `[data-tone]` on `.hero` -- and
+ * it only moves when the state is one that is happening: it breathes while
+ * recording and, faster, while working, and rests while ready or waiting on
+ * setup. The blur is a static filter and the breath is transform and opacity
+ * (`kw-breathe`), so a window left open all day repaints nothing at rest.
  */
-.hero { display: flex; flex-direction: column; align-items: center; max-width: 760px; animation: kw-rise .85s .2s var(--ease) both; }
+.hero { display: flex; flex-direction: column; align-items: center; max-width: 760px; animation: kw-rise .4s var(--ease-out) both; }
 .hero-icon { position: relative; display: flex; align-items: center; justify-content: center; width: 150px; height: 150px; color: #000; }
 .hero-icon .icon { position: relative; stroke-width: 1.1; }
-.hero-orb { position: absolute; inset: 0; border-radius: 50%; background: radial-gradient(circle at 50% 50%, #4fbf7f 0%, #86d2a8 28%, #9cc9f0 52%, #c9b8f2 76%, rgb(200 182 244 / 0) 100%); animation: kw-breathe 6s ease-in-out infinite; }
-.hero[data-tone="recording"] .hero-orb { background: radial-gradient(circle at 50% 50%, #ff813b 0%, #fdac61 26%, #fbab7d 46%, #c98eb5 70%, rgb(119 129 192 / 0) 100%); animation-duration: 2.2s; }
-.hero[data-tone="busy"] .hero-orb { background: radial-gradient(circle at 50% 50%, #efb158 0%, #f3a08d 30%, #c98eb5 55%, #7781c0 78%, rgb(119 129 192 / 0) 100%); animation-duration: 1.4s; }
-.hero[data-tone="setup"] .hero-orb { background: radial-gradient(circle at 50% 50%, #e4e4e4 0%, #d6d6d6 40%, rgb(214 214 214 / 0) 100%); animation: none; transform: scale(.85); filter: blur(10px); }
+.hero-orb { position: absolute; inset: 0; border-radius: 50%; background: radial-gradient(circle at 50% 50%, #4fbf7f 0%, #86d2a8 28%, #9cc9f0 52%, #c9b8f2 76%, rgb(200 182 244 / 0) 100%); filter: blur(10px); transform: scale(.92); }
+.hero[data-tone="recording"] .hero-orb { background: radial-gradient(circle at 50% 50%, #ff813b 0%, #fdac61 26%, #fbab7d 46%, #c98eb5 70%, rgb(119 129 192 / 0) 100%); will-change: transform, opacity; animation: kw-breathe 2.2s ease-in-out infinite; }
+.hero[data-tone="busy"] .hero-orb { background: radial-gradient(circle at 50% 50%, #efb158 0%, #f3a08d 30%, #c98eb5 55%, #7781c0 78%, rgb(119 129 192 / 0) 100%); will-change: transform, opacity; animation: kw-breathe 1.4s ease-in-out infinite; }
+.hero[data-tone="setup"] .hero-orb { background: radial-gradient(circle at 50% 50%, #e4e4e4 0%, #d6d6d6 40%, rgb(214 214 214 / 0) 100%); transform: scale(.85); }
 .hero-status { display: flex; align-items: center; gap: 9px; margin: 18px 0 0; padding: 6px 14px; border-radius: var(--r-control); background: var(--control); font: 15px/18px var(--font-mono); color: var(--text); }
 .hero-mark { width: 7px; height: 7px; flex-shrink: 0; border-radius: 50%; }
 .hero-status-ready .hero-mark { background: var(--muted); }
@@ -445,10 +480,14 @@ h2,
 .hero-status-recording .hero-mark { width: 8px; height: 8px; background: var(--signal); animation: kw-pulse 1.6s ease-in-out infinite; }
 .hero-status-setup .hero-mark { border: 1px solid var(--text); }
 .hero-extra { color: var(--text); font-variant-numeric: tabular-nums; }
-/* The heading in Dusk, drifting. A key inside it keeps its own ink on its own pill. */
-.hero-heading { margin: 18px 0 0; font-family: var(--font-sans); font-size: 52px; line-height: 64px; font-weight: 400; letter-spacing: .03em; text-transform: none; background-image: var(--dusk-text); background-size: 300% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: kw-drift 18s linear infinite; }
-.hero[data-tone="recording"] .hero-heading { animation-duration: 6s; }
-.hero[data-tone="busy"] .hero-heading { animation-duration: 3s; }
+/*
+ * The heading in Dusk, at rest while ready and drifting while recording or
+ * working, like the orb above it. A key inside it keeps its own ink on its
+ * own pill.
+ */
+.hero-heading { margin: 18px 0 0; font-family: var(--font-sans); font-size: 52px; line-height: 64px; font-weight: 400; letter-spacing: .03em; text-transform: none; background-image: var(--dusk-text); background-size: 300% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; }
+.hero[data-tone="recording"] .hero-heading { animation: kw-drift 6s linear infinite; }
+.hero[data-tone="busy"] .hero-heading { animation: kw-drift 3s linear infinite; }
 @media (prefers-reduced-motion: reduce) {
   .hero, .hero-orb, .hero-heading, .hero-status-recording .hero-mark { animation: none; }
 }
@@ -492,11 +531,14 @@ h2,
 .keycaps { white-space: normal; }
 
 /*
- * A key: the machine voice on a `--panel` pill, lifted by a 1px inset
- * `--edge` and a soft shadow. A key is a control, so it takes the control
- * corner, `--r-control`.
+ * A key: a `--panel` pill, lifted by a 1px inset `--edge` and a soft shadow.
+ * A key is a control, so it takes the control corner, `--r-control`. Its
+ * name is Geist medium -- "Control", "Shift" are words read at the size of
+ * the text around them, often 13–14px, where the pixel face breaks up. Only
+ * the hero's large keys (`.hero-heading kbd`) keep the pixel face.
  */
-kbd { display: inline-block; white-space: nowrap; border: 0; border-radius: var(--r-control); background: var(--panel); box-shadow: inset 0 0 0 1px var(--edge), 0 1px 6px rgb(0 0 0 / 5%); color: var(--text); font-family: var(--font-mono); font-size: 1em; line-height: 1.5; padding: 0 0.6em; }
+kbd { display: inline-block; white-space: nowrap; border: 0; border-radius: var(--r-control); background: var(--panel); box-shadow: inset 0 0 0 1px var(--edge), 0 1px 6px rgb(0 0 0 / 5%); color: var(--text); font-family: var(--font-sans); font-weight: 500; font-size: .92em; line-height: 1.6; padding: 0 0.65em; }
+.hero-heading kbd { font-family: var(--font-mono); font-weight: 400; }
 /* Caps in a row stood edge to edge on Settings > Shortcuts (KNEG-331). 3px, the hero's own spacing, which this matches there. */
 .keycaps > kbd + kbd { margin-left: 3px; }
 .hero-heading kbd { margin: 0 4px; padding: 6px 18px 4px; font-size: 26px; line-height: 34px; vertical-align: 8px; color: var(--text); }
@@ -537,7 +579,13 @@ kbd { display: inline-block; white-space: nowrap; border: 0; border-radius: var(
 .chip:hover:not(:disabled):not(.chip-static) { background: var(--control); }
 .chip-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .chip-chevron { display: flex; color: var(--muted); }
-.chip[aria-pressed="true"], .chip[aria-pressed="true"]:hover:not(:disabled) { background: var(--band-wash); }
+/*
+ * A chip that is on is marked the way every "on" is (`button.marked`, the
+ * current pill): `--band` with `--band-ink`. It used to be a pale blue wash,
+ * a second "on" that read as neither selected nor a toggle.
+ */
+.chip[aria-pressed="true"], .chip[aria-pressed="true"]:hover:not(:disabled) { background: var(--band); color: var(--band-ink); }
+.chip[aria-pressed="true"] .chip-chevron { color: inherit; }
 /*
  * A chip that states what is in effect rather than offering to change it
  * (`Chip` with neither `onClick` nor `pressed`): a `span`, so no hover fill
@@ -604,7 +652,7 @@ button.chip-menu-footer:hover:not(:disabled) { background: var(--panel-hover); }
  * strip's padding, so two lines of chips read as one strip rather than two.
  */
 /* The control bar is the reference frame's white card: a 40px sheet lifted off the ground, its strip divided from its body by a rule rather than a fill. */
-.control-bar { width: min(860px, 100%); background: var(--panel); border-radius: var(--r-sheet); box-shadow: var(--card-shadow); overflow: hidden; text-align: left; animation: kw-rise .85s .35s var(--ease) both; }
+.control-bar { width: min(860px, 100%); background: var(--panel); border-radius: var(--r-sheet); box-shadow: var(--card-shadow); overflow: hidden; text-align: left; animation: kw-rise .4s .05s var(--ease-out) both; }
 .control-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 22px; padding: 18px 0 12px; border-bottom: 1px solid var(--rule); }
 .control-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; flex: 0 1 auto; min-width: 0; }
 .control-spacer { flex: 1 0 0; }
@@ -721,7 +769,15 @@ button.control-copy { display: inline-flex; align-items: center; gap: 6px; heigh
 /* One line, the chips ellipsising as the control bar's do, so a narrow window keeps its height for the lines. */
 .live-chips { display: flex; flex: 0 1 auto; align-items: center; gap: 6px; min-width: 0; margin-left: 0; }
 .live-bar > .control-privacy { padding-left: 0; }
-.live-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+/*
+ * Discard and Stop and save sit at the bar's right edge at every width. The
+ * spacer before them only pushes them right on a line they share with the
+ * chips; once they wrapped to a line of their own they sat at its left at
+ * 1280px and at the right at 900px -- the one control a hand reaches for
+ * without looking, moving with the window. `margin-left: auto` holds them
+ * right on whichever line they land.
+ */
+.live-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; margin-left: auto; }
 .live-actions > button { display: inline-flex; align-items: center; gap: 8px; height: 38px; margin: 0; padding: 0 14px; border-radius: var(--r-control); font-size: 14.5px; white-space: nowrap; }
 .live-actions > button.primary { gap: 9px; padding: 0 16px; }
 /* A short window gives the live lines what the canvas' spacing would spend on margins. */
@@ -793,7 +849,7 @@ button.panel-inline:hover:not(:disabled) { border-color: var(--muted); backgroun
  * query after the breakout rule, which `--label-col` works out -- where they
  * would otherwise take 112px of a column already too narrow for two tracks.
  */
-.content { max-width: var(--content-max); margin: 0 auto; padding: 28px 56px 64px; animation: kw-rise .7s .1s var(--ease) both; }
+.content { max-width: var(--content-max); margin: 0 auto; padding: 28px 56px 64px; animation: kw-rise .35s var(--ease-out) both; }
 
 /* The first section in a view sits directly under the page header. */
 .view > section:first-of-type,
@@ -808,15 +864,25 @@ h1 {
   letter-spacing: -0.01em;
 }
 
+/*
+ * A section heading: Geist at 18px, medium, in full ink. It used to be the
+ * pixel face in muted grey at 16px, which set it smaller and quieter than the
+ * 15px rows under it -- a heading a reader had to be told was one. Size and
+ * weight now put it above its content, as a heading people scan by has to be.
+ */
 h2 {
   margin: 0 0 0.75rem;
-  font-weight: 400;
-  color: var(--muted);
+  font-family: var(--font-sans);
+  font-size: 18px;
+  line-height: 26px;
+  font-weight: 500;
+  letter-spacing: 0;
+  color: var(--text);
 }
 
 /* Falls back to bold without this. Geist is variable and would draw a real
- * bold, but the design sets headings at one flat weight, 400, and lets size
- * and face carry the hierarchy. */
+ * bold, but the design sets these at one flat weight, 400, and lets size
+ * carry the step below `h2`. */
 h3 {
   margin: 1.5rem 0 0.5rem;
   font-size: 1.0667rem;
@@ -841,7 +907,7 @@ h3 {
 
 /*
  * A screen's title in Iris, as the reference frames set every settings
- * title: large, light tracking, the text-safe gradient drifting through it.
+ * title: large, light tracking, the text-safe gradient at rest across it.
  */
 .page-header h1 {
   width: fit-content;
@@ -853,9 +919,7 @@ h3 {
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
-  animation: kw-drift 18s linear infinite;
 }
-@media (prefers-reduced-motion: reduce) { .page-header h1 { animation: none; } }
 
 .page-intro {
   margin: 0.6rem 0 0;
@@ -1641,7 +1705,7 @@ button.player-header-play:hover:not(:disabled) { background: linear-gradient(var
 .player-header-range { font: 15px/24px var(--font-mono); letter-spacing: 0.5px; }
 button.player-header-clear { flex: none; display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; margin: 0; padding: 0; color: var(--muted); }
 button.player-header-clear:hover:not(:disabled) { color: var(--text); }
-button.follow-chip { flex: none; height: 22px; margin: 0 0 0 auto; padding: 0 7px; color: var(--muted); font: 14px/16px var(--font-mono); letter-spacing: 0.5px; }
+button.follow-chip { flex: none; height: 22px; margin: 0 0 0 auto; padding: 0 7px; color: var(--muted); font: 15px/16px var(--font-mono); letter-spacing: 0.5px; }
 button.follow-chip:hover:not(:disabled) { background: var(--control); color: var(--text); }
 button.follow-chip[aria-pressed="true"],
 button.follow-chip[aria-pressed="true"]:hover:not(:disabled) { background: var(--band); color: var(--band-ink); }
@@ -1917,7 +1981,7 @@ label:has(> input[type="checkbox"]) {
  * a fixed dark background of its own to stay readable regardless of theme.
  *
  * The corners are oem.care's notification card's, 15px; the typeface is the
- * pixel face (`h2, .overlay`, above), the machine talking about itself.
+ * pixel face (`.overlay`, above), the machine talking about itself.
  */
 
 .overlay {
@@ -2378,26 +2442,29 @@ button:hover:not(:disabled) {
 }
 
 /*
- * The one thing to do next: Iris, drifting, with black text -- oem.care's
- * gradient call to action. At most one per screen, and never on a screen
- * that already shows `button.marked`: that screen's "one thing" is state
- * already in effect, not a press still waiting to happen. Black on Iris is
- * at least 6.4:1 at its palest point, in both themes.
+ * The one thing to do next: Iris with black text -- oem.care's gradient call
+ * to action. At most one per screen, and never on a screen that already
+ * shows `button.marked`: that screen's "one thing" is state already in
+ * effect, not a press still waiting to happen. Black on Iris is at least
+ * 6.4:1 at its palest point, in both themes. It rests until pointed at, then
+ * slides along its track: the movement answers the pointer instead of asking
+ * for attention all day.
  */
 button.primary {
   background: var(--iris);
   background-size: 250% 250%;
+  background-position: 0% 50%;
   color: #000;
-  animation: kw-drift 14s linear infinite;
+  transition: background-position .9s var(--ease-out), filter .3s ease;
 }
 
 button.primary:hover:not(:disabled) {
   background: var(--iris);
   background-size: 250% 250%;
+  background-position: 100% 50%;
   color: #000;
-  filter: saturate(1.25) brightness(1.04);
+  filter: saturate(1.15);
 }
-@media (prefers-reduced-motion: reduce) { button.primary { animation: none; } }
 
 /*
  * A secondary button: an action beside the primary one that is not the next
@@ -2462,6 +2529,8 @@ button:disabled {
  * window's edge. `margin` and `padding` are zeroed because the generic
  * `button` rule gives every button both.
  */
+/* The toggle's place, kept empty where there is no panel to toggle. */
+.titlebar-button-slot { flex-shrink: 0; width: 34px; height: 34px; margin-left: 14px; }
 .app-titlebar button.titlebar-button {
   display: flex;
   align-items: center;
@@ -2644,7 +2713,7 @@ button.microphone-language-toggle:hover:not(:disabled) { background: transparent
 .notes-notices .row { display: flex; flex-wrap: wrap; gap: 2px 10px; padding-block: 0 6px; }
 .notes-notices .row-value { min-width: 0; overflow-wrap: anywhere; }
 .notes-empty { max-width: 40rem; margin: 15vh auto 0; padding: 0 40px; text-align: center; }
-/* An `h2`, as the task heroes' headings are, drawn as the `h3` it was rather than in the machine voice `h2` gets. */
+/* An `h2`, as the task heroes' headings are, drawn as the `h3` it was rather than at a section heading's size. */
 .notes-empty > h2 { margin: 1.5rem 0 0.5rem; font-family: inherit; font-size: 1.0667rem; line-height: inherit; letter-spacing: inherit; text-transform: none; color: inherit; }
 /* Keep the native track's layout space so revealing it never shifts content. */
 :is(.list-panel, .notes-main, .note-body, .note-side-body) {
@@ -2731,10 +2800,9 @@ button:is(.notes-person, .notes-trash)[aria-pressed="true"], button:is(.notes-pe
 .vocabulary-support { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr)); gap: 1rem; }
 .vocabulary-usage details { max-height: 14rem; overflow: auto; overflow-wrap: anywhere; }
 
-/* Back and forward, 6px after the toggle and 6px apart -- or, on a page with no
- * list panel and so no toggle, the 14px in from the window's edge the toggle takes. */
+/* Back and forward, 6px after the toggle -- or after the empty slot that holds
+ * its place on a page with no list panel -- and 6px apart. */
 .titlebar-history { display: flex; align-items: center; flex-shrink: 0; gap: 6px; margin-left: 6px; }
-.app-titlebar > .titlebar-history:first-child { margin-left: 14px; }
 
 /* Separate summary and note editors retain the existing transcript workspace. */
 .note-prose, .summary-pane { min-width: 0; flex: 1; }
@@ -2744,6 +2812,14 @@ button:is(.notes-person, .notes-trash)[aria-pressed="true"], button:is(.notes-pe
 .summary-tabs [role="tab"] { color: var(--muted); border-radius: 0; }
 .summary-tabs [aria-selected="true"] { color: var(--text); border-bottom: 2px solid var(--band); }
 .summary-toolbar { display: flex; flex-wrap: wrap; gap: 8px; padding-block: 8px; }
+/* The summary's actions are the resting pill a settings screen's buttons are, not bare words in the note's margin. */
+.summary-toolbar > button { margin: 0; min-height: 34px; padding: 0 16px; background: var(--control); font-size: 14px; }
+.summary-toolbar > button:hover:not(:disabled) { background: var(--control-hover); }
+
+/* Settings > Shortcuts: one row's editor -- the keys, Record, Set and the mode -- on one wrapping line. */
+.shortcut-editor { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.shortcut-editor > input { flex: 1 1 12rem; min-width: 10rem; margin: 0; }
+.shortcut-editor > button, .shortcut-editor > select { margin: 0; }
 .summary-pane > .muted, .summary-pane > .warn, .summary-pane > .error { padding-inline: 12px; }
 
 .summary-pane { margin: 0; padding: 0; }
@@ -2791,8 +2867,8 @@ button.note-action-button { flex: none; display: flex; align-items: center; just
 .trashed-note-header .note-meta { margin-top: 12px; }
 .trashed-note-title { margin: 22px 0 0; color: var(--text); font-family: inherit; font-size: 32px; line-height: 40px; letter-spacing: -0.4px; text-transform: none; overflow-wrap: anywhere; }
 .trashed-note-text { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.6; }
-/* "Your notes" in the machine voice the workspace's `h2` gives it; an `h3` here, under the title's `h2`. */
-.trashed-note .note-section-heading { margin-top: 24px; font-family: var(--font-mono); line-height: 16px; letter-spacing: 0.5px; }
+/* "Your notes" set as the workspace sets it; an `h3` here, under the title's `h2`. */
+.trashed-note .note-section-heading { margin-top: 24px; }
 .note-page { padding-top: 14px; padding-bottom: 32px; }
 .note-page > .save-status.error { margin: 0 0 12px; }
 .note-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 18px; margin: 12px 0 0; padding: 0; list-style: none; font-size: 13.5px; line-height: 20px; color: var(--muted); }
@@ -2834,7 +2910,7 @@ button.note-people-add:hover:not(:disabled), button.note-people-add[aria-expande
 .note-tabs > button { margin-top: 0; }
 .note-detail .note-workspace { margin-top: 18px; }
 /* The design's flat 400; Geist would draw a real bold, but the heading is set apart by size and colour instead. */
-.note-section-heading { font-size: .85rem; font-weight: 400; color: var(--muted); margin: 1rem 0; }
+.note-section-heading { margin: 1.25rem 0 .75rem; font-family: var(--font-sans); font-size: 16px; line-height: 22px; font-weight: 500; color: var(--text); }
 .note-prose > .note-section-heading:first-child { margin-top: .5rem; }
 .note-workspace > section { min-width: 0; margin-top: 0; }
 .note-workspace [hidden], .note-workspace > [hidden] { display: none; }
@@ -2905,9 +2981,8 @@ button.note-people-add:hover:not(:disabled), button.note-people-add[aria-expande
  * their own. Last in the file because a scoped rule and an unscoped one of
  * equal specificity are decided by order.
  *
- * - **A section label** keeps the machine voice and gains a `--rule` under
- *   it. Only a bare `h2`: every `h2` with a class -- a hero heading, a panel
- *   label -- has its own rule set.
+ * - **A section heading** gains a `--rule` under it. Only a bare `h2`: every
+ *   `h2` with a class -- a hero heading, a panel label -- has its own rule set.
  * - **Fields and selects** are 36px pills with a 1px `--edge`, and a field
  *   sits on `--panel` rather than the `--control` fill. `:not()` with a list, so the rule is exactly as specific as the
  *   unscoped one it follows and a page's own field rule (Providers' search)
@@ -2919,14 +2994,17 @@ button.note-people-add:hover:not(:disabled), button.note-people-add[aria-expande
  */
 /*
  * A settings screen's top-level section is a white card on the ground, the
- * way the reference frames lay out every settings column; its label is the
- * pixel voice in navy, over a rule. A section inside a section stays flat.
+ * way the reference frames lay out every settings column; its heading sits
+ * over a rule. A section inside a section stays flat. Text in a card stops at
+ * about 70 characters a line: at 1280px the column is wider than that, and
+ * Transcription's explanations ran to 105.
  */
 .content .view section { padding: 22px 28px 18px; border-radius: var(--r-card); background: var(--panel); box-shadow: var(--card-shadow); }
 .content .view section section { padding: 0; border-radius: 0; background: none; box-shadow: none; }
 /* A link-like button written before its section's label (Transcription's Manage vocabulary) sits at the label's right, over its rule. */
 .content .view section > button:first-child:not([class]) { float: right; margin: -7px 0 0 12px; }
-.content h2:not([class]) { padding-bottom: 10px; border-bottom: 1px solid var(--rule); color: var(--band-text); }
+.content h2:not([class]) { padding-bottom: 10px; border-bottom: 1px solid var(--rule); }
+.content .view section p, .content .view section li { max-width: 70ch; }
 
 /* A plain button on a settings screen is the resting pill, filled. */
 .content button:not([class]) { padding: 0 16px; min-height: 34px; background: var(--control); font-size: 14px; }
@@ -3048,31 +3126,45 @@ button.provider-link:hover:not(:disabled) { background: none; color: var(--band-
  * the corner. No photographs.
  */
 dialog.settings-sheet { position: fixed; inset: calc(var(--titlebar-height) - 6px) 14px 14px; width: auto; height: auto; max-width: none; max-height: none; margin: 0; padding: 0; border: 0; border-radius: var(--r-sheet); background: var(--glass); color: var(--text); backdrop-filter: blur(64px) saturate(1.2); -webkit-backdrop-filter: blur(64px) saturate(1.2); box-shadow: var(--card-shadow); overflow-y: auto; }
-dialog.settings-sheet[open] { animation: kw-rise .6s var(--ease) both; }
+dialog.settings-sheet[open] { animation: kw-rise .35s var(--ease-out) both; }
 dialog.settings-sheet::backdrop { background: rgb(0 0 0 / 8%); }
 .settings-sheet-body { max-width: 1100px; margin: 0 auto; padding: 28px 32px 40px; }
 .settings-sheet-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 22px; }
-.settings-sheet-title { margin: 0; font-family: var(--font-sans); font-size: 44px; line-height: 52px; letter-spacing: .02em; width: fit-content; background-image: var(--iris-text); background-size: 300% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: kw-drift 18s linear infinite; }
+.settings-sheet-title { margin: 0; font-family: var(--font-sans); font-size: 44px; line-height: 52px; letter-spacing: .02em; width: fit-content; background-image: var(--iris-text); background-size: 300% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; }
 button.sheet-close { display: inline-flex; align-items: center; gap: 14px; height: 40px; margin: 0; padding: 0 5px 0 18px; border-radius: var(--r-control); background: var(--control); font-size: 14px; }
 button.sheet-close:hover:not(:disabled) { background: var(--control-hover); }
 .sheet-close-mark { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; border-radius: 50%; background: var(--panel); transition: transform .5s var(--ease); }
 button.sheet-close:hover .sheet-close-mark { transform: rotate(90deg); }
-.settings-sheet-section { margin: 0 0 28px; padding: 0; background: none; }
-.settings-sheet-label { margin: 0 0 12px; font: 16px/18px var(--font-mono); color: var(--band-text); }
-.settings-sheet-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 14px; margin: 0; padding: 0; list-style: none; }
-button.sheet-tile { display: flex; flex-direction: column; gap: 10px; width: 100%; margin: 0; padding: 0; border-radius: 0; background: none; text-align: left; }
-button.sheet-tile:hover:not(:disabled) { background: none; }
-.sheet-tile-art { position: relative; display: block; aspect-ratio: 4 / 3; border-radius: var(--r-sheet); overflow: hidden; background: #c8b6f4; transition: transform .5s var(--ease), border-radius .5s var(--ease); }
-.sheet-tile-art > .icon { position: absolute; left: 14px; bottom: 14px; box-sizing: content-box; padding: 9px; border-radius: 50%; background: rgb(255 255 255 / 55%); color: #000; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
-button.sheet-tile:hover .sheet-tile-art { transform: scale(1.02); border-radius: 56px; }
-.sheet-tile-label { display: flex; align-items: center; gap: 8px; padding: 0 6px; font-size: 15px; }
-button.sheet-tile[aria-current="page"] .sheet-tile-label::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--text); }
-button.sheet-tile:focus-visible { outline: none; }
-button.sheet-tile:focus-visible .sheet-tile-art { outline: 2px solid var(--accent); outline-offset: 3px; }
-@media (prefers-reduced-motion: reduce) {
-  dialog.settings-sheet[open], .settings-sheet-title { animation: none; }
-  .sheet-tile-art { transition: none; }
+/*
+ * Four sections of two to four tiles (`SETTINGS_PANEL`). A tile is an index
+ * entry before it is a picture: the art is a short band that says which part
+ * of the sheet you are in at a glance, and the title and the screen's own
+ * one-line intro under it say what is behind it. The intro is clamped to two
+ * lines so a row of tiles keeps one baseline.
+ */
+.settings-sheet-section { margin: 0 0 30px; padding: 0; background: none; }
+.settings-sheet-label { margin: 0 0 12px; font-family: var(--font-sans); font-size: 17px; line-height: 24px; font-weight: 500; color: var(--text); }
+.settings-sheet-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 14px; margin: 0; padding: 0; list-style: none; }
+button.sheet-tile { display: flex; flex-direction: column; align-items: stretch; gap: 0; width: 100%; height: 100%; margin: 0; padding: 0 0 14px; border-radius: var(--r-card); background: var(--panel); text-align: left; box-shadow: 0 1px 2px rgb(20 20 40 / 4%); transition: box-shadow .3s ease, transform .3s var(--ease-out); }
+button.sheet-tile:hover:not(:disabled) { background: var(--panel); box-shadow: var(--card-shadow); transform: translateY(-2px); }
+.sheet-tile-art { position: relative; display: block; height: 76px; border-radius: var(--r-card) var(--r-card) 0 0; overflow: hidden; background: #c8b6f4; }
+.sheet-tile-art > .icon { position: absolute; left: 14px; bottom: 12px; box-sizing: content-box; padding: 8px; border-radius: 50%; background: rgb(255 255 255 / 60%); color: #000; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+.sheet-tile-label { display: flex; align-items: center; gap: 8px; margin: 12px 16px 0; font-size: 15px; line-height: 20px; font-weight: 500; }
+.sheet-tile-intro { display: -webkit-box; margin: 4px 16px 0; overflow: hidden; color: var(--muted); font-size: 13.5px; line-height: 19px; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; }
+button.sheet-tile[aria-current="page"] .sheet-tile-label::before { content: ""; width: 7px; height: 7px; flex-shrink: 0; border-radius: 50%; background: var(--text); }
+button.sheet-tile:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+/* The dark sheet: the pastel art dimmed so a grid of it does not glare off #111. */
+@media not (prefers-color-scheme: light) {
+  button.sheet-tile { box-shadow: inset 0 0 0 1px var(--rule); }
+  .sheet-tile-art { filter: brightness(.74) saturate(.88); }
 }
+@media (prefers-reduced-motion: reduce) {
+  dialog.settings-sheet[open] { animation: none; }
+  button.sheet-tile, button.sheet-tile:hover:not(:disabled) { transition: none; transform: none; }
+}
+
+/* A title focused from code (a Settings tile chosen) is announced, not ringed. */
+h1[tabindex="-1"]:focus { outline: none; }
 
 .sheet-tile-art[data-art="shortcuts"] { background: radial-gradient(circle at 30% 35%, #f3a08d 0 18%, transparent 19%), radial-gradient(circle at 62% 58%, #efb158 0 22%, transparent 23%), linear-gradient(160deg, #f6e7da, #e9d3f0); }
 .sheet-tile-art[data-art="meeting-settings"] { background: var(--dusk); }
@@ -3086,3 +3178,23 @@ button.sheet-tile:focus-visible .sheet-tile-art { outline: 2px solid var(--accen
 .sheet-tile-art[data-art="cli"] { background: radial-gradient(circle, rgb(255 255 255 / 55%) 0 1.5px, transparent 2px) 0 0 / 10px 10px, #1f2230; }
 .sheet-tile-art[data-art="mcp"] { background: radial-gradient(ellipse at 20% 80%, #c98eb5 0 30%, transparent 31%), radial-gradient(ellipse at 80% 20%, #9cc9f0 0 30%, transparent 31%), #ece6f4; }
 .sheet-tile-art[data-art="diagnostics"] { background: radial-gradient(circle at 50% 50%, #ff3f61 0 8%, transparent 9%), radial-gradient(circle at 50% 50%, transparent 0 22%, rgb(0 0 0 / 10%) 23% 24%, transparent 25% 40%, rgb(0 0 0 / 10%) 41% 42%, transparent 43%), #f1eeec; }
+
+/*
+ * The application's own yes-or-no question (`components/ConfirmDialog.tsx`),
+ * in place of the operating system's grey box: a white card, the question as
+ * its title, what it costs under it, and a pill naming the action beside
+ * Cancel. A destructive action is the error colour with the ground's ink on
+ * it -- dark on the dark theme's pale red, light on the light theme's deep
+ * one -- so it reads as the step that loses something, at 5.6:1 or better.
+ */
+dialog.confirm-dialog { width: min(440px, calc(100vw - 32px)); margin: auto; padding: 26px 26px 22px; border: 0; border-radius: var(--r-card); background: var(--panel); color: var(--text); box-shadow: var(--card-shadow); }
+dialog.confirm-dialog[open] { animation: kw-rise .3s var(--ease-out) both; }
+dialog.confirm-dialog::backdrop { background: rgb(0 0 0 / 28%); }
+.confirm-dialog-title { margin: 0; font-family: var(--font-sans); font-size: 19px; line-height: 26px; font-weight: 500; letter-spacing: 0; color: var(--text); text-wrap: balance; }
+.confirm-dialog-detail { margin: 8px 0 0; color: var(--muted); font-size: 14.5px; line-height: 21px; }
+.confirm-dialog-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 22px; }
+.confirm-dialog-actions button { margin: 0; min-height: 38px; padding: 0 18px; }
+.confirm-dialog-actions button:not(.danger):not(.primary) { background: var(--control); }
+.confirm-dialog-actions button:not(.danger):not(.primary):hover:not(:disabled) { background: var(--control-hover); }
+button.danger { background: var(--error); color: var(--bg); }
+button.danger:hover:not(:disabled) { background: var(--error); color: var(--bg); filter: brightness(1.08); }

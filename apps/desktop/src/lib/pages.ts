@@ -92,11 +92,11 @@ export const PAGES = {
     intro: "An HTTP interface on this computer for other programs.",
   },
   cli: {
-    title: "CLI",
+    title: "Command line",
     intro: "Use KnegisWhisper from a terminal.",
   },
   mcp: {
-    title: "MCP",
+    title: "AI assistants (MCP)",
     intro: "Let AI assistants that speak MCP work with your notes, transcripts and dictionary.",
   },
   diagnostics: {

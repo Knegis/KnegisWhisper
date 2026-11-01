@@ -264,6 +264,30 @@ export function pressableAccelerators(
 }
 
 /**
+ * What a shortcut is for, named for a person. The rows on Settings >
+ * Shortcuts used to show the action id itself -- "chat-agent",
+ * "voice-agent" -- which is the configuration file's word, not the reader's;
+ * every control on the row is named from this instead. The names stay close
+ * to upstream's (`CHAT_AGENT_KEY` and the rest, `crates/platform`'s
+ * `HotkeyAction`): the assistant actions are not built here yet, so a name
+ * promising more than "the chat agent's key" would be invented.
+ */
+export function hotkeyActionLabel(action: HotkeyAction): string {
+  switch (action) {
+    case "dictation":
+      return "Dictation";
+    case "chat-agent":
+      return "Chat agent";
+    case "voice-agent":
+      return "Voice agent";
+    case "translation":
+      return "Translation";
+    case "meeting":
+      return "Meeting recording";
+  }
+}
+
+/**
  * Whether an action toggles or is held, in the words a control needs.
  *
  * The `detail` is the cost, not a restatement of the name. Push-to-talk turns

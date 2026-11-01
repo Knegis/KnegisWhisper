@@ -122,7 +122,7 @@ try {
     results.push({ scheme, group: "partial settings save", checks: ["screen order", "committed group removed from pending list", "failed group retained", "retry without duplicate writes"] });
 
     const groups = [
-      ["Shortcuts", 'input[aria-label="accelerator for dictation"]', "Control+Shift+F8"],
+      ["Shortcuts", 'input[aria-label="Keys for Dictation"]', "Control+Shift+F8"],
       ["Vocabulary", '.vocabulary-add input', "Uncommitted fixture term"],
       ["Transcription", 'input[aria-label="Corti tenant"]', "fixture-tenant"],
       ["Cleanup & summaries", '[data-surface="settings.intelligence.enterprise"] input[type="text"]', "fixture-region"],
@@ -186,8 +186,8 @@ try {
     assert.equal(await cdp.evaluate("window.__preferenceWrites.filter(e=>e==='meeting_set_prompt').length"), 3);
     results.push({ scheme, group: "immediate meeting preferences", checks: ["failures remain pending", "successful independent write preserves earlier failure", "retry each failed intent once"] });
 
-    await rail("Settings"); await section("Shortcuts"); await waitFor(cdp, "Boolean(document.querySelector('select[aria-label=\"mode for dictation\"]'))");
-    await cdp.evaluate(`(() => { const original=window.__TAURI_INTERNALS__.invoke; window.__failMode=true; window.__modeWrites=0; window.__TAURI_INTERNALS__.invoke=async(command,args)=>{ if(command==='hotkey_set_mode'){window.__modeWrites++; if(window.__failMode)throw Error('Synthetic mode failure'); } return original(command,args); }; const input=document.querySelector('select[aria-label="mode for dictation"]'); input.value=input.value==='hold'?'toggle':'hold'; input.dispatchEvent(new Event('change',{bubbles:true})); })()`);
+    await rail("Settings"); await section("Shortcuts"); await waitFor(cdp, "Boolean(document.querySelector('select[aria-label=\"Mode for Dictation\"]'))");
+    await cdp.evaluate(`(() => { const original=window.__TAURI_INTERNALS__.invoke; window.__failMode=true; window.__modeWrites=0; window.__TAURI_INTERNALS__.invoke=async(command,args)=>{ if(command==='hotkey_set_mode'){window.__modeWrites++; if(window.__failMode)throw Error('Synthetic mode failure'); } return original(command,args); }; const input=document.querySelector('select[aria-label="Mode for Dictation"]'); input.value=input.value==='hold'?'toggle':'hold'; input.dispatchEvent(new Event('change',{bubbles:true})); })()`);
     await waitFor(cdp, "document.querySelector('.settings-draft-status.error')?.textContent.includes('Synthetic mode failure')");
     await rail("Notes"); await dialog(); await cdp.evaluate("window.__failMode=false"); await click(".settings-drafts-dialog button", "Save changes"); await noDialog();
     assert.equal(await cdp.evaluate("window.__modeWrites"), 2);

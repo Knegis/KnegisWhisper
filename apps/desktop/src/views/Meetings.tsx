@@ -1,5 +1,6 @@
 import { useFinalisationProgress } from "../lib/useFinalisationProgress";
 import { MeetingProgress } from "../components/MeetingProgress";
+import { askConfirm } from "../components/ConfirmDialog";
 /**
  * Meetings: the recording task, the meeting under way, and the meetings
  * behind it.
@@ -651,7 +652,7 @@ export function Meetings({
     // The page's clock, which stops at a stall, when it has one; Rust's
     // count before the page has read a start, so the length is never
     // "under a minute" for a meeting it has not timed yet.
-    if (!window.confirm(question(startedAt === null ? before.elapsedSeconds : elapsed))) return false;
+    if (!(await askConfirm(question(startedAt === null ? before.elapsedSeconds : elapsed), { confirm: "Discard recording", destructive: true }))) return false;
     // The question holds the page, so the meeting may have changed while it
     // was open: stopped from its own window, or stopped and another one
     // started. Nothing is discarded unless the meeting asked about is still
