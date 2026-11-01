@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { NAV, INNER_VIEWS, DEFAULT_VIEW, RAIL, SETTINGS_HOME, SETTINGS_PANEL, childrenOf, groupOf, isGroup, railOf, srSuffixOf } from "../src/lib/navigation.js";
+import { NAV, INNER_VIEWS, DEFAULT_VIEW, RAIL, SETTINGS_PANEL, childrenOf, groupOf, isGroup, railOf, srSuffixOf } from "../src/lib/navigation.js";
 
 const topLevel = ["dictation", "meetings", "notes"];
 const groups = {
@@ -64,25 +64,24 @@ test("railOf maps every view to the rail entry that reads as current", () => {
   }
 });
 
-test("the Settings panel lists both groups, Developer under its own heading", () => {
-  assert.deepEqual(SETTINGS_PANEL, [
-    { group: "settings", heading: null },
-    { group: "developer", heading: "Developer" },
-  ]);
-  // Every group NAV has, in NAV's order, so a group added there cannot be
-  // left out of the only panel that lists group children.
-  assert.deepEqual(SETTINGS_PANEL.map((section) => section.group), NAV.filter(isGroup).map((group) => group.id));
-  // The heading is the group's own label, not a second name for it.
+test("the Settings sheet puts every group screen on exactly one tile", () => {
+  // Every screen of both NAV groups, once: a screen added to a group cannot be
+  // left off the only place that lists group children, nor listed twice.
+  const tiles: string[] = SETTINGS_PANEL.flatMap((section) => [...section.views]);
+  const screens = NAV.filter(isGroup).flatMap((group) => childrenOf(group).map((child) => child.id));
+  assert.deepEqual([...tiles].sort(), [...screens].sort());
+  assert.equal(new Set(tiles).size, tiles.length);
+  // No section is a wall of tiles, and none is a lone tile under a heading.
+  for (const section of SETTINGS_PANEL) {
+    assert.ok(section.views.length >= 2 && section.views.length <= 4, section.heading);
+  }
+  // Developer is still NAV's Developer group: its label, its screens, its order.
   const developer = NAV.filter(isGroup).find((group) => group.id === "developer");
-  assert.equal(SETTINGS_PANEL[1].heading, developer?.label);
+  const last = SETTINGS_PANEL[SETTINGS_PANEL.length - 1];
+  assert.equal(last?.heading, developer?.label);
+  assert.deepEqual(last?.views, developer ? childrenOf(developer).map((child) => child.id) : []);
 });
 
-test("SETTINGS_HOME is a Settings child, so the rail's Settings opens a screen", () => {
-  const settings = NAV.filter(isGroup).find((group) => group.id === "settings");
-  assert.ok(settings);
-  assert.ok(childrenOf(settings).some((child) => child.id === SETTINGS_HOME));
-  assert.equal(railOf(SETTINGS_HOME), "settings");
-});
 
 test("the Settings child Meetings is named apart from the top-level Meetings, and only it", () => {
   const leaves = NAV.flatMap((entry) => isGroup(entry) ? [...childrenOf(entry)] : [entry]);

@@ -380,37 +380,43 @@ fn validate_import_url(url: &str) -> Result<url::Url, MediaImportError> {
     Ok(parsed)
 }
 
+const MAX_CONVERTED_BYTES: u64 = 512 * 1024 * 1024;
+
+/// The demuxers an imported file may be read with: the containers behind
+/// every extension the import dialog and the upload route accept (`mov`
+/// covers mp4, m4a and m4v; `ogg` covers opus; `asf` covers wma).
+const MEDIA_FORMAT_WHITELIST: &str = "wav,mp3,mov,matroska,webm,ogg,flac,aac,asf,avi,aiff";
+
+/// Uploaded media is also capped at [`MAX_CONVERTED_BYTES`] of decoded WAV, a
+/// cap a file the owner picked themselves does not need.
+fn uploaded_ffmpeg_args(input: &Path, output: &Path) -> Vec<String> {
+    // -fs is an output option; insert it immediately before the output filename.
+    let mut args = ffmpeg_convert_args(input, output);
+    let destination = args.pop().unwrap_or_default();
+    args.extend(["-fs".into(), MAX_CONVERTED_BYTES.to_string(), destination]);
+    args
+}
+
 /// The ffmpeg arguments that convert any readable audio or video file to 16
 /// kHz mono WAV.
 ///
 /// `-vn` drops any video stream. Harmless when there was never one -- a plain
 /// audio file passes through untouched by it -- which is exactly why audio
 /// and video import share one conversion path.
-const MAX_CONVERTED_BYTES: u64 = 512 * 1024 * 1024;
-/// Uploaded media cannot select playlist demuxers or network protocols.
-fn uploaded_ffmpeg_args(input: &Path, output: &Path) -> Vec<String> {
-    let mut args: Vec<String> = [
-        "-protocol_whitelist",
-        "file,pipe",
-        "-format_whitelist",
-        "wav,mp3,mov,matroska,webm,ogg,flac,aac,asf,avi",
-    ]
-    .into_iter()
-    .map(str::to_owned)
-    .collect();
-    // -fs is an output option; insert it immediately before the output filename.
-    let mut conversion = ffmpeg_convert_args(input, output);
-    let destination = conversion.pop().unwrap_or_default();
-    args.extend(conversion);
-    args.extend(["-fs".into(), MAX_CONVERTED_BYTES.to_string(), destination]);
-    args
-}
+///
+/// The input cannot select playlist demuxers or network protocols, whether it
+/// came from the upload route or the import dialog: a file named `.mp4` can
+/// hold an HLS or DASH playlist, and the dialog's filter checks only the name.
 fn ffmpeg_convert_args(input: &Path, output: &Path) -> Vec<String> {
     vec![
         "-hide_banner".to_owned(),
         "-loglevel".to_owned(),
         "error".to_owned(),
         "-y".to_owned(),
+        "-protocol_whitelist".to_owned(),
+        "file,pipe".to_owned(),
+        "-format_whitelist".to_owned(),
+        MEDIA_FORMAT_WHITELIST.to_owned(),
         "-i".to_owned(),
         input.display().to_string(),
         "-vn".to_owned(),
@@ -1812,6 +1818,44 @@ mod tests {
         assert!(args.contains(&"1".to_owned()), "mono");
         assert!(args.iter().any(|a| a == "in.mp4"));
         assert!(args.iter().any(|a| a == "out.wav"));
+    }
+
+    #[test]
+    fn every_ffmpeg_input_is_held_to_local_files_and_known_containers() {
+        // Dialog imports as well as uploads: both whitelists are input
+        // options, so both must come before `-i`.
+        for args in [
+            ffmpeg_convert_args(Path::new("in.mp4"), Path::new("out.wav")),
+            uploaded_ffmpeg_args(Path::new("in.mp4"), Path::new("out.wav")),
+        ] {
+            let input = args.iter().position(|a| a == "-i").unwrap();
+            let value = |flag: &str| {
+                let at = args.iter().position(|a| a == flag).unwrap();
+                assert!(at < input, "{flag} must precede -i");
+                args[at + 1].clone()
+            };
+            assert_eq!(value("-protocol_whitelist"), "file,pipe");
+            let formats = value("-format_whitelist");
+            for demuxer in ["mov", "ogg", "asf", "aiff"] {
+                assert!(formats.split(',').any(|f| f == demuxer), "{demuxer}");
+            }
+            assert!(!formats.contains("hls") && !formats.contains("dash"));
+            assert_eq!(args.last().map(String::as_str), Some("out.wav"));
+        }
+    }
+
+    #[test]
+    fn only_uploads_are_size_capped() {
+        let picked = ffmpeg_convert_args(Path::new("in.mp4"), Path::new("out.wav"));
+        let uploaded = uploaded_ffmpeg_args(Path::new("in.mp4"), Path::new("out.wav"));
+        assert!(!picked.contains(&"-fs".to_owned()));
+        let fs = uploaded.iter().position(|a| a == "-fs").unwrap();
+        assert_eq!(uploaded[fs + 1], MAX_CONVERTED_BYTES.to_string());
+        assert_eq!(
+            fs + 2,
+            uploaded.len() - 1,
+            "-fs sits right before the output"
+        );
     }
 
     /* --------------------------------------------------------------- yt-dlp */

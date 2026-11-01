@@ -8,18 +8,19 @@ import { Icon } from "./Icon";
  * rows inside them. `SplitView` places the panel; these fill it.
  *
  * Shared rather than written per page, because every page that has a panel
- * draws the same four things -- the Settings panel, Dictation's history,
- * Meetings' recent list and the Notes library -- and
+ * draws the same things -- Dictation's history, Meetings' recent list and
+ * the Notes library -- and
  * a row that looked one way in one panel and another way in the next would
  * read as two kinds of thing where there is one.
  *
  * # Two kinds of row
  *
  * - **`PanelItem` is a place.** It selects something the main area then shows
- *   -- a settings screen, a note -- and exactly one of them is `current`, so it
+ *   -- a dictation, a note -- and exactly one of them is `current`, so it
  *   carries `aria-current="page"` and the `--selected` fill. With an `icon` it
- *   is a single 36px line (the Settings rows); without one it is a title over
- *   an optional `meta` line (a note's title over its time).
+ *   is a single 36px line (the old Settings panel's rows, the last to pass
+ *   one); without one it is a title over an optional `meta` line (a note's
+ *   title over its time).
  * - **`PanelAction` is a command.** It does something -- starts a note, opens
  *   the importer -- and is never current. It has an icon, a label, and an
  *   optional trailing `hint` in the machine voice for a key or a count.
@@ -32,7 +33,8 @@ import { Icon } from "./Icon";
  * no `PageHeader` -- this is the page's title. `level={2}` where the page
  * beside the panel has its own `h1`, as every settings screen does in its
  * `PageHeader`; two `h1`s there made "Settings" and "Providers" read as two
- * pages.
+ * pages. That was the Settings list panel, which the Settings sheet has
+ * replaced, so no panel passes it now.
  */
 export function PanelHeader({ title, level = 1, children }: { title: string; level?: 1 | 2; children?: ReactNode }) {
   const Heading = level === 1 ? "h1" : "h2";
@@ -61,15 +63,16 @@ export function PanelSection({ label, children }: { label: string | null; childr
  * A row that selects something.
  *
  * `srSuffix` is text a screen reader hears after `title` and nobody sees --
- * `lib/navigation.ts`' `srSuffixOf`, which is how the Settings panel's
- * "Meetings" reads as "Meetings settings" beside the rail's own "Meetings".
- * It sits inside the title's span so the accessible name keeps the visible
+ * `lib/navigation.ts`' `srSuffixOf`, which is how the old Settings panel's
+ * "Meetings" read as "Meetings settings" beside the rail's own "Meetings".
+ * The Settings sheet now adds that suffix to its own tile, and no panel row
+ * passes one. It sits inside the title's span so the accessible name keeps the visible
  * label at its start (WCAG 2.5.3, label in name).
  *
  * `tooltip` is for a row whose title can be cut off -- a dictation, a note --
  * and becomes the button's `title`, which `components/Tooltip.tsx` draws. It
- * is opt-in because a Settings row's label always fits, and a tooltip
- * repeating it on every hover and focus would only be noise.
+ * is opt-in because a row whose label always fits gains nothing from a
+ * tooltip repeating it on every hover and focus; it would only be noise.
  *
  * `className` and `titleClassName` add to the button's and the title span's
  * own classes, and any other button attribute passes through to the button.

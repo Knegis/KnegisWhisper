@@ -1,25 +1,26 @@
 /**
- * The navigation tree, the rail drawn from it, and the `ViewId` union derived
- * from it.
+ * The navigation tree, the title bar's pills drawn from it, and the `ViewId`
+ * union derived from it.
  *
  * # Three jobs and Settings
  *
- * The rail answers one question: what is this application for. That is three
+ * The pills answer one question: what is this application for. That is three
  * things -- `Dictation`, `Meetings`, `Notes` -- and everything else is
  * configuring one of those three or exposing the application to another
- * program. So the rail is four entries (`RAIL` below): the three jobs, a
- * divider, and `Settings`. A flat list of thirteen peers, which is what this
- * was before grouping, cannot say that; every screen read as equally important
- * because every screen was one indistinguishable row in the same column.
+ * program. So the title bar carries four pills (`RAIL` below): the three jobs
+ * at its left, and `Settings` at its right. A flat list of thirteen peers,
+ * which is what this was before grouping, cannot say that; every screen read
+ * as equally important because every screen was one indistinguishable row.
  *
- * `Settings` opens a list panel beside the page (`SETTINGS_PANEL`), and every
- * screen under either of `NAV`'s two groups is listed there. **Developer is a
- * heading inside that panel, not a rail entry**: four machine-facing screens
- * are not a fifth job, and a rail entry of their own would put them level with
- * the three that are. The groups themselves are unchanged -- `NAV` is still
- * the source of their order and of every label, and `config/ui-surfaces.json`
- * still files the surfaces under the same names -- so moving Developer was a
- * change to where the groups are drawn, not to what is in them.
+ * `Settings` opens a sheet of tiles over the window (`SETTINGS_PANEL`), and
+ * every screen under either of `NAV`'s two groups is a tile there, in one of
+ * four sections. **Developer is a section inside that sheet, not a pill**: four
+ * machine-facing screens are not a fifth job, and a pill of their own would
+ * put them level with the three that are. The groups themselves are unchanged
+ * -- `NAV` is still the source of their order and of every label, and
+ * `config/ui-surfaces.json` still files the surfaces under the same names.
+ * The pills replaced a rail, and the sheet a list panel; the constants keep
+ * those older names.
  *
  * # Where each screen went, and why
  *
@@ -30,7 +31,7 @@
  *   obvious answer: it is the screen that installs a llama.cpp build, which
  *   sounds machine-facing. It is filed here because `config/ui-surfaces.json`
  *   calls its surface `settings.intelligence.local` and files it directly
- *   under `Settings > Intelligence`. A panel that disagreed with the config
+ *   under `Settings > Intelligence`. A sheet that disagreed with the config
  *   describing the same screen would be a second, quieter answer to "where
  *   does this live". It is also a user action -- install a model, pick one --
  *   rather than a developer one.
@@ -41,28 +42,26 @@
  * - **Developer is the four machine-facing surfaces**: an HTTP API on
  *   loopback, a CLI binary, an MCP stdio server, and the diagnostics dump.
  *   What they have in common is that their audience is another program, which
- *   is why they sit under their own heading at the foot of the Settings panel.
- * - **Import is an inner view of Notes, not a rail entry.** It has no job of
+ *   is why they sit under their own heading at the foot of the Settings sheet.
+ * - **Import is an inner view of Notes, not a pill.** It has no job of
  *   its own -- it exists to put a recording into the writing space Notes
  *   already is -- so it is reached from Notes' own toolbar and empty state
- *   (`INNER_VIEWS` below) rather than sitting beside it in the rail as a
+ *   (`INNER_VIEWS` below) rather than sitting beside it in the title bar as a
  *   fourth job.
  *
  * # The Settings order
  *
- * The settings for the three jobs come first -- Shortcuts (Dictation's),
- * Meetings, and Vocabulary, which dictation and meetings both read -- and
- * the setup screens after them: Transcription, Cleanup & summaries, Local
- * text models. A colleague who came from a task page to change something
- * about that task finds it near the top of the panel.
- *
- * Providers moves down, next to Calendar, because API keys are only needed
- * for cloud services, and local-first use needs none.
+ * `NAV`'s order is the settings for the three jobs first -- Shortcuts
+ * (Dictation's), Meetings, and Vocabulary, which dictation and meetings both
+ * read -- and the setup screens after them: Transcription, Cleanup &
+ * summaries, Local text models, then Providers and Calendar. The sheet lays
+ * the same screens out by part of the application instead (`SETTINGS_PANEL`):
+ * speech to text, meetings and calendar, AI and cloud services, developer.
  *
  * # The ids are mostly unchanged
  *
  * Every destination the flat array had keeps the id it used there --
- * `meetings` is still the rail's Meetings, which now opens the recording task
+ * `meetings` is still the top-level Meetings, which now opens the recording task
  * rather than its configuration. `shortcuts` and `meeting-settings` are new,
  * because the shortcut editor and the meeting configuration had no screen of
  * their own until they moved out of Dictation and Meetings; the second is not
@@ -70,7 +69,7 @@
  * only thing that would catch the clash. `notes-upload` is the one id that
  * left `NAV` entirely, for `INNER_VIEWS` below -- it is still a `ViewId` and
  * still the id `App.tsx`'s switch renders, but it is no longer a destination
- * the rail lists on its own. The ids are internal -- the names that have to
+ * the navigation lists on its own. The ids are internal -- the names that have to
  * stay stable are the surface ids in `config/ui-surfaces.json`, and those
  * live on the components, not here -- but keeping them identical means
  * `onGoToProviders` and the error boundary's reset target keep working
@@ -99,8 +98,8 @@ export const NAV = [
     children: [
       { id: "shortcuts", label: "Shortcuts" },
       // Visually "Meetings", like the top-level entry above; to a screen
-      // reader "Meetings settings", so the rail's Meetings and this one in
-      // the Settings panel -- both on screen at once -- do not share a name.
+      // reader "Meetings settings", so the Meetings pill and this one's tile
+      // in the Settings sheet -- both visible at once -- do not share a name.
       // The suffix follows the visible label, so the name still contains it
       // (WCAG 2.5.3, label in name).
       { id: "meeting-settings", label: "Meetings", srSuffix: " settings" },
@@ -117,20 +116,23 @@ export const NAV = [
     label: "Developer",
     children: [
       { id: "api", label: "Local API" },
-      { id: "cli", label: "CLI" },
-      { id: "mcp", label: "MCP" },
+      // Named for what they are to someone who has not met the acronym;
+      // the acronym stays where it is the thing you would search for.
+      { id: "cli", label: "Command line" },
+      { id: "mcp", label: "AI assistants (MCP)" },
       { id: "diagnostics", label: "Diagnostics" },
     ],
   },
 ] as const;
 
 /**
- * A screen reached from inside another screen rather than from the rail.
+ * A screen reached from inside another screen rather than from the pills or
+ * the Settings sheet.
  *
  * `notes-upload` is still a `ViewId` -- `App.tsx`'s switch still has a case
  * for it, and `PAGES` still carries its title -- but it is not one of `NAV`'s
- * destinations, so neither the rail nor the Settings panel lists it. `parent`
- * is the rail entry that should read as current while an inner view is open;
+ * destinations, so neither the pills nor the Settings sheet lists it. `parent`
+ * is the pill that should read as current while an inner view is open;
  * `railOf` below is what reads it.
  */
 export const INNER_VIEWS = [
@@ -160,9 +162,9 @@ type LeavesOf<E> = E extends { readonly children: readonly (infer C)[] }
  *
  * This is the reason the tree is the single source: `App.tsx`'s view switch is
  * exhaustive over `ViewId`, so a nav entry added here without a branch there is
- * a compile error instead of a rail item that opens a blank window. The union
+ * a compile error instead of a pill or tile that opens a blank window. The union
  * includes `INNER_VIEWS`' ids too -- `notes-upload` is a screen the switch must
- * render even though the rail never lists it as a destination.
+ * render even though the navigation never lists it as a destination.
  */
 export type ViewId = LeavesOf<NavEntry>["id"] | (typeof INNER_VIEWS)[number]["id"];
 
@@ -232,9 +234,9 @@ export function childrenOf(group: NavGroup): readonly [NavLeaf, ...NavLeaf[]] {
  *
  * The shell no longer calls this. It was how arriving at a screen -- by a
  * sideways "go to Providers", or the error boundary's jump to Diagnostics --
- * opened the rail group holding it, and the rail has no groups to open now:
- * both groups' children are always listed in the Settings panel, and
- * `railOf` below is the question the shell asks instead. It stays as the
+ * opened the rail group holding it, and the pills that replaced the rail have
+ * no groups to open: both groups' children are always tiles in the Settings
+ * sheet, and `railOf` below is the question the shell asks instead. It stays as the
  * tree's lookup from a child to its group, which the navigation tests pin.
  */
 export function groupOf(view: ViewId): string | null {
@@ -247,23 +249,24 @@ export function groupOf(view: ViewId): string | null {
 }
 
 /**
- * The rail: the three jobs, then `Settings`.
+ * The title bar's pills: the three jobs, then `Settings`.
  *
  * Written out rather than derived from `NAV`, because it is not `NAV`'s
- * top level -- `developer` is a top-level group there and is not a rail entry
- * here. The labels are still `NAV`'s: `Rail.tsx` reads them from the tree.
+ * top level -- `developer` is a top-level group there and is not a pill
+ * here. The labels are still `NAV`'s: `NavPills.tsx` reads them from the tree.
+ * The name is the rail's, which these pills replaced.
  */
 export const RAIL = ["dictation", "meetings", "notes", "settings"] as const;
 
 export type RailId = (typeof RAIL)[number];
 
 /**
- * The rail entry that reads as current while `view` is showing.
+ * The pill that reads as current while `view` is showing.
  *
- * A top-level leaf is its own entry. An inner view reads as its `parent` --
- * it is not in `NAV`, so comparing it against the rail directly would mark
+ * A top-level leaf is its own pill. An inner view reads as its `parent` --
+ * it is not in `NAV`, so comparing it against the pills directly would mark
  * nothing. And every child of either group reads as `settings`, Developer's
- * four included, because the Settings panel is where all of them are listed.
+ * four included, because the Settings sheet is where all of them are listed.
  */
 export function railOf(view: ViewId): RailId {
   for (const entry of NAV) {
@@ -276,26 +279,20 @@ export function railOf(view: ViewId): RailId {
 }
 
 /**
- * The Settings panel's sections, in order: one per `NAV` group.
+ * The Settings sheet's sections, in order, and the screens in each.
  *
- * `settings` has no heading because the panel's own title already says
- * "Settings"; a heading repeating it over the first list would name the same
- * thing twice. `developer`'s heading is the group's label, so the tree and the
- * panel cannot drift apart on what the section is called.
+ * Twelve tiles in two blocks was a gallery: eight equal tiles under no
+ * heading asked a reader to recognise every one by name. Four sections of
+ * two to four tiles let them find the part of the application first and the
+ * screen second. The sections are the sheet's own grouping, not `NAV`'s:
+ * `NAV` still holds the two groups `config/ui-surfaces.json` files these
+ * surfaces under, and `Developer` is still exactly that group, in its order,
+ * under its label. The navigation test holds the rest -- every screen of
+ * both groups on exactly one tile.
  */
 export const SETTINGS_PANEL = [
-  { group: "settings", heading: null },
-  { group: "developer", heading: "Developer" },
-] as const satisfies readonly { group: NavGroup["id"]; heading: string | null }[];
-
-/**
- * The screen the rail's `Settings` opens before any settings screen has been
- * visited this session: the first child of `settings`, Dictation's
- * shortcuts. After that the rail reopens the last one visited, which
- * `App.tsx` remembers.
- *
- * Annotated `ViewId` rather than `satisfies`, unlike `DEFAULT_VIEW`: it seeds
- * a value that holds whichever settings screen was last open, so the literal
- * type would only have to be widened at the one place that reads it.
- */
-export const SETTINGS_HOME: ViewId = "shortcuts";
+  { heading: "Speech to text", views: ["transcription", "vocabulary", "shortcuts"] },
+  { heading: "Meetings and calendar", views: ["meeting-settings", "calendar"] },
+  { heading: "AI and cloud services", views: ["intelligence", "local-llm", "providers"] },
+  { heading: "Developer", views: ["api", "cli", "mcp", "diagnostics"] },
+] as const satisfies readonly { heading: string; views: readonly ViewId[] }[];

@@ -1,5 +1,6 @@
 /**
- * The Kit icon set: one 24-unit stroked path per name, plus the three filled
+ * The icon set, drawn for the Kit -- the design before the current one, which
+ * kept it unchanged: one 24-unit stroked path per name, plus the three filled
  * marks (`FILLED`) that read as fills rather than outlines because they *are*
  * the thing rather than a control for it -- `stop`, `play` and `pause` mark a
  * state, not an action to take on one.
@@ -20,7 +21,7 @@
  * `expandAll` and `collapseAll` are the Notes
  * library's two folder buttons, carried over path for path from the inline
  * SVGs the library drew before it moved into the list panel; here they take
- * the Kit's square caps and miter joins like every other entry.
+ * the set's square caps and miter joins like every other entry.
  *
  * A plain `d` string rather than a component per icon, so `Icon.tsx` is the
  * only place a `<path>` is ever written and `tests/icons.test.ts` can check
@@ -144,7 +145,7 @@ export const FILLED = {
  * Per-icon stroke-width overrides, applied by `Icon` as a `style` prop.
  *
  * `more` is three dots drawn as zero-length strokes (`M5.5 12h.5`, and so on)
- * -- at the kit's usual 1.5 they read as barely-there commas rather than
+ * -- at the set's usual 1.5 they read as barely-there commas rather than
  * dots, so the canvas draws this one heavier.
  */
 export const ICON_STROKE: Partial<Record<IconName, number>> = {

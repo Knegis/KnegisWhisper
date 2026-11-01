@@ -214,9 +214,13 @@ unchecked**, not strict versus lax: the Windows state passes because the list wa
 `InheritedFromProfile` — now reachable only on a target that is neither Unix nor Windows — does not,
 because nothing looked.
 
-The MCP server talks to the desktop application through this authenticated local API. Streamable
-HTTP is available but disabled by default; stdio is the normal transport. Destructive MCP tools
-require an explicit confirmation field.
+The MCP server talks to the desktop application through this authenticated local API. Stdio is its
+only transport: there is no Streamable HTTP listener in `tools/knegiswhisper-mcp`, so the MCP
+layer opens no port of its own. Destructive MCP tools take no confirmation field; a call is the
+whole decision. `notes_delete` moves a note to Trash, where the app can restore it, but
+`transcriptions_delete` (a dictation and its transcript) and `transcriptions_forget_audio` (its
+kept recording) delete permanently in one call. An MCP client should be set to ask before running
+those two; the server itself does not.
 
 ## Webview
 

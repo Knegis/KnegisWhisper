@@ -55,14 +55,22 @@ from a CDN. The production CSP is `font-src 'self'`, set in
 apps/desktop/src-tauri/tauri.conf.json, so a hosted font would load during
 `npm run dev` and fail silently in the packaged build.
 
-    Switzer           Indian Type Foundry, via Fontshare — fontshare.com
-                      apps/desktop/src/fonts/switzer-400.woff2
+    Geist             The Geist Project Authors (Vercel) — SIL OFL 1.1
+                      apps/desktop/src/fonts/geist-variable.woff2
+                      apps/desktop/src/fonts/OFL-Geist.txt
 
-    ProFontWindows    ProFont, originally by Andrew Welch; Windows port
-                      apps/desktop/src/fonts/ProFontWindows.ttf
+    Tiny5             The Tiny5 Project Authors — SIL OFL 1.1
+                      apps/desktop/src/fonts/tiny5-400.woff2
+                      apps/desktop/src/fonts/OFL-Tiny5.txt
 
-Both files were taken unmodified from the knegis.com deployment, which serves
-the same two faces. Each retains its own license.
+    Doto              The Doto Project Authors — SIL OFL 1.1
+                      apps/desktop/src/fonts/doto-round-variable.woff2
+                      apps/desktop/src/fonts/OFL-Doto.txt
+
+Taken from the Google Fonts repository (github.com/google/fonts, ofl/) and
+modified only by subsetting to Latin and converting to WOFF2. Tiny5 is pinned
+to its default instance and Doto to round dots (ROND 100); Geist and Doto keep
+their weight axis. Each retains its license, which sits beside the file.
 
 
 ================================================================================

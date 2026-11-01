@@ -4,27 +4,30 @@ import type { IconName } from "../lib/icons";
 import { Icon } from "./Icon";
 
 /**
- * The centre of a task page: a large icon, a one-line status in the machine
- * voice, the heading that says what to do, and a sentence under it.
+ * The centre of a task page: the icon on a breathing orb of colour, a
+ * one-line status in the pixel voice on a pill, the heading that says what to
+ * do in the Dusk gradient, and a sentence under it.
+ *
+ * The orb is the design language's "breathe" picture, and its pace is the
+ * state: slow at rest, quicker and warmer while recording, quicker again
+ * while busy, and still while something needs setting up. It is decoration
+ * (`aria-hidden`); the status says the same thing in words.
  *
  * Four tones. The three that mark a state are each a shape as well as a
  * colour, so none of them rests on colour alone:
  *
- *   - **ready** -- a filled `--band` square;
- *   - **recording** -- a round `--rec` dot, the one round mark the Kit
- *     allows, followed by `extra` (the page's timer);
- *   - **setup** -- a hollow `--text` square. Not orange: the redesign has no
- *     warning colour (decision 6), and the canvas' amber was the brown the
- *     theme removed;
+ *   - **ready** -- a filled dot;
+ *   - **recording** -- the pink signal dot, pulsing, followed by `extra`
+ *     (the page's timer);
+ *   - **setup** -- a hollow ring. Not orange: the redesign has no warning
+ *     colour (decision 6);
  *   - **busy** -- no mark, only the label: work under way that is neither
  *     ready nor recording, such as Dictation's "Transcribing…" and a
- *     meeting's. The ready square there read as "Ready" beside a label that
+ *     meeting's. A ready mark there read as "Ready" beside a label that
  *     said otherwise.
  *
  * The label's own text is `--text` except while recording, where it takes
- * `--rec` as the canvas draws it. The canvas also paints "Ready" blue; that
- * is left out because `#3d55ff` on the dark card is 3.3:1, under the 4.5:1 a
- * 12px label needs, and the square already carries the blue.
+ * `--rec`.
  *
  * Only the label is a live region. `extra` ticks every second while
  * recording, and a status that announced each tick would talk over the
@@ -53,9 +56,10 @@ export function TaskHero({
   children?: ReactNode;
 }) {
   return (
-    <div className="hero">
+    <div className="hero" data-tone={status.tone}>
       <span className="hero-icon">
-        <Icon name={icon} size={60} />
+        <span className="hero-orb" aria-hidden="true" />
+        <Icon name={icon} size={52} />
       </span>
       <p className={`hero-status hero-status-${status.tone}`}>
         {status.tone === "busy" ? null : <span className="hero-mark" aria-hidden="true" />}
