@@ -31,6 +31,14 @@ use kw_cli::{CliError, Client};
 
 use crate::protocol::ErrorObject;
 
+/// The tools whose delete nothing can restore. `notes_delete` is not one: it
+/// moves a note to Trash, and the app can bring it back.
+///
+/// `confirm: true` makes the step explicit in the call and in the schema a
+/// client shows. It is not authorisation: an agent that has been talked into
+/// deleting something can send the field too.
+const PERMANENT_DELETES: &[&str] = &["transcriptions_delete", "transcriptions_forget_audio"];
+
 /// Every tool this server exposes, in the order `tools/list` reports them.
 ///
 /// Each entry names one local API route. There is no tool here without a
@@ -187,13 +195,15 @@ fn definition(name: &str) -> Value {
             id_schema("The dictation's id."),
         ),
         "transcriptions_delete" => (
-            "Delete a dictation and its transcript. Maps to DELETE /v1/transcriptions/{id}.",
-            id_schema("The dictation's id."),
+            "Permanently delete a dictation and its transcript. This cannot be undone, so ask \
+             the person first, then send confirm: true. Maps to DELETE /v1/transcriptions/{id}.",
+            permanent_delete_schema("The dictation's id."),
         ),
         "transcriptions_forget_audio" => (
-            "Delete only the kept recording for a dictation, leaving the transcript. Maps to \
-             DELETE /v1/transcriptions/{id}/audio.",
-            id_schema("The dictation's id."),
+            "Permanently delete the kept recording for a dictation, leaving the transcript. This \
+             cannot be undone, so ask the person first, then send confirm: true. Maps to DELETE \
+             /v1/transcriptions/{id}/audio.",
+            permanent_delete_schema("The dictation's id."),
         ),
         // Unreachable from `definitions`, which only ever calls this with a
         // name out of `TOOLS`. Kept as a real schema rather than panicking,
@@ -201,7 +211,16 @@ fn definition(name: &str) -> Value {
         _ => ("", empty_schema()),
     };
 
-    json!({ "name": name, "description": description, "inputSchema": schema })
+    let mut tool = json!({ "name": name, "description": description, "inputSchema": schema });
+    if PERMANENT_DELETES.contains(&name) {
+        if let Some(fields) = tool.as_object_mut() {
+            fields.insert(
+                "annotations".to_owned(),
+                json!({ "destructiveHint": true, "readOnlyHint": false }),
+            );
+        }
+    }
+    tool
 }
 
 fn empty_schema() -> Value {
@@ -213,6 +232,23 @@ fn id_schema(id_description: &str) -> Value {
         "type": "object",
         "properties": { "id": { "type": "integer", "description": id_description } },
         "required": ["id"],
+        "additionalProperties": false
+    })
+}
+
+/// An id plus the `confirm: true` that [`required_confirmation`] insists on.
+fn permanent_delete_schema(id_description: &str) -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "id": { "type": "integer", "description": id_description },
+            "confirm": {
+                "type": "boolean",
+                "const": true,
+                "description": "Must be true. Ask the person first: this cannot be undone."
+            }
+        },
+        "required": ["id", "confirm"],
         "additionalProperties": false
     })
 }
@@ -519,6 +555,7 @@ async fn transcriptions_get(client: &Client, args: &Value) -> Result<CallResult,
 
 async fn transcriptions_delete(client: &Client, args: &Value) -> Result<CallResult, ErrorObject> {
     let id = required_i64(args, "id", "transcriptions_delete")?;
+    required_confirmation(args, "transcriptions_delete")?;
     Ok(deleted(
         client,
         format!("/v1/transcriptions/{id}"),
@@ -532,6 +569,7 @@ async fn transcriptions_forget_audio(
     args: &Value,
 ) -> Result<CallResult, ErrorObject> {
     let id = required_i64(args, "id", "transcriptions_forget_audio")?;
+    required_confirmation(args, "transcriptions_forget_audio")?;
     Ok(deleted(
         client,
         format!("/v1/transcriptions/{id}/audio"),
@@ -541,6 +579,16 @@ async fn transcriptions_forget_audio(
 }
 
 // -------------------------------------------------------------- argument shape
+
+/// Refuse a permanent delete unless the call says `confirm: true`, literally.
+fn required_confirmation(args: &Value, tool: &str) -> Result<(), ErrorObject> {
+    if args.get("confirm") == Some(&Value::Bool(true)) {
+        return Ok(());
+    }
+    Err(ErrorObject::invalid_params(format!(
+        "{tool} deletes permanently and requires 'confirm' to be true. Ask the person first."
+    )))
+}
 
 fn required_i64(args: &Value, field: &str, tool: &str) -> Result<i64, ErrorObject> {
     match args.get(field) {
