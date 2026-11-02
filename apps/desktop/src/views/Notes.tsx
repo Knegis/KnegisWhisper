@@ -675,7 +675,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
     <PanelSection label={null}>
       <button type="button" className="notes-trash" aria-pressed={trashOpen}
         title="Deleted notes, kept until you empty Trash" onClick={toggleTrash}>
-        <Icon name="discard" size={16} />
+        <Icon name="trash" size={16} />
         <span className="notes-trash-label">Trash</span>
         <span className="notes-folder-count"><span aria-hidden="true">{trash.notes.length}</span><span className="sr-only">, {noteCount(trash.notes.length)}</span></span>
       </button>
@@ -779,7 +779,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
                           <span className="notes-folder-name" title={folder.name}>{folder.name}</span>
                           <span className="notes-folder-count"><span className="sr-only">, </span>{filed.length}<span className="sr-only">{filed.length === 1 ? " note" : " notes"}</span></span>
                         </button>
-                        <button type="button" className="notes-folder-more" aria-label={`Actions for folder ${folder.name}`} aria-haspopup="dialog" onClick={event => { const rect = event.currentTarget.getBoundingClientRect(); setContext({ kind: "folder", folder, x: rect.left, y: rect.bottom, anchor: event.currentTarget }); }}>…</button></div>
+                        <button type="button" className="notes-folder-more" aria-label={`Actions for folder ${folder.name}`} aria-haspopup="dialog" onClick={event => { const rect = event.currentTarget.getBoundingClientRect(); setContext({ kind: "folder", folder, x: rect.left, y: rect.bottom, anchor: event.currentTarget }); }}><Icon name="more" /></button></div>
                         <div id={`notes-folder-${folder.id}`} className="notes-folder-notes" hidden={!open}>
                           {filed.length ? filed.map(renderEntry) : <p className="notes-folder-empty">No notes in this folder.</p>}
                         </div>

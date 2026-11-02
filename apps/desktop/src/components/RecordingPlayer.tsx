@@ -13,7 +13,7 @@ import {
 import { formatClock } from "../lib/clock";
 import { recordingSrc } from "../lib/ipc";
 import { SKIP_SECONDS, markFractions, skipTarget } from "../lib/playerControls";
-import { IconFilled } from "./Icon";
+import { Icon } from "./Icon";
 
 /**
  * A note mounts its player once, however often it is moved between slots
@@ -289,7 +289,7 @@ export const RecordingPlayer = forwardRef<RecordingPlayerHandle, RecordingPlayer
               }
             }}
           >
-            <IconFilled name={playing ? "pause" : "play"} size={16} />
+            <Icon name={playing ? "pause" : "play"} size={16} />
           </button>
           <button type="button" disabled={!ready} className="recording-skip" aria-label={`Back ${SKIP_SECONDS} seconds`} title={`Back ${SKIP_SECONDS} seconds`} onClick={() => skip(-SKIP_SECONDS)}>
             −{SKIP_SECONDS}

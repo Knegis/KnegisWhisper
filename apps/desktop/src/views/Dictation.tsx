@@ -50,7 +50,7 @@ import { Chip } from "../components/Chip";
 import { ChipMenu } from "../components/ChipMenu";
 import { ControlBar } from "../components/ControlBar";
 import { DictationHistoryPanel } from "../components/DictationHistoryPanel";
-import { Icon, IconFilled } from "../components/Icon";
+import { Icon } from "../components/Icon";
 import { Keycaps } from "../components/Keycaps";
 import { LearnMore } from "../components/LearnMore";
 import { LevelMeter } from "../components/LevelMeter";
@@ -651,7 +651,7 @@ export function DictationView({
                   void guard(toggleDictation);
                 }}
               >
-                {recording ? <IconFilled name="stop" size={14} /> : <Icon name="microphone" size={16} />}
+                {recording ? <Icon name="stop" size={14} /> : <Icon name="microphone" size={16} />}
                 {recording
                   ? "Stop and transcribe"
                   : mic.busy

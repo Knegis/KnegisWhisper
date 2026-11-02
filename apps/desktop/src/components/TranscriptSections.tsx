@@ -12,7 +12,7 @@ import { formatClock } from "./RecordingPlayer";
 
 /**
  * A note's transcript as the M6 canvas draws it (KNEG-448): time sections, each a
- * collapsible header over its speaker turns, each turn a head -- a square marker,
+ * collapsible header over its speaker turns, each turn a head -- a round marker,
  * who, and when -- over its lines at the column's full width. `TranscriptPanel`
  * owns the state, the header and the effects; this file only draws.
  *
@@ -311,9 +311,9 @@ function holds(found: readonly FindMatch[] | undefined, ordinal: number | null):
 }
 
 /**
- * One speaker's run of lines: a 6px square (`--band` while one of them plays), the name -- the
+ * One speaker's run of lines: a 6px dot (`--band` while one of them plays), the name -- the
  * button that renames that speaker, or plain text when there is no label to rename -- and when
- * the turn starts. A turn with no speaker shows only the square and the time. The rename form
+ * the turn starts. A turn with no speaker shows only the dot and the time. The rename form
  * opens between the head and the lines. The lines are a listbox named by who and when.
  */
 export const Turn = memo(function Turn({ turn, activeIndex, stopIndex, renaming, findCurrent, idPrefix, selected, found, readOnly, canPlay, suggestions, actions }: TurnProps) {

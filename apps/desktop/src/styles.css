@@ -577,6 +577,8 @@ kbd { display: inline-block; white-space: nowrap; border: 0; border-radius: var(
  */
 .chip { display: inline-flex; align-items: center; gap: 7px; flex: 0 1 auto; min-width: 0; max-width: 260px; height: 34px; margin: 0; padding: 0 14px; border: 0; border-radius: var(--r-control); background: var(--wash); color: var(--text); font: inherit; font-size: 13.5px; line-height: 18px; white-space: nowrap; transition: background-color .3s ease; }
 .chip:hover:not(:disabled):not(.chip-static) { background: var(--control); }
+/* A solid icon carries more ink than the line ones beside it, so it is muted to sit level with them. */
+.chip > .icon-filled { color: var(--muted); }
 .chip-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .chip-chevron { display: flex; color: var(--muted); }
 /*
@@ -736,7 +738,7 @@ button.control-copy { display: inline-flex; align-items: center; gap: 6px; heigh
 .live-head .live-clock { font-family: var(--font-dots); font-weight: 800; font-size: 22px; letter-spacing: .04em; }
 @media (prefers-reduced-motion: reduce) { .live-head .rec-dot { animation: none; } }
 .live-status { display: flex; align-items: center; gap: 8px; margin: 0; font: 15px/18px var(--font-mono); letter-spacing: .5px; color: var(--rec); }
-/* Stalled records nothing, so neither the recording red nor its dot: `--text` and the hollow square (decision 6). */
+/* Stalled records nothing, so neither the recording red nor its filled dot: `--text` and the hollow ring (decision 6). */
 .live-status-stalled { color: var(--text); }
 .live-clock { color: var(--text); font-variant-numeric: tabular-nums; }
 .rec-dot { width: 8px; height: 8px; flex-shrink: 0; border-radius: 50%; background: var(--rec); }
@@ -792,10 +794,10 @@ button.control-copy { display: inline-flex; align-items: center; gap: 6px; heigh
 
 /*
  * Rows the Meetings panel carries besides `PanelItem`s. The Now row's meta is
- * `--rec` with the round dot, as the hero draws recording -- or, stalled, the
- * hollow square in `--text`, since nothing is being recorded. An Interrupted
- * row is not a button, because Recover inside it is; its marker is a hollow
- * square, hollow as the hero's Needs setup ring is -- `--text`, not orange
+ * `--rec` with the filled dot, as the hero draws recording -- or, stalled, the
+ * hollow ring in `--text`, since nothing is being recorded. An Interrupted
+ * row is not a button, because Recover inside it is; its marker is the same
+ * ring, hollow as the hero's Needs setup ring is -- `--text`, not orange
  * (decision 6). Recent's
  * error sits with its Try again under it.
  */
@@ -807,7 +809,7 @@ button.control-copy { display: inline-flex; align-items: center; gap: 6px; heigh
 .panel-note-error > button.panel-inline { margin: 0; }
 .panel-row { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; padding: 7px 12px; }
 .panel-row-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; color: var(--text); }
-.mark-hollow { width: 7px; height: 7px; flex-shrink: 0; border: 1px solid var(--text); }
+.mark-hollow { width: 7px; height: 7px; flex-shrink: 0; border: 1px solid var(--text); border-radius: 50%; }
 button.panel-inline { height: 24px; margin: 0 0 0 4px; padding: 0 8px; border: 1px solid var(--rule); border-radius: var(--r-control); background: var(--bg); font-size: 12.5px; line-height: 18px; }
 button.panel-inline:hover:not(:disabled) { border-color: var(--muted); background: var(--bg); }
 
@@ -1509,7 +1511,7 @@ button.transcript-speaker:focus-visible {
  *
  * A section is a 36px header with a `--rule` above it: the chevron, the range in the machine voice
  * (`--band-text` while it holds the playing line), and its count, muted, at the far end; hovering
- * it is a panel row's `--panel-hover`. A turn is a head -- a 6px square, `--muted`, `--band` while
+ * it is a panel row's `--panel-hover`. A turn is a head -- a 6px dot, `--muted`, `--band` while
  * one of its lines plays; the speaker at 13px in the text colour, a plain name that is underlined
  * only on hover and focus; the time in the machine voice at 11px, muted -- over its lines, which
  * run the full width at 14.5/22. A line that plays when pressed shows the pointer. A hovered line
@@ -1558,7 +1560,7 @@ button.transcript-find-step { flex: none; display: flex; align-items: center; ju
 .transcript-section-count { flex: none; font-size: 11px; color: var(--muted); }
 .transcript-turn { padding: 8px 0 4px; }
 .transcript-turn-head { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 0 20px 2px; }
-.transcript-turn-marker { flex: none; width: 6px; height: 6px; background: var(--muted); }
+.transcript-turn-marker { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--muted); }
 .transcript-turn-playing .transcript-turn-marker { background: var(--band); }
 .transcript .transcript-turn-head .transcript-speaker { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 13px; line-height: 18px; color: var(--text); }
 /* A plain name at rest, as the canvas draws it, rather than the shared rule's dotted underline. */
@@ -1689,7 +1691,7 @@ button.recording-skip + button.recording-skip { margin-right: 8px; }
 
 /*
  * The card's header line (`PlayerHeader.tsx`, KNEG-448), while the transcript is on screen: a 6px
- * square -- `--band` while the recording plays, muted while it is paused -- and who is speaking;
+ * dot -- `--band` while the recording plays, muted while it is paused -- and who is speaking;
  * or, while lines are selected, "Play selection" with its range in the machine voice, filled at
  * rest as the card's Play is, and beside it the button that clears the selection. At the far end
  * the Follow chip, a label in the machine voice: marked (`--band`, `--band-ink`) while it is on,
@@ -1697,7 +1699,7 @@ button.recording-skip + button.recording-skip { margin-right: 8px; }
  * "Play selection" give way, ellipsed, before the chip does.
  */
 .player-header { display: flex; align-items: center; gap: 8px; height: 24px; min-width: 0; white-space: nowrap; }
-.player-header-marker { flex: none; width: 6px; height: 6px; background: var(--muted); }
+.player-header-marker { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--muted); }
 .player-header-marker-playing { background: var(--band); }
 .player-header-speaker { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 12.5px; line-height: 18px; }
 button.player-header-play { flex: 0 1 auto; min-width: 0; height: 24px; margin: 0; padding: 0 8px; overflow: hidden; text-overflow: ellipsis; background: var(--control); font-size: 12.5px; line-height: 24px; }
@@ -2356,6 +2358,9 @@ option:checked:hover {
     /* The base appearance brings its own border and radius back. */
     border: 0;
     border-radius: 0;
+    /* And it lays out as a flex box, which leaves the value at the top of a tall field. */
+    align-items: center;
+    gap: 8px;
   }
 
   select::picker(select) {
@@ -2372,8 +2377,22 @@ option:checked:hover {
     box-shadow: 0 8px 28px rgb(0 0 0 / 22%);
   }
 
+  /*
+   * The platform's arrow is a sharp filled triangle, the one icon the set does
+   * not draw. A pseudo-element cannot hold `Icon`, and a data: image would need
+   * the CSP widened, so this is `chevronDown` at a chip's size from two borders.
+   */
   select::picker-icon {
-    color: var(--muted);
+    content: "";
+    width: 5px;
+    height: 5px;
+    /* Auto on three sides: pushed to the far end of a wide field, and centred on its height. */
+    margin: auto 3px auto auto;
+    border-right: 1.15px solid var(--muted);
+    border-bottom: 1.15px solid var(--muted);
+    border-bottom-right-radius: 1px;
+    /* Turned, the two borders' corner sits low in the box, so it comes up a pixel to look centred. */
+    transform: translateY(-1px) rotate(45deg);
   }
 
   /*
@@ -2556,16 +2575,15 @@ button:disabled {
 }
 
 /*
- * The icon set (`lib/icons.ts`, drawn by `components/Icon.tsx`), which
- * predates this design and keeps its own square-ended strokes for controls,
- * a solid fill for the two states that are a fill rather than a stroke.
- * Replaces the old `.nav-icon`/`.nav-icon-*` masks, which existed only
+ * The icon set (`lib/icons.ts`, drawn by `components/Icon.tsx`): a soft line
+ * with round ends for most, and a solid fill for the states and places that
+ * are a shape rather than a stroke. Replaces the old `.nav-icon`/`.nav-icon-*` masks, which existed only
  * because some icons shipped as separate SVG files under
  * `src/assets/navigation` -- every icon is now this one path-based
  * component instead, the title bar's and the Settings sheet's included.
  */
-.icon { fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: square; stroke-linejoin: miter; flex-shrink: 0; }
-.icon-filled { fill: currentColor; stroke: none; }
+.icon { fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; }
+.icon-filled { fill: currentColor; stroke: none; flex-shrink: 0; }
 
 /* Persistent dictation control: native window retains WS_EX_NOACTIVATE. */
 .microphone-overlay { height: 100%; overflow: clip; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; padding: 0; gap: 6px; user-select: none; }
@@ -2586,7 +2604,7 @@ button.floating-microphone:hover:not(:disabled) { background: transparent; color
 @media (prefers-reduced-motion: reduce) { .microphone-spinner { animation: none; } .microphone-controls::before, .microphone-glyph { transition: none; } }
 .microphone-error { display: flex; gap: 6px; align-items: flex-start; padding: 8px; background: var(--bg); color: var(--text, #eee); font-size: 12px; width: 100%; max-height: 72px; overflow: auto; border-radius: var(--r-card); box-shadow: 0 2px 6px #0005; }
 .microphone-error span { flex: 1; overflow-wrap: anywhere; }
-.microphone-error button { padding: 0 4px; min-height: 20px; }
+.microphone-error button { display: inline-flex; align-items: center; justify-content: center; margin: 0; padding: 0 4px; min-height: 20px; }
 .microphone-status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 .microphone-setting { display: flex; align-items: center; gap: 10px; }
 .shortcut-recorder { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 4px 0; }
@@ -2599,9 +2617,9 @@ button.floating-microphone:hover:not(:disabled) { background: transparent; color
 
 .microphone-controls { pointer-events: none; position: relative; width: 96px; height: 96px; flex-shrink: 0; }
 .microphone-controls .floating-microphone { pointer-events: auto; position: absolute; left: 48px; top: 48px; transform: translate(-50%, -50%); margin: 0; }
-button.microphone-language-toggle { position: absolute; left: 74px; top: 34px; width: 16px; height: 28px; min-height: 28px; margin: 0; padding: 0; border: 0; border-radius: 0 2px 2px 0; background: transparent; color: white; font-size: 16px; line-height: 1; }
+button.microphone-language-toggle { position: absolute; left: 74px; top: 34px; display: flex; align-items: center; justify-content: center; width: 16px; height: 28px; min-height: 28px; margin: 0; padding: 0; border: 0; border-radius: 0 100px 100px 0; background: transparent; color: white; }
 button.microphone-language-toggle:hover:not(:disabled) { background: transparent; color: white; }
-.is-vertical .microphone-language-toggle { left: 34px; top: 74px; width: 28px; height: 16px; min-height: 16px; border-radius: 0 0 2px 2px; }
+.is-vertical .microphone-language-toggle { left: 34px; top: 74px; width: 28px; height: 16px; min-height: 16px; border-radius: 0 0 100px 100px; }
 .microphone-language-menu { width: calc(100% - 12px); max-height: 252px; overflow: auto; padding: 12px 14px; border-radius: var(--r-card); background: var(--panel); color: var(--text); font-size: 12px; line-height: 1.4; box-shadow: inset 0 0 0 1px var(--rule); }
 .local-language-picker { border: 0; padding: 0; margin: 0; min-width: 0; }
 /* The design's flat 400; Geist would draw a real bold, but nothing here asks for one. */
@@ -2618,8 +2636,7 @@ button.microphone-language-toggle:hover:not(:disabled) { background: transparent
 .microphone-controls:is(:hover, .hold-hover) .microphone-glyph { opacity: 1; transform: scale(1); }
 @media (prefers-reduced-motion: reduce) { .microphone-language-toggle { transition: none; } }
 
-.microphone-language-toggle span { display: inline-block; }
-.is-vertical .microphone-language-toggle span { transform: rotate(90deg); }
+.is-vertical .microphone-language-toggle .icon { transform: rotate(90deg); }
 
 /* One animated surface, with separate dictation and language hit targets. */
 .microphone-controls::before { content: ""; position: absolute; left: 48px; top: 48px; width: 32px; height: 6px; border-radius: var(--r-control); background: #858985; --surface-shift: 0px; --surface-angle: 0deg; transform: translate(-50%, -50%) rotate(var(--surface-angle)) translateX(var(--surface-shift)); transition: width 160ms ease, height 160ms ease, transform 160ms ease, background-color 160ms ease; pointer-events: none; }
@@ -2753,7 +2770,7 @@ button.panel-tool[aria-expanded="true"]:hover:not(:disabled) { background: var(-
 button.notes-folder-toggle { display: flex; align-items: center; gap: 7px; width: 100%; height: 32px; margin: 0; padding: 0 10px; border-radius: var(--r-control); text-align: left; font-size: 14px; line-height: 20px; }
 /* A folder is never current, so its hover is a panel row's hover, not the current row's fill. */
 button.notes-folder-toggle:hover:not(:disabled) { background: var(--panel-hover); }
-.notes-folder-toggle > .icon:first-child { color: var(--muted); }
+.notes-folder-toggle > :is(.icon:first-child, .icon-filled) { color: var(--muted); }
 .notes-folder-name { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .notes-folder-count { flex: none; font-size: 12.5px; color: var(--muted); }
 .notes-folder-notes { display: flex; flex-direction: column; gap: 1px; }
@@ -2768,7 +2785,7 @@ button.notes-folder-toggle:hover:not(:disabled) { background: var(--panel-hover)
 button:is(.notes-person, .notes-trash) { display: flex; align-items: center; gap: 7px; width: 100%; height: 32px; margin: 0; padding: 0 10px 0 12px; border-radius: var(--r-control); text-align: left; font-size: 14px; line-height: 20px; }
 button:is(.notes-person, .notes-trash):hover:not(:disabled) { background: var(--panel-hover); }
 button:is(.notes-person, .notes-trash)[aria-pressed="true"], button:is(.notes-person, .notes-trash)[aria-pressed="true"]:hover:not(:disabled) { background: var(--selected); }
-:is(.notes-person, .notes-trash) > .icon:first-child { color: var(--muted); }
+:is(.notes-person, .notes-trash) > :is(.icon, .icon-filled):first-child { color: var(--muted); }
 :is(.notes-person-name, .notes-trash-label) { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 /* Filing by drag: the note in the air fades, the group under the pointer gets a `--band`
  * outline, and a "No folder" strip appears below the folders while a filed note is being
@@ -2925,11 +2942,9 @@ button.note-people-add:hover:not(:disabled), button.note-people-add[aria-expande
 .note-mini-player { position: sticky; bottom: 0; grid-row: 3; padding: 12px 14px 10px 16px; background: var(--panel); border: 0; border-radius: var(--r-sheet); box-shadow: var(--card-shadow); z-index: 3; touch-action: none; }
 .note-full-player { grid-row: 1; }
 /*
- * The position slider, drawn here rather than by the platform, whose thumb is a round knob. A 2px
- * `--rule` track with the played part in `--band`, and a 10px square `--band` thumb -- square
- * because the design before this one allowed no round mark but the recording dot; it has not been
- * redrawn since. `--played` is the fraction played,
- * set by `RecordingPlayer`; the stop sits under the thumb's centre, which travels 5px in from each
+ * The position slider, drawn here rather than by the platform so it takes the app's colours. A 2px
+ * `--rule` track with the played part in `--band`, and a 10px round `--band` thumb. `--played` is
+ * the fraction played, set by `RecordingPlayer`; the stop sits under the thumb's centre, which travels 5px in from each
  * end. The box stays 18px tall so the thumb is as easy to catch as the platform's was, and the
  * focus ring is the generic `input:focus-visible` one around that box. Here rather than beside the
  * rule above: the generic `input` fill further up would otherwise draw a box behind the track.
@@ -2940,8 +2955,8 @@ button.note-people-add:hover:not(:disabled), button.note-people-add[aria-expande
  * opaque here, the track would cut every tick in two.
  */
 .recording-player input[type="range"] { appearance: none; -webkit-appearance: none; position: relative; display: block; width: 100%; height: 18px; margin: 0; padding: 0; border: 0; border-radius: 0; background: transparent; cursor: pointer; }
-.recording-player input[type="range"]::-webkit-slider-runnable-track { height: 2px; border-radius: 0; background: linear-gradient(to right, var(--band) calc(5px + (100% - 10px) * var(--played, 0)), transparent 0); }
-.recording-player input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 10px; height: 10px; margin-top: -4px; border: 0; border-radius: 0; background: var(--band); }
+.recording-player input[type="range"]::-webkit-slider-runnable-track { height: 2px; border-radius: 100px; background: linear-gradient(to right, var(--band) calc(5px + (100% - 10px) * var(--played, 0)), transparent 0); }
+.recording-player input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 10px; height: 10px; margin-top: -4px; border: 0; border-radius: 50%; background: var(--band); }
 .recording-player input[type="range"]:disabled { cursor: default; }
 .recording-player input[type="range"]:disabled::-webkit-slider-runnable-track { background: linear-gradient(to right, var(--muted) calc(5px + (100% - 10px) * var(--played, 0)), transparent 0); }
 .recording-player input[type="range"]:disabled::-webkit-slider-thumb { background: var(--muted); }

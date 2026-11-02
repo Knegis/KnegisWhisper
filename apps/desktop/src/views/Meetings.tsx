@@ -89,7 +89,7 @@ import { Chip } from "../components/Chip";
 import { ChipMenu, type ChipMenuHandle } from "../components/ChipMenu";
 import { ControlBar } from "../components/ControlBar";
 import { FailureLine } from "../components/FailureLine";
-import { Icon, IconFilled } from "../components/Icon";
+import { Icon } from "../components/Icon";
 import { LearnMore } from "../components/LearnMore";
 import { LevelMeter } from "../components/LevelMeter";
 import { PanelAction, PanelHeader, PanelItem, PanelSection } from "../components/Panel";
@@ -756,7 +756,7 @@ export function Meetings({
             current
             meta={
               // Stalled is not recording -- nothing is being captured -- so
-              // not the recording dot: the hollow square Interrupted uses.
+              // not the recording dot: the hollow ring Interrupted uses.
               <span className={stalled ? "panel-rec panel-rec-stalled" : "panel-rec"}>
                 <span className={stalled ? "mark-hollow" : "rec-dot"} aria-hidden="true" />
                 {stalled ? "Stopped unexpectedly" : "Recording"} · {elapsedLabel(elapsed)}
@@ -855,8 +855,8 @@ export function Meetings({
       <SplitView label="Meetings list" heading="Meetings" panel={panel}>
         <section data-surface="meetings.record" className="meeting-live" aria-label="Meeting">
           <header className="live-head">
-            {/* Stalled draws the hollow `--text` square and drops the
-                recording red: the round dot says something is being
+            {/* Stalled draws the hollow `--text` ring and drops the
+                recording red: the filled dot says something is being
                 recorded, and a stalled meeting records nothing. */}
             <p className={stalled ? "live-status live-status-stalled" : "live-status"}>
               <span className={stalled ? "mark-hollow" : "rec-dot"} aria-hidden="true" />
@@ -923,7 +923,7 @@ export function Meetings({
                 Discard
               </button>
               <button type="button" className="primary" onClick={stop}>
-                <IconFilled name="stop" size={14} />
+                <Icon name="stop" size={14} />
                 Stop and save
               </button>
             </div>

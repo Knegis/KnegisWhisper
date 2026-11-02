@@ -16,4 +16,6 @@
 .folder-sharing-path { overflow-wrap: anywhere; }
 .notes-folder-actions { display: flex; align-items: center; }
 .notes-folder-actions > .notes-folder-toggle { flex: 1; min-width: 0; }
-.notes-folder-more { flex: 0 0 auto; padding: 3px 7px; }
+/* `margin: 0` because every `button` starts with a 0.75rem top margin, which is what left this one
+ * sitting low on its row. */
+button.notes-folder-more { flex: none; display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; margin: 0; padding: 0; border-radius: 50%; }
