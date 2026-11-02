@@ -218,17 +218,12 @@ impl Running {
     }
 }
 
-/// Start a sidecar and wait for it to answer.
-pub async fn start<H: Health>(
-    spec: &SidecarSpec,
-    launch: &Launch,
-    store: &PidStore,
-    health: &H,
-    timings: StartTimings,
-) -> Result<Running, ProcessError> {
+/// The child's command, ready to spawn.
+fn command_for(launch: &Launch, env: &[(&str, &str)]) -> tokio::process::Command {
     let mut command = tokio::process::Command::new(&launch.executable);
     command
         .args(&launch.args)
+        .envs(env.iter().copied())
         // stdout can carry recognised text; we never want it in a log.
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -253,6 +248,34 @@ pub async fn start<H: Health>(
         command.creation_flags(0x0800_0000);
     }
 
+    command
+}
+
+/// Start a sidecar and wait for it to answer.
+pub async fn start<H: Health>(
+    spec: &SidecarSpec,
+    launch: &Launch,
+    store: &PidStore,
+    health: &H,
+    timings: StartTimings,
+) -> Result<Running, ProcessError> {
+    start_with_env(spec, launch, &[], store, health, timings).await
+}
+
+/// [`start`], with environment variables set on this child alone.
+///
+/// For a value the process list must not show, such as a key: anything in
+/// [`Launch::args`] can be read back from the command line. `env` is a separate
+/// parameter rather than a [`Launch`] field because `Launch` derives `Debug`.
+pub async fn start_with_env<H: Health>(
+    spec: &SidecarSpec,
+    launch: &Launch,
+    env: &[(&str, &str)],
+    store: &PidStore,
+    health: &H,
+    timings: StartTimings,
+) -> Result<Running, ProcessError> {
+    let mut command = command_for(launch, env);
     let mut child = command.spawn().map_err(|source| ProcessError::Spawn {
         executable: launch.executable.clone(),
         source,
@@ -963,6 +986,20 @@ mod tests {
         assert!(matches!(err, ProcessError::Spawn { .. }));
         assert!(err.to_string().contains("not-installed"));
         assert_eq!(store.read("probe").unwrap(), None);
+    }
+
+    #[test]
+    fn an_environment_value_reaches_the_child_and_stays_off_its_command_line() {
+        let value = "value-for-the-child-only";
+        let command = command_for(&long_lived(8183), &[("KW_PROBE_VALUE", value)]);
+        let command = command.as_std();
+
+        assert!(command.get_envs().any(|(name, set)| {
+            name == "KW_PROBE_VALUE" && set == Some(std::ffi::OsStr::new(value))
+        }));
+        assert!(!command
+            .get_args()
+            .any(|arg| arg.to_string_lossy().contains(value)));
     }
 
     #[test]

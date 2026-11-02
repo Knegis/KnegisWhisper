@@ -487,11 +487,16 @@ impl Cleanup for ModelCleanup {
             None
         };
 
+        // Read on every route, because the read is how a use is recorded, but
+        // only the local route is handed the server and its key.
+        let local = self.local.server();
+        let local = local.filter(|_| matches!(route, kw_reasoning_core::ChatRoute::Local));
+
         // `Chat::cleanup` is already infallible by contract: it returns the
         // original on any failure, because a cleanup that errors must not lose
         // the transcript.
         kw_reasoning_core::Chat::new(&self.policy, self.credentials.as_ref())
-            .with_local_port(self.local.port())
+            .with_local_server(local)
             .cleanup(registry, &route, &model, text)
             .await
     }

@@ -170,8 +170,19 @@ parsed rather than trusted, so one carrying a scheme or an authority is refused.
 Each sidecar server is bound to `127.0.0.1` by its own command line: `whisper-server` and
 `llama-server` are passed `--host 127.0.0.1`, and `sherpa-onnx-online-websocket-server`
 `--host=127.0.0.1`. `kw_sidecar::port` only chooses the port, by probing a loopback bind, and
-takes no address either. These servers have no authentication of any kind; a bind to `0.0.0.0`
-would be an open transcription endpoint on the network.
+takes no address either.
+
+`whisper-server` and the streaming server have no authentication; `whisper-server`'s `--help` lists
+no key option. A bind to `0.0.0.0` would be an open transcription endpoint on the network, and any
+process on this machine can reach them on loopback.
+
+`llama-server` is the exception. Each start gets a new key in `LLAMA_API_KEY`, kept off the command
+line so the process list doesn't show it, and `--no-slots` closes the slots monitor. Measured on
+b9763 on 2026-11-02: chat and `/props` answer 401 without the key, `/slots` answers 401 without it
+and 501 with it, and `/health` and `/v1/models` stay open, which reveals the model's name and is
+what the readiness poll uses. The server logs the key's last 4 of 64 characters. It still reflects
+any `Origin` in its CORS headers, so the key is what stops a web page calling the model. It does
+not stop a process with debug rights under the same account, which can read the child's environment.
 
 **That happened, and the streaming server is why the host has to be checked, not just passed.**
 The pinned `sherpa-onnx-online-websocket-server`, v1.13.4, has no host option: its `--help` lists

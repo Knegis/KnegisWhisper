@@ -691,14 +691,13 @@ async fn step(
             previous: previous.clone(),
             guard: Some(guard),
         };
-        let port = if previous.as_deref() == Some(settings.model.as_str()) {
-            llm.running_port().ok_or("The local model stopped.")?
-        } else {
+        if previous.as_deref() != Some(settings.model.as_str()) {
             llm.stop().await;
-            crate::local_llm::start_and_watch(llm,app.clone(),&settings.model).await.map_err(|_|"Could not start the selected local model. Install it in Settings > Local text models and retry.")?
-        };
+            crate::local_llm::start_and_watch(llm,app.clone(),&settings.model).await.map_err(|_|"Could not start the selected local model. Install it in Settings > Local text models and retry.")?;
+        }
+        let server = endpoint.server().ok_or("The local model stopped.")?;
         let result = Chat::new(state.policy(), state.credentials())
-            .with_local_port(Some(port))
+            .with_local_server(Some(server))
             .for_summary()
             .complete(registry, destination, &settings.model, messages, &options)
             .await;
