@@ -12,6 +12,75 @@ maintained in place rather than appended to, because its purpose is to be curren
 
 ---
 
+## 2026-11-02 — KNEG-484 closed, four rulings, KNEG-90, KNEG-498 and KNEG-499
+
+Branch `fix/kneg-498-499`, from `dev` at `f02829f`. Everything below was measured by instrument in
+disposable profiles, or read from code where it says so. The owner saw none of it.
+
+**KNEG-484 closed on the uninstall, at the owner's ruling.** The 2026-09-19 build is gone from
+`C:\Program Files`. The owner's own `tauri:dev` on the guarded code hasn't happened: the real profile
+was last written on 2026-10-02, so its first run will also migrate the database. The two firewall
+rules stay, also the owner's choice, and three kept worktrees predate the guard.
+
+**Rulings.** KNEG-455 item 7 stands, KNEG-87 is declined at no priority, KNEG-299 is met by what
+exists, and the owner reports no Deepgram key on this machine, which settles KNEG-53 against KNEG-56.
+
+**KNEG-90: a real OpenWhispr database was on this machine all along.** The issue said the project had
+none. The run used a byte-identical copy, so the originals were never opened, and `state.rs` gives a
+`KW_AUTOMATION_PROFILE` instance an in-memory credential store, so nothing could reach Credential
+Manager. Results are in `BENCH_CHECK.md`, chunk G item 3. Two things worth keeping:
+
+- **"Never written to" is not quite true of a WAL source.** A read-only open rewrote 7 bytes of the
+  `-shm`, in the wal-index header. A plain `node:sqlite` read-only open changed the same 7 bytes, so
+  this is believed to be SQLite rather than the importer. The main file and the WAL were unchanged.
+  This, and the report naming no table outside the copy plan, are KNEG-507.
+- **The credential half tested nothing.** The source's two token tables were empty. Relocation is
+  still proven only by the unit test with synthetic tokens.
+
+**KNEG-498: `confirm: true` on the two permanent MCP deletes.** The new tests failed first, with a
+one-call delete actually going through. The field makes the step explicit in the call and the schema;
+it isn't authorisation, since an agent talked into a delete can send it too. `destructiveHint: true`
+and `readOnlyHint: false` match the MCP defaults, so the unannotated tools read the same to a client
+that honours them.
+
+**KNEG-499: a per-start key for `llama-server`, and `--no-slots`.** Measured on the pinned b9763 before
+any code changed, because the design depended on it:
+
+- With no flags, chat answers 200 with no key and the server reflects any `Origin`, on the preflight
+  too. That half of the issue was true.
+- `/slots` answered 200 and did **not** contain a synthetic prompt after a completed request. The
+  issue's worry about a cached transcript there did not reproduce on this build. One short prompt
+  measures that case and no other.
+- With `LLAMA_API_KEY` set, `/health` stays open, which is the one thing that could have broken every
+  start, since `HttpHealth` sends no key. Chat and `/props` answer 401 without the key. `/v1/models`
+  stays open. `/slots` answers 501 under `--no-slots`.
+- **Stderr carries the key's last 4 of 64 characters** (`api_keys: ****xxxx`), and a stderr tail can
+  reach logs and the screen. That was judged not to be the key; `NETWORK_BOUNDARY.md` records it.
+
+The key travels in the child's environment rather than `--api-key`, which the process list would show.
+`process::start_with_env` is additive because `Launch` has about 20 literals and derives `Debug`.
+Port and key sit together in `LocalEndpoint`, so a reader can't pair one start's port with another's
+key. A 401 in cleanup would be silent (the raw transcript and a warning), so
+`dictation_cleanup_sends_the_running_servers_key` checks the wiring through the real adapter. The
+header test failed with the key removed.
+
+The real checks, in a throwaway profile with sidecars and models junctioned in: real cleanup through
+Qwen2.5 1.5B; from another process, chat and `/slots` answer 401; the process list shows `--no-slots`
+and no key; the 209 files in those two trees had the same paths, sizes and write times afterwards.
+
+**One summary failed first, and the reason matters.** The first synthetic meeting ended with "The model
+did not return a valid structured summary". A rejected key would have read "rejected the request (HTTP
+401)", and this message comes from `Summary::parse`, after a successful reply, so the key was accepted.
+That is the limit KNEG-278 records for this small model. The next, shorter meeting succeeded. This
+says the key works on the summary route; it says nothing about summary quality.
+
+**Not done.** whisper-server has no key option (`--help`), and the streaming server stays unauthenticated.
+A process with debug rights under the same account can read the child's environment. `NetworkPolicy::new`
+sets no `no_proxy`, so `HTTP_PROXY` without `NO_PROXY` may send the Bearer to that proxy, the same route
+transcripts already take. That last one is read from code and not run.
+
+---
+
 ## 2026-10-24 — KNEG-455 items 6, 8 and 9, KNEG-489 and KNEG-486
 
 Branch `fix/kneg-455-489-486`, from `dev` at `1fd78fd`. Before anything changed, the six transcript
@@ -362,6 +431,7 @@ and 2 lines, and the one leaving it the same, as the stop went to line 1 and bac
   code never disables them, so they stay live (+15 four times reads "1:00 / 0:00"), and the CSS
   rule that would hide the ticks under a disabled range never applies.
 - Collapsing the current line's section while paused leaves Follow on, so Play opens it again.
+  Ruled 2026-11-02: the owner keeps it (KNEG-455 closed).
 - Tab focus, or a text-drag selection, doesn't release Follow: the focused control or the quote
   can be scrolled away at the next line change.
 - Crossing 1280px drew the transcript afresh: Find closed and lost its query, closed sections

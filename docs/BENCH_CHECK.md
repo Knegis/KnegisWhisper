@@ -1115,7 +1115,15 @@ of chunk F is green tests and code review; none of it has touched real hardware 
    import".
 3. **Import an OpenWhispr `transcriptions.db`** through the same screen and confirm the source file
    is unmodified afterward, the report names what was copied and what was dropped per table, and no
-   credential value appears anywhere in the report.
+   credential value appears anywhere in the report. **Run 2026-11-02 (KNEG-90), measured by
+   instrument and not seen by the owner:** a debug build of `dev` at `f02829f` in a disposable
+   profile, through the real button and file dialog, against a byte-identical copy of a real
+   database. `transcriptions.db` and its `-wal` came through unchanged by SHA-256; the `-shm` did not
+   (7 of 32,768 bytes, all in SQLite's wal-index header, and a plain `node:sqlite` read-only open
+   changed the same 7). All 16 tables in the report matched the source and the screen, with nothing
+   skipped. The source's two token tables were empty, so the credential half had nothing to find and
+   proves nothing about real tokens. Tables outside the copy plan go unmentioned. The `-shm` change
+   and the unnamed tables are KNEG-507.
 4. **Kill the application mid-import** (a local file — the URL half of this item went with item 2)
    and restart it. Confirms whether an orphaned per-import scratch directory is left behind — a
    known, disclosed gap with no startup sweep.

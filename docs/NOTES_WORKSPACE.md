@@ -79,7 +79,8 @@ playing or paused, when it is out of view, unless a search hit or a summary refe
 shown. The person moving the transcript turns Follow off: a wheel, a touch moving anywhere but on the player
 card (a drag on the mini card moves neither the transcript under it nor Follow), a press on its scrollbar, a scrolling key with focus on a line or a button in the
 transcript or, with focus nowhere, after a press in it, the arrow keys between lines, or closing
-the section that is playing. Actual scrolls also release Follow unless they belong to the app's
+the section that is playing. Closing that section while paused leaves Follow on, so Play opens it
+again; the owner ruled that intended (KNEG-455). Actual scrolls also release Follow unless they belong to the app's
 reveal operation; this covers selection autoscroll, overlay scrollbars and focus reveal.
 Opening Rename turns Follow off until it is explicitly enabled after the form closes. A search
 hit turns it off while something plays. The chip is a toggle: pressed while Follow is on it
