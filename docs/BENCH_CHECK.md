@@ -81,7 +81,7 @@ Every gate passes on the merged tree. Nothing below has been clicked by a person
 2. **Type a name and Save:** every turn of that speaker shows the name; Export in each format
    shows it; the summary's Generate, run afterwards, uses it.
 3. **Remove name** restores `Speaker N`; Escape and Cancel close the form without a change.
-4. **Suggestions:** on a note with calendar participants their names come first in the datalist;
+4. **Suggestions:** on a note with calendar participants their names come first among the pills;
    a name used on another note appears after them; a name already on this note does not.
 5. **A meeting with no speaker labels** heads its turns with plain "You"/"Others" names and no
    rename.

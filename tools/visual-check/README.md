@@ -561,6 +561,20 @@ extended (both measured false before the fixes): 17/17 in both schemes, claim
 same render counts (none of the sections, turns or lines within a line; 1
 section, 2 turns and 2 lines across a line change).
 
+## Speaker naming form
+
+```powershell
+node tools/visual-check/speaker-rename-form.mjs --url http://127.0.0.1:5191/
+```
+
+Same options as the chip menus (the banner is always removed). It measures the
+form that names a speaker in a note's transcript: a named speaker's form holds the
+name and offers Remove name, an unnamed one's starts empty with its label as the
+placeholder and doesn't, suggestions are the app's own pills and narrow as you type,
+a press fills the field and saves nothing, Escape closes from a pill, and nothing
+leaves the column in either scheme or at 720x520. Which names Rust suggests is
+pinned by `cargo test`, not here.
+
 ## Meeting speaker labels
 
 ```powershell

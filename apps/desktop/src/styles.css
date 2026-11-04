@@ -1351,20 +1351,6 @@ button.transcript-find-step { flex: none; display: flex; align-items: center; ju
 .transcript mark.transcript-match-current { background: var(--band); color: var(--band-ink); text-decoration: none; }
 
 /* Wrap on narrow notes while keeping the field and actions beside their label when space permits. */
-.transcript-rename {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 0.5rem;
-  margin: 0.75rem 0 0;
-}
-
-/* Leave room to see a full first and last name while typing. */
-.transcript-rename input { min-width: 12rem; }
-/* The global button margin is for standalone actions, not controls in this form. */
-.transcript-rename button { margin-top: 0; }
-/* Errors stay below the controls so they do not squeeze the field. */
-.transcript-rename .error { flex-basis: 100%; }
 /* Under the head of the turn whose name was pressed, inset as its lines are (KNEG-448). */
 .transcript .transcript-rename { margin: 4px 20px 8px; scroll-margin-top: 60px; scroll-margin-bottom: calc(var(--player-h, 0px) + 24px); }
 
@@ -1490,7 +1476,6 @@ button.follow-chip[aria-pressed="true"]:hover:not(:disabled) { background: var(-
 .note-inline-player[hidden] { display: none; }
 .note-inline-player .note-mini-player { position: static; }
 .note-side-body > p { margin: 0 20px; }
-.note-side .transcript-rename input { min-width: 0; flex: 1 1 10rem; }
 /* The player floats over the foot of the column as a card, 12px in from the column's sides and
  * bottom, the transcript scrolling on under it (KNEG-448). Over the column's scrollbar too: the
  * card is the column's width less its insets, as the canvas draws it. */
@@ -3409,7 +3394,24 @@ button.transcript-find:hover:not(:disabled) { background: var(--control-hover); 
 .note-side .transcript .transcript-rows li, .note-side .transcript .transcript-rename { scroll-margin-bottom: 24px; }
 .transcript-text { font-size: 16px; line-height: 1.4; }
 .transcript-word-current { border-radius: 4px; background: var(--band-text); box-shadow: 0 0 0 2px var(--band-text); color: var(--bg); }
-.transcript .transcript-rename { margin: 4px 0 8px; }
+/*
+ * Naming a speaker, in the languages menu's words: a navy pixel label, a pill field, the suggestions
+ * as pills and Iris for the one thing to do next. A card because it opens among the turns and needs
+ * an edge of its own. Here, after the settings screens' field rules, because a note's transcript can
+ * sit inside `.content` and those would win otherwise.
+ */
+.transcript .transcript-rename { display: flex; flex-direction: column; gap: 10px; margin: 4px 0 8px; padding: 14px; border-radius: 18px; background: var(--panel); box-shadow: 0 1px 8px rgb(0 0 0 / 6%); }
+.transcript .transcript-rename input { box-sizing: border-box; width: 100%; min-width: 0; height: 36px; padding: 0 14px; border-radius: var(--r-control); background: var(--field); font-size: 14px; }
+.transcript .transcript-rename input:focus { background: var(--field); box-shadow: none; }
+.transcript-rename-suggestions { display: flex; flex-wrap: wrap; gap: 5px; min-width: 0; }
+/* A block, so a long name ends in an ellipsis inside the column, with the whole of it in its title. */
+.transcript-rename-suggestions button.language-pill { display: block; height: 30px; max-width: 100%; padding: 0 12px; overflow: hidden; font-size: 12.5px; line-height: 30px; white-space: nowrap; text-overflow: ellipsis; }
+.transcript-rename-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.transcript .transcript-rename-actions button { height: 32px; min-height: 32px; margin: 0; padding: 0 14px; font-size: 13px; line-height: 1; letter-spacing: 0; white-space: nowrap; }
+.transcript .transcript-rename-actions button:not(.primary) { background: var(--control); }
+.transcript .transcript-rename-actions button:not(.primary):hover:not(:disabled) { background: var(--control-hover); }
+.transcript .transcript-rename-actions button.primary { margin-left: auto; padding: 0 18px; }
+.transcript .transcript-rename .error { margin: 0; }
 .note-transcript-inline, .note-inline-player { max-width: none; padding-right: 0; padding-left: 0; }
 
 /*

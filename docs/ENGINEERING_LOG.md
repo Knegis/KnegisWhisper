@@ -25,6 +25,19 @@ now allows three rows of chips on Meetings at 720x520, since seven chips wrap to
 labels both say needs setup. Nothing overflows. Checked with unit tests and `meeting-speaker-labels.mjs` in
 headless Edge against dev fixtures, not in the real window.
 
+**The form that names a speaker (KNEG-514).** It kept its old styling through the redesign, and its suggestions
+were a native `<datalist>`, which CSS can't style. The boards don't draw it, and the owner liked the new languages
+menu, so it follows that: a card with a pixel label, a pill field, the suggestions as pills that narrow as you
+type, up to eight, and Iris Save on the right. A pill fills the field and saves nothing, as the native list did.
+At the owner's request Remove name only shows when there is a name, and an unnamed speaker's field starts empty
+with its label as the placeholder. Rust sends only the name to show, so "named" is worked out by comparing it
+with the label Rust gives an unnamed speaker (`speaker_name`). If that label ever differs, the form treats it as
+a name, which is how it behaved before. Checked with unit tests and `speaker-rename-form.mjs` in headless Edge
+against dev fixtures, in both schemes and at 720x520, not in the real window. The suggestions came from fixtures.
+
+**Seen while checking it (KNEG-515).** At 720x520, on a note's Transcript tab, the notes list toggle sits on the
+"transcript" label. One render, not measured. The toggle moved in KNEG-509, which is believed to be why, not traced.
+
 ---
 
 ## 2026-11-04 — The app rebuilt to the approved design, screen by screen
