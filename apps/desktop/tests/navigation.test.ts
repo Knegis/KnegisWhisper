@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { NAV, INNER_VIEWS, DEFAULT_VIEW, RAIL, SETTINGS_PANEL, childrenOf, groupOf, isGroup, railOf, srSuffixOf } from "../src/lib/navigation.js";
+import { eyebrowOf, NAV, INNER_VIEWS, DEFAULT_VIEW, RAIL, SETTINGS_PANEL, childrenOf, groupOf, isGroup, railOf, srSuffixOf } from "../src/lib/navigation.js";
 
 const topLevel = ["dictation", "meetings", "notes"];
 const groups = {
@@ -92,4 +92,11 @@ test("the Settings child Meetings is named apart from the top-level Meetings, an
   // The visible label is unchanged, and the accessible name contains it.
   assert.equal(child.label, "Meetings");
   assert.equal(`${child.label}${srSuffixOf(child) ?? ""}`, "Meetings settings");
+});
+
+test("a page's eyebrow says which part of the application it belongs to", () => {
+  assert.equal(eyebrowOf("transcription"), "settings");
+  assert.equal(eyebrowOf("api"), "developer");
+  assert.equal(eyebrowOf("notes-upload"), "notes");
+  assert.equal(eyebrowOf("dictation"), null);
 });

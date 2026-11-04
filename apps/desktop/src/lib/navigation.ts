@@ -249,6 +249,19 @@ export function groupOf(view: ViewId): string | null {
 }
 
 /**
+ * The small label over a page's title: the part of the application it belongs to,
+ * in the pixel voice's lower case. `null` for a top-level destination, whose title
+ * stands alone.
+ */
+export function eyebrowOf(view: ViewId): string | null {
+  const group = NAV.find((entry) => isGroup(entry) && entry.id === groupOf(view));
+  if (group !== undefined) return group.label.toLowerCase();
+  const inner = INNER_VIEWS.find((entry) => entry.id === view);
+  if (inner === undefined) return null;
+  return NAV.find((entry) => entry.id === inner.parent)?.label.toLowerCase() ?? null;
+}
+
+/**
  * The title bar's pills: the three jobs, then `Settings`.
  *
  * Written out rather than derived from `NAV`, because it is not `NAV`'s

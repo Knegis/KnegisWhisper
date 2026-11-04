@@ -154,7 +154,7 @@ function verticalNeighbour(tiles: HTMLButtonElement[], from: HTMLButtonElement, 
 export function BackToSettings({ onOpen }: { onOpen: () => void }) {
   return (
     <button type="button" className="back-to-settings" aria-haspopup="dialog" onClick={onOpen}>
-      <Icon name="back" size={14} />
+      <Icon name="back" size={16} />
       Settings
     </button>
   );

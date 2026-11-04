@@ -71,7 +71,7 @@ import { BackToSettings, SettingsSheet } from "./components/SettingsSheet";
 import { ConfirmHost } from "./components/ConfirmDialog";
 import { PanelCollapsed } from "./components/SplitView";
 import { getDiagnostics, getMeetingStatus, onMeetingState, type Diagnostics, type MeetingState } from "./lib/ipc";
-import { railOf, type ViewId } from "./lib/navigation";
+import { eyebrowOf, railOf, type ViewId } from "./lib/navigation";
 import { defaultDestination, initialHistory, navigationHistory } from "./lib/navigationHistory";
 import { PAGES } from "./lib/pages";
 import { currentSurface } from "./lib/surface";
@@ -351,12 +351,14 @@ function Shell() {
   // Providers draws its own header, with its search and Test connections in it.
   // A settings or developer screen leads with the way back to the sheet.
   const content = (
-    <div className="content">
-      {railOf(view) === "settings" ? <BackToSettings onOpen={openSheet} /> : null}
-      {page && view !== "providers" ? <PageHeader page={page} /> : null}
+    <>
+      {railOf(view) === "settings" ? <div className="page-back"><BackToSettings onOpen={openSheet} /></div> : null}
+      <div className={`content content-${view}`}>
+      {page && view !== "providers" ? <PageHeader page={page} eyebrow={eyebrowOf(view)} /> : null}
       {summarySetup !== null && railOf(view) === "settings" && <div className="controls summary-setup-return"><button type="button" onClick={returnToSummary}>Return to note</button></div>}
       {boundary}
-    </div>
+      </div>
+    </>
   );
 
   // Every other screen -- the settings and developer screens, and

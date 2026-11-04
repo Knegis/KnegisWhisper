@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { importActive, importProgressText, pollImport } from "../src/lib/importProgress.js";
+import { importActive, importProgressText, importStages, pollImport } from "../src/lib/importProgress.js";
 import type { ImportSnapshot } from "../src/generated/ipc-types.js";
 const snapshot = (stage: ImportSnapshot["stage"]): ImportSnapshot => ({ operationId: "a", stage, elapsedSeconds: 65, provider: "local", model: "base", result: null, error: null });
 const flush = async () => { await Promise.resolve(); await Promise.resolve(); };
@@ -30,4 +30,20 @@ test("polling serializes reads and retries a read failure", async () => {
   await flush(); assert.equal(reads, 1); assert.equal(failures, 1);
   next?.(); await flush(); assert.equal(reads, 2); assert.deepEqual(values, ["new operation"]);
   stop(); assert.equal(next, undefined);
+});
+
+test("the four stages are drawn only while an import runs", () => {
+  assert.equal(importStages(null), null);
+  for (const stage of ["succeeded", "failed", "cancelled", "interrupted"] as const) {
+    assert.equal(importStages(snapshot(stage)), null, stage);
+  }
+});
+
+test("each stage before the current one is done, and each after it still to come", () => {
+  const stages = importStages(snapshot("transcribing"));
+  assert.deepEqual(stages?.map((s) => s.label), ["Preparing import", "Converting audio", "Transcribing", "Saving note and recording"]);
+  assert.deepEqual(stages?.map((s) => s.state), ["done", "done", "current", "todo"]);
+  assert.deepEqual(stages?.map((s) => s.number), ["01", "02", "03", "04"]);
+  assert.deepEqual(importStages(snapshot("preparing"))?.map((s) => s.state), ["current", "todo", "todo", "todo"]);
+  assert.deepEqual(importStages(snapshot("saving"))?.map((s) => s.state), ["done", "done", "done", "current"]);
 });

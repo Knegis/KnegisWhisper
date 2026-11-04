@@ -161,15 +161,15 @@
    * a main area narrower than two label tracks, the gap and the paddings
    * (`@container main`, after the breakout rule).
    */
-  --label-col: 14rem;
-  --row-gap: 1.5rem;
+  --label-col: 13rem;
+  --row-gap: 28px;
 
   /*
    * `--content-max` caps `.content`, the centred column a settings or
    * developer screen renders in -- the FAQ-like column of the reference
    * frames. Wider would only stretch prose past a readable measure.
    */
-  --content-max: 60rem;
+  --content-max: 808px;
 
   --font-sans: Geist, "Helvetica Neue", Arial, sans-serif;
   /* The pixel voice. The name is the old one's, so every label that used it follows. */
@@ -669,7 +669,7 @@ button.panel-inline:hover:not(:disabled) { border-color: var(--muted); backgroun
  * query after the breakout rule, which `--label-col` works out -- where they
  * would otherwise take 112px of a column already too narrow for two tracks.
  */
-.content { max-width: var(--content-max); margin: 0 auto; padding: 28px 56px 64px; animation: kw-rise .35s var(--ease-out) both; }
+.content { max-width: var(--content-max); margin: 0 auto; padding: 0 24px 96px; animation: kw-rise .35s var(--ease-out) both; }
 
 /* The first section in a view sits directly under the page header. */
 .view > section:first-of-type,
@@ -726,30 +726,16 @@ h3 {
 }
 
 /*
- * A screen's title in Iris, as the reference frames set every settings
- * title: large, light tracking, the text-safe gradient at rest across it.
+ * A screen's head, centred: the part of the application it belongs to, its title
+ * in Iris across the whole gradient, and the sentence saying what it is for.
  */
-.page-header h1 {
-  width: fit-content;
-  font-size: 44px;
-  line-height: 52px;
-  letter-spacing: .02em;
-  background-image: var(--iris-text);
-  background-size: 300% 100%;
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-}
-
-.page-intro {
-  margin: 0.6rem 0 0;
-  color: var(--muted);
-  max-width: 60ch;
-  font-size: 16px;
-}
+.page-header { display: flex; flex-direction: column; align-items: center; gap: 14px; margin: 0; padding: 44px 0 40px; text-align: center; }
+.page-header h1 { width: fit-content; font-size: 52px; line-height: 1.06; letter-spacing: .04em; background-image: var(--iris-text); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.page-intro { margin: 0; font-size: 17px; line-height: 1.3; color: var(--muted); }
 
 /* The way back to the Settings sheet, above a settings screen's title. */
-button.back-to-settings { display: inline-flex; align-items: center; gap: 8px; height: 34px; margin: 0 0 22px; padding: 0 16px 0 12px; border-radius: var(--r-control); background: var(--control); font-size: 13px; letter-spacing: .04em; transition: background-color .3s ease; }
+.page-back { padding: 18px 24px 0; }
+button.back-to-settings { display: inline-flex; align-items: center; gap: 8px; height: 36px; margin: 0; padding: 0 16px 0 12px; border-radius: var(--r-control); background: var(--control); font-size: 13px; letter-spacing: .04em; transition: background-color .3s ease; }
 button.back-to-settings:hover:not(:disabled) { background: var(--control-hover); }
 
 .learn-more {
@@ -871,15 +857,11 @@ section {
    * whose width it can predict.
    */
   grid-template-columns: var(--label-col) minmax(0, 1fr);
-  gap: var(--row-gap);
-  align-items: baseline;
-  /* 14px, in px for the same reason `section`'s 40px is. */
-  padding: 14px 0;
-  border-top: 1px solid var(--rule);
-}
-
-.row:first-of-type {
-  border-top: none;
+  gap: 6px var(--row-gap);
+  align-items: start;
+  /* 16px, in px for the same reason `section`'s 40px is. */
+  padding: 16px 0;
+  border-top: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
 }
 
 /*
@@ -894,7 +876,7 @@ section {
 }
 
 .row-label {
-  color: var(--muted);
+  color: var(--text);
   flex: 0 0 auto;
 }
 
@@ -915,7 +897,7 @@ section {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 0.15rem;
+  gap: 6px;
 }
 
 /*
@@ -941,7 +923,7 @@ section {
   max-width: 76ch;
   font-family: var(--font-sans);
   color: var(--muted);
-  font-size: 0.9333rem;
+  font-size: 13px;
   line-height: 1.45;
   letter-spacing: normal;
   font-style: normal;
@@ -986,18 +968,29 @@ section > .muted {
 }
 
 /*
- * The one mark that stays. A caveat has to read as set apart from the prose
- * around it, and on paper an 8% wash alone does not carry that; the bar is a
- * mark in the margin rather than an outline around the block, so it keeps the
- * distinction this file is otherwise removing.
+ * A caveat: a soft rounded block with a dot at its start, as the design draws one.
+ * The dot is the mark that sets it apart from the prose around it, so it does not
+ * rest on the fill alone.
  */
 .caveat {
+  position: relative;
   margin: 0.75rem 0 0;
-  padding: 0.6rem 0.75rem;
-  border-left: 2px solid var(--accent);
+  padding: 12px 16px 12px 34px;
+  border-radius: var(--r-notice);
   background: var(--wash);
   color: var(--text);
-  font-size: 0.9375rem;
+  font-size: 14px;
+  line-height: 1.45;
+}
+.caveat::before {
+  content: "";
+  position: absolute;
+  top: 18px;
+  left: 14px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentcolor;
 }
 
 /* Kept at the design's flat 400 though Geist could draw a real bold; this also un-bolds the Meetings and Cleanup & summaries caveat lead-ins, deliberately. */
@@ -2835,17 +2828,31 @@ button.note-people-add:hover:not(:disabled), button.note-people-add[aria-expande
  * about 70 characters a line: at 1280px the column is wider than that, and
  * Transcription's explanations ran to 105.
  */
-.content .view section { padding: 22px 28px 18px; border-radius: var(--r-card); background: var(--panel); box-shadow: var(--card-shadow); }
-.content .view section section { padding: 0; border-radius: 0; background: none; box-shadow: none; }
+.content .view { display: flex; flex-direction: column; gap: 40px; }
+.content .view section { margin: 0; padding: 0; border-radius: 0; background: none; box-shadow: none; }
 /* A link-like button written before its section's label (Transcription's Manage vocabulary) sits at the label's right, over its rule. */
 .content .view section > button:first-child:not([class]) { float: right; margin: -7px 0 0 12px; }
-.content h2:not([class]) { padding-bottom: 10px; border-bottom: 1px solid var(--rule); }
+.content h2:not([class]), .content .view h2.section-label { margin: 0 0 12px; padding: 0; border: 0; font: 400 14px/1.3 var(--font-mono); letter-spacing: 0; color: var(--band-text); }
+.content h3 { margin: 20px 0 8px; font-size: 15px; }
 .content .view section p, .content .view section li { max-width: 70ch; }
+/* Every run of rows closes with a rule, unless what follows opens with its own. */
+.content .row:not(:has(+ .row, + .learn-more)) { border-bottom: 1px solid color-mix(in srgb, var(--text) 12%, transparent); }
+.content .learn-more { max-width: none; margin: 0; border-top: 1px solid color-mix(in srgb, var(--text) 12%, transparent); }
+.content .learn-more > summary { min-height: 40px; border-block: 0; font-size: 14px; }
+/* A section's own sentence, in full ink. */
+.content .view section > p:not([class]) { margin: 0 0 12px; font-size: 15px; line-height: 1.5; }
+.content .learn-more > .learn-more-body > p { margin: 0 0 12px; max-width: 640px; font-size: 13px; line-height: 1.5; color: var(--muted); }
+/* Inside a row it is a quieter line under the value. */
+.content .row .learn-more { width: 100%; border: 0; }
+.content .row .learn-more > summary { min-height: 36px; font-size: 13px; color: var(--muted); }
+/* A status beside a value: a dot, mint for what is fine. */
+.status-ok { display: inline-flex; align-items: center; gap: 9px; }
+.status-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--mint); box-shadow: inset 0 0 0 1px #6fa46b; }
 
 /* A plain button on a settings screen is the resting pill, filled. */
-.content button:not([class]) { padding: 0 16px; min-height: 34px; background: var(--control); font-size: 14px; }
+.content button:not([class]) { padding: 0 16px; min-height: 36px; background: var(--control); font-size: 13px; letter-spacing: .04em; }
 .content button:not([class]):hover:not(:disabled) { background: var(--control-hover); }
-.content button.primary, .content button.secondary, .content button.marked { padding: 0 16px; min-height: 34px; font-size: 14px; }
+.content button.primary, .content button.secondary, .content button.marked { padding: 0 16px; min-height: 36px; font-size: 13px; letter-spacing: .04em; }
 
 .content input:not([type="checkbox"], [type="radio"], [type="range"]),
 .content select {
@@ -3054,7 +3061,7 @@ button.danger:hover:not(:disabled) { background: var(--error); color: var(--bg);
  * not know to stop. Listed rather than `*`, because a one-shot arrival paused at
  * its first frame would leave what it was bringing in invisible.
  */
-:root[data-window-active="false"] :is(.tile-orb, .tile-weather, .title-ink, .notice-dot, .nav-pill-dot, .tile-label-dot, .level-segment-lit, .tile-cta, .call-card-dot, .live-finishing-pill, .live-text, .live-caret, .notes-empty-art > span) { animation-play-state: paused; }
+:root[data-window-active="false"] :is(.tile-orb, .tile-weather, .title-ink, .notice-dot, .nav-pill-dot, .tile-label-dot, .level-segment-lit, .tile-cta, .call-card-dot, .live-finishing-pill, .live-text, .live-caret, .notes-empty-art > span, .tile-streak-art) { animation-play-state: paused; }
 :root[data-window-active="false"] .note-side-player::before { animation-play-state: paused; }
 
 /* A title in the big statement voice. */
@@ -3572,3 +3579,45 @@ button.notes-empty-import:hover:not(:disabled) { background: #fff; color: #000; 
 .trash-space > button:hover:not(:disabled) { background: var(--control-hover); }
 .trashed-note { padding: 38px 44px 44px; border-radius: var(--r-sheet); background: var(--panel); }
 .trashed-note-title { margin: 22px 0 0; background-image: var(--iris-text); -webkit-background-clip: text; background-clip: text; color: transparent; font-size: 44px; line-height: 1.08; letter-spacing: .03em; }
+
+/*
+ * # Import (`views/NotesUpload.tsx`)
+ *
+ * A wider column, the file step first on a picture, then what it uses and the
+ * other importer in flat sections. The streak picture is the note player's: a
+ * sliding layer, slow at rest and quicker while an import runs.
+ */
+.content-notes-upload { max-width: 868px; }
+.content-notes-upload .page-header { padding: 56px 0 36px; }
+.tile-streak { background: #cfcbb8; }
+.tile-streak-art { position: absolute; left: 0; right: 0; top: 0; height: calc(100% + 220px); background-color: #cfcbb8; background-image: repeating-linear-gradient(180deg, rgb(255 255 255 / 0) 0, rgb(255 255 255 / 78%) 18px, rgb(255 214 170 / 55%) 30px, rgb(150 150 120 / 25%) 52px, rgb(255 255 255 / 0) 70px); background-size: 100% 220px; will-change: transform; animation: kw-streak 14s steps(140) infinite; }
+.tile-streak[data-busy="true"] > .tile-streak-art { animation-duration: 3s; animation-timing-function: steps(60); }
+.tile-streak::before { content: ""; position: absolute; inset: 0; z-index: 1; background: radial-gradient(circle at 26% 38%, rgb(255 255 240 / 95%) 0 6%, rgb(255 255 240 / 0) 24%); pointer-events: none; }
+.tile-streak > :not(.tile-streak-art) { z-index: 2; }
+.tile-streak .tile-label { background: rgb(40 36 24 / 50%); }
+.picture-tile.import-tile { justify-content: center; gap: 18px; min-height: 330px; padding: 40px 28px; }
+.content .view section h2.tile-label { margin: 0; padding: 7px 14px; font: 400 13px/1.3 var(--font-mono); color: #fff; }
+button.glass-action.import-choose { gap: 16px; height: 50px; padding: 0 6px 0 22px; background: rgb(40 36 24 / 55%); }
+button.glass-action.import-choose:hover:not(:disabled) { background: rgb(40 36 24 / 72%); }
+.import-choose .glass-action-end { background: rgb(255 255 255 / 18%); }
+button.glass-action.import-choose:hover:not(:disabled) .glass-action-end { transform: rotate(90deg); }
+.import-picked { position: relative; display: inline-flex; align-items: center; gap: 10px; max-width: 100%; padding: 9px 16px; border-radius: var(--r-control); background: rgb(255 255 255 / 82%); color: #000; font-size: 14px; animation: kw-enter .5s var(--ease-enter) both; }
+.import-picked-label { flex: none; font-size: 13px; color: rgb(0 0 0 / 62%); }
+.import-picked-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.import-file { display: flex; flex-direction: column; gap: 16px; }
+.import-run { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+.content .view section p.import-status { flex: 1 1 200px; margin: 0; font-size: 14px; line-height: 1.45; color: var(--muted); }
+.import-run > button.primary { height: 48px; margin: 0 0 0 auto; padding: 0 28px; font-size: 15px; letter-spacing: 0; }
+.import-file > .caveat, .import-file > .error, .import-file > .muted { margin: 0; }
+.import-file > .muted { font-size: 13px; line-height: 1.45; }
+.import-stages { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; list-style: none; animation: kw-enter .5s var(--ease-enter) both; }
+.content .view section li.import-stage { display: inline-flex; align-items: center; gap: 10px; height: 40px; max-width: none; padding: 0 16px 0 12px; border-radius: var(--r-control); background: var(--wash); color: var(--muted); font-size: 13px; transition: background-color .5s ease, color .5s ease; }
+.content .view section li.import-stage[data-state="done"] { background: var(--mint); color: var(--mint-ink); }
+.content .view section li.import-stage[data-state="current"] { background: var(--band); color: var(--band-ink); }
+.import-stage-number { font-family: var(--font-mono); }
+.import-done { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 12px 12px 20px; border-radius: var(--r-notice); background: var(--mint); color: var(--mint-ink); font-size: 14px; animation: kw-enter .5s var(--ease-enter) both; }
+.import-done-text { flex: 1 1 240px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.import-done-detail { font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
+button.import-open { flex: none; height: 38px; margin: 0; padding: 0 18px; border-radius: var(--r-control); background: #fff; color: #000; font-size: 14px; }
+button.import-open:hover:not(:disabled) { background: #fff; color: #000; filter: brightness(.95); }
+.content .view section p.import-retained { max-width: none; margin: 0; padding-top: 14px; border-top: 1px solid color-mix(in srgb, var(--text) 12%, transparent); font-size: 13px; line-height: 1.45; }
