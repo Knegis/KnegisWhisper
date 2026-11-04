@@ -1,42 +1,52 @@
 import { createContext, useContext, type ReactNode } from "react";
 
+import { Icon } from "./Icon";
+
 /**
- * Whether the list panel is collapsed, on whichever page is showing.
+ * Whether the list panel is collapsed, and how to change it.
  *
- * A context rather than a prop because the page that draws a panel is not the
- * component that owns the toggle: the title bar's "Hide list" button lives in
- * `App.tsx`, above every view, while Dictation, Meetings and Notes each render
- * their own `SplitView` from inside their own file. Threading a boolean
- * through every view's props to reach one attribute is what this saves. The
- * value is one piece of state for the whole window, so collapsing the panel on
- * one page leaves it collapsed on the next.
+ * A context rather than props because the state belongs to the window while the
+ * page that draws a panel renders its own `SplitView`: `App.tsx` holds it, so it
+ * can collapse the panel when the window narrows past 900px, and threading it
+ * through a view's props to reach one attribute is what this saves.
  */
-export const PanelCollapsed = createContext(false);
+export const PanelCollapsed = createContext<{ collapsed: boolean; toggle: () => void }>({ collapsed: false, toggle: () => {} });
 
 /**
  * A list panel beside a main area, inside the card.
- *
- * `id="list-panel"` is what the title bar's toggle names in `aria-controls`.
- * Only one `SplitView` is ever mounted -- one page shows at a time -- so the
- * id is unique in the document.
  *
  * `hidden` rather than unmounting, so a collapsed panel keeps its scroll
  * position and whatever its page put in it. `styles.css` restates
  * `[hidden]` for `.list-panel`, because the panel's own `display: flex`
  * would otherwise outrank the browser's `display: none`.
  *
- * `heading` is for a task page -- Dictation, Meetings, Notes -- whose `h1` is
- * its panel's title. A hidden panel is out of the accessibility tree, and
- * the page would have no `h1` at all; so while the panel is collapsed the
- * main area carries one, visually hidden, with the same words. Only then, so
- * the page has exactly one either way. Optional because a settings screen
- * passed none while it sat beside the Settings list panel -- its `h1` was its
- * `PageHeader` -- and settings screens have no `SplitView` now.
+ * The toggle names the panel in `aria-controls`, which is why the id is here:
+ * one page shows at a time, so one `SplitView` is mounted and the id is unique.
+ * It stays in the document either way and is laid out over the page while the
+ * panel is hidden, so it never disappears along with what it would bring back.
+ *
+ * `heading` is for a page whose `h1` is its panel's title. A hidden panel is
+ * out of the accessibility tree, and the page would have no `h1` at all; so
+ * while the panel is collapsed the main area carries one, visually hidden,
+ * with the same words. Only then, so the page has exactly one either way.
  */
 export function SplitView({ label, heading, panel, children }: { label: string; heading?: string; panel: ReactNode; children: ReactNode }) {
-  const collapsed = useContext(PanelCollapsed);
+  const { collapsed, toggle } = useContext(PanelCollapsed);
+  const toggleLabel = collapsed ? "Show list" : "Hide list";
   return (
     <div className="split">
+      <button
+        type="button"
+        className="list-toggle"
+        data-collapsed={collapsed}
+        aria-label={toggleLabel}
+        title={toggleLabel}
+        aria-expanded={!collapsed}
+        aria-controls="list-panel"
+        onClick={toggle}
+      >
+        <Icon name="panel" size={16} />
+      </button>
       <aside id="list-panel" className="list-panel" aria-label={label} hidden={collapsed}>
         {panel}
       </aside>

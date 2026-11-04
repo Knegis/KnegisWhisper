@@ -7,23 +7,20 @@ import { getCurrentWindow, type Window as AppWindow } from "@tauri-apps/api/wind
 
 /**
  * The main window's own title bar, which is also its navigation: on the left
- * the list-panel toggle, back and forward and the three job pills; the
- * KnegisWhisper dot mark in the middle, between two drag regions; on the right
- * the search field, the Settings pill and the window buttons.
+ * back, forward and the three job pills; the KnegisWhisper dot mark centred on
+ * the window; on the right the search field, the Settings pill and the window
+ * buttons.
  *
- * The toggle shows and hides the list panel beside the page (`SplitView`'s
- * `#list-panel`). On a page with no panel (`hasListPanel` false -- a settings
- * screen, Notes > Upload, the card while it loads or after it failed to, and
- * Dictation, Meetings or Notes while the error boundary stands in for the
- * page) the toggle is not drawn, rather than drawn pointing its
- * `aria-controls` at an element that is not in the document -- but its place
- * is kept by an empty slot of the same width, so the back and forward buttons
- * and the job pills stay where the hand left them instead of jumping 40px
- * left on every settings screen. The collapsed state it flips belongs to the
- * whole window and outlives the page, so the next page with a panel still
- * opens the way it was left.
+ * What is not a control is the drag region. The bar and its two ends carry the
+ * attribute as well as the mark, because Tauri starts a drag only when the
+ * element pressed has it: the bar's own padding and the empty middle of each
+ * end are the places a hand goes to move a window.
+ *
+ * The list panel's toggle is not here. Only Notes has a list panel now, so the
+ * toggle sits with the panel (`SplitView`), and back, forward and the pills
+ * stay in one place on every page.
  */
-export function TitleBar({ view, onSelect, sheetOpen, onOpenSheet, panelCollapsed, hasListPanel, onTogglePanel, onOpenNote, canGoBack, canGoForward, onBack, onForward }: { view: ViewId; onSelect: (id: ViewId) => void; sheetOpen: boolean; onOpenSheet: () => void; panelCollapsed: boolean; hasListPanel: boolean; onTogglePanel: () => void; onOpenNote: (id: number, transcriptRow?: number) => void; canGoBack: boolean; canGoForward: boolean; onBack: () => void; onForward: () => void }) {
+export function TitleBar({ view, onSelect, sheetOpen, onOpenSheet, onOpenNote, canGoBack, canGoForward, onBack, onForward, meetingRecording }: { view: ViewId; onSelect: (id: ViewId) => void; sheetOpen: boolean; onOpenSheet: () => void; onOpenNote: (id: number, transcriptRow?: number) => void; canGoBack: boolean; canGoForward: boolean; onBack: () => void; onForward: () => void; meetingRecording: boolean }) {
   const [maximized, setMaximized] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const native = "__TAURI_INTERNALS__" in window;
@@ -54,40 +51,28 @@ export function TitleBar({ view, onSelect, sheetOpen, onOpenSheet, panelCollapse
     try { await action(getCurrentWindow()); }
     catch (e) { setError(String(e)); }
   };
-  const panelLabel = panelCollapsed ? "Show list" : "Hide list";
   return <>
-    <header className="app-titlebar" aria-label="Application title bar">
-      {hasListPanel ? (
-        <button
-          type="button"
-          className="titlebar-button"
-          aria-label={panelLabel}
-          title={panelLabel}
-          aria-expanded={!panelCollapsed}
-          aria-controls="list-panel"
-          onClick={onTogglePanel}
-        >
-          <Icon name="panel" />
-        </button>
-      ) : <span className="titlebar-button-slot" aria-hidden="true" />}
-      <div className="titlebar-history" role="group" aria-label="Navigation history">
-        <button type="button" className="titlebar-button" aria-label="Go back" title="Go back" disabled={!canGoBack} onClick={onBack}>
-          <Icon name="back" />
-        </button>
-        <button type="button" className="titlebar-button" aria-label="Go forward" title="Go forward" disabled={!canGoForward} onClick={onForward}>
-          <Icon name="forward" />
-        </button>
+    <header className="app-titlebar" aria-label="Application title bar" data-tauri-drag-region>
+      <div className="app-titlebar-start" data-tauri-drag-region>
+        <div className="titlebar-history" role="group" aria-label="Navigation history">
+          <button type="button" className="titlebar-button" aria-label="Go back" title="Go back" disabled={!canGoBack} onClick={onBack}>
+            <Icon name="back" size={16} />
+          </button>
+          <button type="button" className="titlebar-button" aria-label="Go forward" title="Go forward" disabled={!canGoForward} onClick={onForward}>
+            <Icon name="forward" size={16} />
+          </button>
+        </div>
+        <JobPills view={view} onSelect={onSelect} meetingRecording={meetingRecording} />
       </div>
-      <JobPills view={view} onSelect={onSelect} />
-      <div className="app-titlebar-drag" data-tauri-drag-region />
-      <span className="app-titlebar-mark" data-tauri-drag-region><DotMark size={26} /></span>
-      <div className="app-titlebar-drag" data-tauri-drag-region />
-      <TitleBarSearch onOpenNote={onOpenNote} />
-      <SettingsPill view={view} open={sheetOpen} onOpen={onOpenSheet} />
-      <div className="app-titlebar-buttons">
-        <button type="button" disabled={!native} aria-label="Minimize window" title="Minimize" onClick={() => void act(w => w.minimize())}><Icon name="minimise" size={16} /></button>
-        <button type="button" disabled={!native} aria-label={maximized ? "Restore window" : "Maximize window"} title={maximized ? "Restore" : "Maximize"} onClick={() => void act(w => w.toggleMaximize())}><Icon name={maximized ? "restore" : "maximise"} size={16} /></button>
-        <button type="button" disabled={!native} className="window-close" aria-label="Close window" title="Close" onClick={() => void act(w => w.close())}><Icon name="close" size={16} /></button>
+      <span className="app-titlebar-mark" data-tauri-drag-region><DotMark size={34} /></span>
+      <div className="app-titlebar-end" data-tauri-drag-region>
+        <TitleBarSearch onOpenNote={onOpenNote} />
+        <SettingsPill view={view} open={sheetOpen} onOpen={onOpenSheet} />
+        <div className="app-titlebar-buttons">
+          <button type="button" disabled={!native} aria-label="Minimize window" title="Minimize" onClick={() => void act(w => w.minimize())}><Icon name="minimise" size={18} /></button>
+          <button type="button" disabled={!native} aria-label={maximized ? "Restore window" : "Maximize window"} title={maximized ? "Restore" : "Maximize"} onClick={() => void act(w => w.toggleMaximize())}><Icon name={maximized ? "restore" : "maximise"} size={18} /></button>
+          <button type="button" disabled={!native} className="window-close" aria-label="Close window" title="Close" onClick={() => void act(w => w.close())}><Icon name="close" size={18} /></button>
+        </div>
       </div>
     </header>
     {error && <div className="window-control-error" role="alert">{error}<button onClick={() => setError(null)} aria-label="Dismiss window error">Dismiss</button></div>}

@@ -472,7 +472,7 @@ export function Meetings({
     (data?.keyterms ?? []).join("\n"),
   );
   // Whether the list panel is showing, for the one sentence that points into it.
-  const panelCollapsed = useContext(PanelCollapsed);
+  const panelCollapsed = useContext(PanelCollapsed).collapsed;
 
   if (!data) {
     return (

@@ -95,10 +95,12 @@
   --accent: #a9bdf5;
   --error: #ff8197;
 
-  --wash: rgb(255 255 255 / 5%);
-  /* A control at rest, as oem.care's 10% pill. */
+  --wash: rgb(255 255 255 / 7%);
+  /* A field at rest: a fill and no edge, as the design draws it. */
+  --field: rgb(255 255 255 / 8%);
+  /* A pill at rest: the design's black at 10%, inverted. */
   --control: rgb(255 255 255 / 11%);
-  /* Pointed at: the site darkens its pill from 10% to 30%. */
+  /* Pointed at: the design's pill darkens from 10% to 30%. */
   --control-hover: rgb(255 255 255 / 22%);
 
   --frame: #111112;
@@ -121,8 +123,8 @@
    * against the ground at every point along it.
    */
   --iris: linear-gradient(88deg, #7781c0, #c98eb5 20%, #f3a08d 50%, #efb158);
-  --iris-text: linear-gradient(88deg, #aab3ec, #e3a9cf 30%, #f6b4a1 60%, #f1c27a);
-  --dusk: linear-gradient(180deg, #0e3b8d 0%, #fbab7d 55%, #fdac61 78%, #ff813b 100%);
+  --iris-text: linear-gradient(88deg, #aab3ec, #e3a9cf 34%, #f6b4a1 66%, #f1c27a);
+  --dusk: linear-gradient(182deg, #0e3b8d 8.96%, #fbab7d 55.48%, #fdac61 76.26%, #ff813b 103.97%);
   --dusk-text: linear-gradient(96deg, #f0a07a 0%, #c99ab8 30%, #9db4f0 58%, #b4c3f5 80%, #f0a07a 100%);
   /* An offer or an update: the site's mint notice. */
   --mint: #baecb7;
@@ -132,8 +134,13 @@
 
   --r-control: 100px;
   --r-row: 12px;
+  /* A notice. */
+  --r-notice: 15px;
+  /* A floating menu or popover. A page's own card is `--r-sheet`. */
   --r-card: 24px;
   --r-sheet: 40px;
+  /* A picture tile: the design's squircle. */
+  --r-tile: 100px;
 
   /* oem.care's one ease, and the sharper one its notifications drop in on. */
   --ease: cubic-bezier(.7, .01, .11, .96);
@@ -172,7 +179,7 @@
   color-scheme: light dark;
   font-family: var(--font-sans);
   font-size: 15px;
-  line-height: 1.5;
+  line-height: 1.3;
 }
 
 /* The light theme: oem.care's own ground and ink. */
@@ -191,9 +198,10 @@
     --accent: #0e3b8d;
     --error: #c2183a;
 
-    --wash: rgb(0 0 0 / 4%);
-    --control: rgb(0 0 0 / 8%);
-    --control-hover: rgb(0 0 0 / 18%);
+    --wash: rgb(0 0 0 / 6%);
+    --field: rgb(0 0 0 / 6.5%);
+    --control: rgb(0 0 0 / 10%);
+    --control-hover: rgb(0 0 0 / 30%);
 
     --frame: #fafafa;
     --panel: #fff;
@@ -206,7 +214,7 @@
     --edge: #d6d6d6;
     --glass: rgb(250 250 250 / 72%);
 
-    --iris-text: linear-gradient(88deg, #5f6ab4, #a85f93 30%, #cc6a4e 60%, #b87418);
+    --iris-text: linear-gradient(88deg, #5f6ab4, #a85f93 34%, #cc6a4e 66%, #b87418);
     --dusk-text: linear-gradient(96deg, #c4633f 0%, #8a5a78 30%, #0e3b8d 58%, #3a4c9a 80%, #c4633f 100%);
   }
 }
@@ -223,8 +231,18 @@
 /*
  * Transform and opacity only, so the compositor runs it: the orb's blur is a
  * static filter on the element, painted once, not a filter re-run every frame.
+ * Written out as the eased curve in eight segments, because `.tile-orb` steps
+ * through each one: a composited layer still redraws the window on every frame
+ * it changes, and at rest this one sits open all day. On a blurred shape moving
+ * this slowly, fifteen changes a second looks the same as sixty.
  */
-@keyframes kw-breathe { 0%, 100% { transform: scale(.84); opacity: .85; } 50% { transform: scale(1.04); opacity: 1; } }
+@keyframes kw-breathe {
+  0%, 100% { transform: scale(.8); opacity: .88; }
+  12.5%, 87.5% { transform: scale(.837); opacity: .898; }
+  25%, 75% { transform: scale(.925); opacity: .94; }
+  37.5%, 62.5% { transform: scale(1.013); opacity: .982; }
+  50% { transform: scale(1.05); opacity: 1; }
+}
 @keyframes kw-blob { 0%, 100% { transform: translate(0, 0); } 50% { transform: translate(6%, -4%); } }
 
 /*
@@ -293,6 +311,9 @@ body {
   color: var(--text);
 }
 
+/* The body sets 15/1.3, as the design does; a sentence or a paragraph reads at 1.5. */
+p { line-height: 1.5; }
+
 /*
  * The machine voice: Tiny5, the pixel face, in the string's own case -- never
  * by `text-transform`, which is not reversible by eye: an uppercased path or
@@ -340,8 +361,8 @@ body {
  */
 .frame { position: fixed; inset: var(--titlebar-height) 0 0; display: flex; background: var(--frame); animation: kw-fade .3s both; }
 
-.nav-pills { display: flex; align-items: center; gap: 8px; margin-left: 10px; flex-shrink: 0; }
-.nav-pill { display: inline-flex; align-items: center; height: 34px; margin: 0; padding: 0 16px; border: 0; border-radius: var(--r-control); background: var(--control); color: var(--text); font: inherit; font-size: 13px; letter-spacing: .04em; white-space: nowrap; transition: background-color .3s ease, color .3s ease; }
+.nav-pills { display: flex; align-items: center; gap: 10px; margin-left: 6px; flex-shrink: 0; }
+.nav-pill { display: inline-flex; align-items: center; gap: 8px; height: 36px; margin: 0; padding: 0 16px; border: 0; border-radius: var(--r-control); background: var(--control); color: var(--text); font: inherit; font-size: 13px; letter-spacing: .04em; white-space: nowrap; transition: background-color .3s ease, color .3s ease; }
 .nav-pill:hover:not(:disabled) { background: var(--control-hover); }
 /*
  * The marked state: the pill fills solid and its text inverts, nothing drawn
@@ -354,10 +375,11 @@ body {
 .nav-pill[aria-current="page"],
 .nav-pill[aria-current="page"]:hover:not(:disabled),
 .nav-pill[aria-expanded="true"] { background: var(--band); color: var(--band-ink); }
-.app-titlebar > .nav-pill { align-self: center; flex-shrink: 0; margin: 0 4px 0 8px; }
+.nav-pill-dot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--signal); animation: kw-pulse 1.6s ease-in-out infinite; }
 
 .dot-mark { display: block; color: var(--text); }
-.app-titlebar-mark { display: flex; align-items: center; flex-shrink: 0; padding: 0 8px; }
+.app-titlebar-mark .dot-mark { pointer-events: none; }
+.app-titlebar-mark { display: flex; align-items: center; justify-content: center; }
 
 .card { flex: 1; min-width: 0; display: flex; margin: 0; background: var(--bg); overflow: hidden; }
 
@@ -379,6 +401,14 @@ body {
 /* The list panel is lifted off the ground: a white rounded sheet, inset from the window's edges. */
 .list-panel { width: 280px; flex-shrink: 0; display: flex; flex-direction: column; overflow-y: auto; margin: 6px 0 14px 14px; background: var(--panel); border-radius: var(--r-card); box-shadow: var(--card-shadow); }
 .list-panel[hidden] { display: none; }
+/*
+ * The panel's toggle (`SplitView`): over the panel's top corner while it is
+ * open, at the page's top left while it is hidden, so it is always in reach
+ * and never takes a line of its own.
+ */
+.split { position: relative; }
+button.list-toggle { position: absolute; z-index: 2; top: 14px; left: 258px; display: flex; align-items: center; justify-content: center; width: 30px; height: 30px; margin: 0; padding: 0; border-radius: 50%; background: transparent; color: var(--text); }
+button.list-toggle[data-collapsed="true"] { left: 24px; top: 8px; background: var(--wash); }
 .split-main { flex: 1; min-width: 0; overflow-y: auto; scrollbar-gutter: stable; position: relative; container: main / inline-size; }
 
 /*
@@ -531,16 +561,15 @@ body {
 .keycaps { white-space: normal; }
 
 /*
- * A key: a `--panel` pill, lifted by a 1px inset `--edge` and a soft shadow.
- * A key is a control, so it takes the control corner, `--r-control`. Its
- * name is Geist medium -- "Control", "Shift" are words read at the size of
- * the text around them, often 13–14px, where the pixel face breaks up. Only
- * the hero's large keys (`.hero-heading kbd`) keep the pixel face.
+ * A key: a `--panel` pill with a 1px inset ring, its name in the pixel face at
+ * 14px, as the design draws it. In a sentence it steps down so it does not
+ * open up the line around it.
  */
-kbd { display: inline-block; white-space: nowrap; border: 0; border-radius: var(--r-control); background: var(--panel); box-shadow: inset 0 0 0 1px var(--edge), 0 1px 6px rgb(0 0 0 / 5%); color: var(--text); font-family: var(--font-sans); font-weight: 500; font-size: .92em; line-height: 1.6; padding: 0 0.65em; }
+kbd { display: inline-flex; align-items: center; height: 30px; padding: 0 12px; white-space: nowrap; border: 0; border-radius: var(--r-control); background: var(--panel); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 18%, transparent); color: var(--text); font: 400 14px/1 var(--font-mono); vertical-align: middle; }
+p kbd, .row-detail kbd, .caveat kbd { height: 22px; padding: 0 8px; }
 .hero-heading kbd { font-family: var(--font-mono); font-weight: 400; }
 /* Caps in a row stood edge to edge on Settings > Shortcuts (KNEG-331). 3px, the hero's own spacing, which this matches there. */
-.keycaps > kbd + kbd { margin-left: 3px; }
+.keycaps > kbd + kbd { margin-left: 8px; }
 .hero-heading kbd { margin: 0 4px; padding: 6px 18px 4px; font-size: 26px; line-height: 34px; vertical-align: 8px; color: var(--text); }
 
 /*
@@ -575,12 +604,13 @@ kbd { display: inline-block; white-space: nowrap; border: 0; border-radius: var(
  * a line and still too wide, and the label ellipsises inside a 260px cap
  * either way; the full label is the `title`.
  */
-.chip { display: inline-flex; align-items: center; gap: 7px; flex: 0 1 auto; min-width: 0; max-width: 260px; height: 34px; margin: 0; padding: 0 14px; border: 0; border-radius: var(--r-control); background: var(--wash); color: var(--text); font: inherit; font-size: 13.5px; line-height: 18px; white-space: nowrap; transition: background-color .3s ease; }
+.chip { display: inline-flex; align-items: center; gap: 8px; flex: 0 1 auto; min-width: 0; max-width: 260px; height: 36px; margin: 0; padding: 0 14px; border: 0; border-radius: var(--r-control); background: var(--wash); color: var(--text); font: inherit; font-size: 13px; line-height: 18px; white-space: nowrap; transition: background-color .3s ease; }
 .chip:hover:not(:disabled):not(.chip-static) { background: var(--control); }
 /* A solid icon carries more ink than the line ones beside it, so it is muted to sit level with them. */
 .chip > .icon-filled { color: var(--muted); }
 .chip-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.chip-chevron { display: flex; color: var(--muted); }
+.chip-chevron { display: flex; margin: 0 -7px 0 -5px; color: var(--text); }
+.chip-chevron .icon { stroke-width: 1.15; }
 /*
  * A chip that is on is marked the way every "on" is (`button.marked`, the
  * current pill): `--band` with `--band-ink`. It used to be a pale blue wash,
@@ -2534,7 +2564,7 @@ section > button.primary + button + button {
 
 button:focus-visible {
   outline: 2px solid var(--accent);
-  outline-offset: 2px;
+  outline-offset: 3px;
 }
 
 button:disabled {
@@ -2543,21 +2573,19 @@ button:disabled {
 }
 
 /*
- * The title bar's own buttons -- the list-panel toggle, back and forward --
- * as round 34px buttons on a faint fill, the first 14px in from the
- * window's edge. `margin` and `padding` are zeroed because the generic
- * `button` rule gives every button both.
+ * Back and forward: round 36px buttons on a faint fill. `margin` and
+ * `padding` are zeroed because the generic `button` rule gives every button
+ * both. Disabled, the fill and the ink fade separately, as the design draws
+ * it: `opacity` would take the fill with the ink until the circle was gone.
  */
-/* The toggle's place, kept empty where there is no panel to toggle. */
-.titlebar-button-slot { flex-shrink: 0; width: 34px; height: 34px; margin-left: 14px; }
 .app-titlebar button.titlebar-button {
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
   align-self: center;
-  width: 34px;
-  height: 34px;
+  width: 36px;
+  height: 36px;
   margin: 0;
   padding: 0;
   border-radius: 50%;
@@ -2565,12 +2593,10 @@ button:disabled {
   color: var(--text);
 }
 
-.app-titlebar > button.titlebar-button:first-child {
-  margin-left: 14px;
-}
-
 .app-titlebar button.titlebar-button:disabled {
-  opacity: 0.3;
+  opacity: 1;
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+  color: color-mix(in srgb, var(--text) 30%, transparent);
   cursor: default;
 }
 
@@ -2652,16 +2678,33 @@ button.microphone-language-toggle:hover:not(:disabled) { background: transparent
 .language-popup .microphone-language-menu { width: 100%; max-height: 100%; }
 
 /* Custom chrome belongs only to the main window; floating panels stay borderless. */
-:root[data-window="main"] { --titlebar-height: 60px; overflow: hidden; scrollbar-gutter: auto; }
+:root[data-window="main"] { --titlebar-height: 56px; overflow: hidden; scrollbar-gutter: auto; }
 /*
  * The title bar sits on the ground with no rule under it, so the bar and the
  * page read as one surface, as oem.care's header floats over its page. It is
  * the window's navigation as well as its chrome: see `components/TitleBar.tsx`.
+ *
+ * Three tracks, so the mark is centred on the window and not on what is left
+ * between the two ends. The left track never goes below its content: at the
+ * 720px minimum the right track gives way instead, where the search field can
+ * shrink. The design's header wraps; this one holds the window controls and
+ * stays one line, at the top, while the page scrolls under it.
  */
-.app-titlebar { position: fixed; inset: 0 0 auto; height: var(--titlebar-height); display: flex; align-items: stretch; z-index: 1000; background: var(--frame); color: var(--text); user-select: none; }
-.app-titlebar-drag { flex: 1; min-width: 8px; display: flex; align-items: center; font-size: 13px; cursor: default; }
-/* The window buttons are round, a step apart, and the last sits 10px in from the edge. */
-.app-titlebar-buttons { display: flex; align-items: center; gap: 2px; flex-shrink: 0; padding: 0 10px 0 6px; }
+.app-titlebar { position: fixed; inset: 0 0 auto; height: var(--titlebar-height); display: grid; grid-template-columns: minmax(max-content, 1fr) auto minmax(0, 1fr); align-items: center; gap: 16px; padding: 20px 24px 0; z-index: 1000; background: var(--frame); color: var(--text); user-select: none; }
+.app-titlebar-start, .app-titlebar-end { display: flex; align-items: center; gap: 10px; min-width: 0; height: 100%; }
+.app-titlebar-end { justify-content: flex-end; }
+/*
+ * Narrow, the mark gives up its place to the search field, which keeps its icon
+ * and gives up its key: at the 720px minimum there is room for the jobs, the
+ * Settings pill and the window buttons, and what is left of the field.
+ */
+@media (max-width: 900px) {
+  .app-titlebar { grid-template-columns: max-content minmax(0, 1fr); }
+  .app-titlebar-mark, .titlebar-search-key { display: none; }
+  .app-titlebar .titlebar-search input { padding-right: 10px; }
+}
+/* The window buttons are round and a step apart; the last sits on the bar's 24px inset. */
+.app-titlebar-buttons { display: flex; align-items: center; gap: 2px; flex-shrink: 0; margin-left: 6px; }
 .app-titlebar-buttons button { display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; min-height: 0; margin: 0; padding: 0; border: 0; border-radius: 50%; background: transparent; color: inherit; box-shadow: none; transition: background-color .3s ease, color .3s ease; }
 .app-titlebar-buttons button:hover:not(:disabled) { background: var(--control); color: inherit; }
 .app-titlebar-buttons button:active:not(:disabled) { background: var(--band); color: var(--band-ink); }
@@ -2670,20 +2713,20 @@ button.microphone-language-toggle:hover:not(:disabled) { background: transparent
 .window-control-error { position: fixed; top: var(--titlebar-height); right: 12px; z-index: 1001; max-width: 32rem; padding: 12px 16px; background: var(--panel); color: var(--text); border-radius: var(--r-card); box-shadow: var(--card-shadow); animation: kw-enter .5s var(--ease-enter) both; }
 
 /*
- * The search field: always drawn, a 34px pill on the faint fill at the title
+ * The search field: always drawn, a 36px pill on the faint fill at the title
  * bar's right, which turns white and widens a little while it has focus, as
- * oem.care's own search does. The icon and the CTRL K hint sit over the
+ * oem.care's own search does. The icon and the "ctrl k" key sit over the
  * field's own padding with `pointer-events: none`, so a press on either lands
  * in the field. It shrinks rather than push the window buttons off a narrow
  * window. The results open directly under it at exactly its width (`left: 0;
  * right: 0`), so the two share both edges at any window size.
  */
-.titlebar-search { position: relative; align-self: center; flex: 0 1 280px; min-width: 0; height: 34px; transition: flex-basis .5s var(--ease); }
-.titlebar-search:focus-within { flex-basis: 340px; }
-.titlebar-search > .icon { position: absolute; left: 13px; top: 9.5px; color: var(--muted); pointer-events: none; }
-.app-titlebar .titlebar-search input { width: 100%; height: 34px; min-height: 0; margin: 0; padding: 0 64px 0 36px; border: 0; border-radius: var(--r-control); background: var(--control); color: var(--text); font: inherit; font-size: 13px; transition: background-color .3s ease, box-shadow .3s ease; }
+.titlebar-search { position: relative; flex: 0 1 270px; min-width: 0; height: 36px; transition: flex-basis .5s var(--ease); }
+.titlebar-search:focus-within { flex-basis: 360px; }
+.titlebar-search > .icon { position: absolute; left: 14px; top: 10px; pointer-events: none; }
+.app-titlebar .titlebar-search input { width: 100%; min-width: 0; height: 36px; min-height: 0; margin: 0; padding: 0 60px 0 38px; border: 0; border-radius: var(--r-control); background: var(--wash); color: var(--text); font: inherit; font-size: 13px; transition: background-color .3s ease, box-shadow .3s ease; }
 .app-titlebar .titlebar-search input:focus { background: var(--panel); box-shadow: 0 1px 8px rgb(0 0 0 / 6%); }
-.titlebar-search-key { position: absolute; top: 0; right: 14px; font: 15px/34px var(--font-mono); color: var(--muted); pointer-events: none; }
+.titlebar-search-key { position: absolute; top: 6px; right: 6px; height: 24px; padding: 0 9px; border-radius: var(--r-control); background: var(--panel); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 14%, transparent); font: 12px/24px var(--font-mono); color: var(--text); pointer-events: none; }
 .titlebar-search input::-webkit-search-cancel-button {
   -webkit-appearance: none;
   width: 16px;
@@ -2733,14 +2776,14 @@ button.microphone-language-toggle:hover:not(:disabled) { background: transparent
 /* An `h2`, as the task heroes' headings are, drawn as the `h3` it was rather than at a section heading's size. */
 .notes-empty > h2 { margin: 1.5rem 0 0.5rem; font-family: inherit; font-size: 1.0667rem; line-height: inherit; letter-spacing: inherit; text-transform: none; color: inherit; }
 /* Keep the native track's layout space so revealing it never shifts content. */
-:is(.list-panel, .notes-main, .note-body, .note-side-body) {
+:is(.list-panel, .notes-main, .note-body, .note-side-body, .split-main) {
   scrollbar-color: transparent transparent;
 }
-:is(.list-panel, .notes-main, .note-body, .note-side-body).scrollbar-active {
+:is(.list-panel, .notes-main, .note-body, .note-side-body, .split-main).scrollbar-active {
   scrollbar-color: var(--muted) transparent;
 }
 @media (forced-colors: active) {
-  :is(.list-panel, .notes-main, .note-body, .note-side-body) { scrollbar-color: auto; }
+  :is(.list-panel, .notes-main, .note-body, .note-side-body, .split-main) { scrollbar-color: auto; }
 }
 
 /*
@@ -2998,8 +3041,8 @@ button.note-people-add:hover:not(:disabled), button.note-people-add[aria-expande
  *
  * - **A section heading** gains a `--rule` under it. Only a bare `h2`: every
  *   `h2` with a class -- a hero heading, a panel label -- has its own rule set.
- * - **Fields and selects** are 36px pills with a 1px `--edge`, and a field
- *   sits on `--panel` rather than the `--control` fill. `:not()` with a list, so the rule is exactly as specific as the
+ * - **Fields and selects** are 36px pills on the `--field` fill, with no edge,
+ *   as the design draws them. `:not()` with a list, so the rule is exactly as specific as the
  *   unscoped one it follows and a page's own field rule (Providers' search)
  *   can still outrank it. A select keeps its hover and focus fill.
  * - **A checkbox** is a 16px square filled `--band` when checked: the native
@@ -3030,12 +3073,14 @@ button.note-people-add:hover:not(:disabled), button.note-people-add[aria-expande
 .content select {
   height: 36px;
   padding: 0 14px;
-  border: 1px solid var(--edge);
+  border: 0;
   border-radius: var(--r-control);
+  background: var(--field);
 }
-.content input:not([type="checkbox"], [type="radio"], [type="range"]) { background: var(--panel); transition: border-color .3s ease, box-shadow .3s ease; }
-.content input:not([type="checkbox"], [type="radio"], [type="range"]):focus { border-color: var(--muted); box-shadow: 0 1px 8px rgb(0 0 0 / 6%); }
-.content textarea { padding: 10px 14px; border: 1px solid var(--edge); border-radius: var(--r-row); background: var(--panel); color: var(--text); }
+.content input:not([type="checkbox"], [type="radio"], [type="range"]) { transition: background-color .3s ease, box-shadow .3s ease; }
+.content input:not([type="checkbox"], [type="radio"], [type="range"]):focus { background: var(--panel); box-shadow: 0 1px 8px rgb(0 0 0 / 6%); }
+.content select:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.content textarea { padding: 10px 14px; border: 0; border-radius: var(--r-row); background: var(--field); color: var(--text); }
 /* `flex: none`: beside a label long enough to wrap, a flex item's box shrank to 14px wide. */
 .content input[type="checkbox"] { flex: none; width: 16px; height: 16px; margin: 0; accent-color: var(--band); }
 /*
@@ -3213,3 +3258,189 @@ dialog.confirm-dialog::backdrop { background: rgb(0 0 0 / 28%); }
 .confirm-dialog-actions button:not(.danger):not(.primary):hover:not(:disabled) { background: var(--control-hover); }
 button.danger { background: var(--error); color: var(--bg); }
 button.danger:hover:not(:disabled) { background: var(--error); color: var(--bg); filter: brightness(1.08); }
+
+/*
+ * # The approved design's pieces
+ *
+ * What the canvas "KnegisWhisper after oem.care" draws on many screens. Last in
+ * the file, because a class here has to beat the generic `button` and `section`
+ * rules above it at equal specificity.
+ *
+ * Motion, by the owner's ruling of 2026-11-04: a picture tile moves at rest,
+ * slowly, on a layer of its own using transform and opacity, so the compositor
+ * runs it and nothing repaints. Titles and buttons stay still unless the page is
+ * recording or busy. The canvas's backdrop blur on what sits over a tile is left
+ * out: over a smooth gradient it shows nothing, and it would re-blur every frame.
+ *
+ * Nothing endless runs while the window lacks focus (`lib/windowActivity.ts`):
+ * this window spends most of its day hidden in the tray, where the browser does
+ * not know to stop. Listed rather than `*`, because a one-shot arrival paused at
+ * its first frame would leave what it was bringing in invisible.
+ */
+:root[data-window-active="false"] :is(.tile-orb, .title-ink, .notice-dot, .nav-pill-dot, .tile-label-dot, .level-segment-lit, .tile-cta) { animation-play-state: paused; }
+
+/* A title in the big statement voice. */
+.page-title { margin: 0; font-family: var(--font-sans); font-size: clamp(40px, 5.6vw, 72px); font-weight: 400; line-height: 1.05; letter-spacing: .04em; color: var(--text); }
+/* A sentence rather than three words: Dictation's and Meetings' needs-setup titles. */
+.page-title-long { font-size: clamp(32px, 4vw, 52px); }
+.title-ink { background-image: var(--dusk-text); background-size: 300% 100%; background-position: 20% 50%; -webkit-background-clip: text; background-clip: text; color: transparent; }
+[data-tone="recording"] > .title-ink, [data-tone="recording"] > .page-title > .title-ink { animation: kw-drift 6s linear infinite; }
+[data-tone="busy"] > .title-ink, [data-tone="busy"] > .page-title > .title-ink { animation: kw-drift 3s linear infinite; }
+.page-sub { margin: 0; max-width: 560px; font-size: 17px; line-height: 1.3; color: var(--muted); }
+
+/* The title with the shortcut in it, each key a pill, the last one solid. */
+.page-title-keys { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 10px 18px; }
+.page-title-keys .keycaps { display: inline-flex; flex-wrap: wrap; justify-content: center; gap: 10px; }
+.page-title-keys .keycaps > kbd,
+.page-title-keys .keycaps > kbd + kbd { display: inline-flex; align-items: center; height: 64px; margin: 0; padding: 0 22px; background: var(--panel); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 16%, transparent), 0 1px 8px rgb(0 0 0 / 5%); font: 400 26px/1 var(--font-mono); letter-spacing: 0; color: var(--text); }
+.page-title-keys .keycaps > kbd:last-child { justify-content: center; min-width: 64px; background: var(--text); box-shadow: none; color: var(--bg); }
+
+/* A section's label, in the pixel voice. */
+.section-label { margin: 0; font: 400 14px/1.3 var(--font-mono); letter-spacing: 0; color: var(--band-text); }
+
+/* The notice at a task page's top left (`components/StatusNotice.tsx`). */
+.notice { display: inline-flex; align-items: center; gap: 12px; max-width: 280px; padding: 10px 20px 10px 14px; border-radius: var(--r-notice); background: var(--control); animation: kw-enter .5s var(--ease-enter) both; }
+.notice-ready { background: var(--mint); color: var(--mint-ink); }
+.notice-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; }
+.notice-ready .notice-dot { background: #fff; }
+.notice-recording .notice-dot { background: var(--signal); animation: kw-pulse 1.6s ease-in-out infinite; }
+.notice-setup .notice-dot { border: 1px solid currentcolor; }
+.notice-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.notice-label { font-size: 11px; color: var(--muted); }
+.notice-ready .notice-label { color: inherit; }
+.notice-value { font-size: 14px; overflow-wrap: anywhere; }
+.notice-extra { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+
+/*
+ * A switch: the native checkbox, with `role="switch"`, drawn as the design's
+ * 52x30 pill. Native, so its keyboard handling, disabled state and form of address
+ * come with it. Iris when on, in both themes: black on Iris does not apply here,
+ * since the thumb is the only thing on it.
+ */
+input[type="checkbox"][role="switch"],
+.content input[type="checkbox"][role="switch"] { -webkit-appearance: none; appearance: none; position: relative; flex: none; width: 52px; height: 30px; margin: 0; border: 0; border-radius: var(--r-control); background: var(--control); cursor: pointer; transition: background-color .3s ease; }
+input[type="checkbox"][role="switch"]::after { content: ""; position: absolute; top: 3px; left: 3px; width: 24px; height: 24px; border-radius: 50%; background: #fff; box-shadow: 0 1px 8px rgb(0 0 0 / 12%); transition: transform .5s var(--ease); }
+input[type="checkbox"][role="switch"]:checked { background: var(--iris); background-size: 250% 250%; }
+input[type="checkbox"][role="switch"]:checked::after { transform: translateX(22px); }
+input[type="checkbox"][role="switch"]:disabled,
+input[type="checkbox"][role="switch"][aria-disabled="true"] { opacity: .55; cursor: default; }
+input[type="checkbox"][role="switch"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+/* Specific enough to outrank `label:has(> input[type="checkbox"])`, which lays a tick out beside its words. */
+label.switch-row:has(> input[type="checkbox"]) { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+
+/* A filled pill. */
+button.pill { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 36px; margin: 0; padding: 0 16px; border-radius: var(--r-control); background: var(--control); color: var(--text); font-size: 13px; letter-spacing: .04em; white-space: nowrap; }
+button.pill:hover:not(:disabled) { background: var(--control-hover); }
+button.pill-with-key { gap: 10px; padding: 0 8px 0 16px; }
+.pill-key { height: 24px; padding: 0 9px; border-radius: var(--r-control); background: var(--panel); font: 12px/24px var(--font-mono); letter-spacing: 0; }
+.pill-plus { display: flex; transition: transform .5s var(--ease); }
+.pill-plus[data-open="true"] { transform: rotate(45deg); }
+
+/* The compound button on a picture: a label and a circle holding its mark. */
+button.glass-action { display: inline-flex; align-items: center; justify-content: space-between; gap: 22px; height: 52px; margin: 0; padding: 0 7px 0 26px; border-radius: var(--r-control); background: rgb(20 20 30 / 45%); color: #fff; font-size: 15px; white-space: nowrap; transition: background-color .3s ease; }
+button.glass-action:hover:not(:disabled) { background: rgb(20 20 30 / 62%); color: #fff; }
+.glass-action-end { display: inline-flex; align-items: center; justify-content: center; width: 38px; height: 38px; flex: none; border-radius: 50%; background: rgb(0 0 0 / 40%); transition: transform .5s var(--ease); }
+button.glass-action:hover:not(:disabled) .glass-action-end { transform: scale(1.08); }
+.glass-action-signal.glass-action { background: rgb(20 20 30 / 55%); }
+.glass-action-signal .glass-action-end { background: var(--signal); }
+.glass-action-stop { width: 10px; height: 10px; border-radius: 2.5px; background: #fff; }
+/* The plain one beside it. */
+button.glass-plain { display: inline-flex; align-items: center; gap: 8px; height: 52px; margin: 0; padding: 0 20px; border-radius: var(--r-control); background: rgb(255 255 255 / 75%); color: #000; font-size: 15px; white-space: nowrap; }
+button.glass-plain:hover:not(:disabled) { background: #fff; color: #000; }
+/* An Iris button on a picture: work under way, or the setup that has to come first. */
+button.tile-cta { display: inline-flex; align-items: center; height: 52px; margin: 0; padding: 0 28px; font-size: 15px; white-space: nowrap; }
+button.tile-cta[data-busy="true"] { opacity: 1; animation: kw-drift 3s linear infinite; }
+
+/* A picture tile: the design's squircle, with a label at its head and its button at its foot. */
+.picture-tile { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: space-between; gap: 16px; min-height: 380px; padding: 30px 28px 34px; border-radius: var(--r-tile); overflow: hidden; color: #fff; }
+.tile-lavender { background: #c8b6f4; }
+.tile-orb { position: absolute; left: 14%; top: 13%; width: 72%; height: 74%; border-radius: 120px; background: radial-gradient(circle at 50% 50%, #4fbf7f 0%, #86d2a8 28%, #9cc9f0 50%, #c9b8f2 76%, #c8b6f4 100%); filter: blur(8px); will-change: transform, opacity; animation: kw-breathe 8s steps(15) infinite; }
+[data-tone="recording"] > .tile-orb { animation-duration: 2.2s; }
+[data-tone="busy"] > .tile-orb { animation-duration: 4s; }
+.tile-label { position: relative; display: inline-flex; align-items: center; gap: 8px; padding: 7px 14px; border-radius: var(--r-control); background: rgb(20 20 30 / 45%); color: #fff; font: 13px/1.3 var(--font-mono); font-variant-numeric: tabular-nums; }
+.tile-label-dot { flex: none; width: 7px; height: 7px; border-radius: 2px; background: #fff; }
+[data-tone="recording"] > .tile-label > .tile-label-dot { border-radius: 50%; background: var(--signal); animation: kw-pulse 1.6s ease-in-out infinite; }
+[data-tone="setup"] > .tile-label > .tile-label-dot { border: 1px solid #fff; border-radius: 50%; background: none; }
+.tile-actions { position: relative; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 10px; }
+
+/*
+ * A task page: the notice, the title, a card beside a tile, then what came of it,
+ * in one column that scrolls in its `.split-main`.
+ */
+.task-page { display: flex; flex-direction: column; min-height: 100%; animation: kw-rise .35s var(--ease-out) both; }
+.task-notice { min-height: 52px; padding: 18px 24px 0; box-sizing: content-box; }
+.task-page .task { display: block; min-height: 0; }
+.task-page .task-hero { flex: none; gap: 22px; max-width: 1100px; margin: 0 auto; padding: 40px 24px 56px; }
+.task-page .hero-note { margin: 0; font-size: 14px; line-height: 1.4; color: var(--muted); }
+.task-page .task-hero > .learn-more { margin: 0; }
+.task-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr)); gap: 20px; max-width: 1180px; margin: 0 auto; padding: 0 24px; }
+
+/* The white card (`ControlBar`) in that grid. */
+.task-grid .control-bar { display: flex; flex-direction: column; gap: 22px; width: auto; padding: 28px 32px 30px; border-radius: var(--r-sheet); box-shadow: none; overflow: visible; animation: none; }
+.task-grid .control-strip { flex-direction: column; align-items: stretch; gap: 22px; margin: 0; padding: 0 0 22px; }
+.task-grid .control-chips { gap: 8px; }
+.task-grid .control-spacer { display: none; }
+.task-grid .control-privacy { gap: 6px 18px; padding: 0; }
+.task-grid .control-privacy li { gap: 7px; }
+.task-grid .control-body { flex: 1; gap: 12px; padding: 0; }
+/* A live region waiting for its first words, in the document but taking no gap in the column. */
+.task-grid .control-body > [role="status"]:empty { position: absolute; }
+.task-grid .control-result { gap: 12px; }
+.task-grid .control-result-head { justify-content: space-between; gap: 12px; }
+.task-grid .control-result-label { font: 13px/1.3 var(--font-mono); letter-spacing: 0; color: var(--band-text); }
+.task-grid button.control-copy { flex: none; gap: 7px; height: 32px; padding: 0 14px; background: var(--wash); }
+.task-grid button.control-copy:hover:not(:disabled) { background: var(--control); }
+/* Six lines of the last dictation, then it scrolls. */
+.task-grid .control-result-text { max-height: 172px; font-size: 22px; line-height: 1.3; letter-spacing: .01em; text-wrap: pretty; }
+.task-grid .control-result-empty { padding: 24px 0; font-size: 22px; line-height: 1.3; }
+.task-grid .control-note { line-height: 1.4; }
+.task-grid .control-row { margin-top: auto; padding-top: 10px; }
+.control-tidy { flex: 1; }
+.control-tidy-label { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; }
+.task-page .task-health { margin-top: 16px; padding: 0 24px; }
+
+/* Dictation's live level, as the design's wave: nine bars, lit from the left by the real level. */
+.task-page .hero-meter { align-items: center; height: 56px; margin: 0; }
+.level-wave { gap: 7px; }
+.level-wave .level-segment { width: 9px; height: 52px; border-radius: var(--r-control); background: color-mix(in srgb, var(--text) 14%, transparent); transition: none; }
+.level-wave .level-segment-lit { background: var(--text); animation: kw-wave 1s ease-in-out infinite; }
+.level-wave .level-segment:nth-child(2) { animation-delay: .12s; }
+.level-wave .level-segment:nth-child(3) { animation-delay: .24s; }
+.level-wave .level-segment:nth-child(4) { animation-delay: .36s; }
+.level-wave .level-segment:nth-child(5) { animation-delay: .48s; }
+.level-wave .level-segment:nth-child(6) { animation-delay: .6s; }
+.level-wave .level-segment:nth-child(7) { animation-delay: .72s; }
+.level-wave .level-segment:nth-child(8) { animation-delay: .84s; }
+.level-wave .level-segment:nth-child(9) { animation-delay: .96s; }
+@keyframes kw-wave { 0%, 100% { transform: scaleY(.3); } 50% { transform: scaleY(1); } }
+@media (prefers-reduced-motion: reduce) { .level-wave .level-segment-lit { animation: none; } }
+
+/* Dictation's history (`components/DictationHistory.tsx`), and any list like it under a task page. */
+.history { display: flex; flex-direction: column; gap: 22px; width: 100%; max-width: 1180px; margin: 0 auto; padding: 72px 24px 80px; background: none; }
+.history-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 14px; }
+.history-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 18px; }
+.history-privacy { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; color: var(--muted); }
+.history-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.history-note { margin: 0; font-size: 14px; color: var(--muted); }
+.history-options { display: flex; flex-direction: column; align-items: stretch; gap: 8px; align-self: flex-end; width: min(520px, 100%); padding: 20px 24px; border-radius: var(--r-card); background: var(--panel); font-size: 14px; animation: kw-rise .35s var(--ease-out) both; }
+.history-options > label { color: var(--text); }
+.history-options > p { margin: 0 0 8px; font-size: 13px; line-height: 1.45; color: var(--muted); }
+.history-options > button.pill { align-self: flex-start; }
+.history-day { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 0 24px; padding-top: 20px; border-top: 1px solid color-mix(in srgb, var(--text) 14%, transparent); }
+.history-date { margin: 0; padding-top: 3px; font: 400 13px/1.3 var(--font-mono); letter-spacing: 0; color: var(--muted); }
+.history-rows { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; }
+.history-row { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 18px 0; border-top: 1px solid color-mix(in srgb, var(--text) 8%, transparent); }
+.history-row:first-child { padding-top: 0; border-top: 0; }
+.history-row:last-child { padding-bottom: 20px; }
+.history-row-body { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.history-row-text { font-size: 16px; overflow-wrap: anywhere; }
+.history-row-muted { display: inline-flex; align-items: center; gap: 9px; color: var(--muted); }
+.history-row-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--signal); }
+.history-row-meta { font-size: 13px; line-height: 1.4; color: var(--muted); overflow-wrap: anywhere; }
+.history-row-time { font-family: var(--font-mono); }
+/* Under the pointer and on keyboard focus; and while it is answering, since a failure stays visible. */
+button.history-copy { flex: none; height: 32px; margin: 0; padding: 0 14px; border-radius: var(--r-control); background: var(--wash); font-size: 13px; opacity: 0; transition: opacity .3s ease, background-color .3s ease; }
+button.history-copy:hover:not(:disabled) { background: var(--control); }
+.history-row:hover button.history-copy, .history-row:focus-within button.history-copy, button.history-copy[data-answering="true"] { opacity: 1; }
+@media (hover: none) { button.history-copy { opacity: 1; } }
+@media (max-width: 640px) { .history-day { grid-template-columns: minmax(0, 1fr); gap: 10px; } }

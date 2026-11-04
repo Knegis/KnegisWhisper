@@ -44,14 +44,14 @@ import { LanguagePopup } from "./components/LanguagePopup";
  * Every page sits in one card under the title bar. A settings or developer
  * screen is a centred column with a "Settings" pill above its title that
  * reopens the sheet; it has no list panel. Dictation, Meetings and Notes each
- * render their own `SplitView` -- the title bar's toggle collapses its panel,
- * and the collapsed state reaches it through `PanelCollapsed` rather than
- * props -- because they own their panel's data -- the
+ * render their own `SplitView` -- its toggle and the collapsed state reach it
+ * through `PanelCollapsed` rather than props -- because they own their panel's
+ * data -- the
  * history, the recent and interrupted recordings, the notes library -- and
  * each goes into the card bare, with no `.content` and no `PageHeader`: a
  * task hero says what Dictation and Meetings are for, and a note's own title
  * is the heading on Notes. Notes > Upload is the one page with no panel; it
- * keeps its `PageHeader`, and the title bar draws no panel toggle for it.
+ * keeps its `PageHeader`.
  * Providers keeps a `PageHeader` too, but draws it itself: its search field
  * and Test connections sit in the header, and what they hold is the page's
  * own state, so this file leaves its copy out for that one view.
@@ -70,12 +70,13 @@ import { PageHeader } from "./components/PageHeader";
 import { BackToSettings, SettingsSheet } from "./components/SettingsSheet";
 import { ConfirmHost } from "./components/ConfirmDialog";
 import { PanelCollapsed } from "./components/SplitView";
-import { getDiagnostics, type Diagnostics } from "./lib/ipc";
+import { getDiagnostics, getMeetingStatus, onMeetingState, type Diagnostics } from "./lib/ipc";
 import { railOf, type ViewId } from "./lib/navigation";
 import { defaultDestination, initialHistory, navigationHistory } from "./lib/navigationHistory";
 import { PAGES } from "./lib/pages";
 import { currentSurface } from "./lib/surface";
 import { installIdleScrollbars } from "./lib/idleScrollbars";
+import { installWindowActivity } from "./lib/windowActivity";
 import { useRefresh } from "./lib/useRefresh";
 import { MeetingNotification } from "./MeetingNotification";
 import { Overlay } from "./Overlay";
@@ -106,14 +107,13 @@ import { SettingsTranscription } from "./views/SettingsTranscription";
  * anyone can act on, and it offers a way out to a screen that was working.
  */
 class ViewBoundary extends Component<
-  { children: ReactNode; view: ViewId; onReset: () => void; onFailedChange: (failed: boolean) => void },
+  { children: ReactNode; view: ViewId; onReset: () => void },
   { failed: string | null }
 > {
   constructor(props: {
     children: ReactNode;
     view: ViewId;
     onReset: () => void;
-    onFailedChange: (failed: boolean) => void;
   }) {
     super(props);
     this.state = { failed: null };
@@ -123,26 +123,12 @@ class ViewBoundary extends Component<
     return { failed: error instanceof Error ? error.message : String(error) };
   }
 
-  // `onFailedChange` tells the shell whether the page's own markup is on
-  // screen: a task page that failed has no list panel for the title bar's
-  // toggle to name.
-  override componentDidCatch() {
-    this.props.onFailedChange(true);
-  }
-
   override componentDidUpdate(prev: { view: ViewId }) {
     // Leaving a broken screen clears the failure. Without this, one thrown
     // render would leave the boundary latched for the rest of the session.
     if (prev.view !== this.props.view && this.state.failed !== null) {
       this.setState({ failed: null });
-      this.props.onFailedChange(false);
     }
-  }
-
-  override componentWillUnmount() {
-    // A task page's boundary and a settings page's sit in different places,
-    // so moving between them replaces the boundary rather than updating it.
-    if (this.state.failed !== null) this.props.onFailedChange(false);
   }
 
   override render() {
@@ -229,7 +215,7 @@ function renderView(
   }
 }
 
-function Shell({ panelCollapsed, onTogglePanel }: { panelCollapsed: boolean; onTogglePanel: () => void }) {
+function Shell() {
   const load = useCallback(() => getDiagnostics(), []);
   const { data: diagnostics, error } = useRefresh(load);
 
@@ -304,29 +290,32 @@ function Shell({ panelCollapsed, onTogglePanel }: { panelCollapsed: boolean; onT
     heading.focus({ preventScroll: true });
   }, [view]);
 
-  // Whether the page that failed to render is one that draws its own panel.
-  const [boundaryFailed, setBoundaryFailed] = useState(false);
   const ownsPanel = view === "dictation" || view === "meetings" || view === "notes";
 
-  // Only Dictation, Meetings and Notes draw a list panel -- see `# The card`
-  // above -- and the title bar's toggle is drawn only where there is one to
-  // toggle. Not while the card is still loading or failed to load, which
-  // draws no page at all, and not while one of them shows the error boundary
-  // in place of its `SplitView`.
-  const hasListPanel = diagnostics !== null && ownsPanel && !boundaryFailed;
+  // Rust announces the meeting's state wherever the window is, so the pill can
+  // say so from any page. The first read covers a window opened mid-meeting.
+  const [meetingRecording, setMeetingRecording] = useState(false);
+  useEffect(() => {
+    let disposed = false;
+    let stop: (() => void) | undefined;
+    void getMeetingStatus().then((status) => { if (!disposed) setMeetingRecording(status.state !== "idle"); }).catch(() => {});
+    void onMeetingState((state) => { if (!disposed) setMeetingRecording(state !== "idle"); }).then((unlisten) => {
+      if (disposed) unlisten(); else stop = unlisten;
+    });
+    return () => { disposed = true; stop?.(); };
+  }, []);
+
   const titlebar = <TitleBar view={view} onSelect={select} sheetOpen={sheetOpen} onOpenSheet={openSheet}
-    panelCollapsed={panelCollapsed} hasListPanel={hasListPanel} onTogglePanel={onTogglePanel} onOpenNote={openNote}
+    onOpenNote={openNote} meetingRecording={meetingRecording}
     canGoBack={history.index > 0} canGoForward={history.index < history.entries.length - 1}
     onBack={() => navigate({ type: "back" })} onForward={() => navigate({ type: "forward" })} />;
 
   // The pills need nothing from diagnostics, so they are drawn from the first
   // frame and do not jump in when the first read lands; only the card waits.
   const frame = (card: ReactNode) => (
-    <>{titlebar}<PanelCollapsed.Provider value={panelCollapsed}>
-      <div className="frame">
-        <main className="card">{card}</main>
-      </div>
-    </PanelCollapsed.Provider>
+    <>{titlebar}<div className="frame">
+      <main className="card">{card}</main>
+    </div>
     <SettingsSheet open={sheetOpen} view={view} onSelect={selectFromSheet} onClose={() => setSheetOpen(false)} /></>
   );
 
@@ -346,7 +335,7 @@ function Shell({ panelCollapsed, onTogglePanel }: { panelCollapsed: boolean; onT
   }
 
   const boundary = (
-    <ViewBoundary view={view} onReset={() => select("diagnostics")} onFailedChange={setBoundaryFailed}>
+    <ViewBoundary view={view} onReset={() => select("diagnostics")}>
       {renderView(view, diagnostics, select, searchNoteRequest, openNote, openSummarySetup, summarySetup?.nonce)}
     </ViewBoundary>
   );
@@ -383,6 +372,7 @@ const NARROW = "(max-width: 900px)";
  */
 function MainWindow() {
   useEffect(installIdleScrollbars, []);
+  useEffect(installWindowActivity, []);
   // Collapsed from the start at 900px and below, and collapsed again whenever
   // the window narrows past that -- the rule Notes' own library followed
   // before it became this panel. At the 720x520 minimum the panel would take a large share of the
@@ -395,8 +385,9 @@ function MainWindow() {
     narrow.addEventListener("change", collapse);
     return () => narrow.removeEventListener("change", collapse);
   }, []);
-  const togglePanel = useCallback(() => setPanelCollapsed(collapsed => !collapsed), []);
-  return <><Shell panelCollapsed={panelCollapsed} onTogglePanel={togglePanel} /><Tooltips /><ConfirmHost /></>;
+  const toggle = useCallback(() => setPanelCollapsed(collapsed => !collapsed), []);
+  const panel = useMemo(() => ({ collapsed: panelCollapsed, toggle }), [panelCollapsed, toggle]);
+  return <PanelCollapsed.Provider value={panel}><Shell /><Tooltips /><ConfirmHost /></PanelCollapsed.Provider>;
 }
 
 export default function App() {

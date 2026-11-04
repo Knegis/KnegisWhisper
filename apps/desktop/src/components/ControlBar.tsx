@@ -35,7 +35,7 @@ export function ControlBar({
         <ul className="control-privacy">
           {privacy.map((line) => (
             <li key={line}>
-              <Icon name="lock" size={14} />
+              <Icon name="lock" size={16} />
               {line}
             </li>
           ))}

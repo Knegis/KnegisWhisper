@@ -14,22 +14,32 @@ const JOBS = RAIL.filter((id): id is Exclude<RailId, "settings"> => id !== "sett
  * They replace the rail. Exactly one reads as current when a job's screen is
  * showing -- `railOf(view)`, so Notes > Upload marks Notes -- and none does on
  * a settings screen, where the Settings pill is the marked one.
+ *
+ * While a meeting records, the Meetings pill carries the pulsing signal dot
+ * from anywhere in the window, so leaving the page does not hide that the
+ * microphone is open. Its name says so too: the dot alone says nothing to a
+ * screen reader.
  */
-export function JobPills({ view, onSelect }: { view: ViewId; onSelect: (id: ViewId) => void }) {
+export function JobPills({ view, onSelect, meetingRecording }: { view: ViewId; onSelect: (id: ViewId) => void; meetingRecording: boolean }) {
   const current = railOf(view);
   return (
     <nav className="nav-pills" aria-label="Main navigation">
-      {JOBS.map((id) => (
-        <button
-          key={id}
-          type="button"
-          className="nav-pill"
-          aria-current={current === id ? "page" : undefined}
-          onClick={() => onSelect(id)}
-        >
-          {labelOf(id)}
-        </button>
-      ))}
+      {JOBS.map((id) => {
+        const recording = meetingRecording && id === "meetings";
+        return (
+          <button
+            key={id}
+            type="button"
+            className="nav-pill"
+            aria-current={current === id ? "page" : undefined}
+            aria-label={recording ? `${labelOf(id)}, recording` : undefined}
+            onClick={() => onSelect(id)}
+          >
+            {recording ? <span className="nav-pill-dot" aria-hidden="true" /> : null}
+            {labelOf(id)}
+          </button>
+        );
+      })}
     </nav>
   );
 }

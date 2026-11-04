@@ -33,6 +33,19 @@ test("a completed row is its text over its time", () => {
   assert.equal(r.typed, true);
 });
 
+test("the time is apart from the rest of the meta, so it can be set in the pixel face", () => {
+  const plain = historyRow(row({}));
+  assert.equal(plain.time, "16:12");
+  assert.equal(plain.detail, "");
+  const failed = historyRow(row({ status: "failed", errorMessage: "refused", rawText: "send notes" }));
+  assert.equal(failed.time, "16:12");
+  assert.equal(failed.detail, "refused · Cleaned up");
+  assert.equal(failed.meta, "16:12 · refused · Cleaned up");
+  const undated = historyRow(row({ createdAt: "not a date", status: "failed", errorMessage: "refused" }));
+  assert.equal(undated.time, null);
+  assert.equal(undated.detail, "refused");
+});
+
 test("a row whose paste failed keeps its text, and says why in the meta", () => {
   // The shape `fail` writes when only the insert failed: text present, status failed.
   const r = historyRow(row({ status: "failed", errorMessage: "could not deliver the paste keystroke: refused" }));

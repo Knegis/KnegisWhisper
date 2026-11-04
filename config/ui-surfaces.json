@@ -64,7 +64,7 @@
     },
     "Dictation > History": {
       "surfaceId": "dictation.history",
-      "component": "apps/desktop/src/components/DictationHistoryPanel.tsx",
+      "component": "apps/desktop/src/components/DictationHistory.tsx",
       "built": true,
       "note": "Dictation's list panel: the history grouped by day, and under History options the switches that turn history off and keep the pre-cleanup transcript, and Clear history. The first two controls exist because the backend honoured history.enabled and history.keepRawText with no way in (KNEG-98, KNEG-99) -- the pattern tools/settings-audit/scan.mjs now gates. Moved out of views/Dictation.tsx into the panel in KNEG-363."
     },

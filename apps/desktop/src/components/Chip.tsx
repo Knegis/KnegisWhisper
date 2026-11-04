@@ -79,10 +79,10 @@ export function Chip({
 }) {
   const content = (
     <>
-      <Icon name={icon} size={16} />
+      <Icon name={icon} size={18} />
       <span className="chip-label">{label}</span>
       {srText === undefined ? null : <span className="sr-only">{`. ${srText}`}</span>}
-      {chevron ? <span className="chip-chevron"><Icon name="chevronDown" size={14} /></span> : null}
+      {chevron ? <span className="chip-chevron"><Icon name="chevronDown" size={24} /></span> : null}
     </>
   );
   if (onClick === undefined && pressed === undefined) {

@@ -1,6 +1,6 @@
 import { Fragment } from "react";
 
-import { keycapGroups } from "../lib/keycaps";
+import { keycapGroups, keyName } from "../lib/keycaps";
 
 /**
  * Shortcuts as keycaps: `Control+Shift+D` is three, and a second accelerator
@@ -16,7 +16,7 @@ export function Keycaps({ accelerators }: { accelerators: readonly string[] }) {
       {i > 0 ? " or " : null}
       <span className="keycaps">
         {keys.map((key, k) => (
-          <kbd key={`${k}-${key}`}>{key}</kbd>
+          <kbd key={`${k}-${key}`}>{keyName(key, navigator.platform)}</kbd>
         ))}
       </span>
     </Fragment>
