@@ -12,6 +12,91 @@ maintained in place rather than appended to, because its purpose is to be curren
 
 ---
 
+## 2026-11-04 — The app rebuilt to the approved design, screen by screen
+
+Branch `design/artifact-parity`, from `dev` at `9a3e660`, not merged or pushed. The owner said the app
+didn't entirely look like the canvas they had approved. Reading all 24 boards against the code showed
+why: the colours, fonts, pills and copy matched, and the layouts didn't. `07f1b24` had reskinned the
+old list panels and settings rows rather than building what the boards draw.
+
+**What was done.** `tools/visual-check/design-compare.mjs` renders a board beside the fixture screen it
+draws. Each screen was then built from its board and checked against that pair: the title bar and
+Dictation first, stopping for the owner to look, then Meetings, Notes, Import, the Settings sheet,
+twelve settings and developer screens, and the floating windows. Behaviour was meant to stay put:
+this pass changes where things are and how they look.
+
+**The owner's rulings of 2026-11-04.** The design overrules four earlier decisions: Iris switches where
+the boards draw them (KNEG-331), mint for OK states, navy pixel section labels, and the Settings sheet
+of picture tiles labelled Meetings, CLI and MCP. Picture tiles breathe and drift at rest; titles and
+buttons hold still unless recording or busy. The window opens at 1280x800, and the minimum stays 720x520.
+
+**Where the app won't draw what the board shows, because it never read it.** "Microphone · Ready" is
+"Dictation" or "Meeting" with "Ready", since readiness never tests a microphone. A calendar card has no
+failure dot, because only a flat error list exists. The sheet's meeting tile says "rec" with no time, and
+its calendar tile shows today's date. Off, Local API shows `127.0.0.1` alone, with no port to show. MCP's
+wires and the Diagnostics bars only move while what they stand for is up.
+
+**Where it differs on purpose.**
+- The title bar stays fixed, and Notes keeps separate scrolling for the note and the transcript.
+- The two measured speaker-label caveats stay in view; the board folds them.
+- One left/right box on the dictation card applies to recording any action's shortcut. Each recorder had
+  its own, and the board draws one.
+- Model rows keep a Details chip the board doesn't draw, for the engine, the id and how a download is
+  checked.
+- Company account cards hold every field they need in the board's narrow cards, so long placeholders cut
+  off, with the whole text in a tooltip.
+- Vocabulary's Add is faded until something is typed, because it stays disabled until then.
+- The floating windows have no frost: each is transparent and the size of its card, so there is nothing
+  to blur and no room for a shadow. The language toggle stays, under the pill, 30px square from 16 by 28.
+- The update card's address can be selected but isn't a link: nothing in the app opens a URL, and a link
+  would navigate that window away.
+
+**A trade-off the owner should know about.** At 720x520 Dictation and Meetings stack and the page scrolls,
+so Start and Stop are below the fold: Stop and save at y 673, Meetings' Start at 685, Dictation's Start at
+1009. The approved plan chose this, removing the rule that shrank the hero to fit. At 1000x720 Meetings'
+Start straddles the fold (701-753). At the default 1280x800 everything measured is in view.
+
+**Two regressions of mine, found and fixed on the branch.** The sheet commit deleted the rule that keeps a
+title focused from code from drawing a ring. The Notes commit made the title a textarea while focus after
+creating a note still looked for an `input`.
+
+**The visual checks had been failing since `07f1b24`,** not because of this branch: nearly all still waited
+for `nav.rail`. They now use the title bar and the sheet, and `shell-title-bar.mjs` replaces
+`shell-rail.mjs`. 22 browser scripts pass against fixtures. `notes-smoke`, `summary-smoke`, `win32` and
+`app-windows` weren't run. `level-meters` check 3 and `chip-menus` check 8 now hold those pages to the
+window's width at 720x520, not its height, for the reason above.
+
+**Evidence.** In headless Edge against dev fixtures: pairs against every board at 1280 wide, a sweep of every
+screen at 1000x720 and 720x520 with no sideways overflow and one `h1` each, and dark at 1280x800 for
+legibility only, since no board is dark. With reduced motion nothing endless runs. In the real window on a
+throwaway profile (`target/real-window`): 1280x800; all three faces load; the meeting window 392x102 and the
+update window 392x104, both painting no ground of their own; the floating microphone 96x96 without taking
+focus, opening to its pill and reaching its toggle; the languages window 280x272 with Done inside it.
+
+**Idle cost, real window, whole process tree, 30 s, % of one core of 16 logical processors.** Dictation
+focused 6.6, Meetings focused 13.9, the Settings sheet open 24.2, hidden in the tray 1.1. Dictation partway
+through this work was measured at 14.2 focused and 17.1 hidden, and at 7.1 and 0.5 once tiles stepped and
+paused with the window. Focus was emulated over CDP so the run didn't take the owner's keyboard. Hidden read
+1.1 here and 0.5 earlier, on one run each, so that difference isn't a finding.
+
+**Not verified.** Nobody has physically dragged a window on this build. The meeting offer, finishing card,
+recording panel and update card have not been seen in their real windows: they were measured to fit in
+headless Edge at the same sizes, and the windows' sizes and transparency were read in the real ones, but a
+throwaway profile has no provider to start a meeting and no release to offer. An OS screenshot can't check
+them either, because they are excluded from screen capture. Their look on a real desktop is believed, not
+seen.
+
+**One thing not explained.** During a real-window run the main window once read "Record a meeting" shortly
+after launch, and later "Import audio or video" after closing to the tray. Left alone on a fresh launch, with
+every click logged, it stayed on Dictation, and closing changed nothing. That run's window was visible on the
+owner's desktop, so a person's clicks are the likely cause, but that is believed, not shown.
+
+**Still open from the earlier design audit:** `--dusk-text` contrast, and field edges under 3:1, which the
+boards' borderless fields go against. Focus rings stay on all fields. The palette still uses oem.care's exact
+values, and that remains a blocker before any public release.
+
+---
+
 ## 2026-11-02 — KNEG-484 closed, four rulings, KNEG-90, KNEG-498 and KNEG-499
 
 Branch `fix/kneg-498-499`, from `dev` at `f02829f`. Everything below was measured by instrument in
