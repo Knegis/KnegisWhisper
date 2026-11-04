@@ -246,7 +246,10 @@ export const RecordingPlayer = forwardRef<RecordingPlayerHandle, RecordingPlayer
             player plays there too; an id they have no recording for fails as
             Rust's 404 would. */}
         <audio ref={audioRef} preload="metadata" src={recordingSrc(noteId)} className="recording-audio" />
-        {header}
+        <div className="recording-top">
+          <span className="recording-clock">{formatClock(currentTime)}<span className="recording-clock-total"> / {formatClock(duration)}</span></span>
+          {header}
+        </div>
         <div className="recording-scrubber">
           {/* Under the range, so the thumb and the played part are drawn over a tick. */}
           {markAt.length > 0 ? (
@@ -297,7 +300,6 @@ export const RecordingPlayer = forwardRef<RecordingPlayerHandle, RecordingPlayer
           <button type="button" disabled={!ready} className="recording-skip" aria-label={`Forward ${SKIP_SECONDS} seconds`} title={`Forward ${SKIP_SECONDS} seconds`} onClick={() => skip(SKIP_SECONDS)}>
             +{SKIP_SECONDS}
           </button>
-          <span className="recording-clock">{formatClock(currentTime)}<span className="recording-clock-total"> / {formatClock(duration)}</span></span>
           <label className="recording-speed">
             <span className="sr-only">Playback speed</span>
             <select

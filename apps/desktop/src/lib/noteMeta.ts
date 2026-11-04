@@ -80,3 +80,18 @@ export function noteMeta(
     transcribed: transcribedLine(note.transcribedBy),
   };
 }
+
+/**
+ * The line over a note's title, in the pixel voice: "26.08.26 · 11:00 · 31 min".
+ * Each part only when it is known; a recording under a minute is "1 min", as the
+ * Meetings list rounds it, since "0 min" reads as nothing recorded.
+ */
+export function noteWhen(date: Date | null, minutes: number | null): string | null {
+  const pad = (value: number) => String(value).padStart(2, "0");
+  const parts = [
+    date === null ? null : `${pad(date.getDate())}.${pad(date.getMonth() + 1)}.${pad(date.getFullYear() % 100)}`,
+    date === null ? null : `${pad(date.getHours())}:${pad(date.getMinutes())}`,
+    minutes === null ? null : `${Math.max(1, minutes)} min`,
+  ].filter((part) => part !== null);
+  return parts.length === 0 ? null : parts.join(" · ");
+}

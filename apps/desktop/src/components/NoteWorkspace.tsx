@@ -5,8 +5,7 @@ import { attachNoteRecording, getNoteRecording, getNoteRecordingState, getNoteMe
 import { useAutosave, type AutosaveStatus } from "../lib/useAutosave";
 import { workspaceSaveText } from "../lib/saveStatus";
 import { transcriptToMarkdown } from "../lib/noteBody";
-import { timeOfDay } from "../lib/dayGroups";
-import { hasStoredTranscript, noteMeta } from "../lib/noteMeta";
+import { hasStoredTranscript, noteMeta, noteWhen } from "../lib/noteMeta";
 import { lastStartedLine, NO_SELECTION, sectionMarks, selectionInterval, transcriptSections, type LineSelection } from "../lib/transcriptLayout";
 import { message } from "../lib/useRefresh";
 import { askConfirm } from "./ConfirmDialog";
@@ -562,6 +561,7 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
   };
 
   const { date, minutes, transcribed } = noteMeta(note, []);
+  const when = noteWhen(date, minutes);
   const dispositionLine = recordingState?.status === "deleted" ? "The recording was deleted after transcribing, as chosen for this meeting." : recordingState?.status === "deleted-update-failed" ? "The recording file is gone, but its attachment still needs cleanup." : recordingState?.status === "kept-incomplete" ? "This meeting was set to delete its recording after transcribing. It was kept because the saved transcript may be incomplete." : recordingState?.status === "kept-untranscribed" ? "This meeting was set to delete its recording after transcribing. It was kept because nothing was transcribed from it." : recordingState?.canRetry ? "The recording is still attached. Its requested deletion has not completed." : null;
   const disposition = dispositionLine && <div className="recording-disposition" role="status"><p>{dispositionLine}</p>{recordingState?.error && <p>{recordingState.error}</p>}{recordingState?.canRetry && <button type="button" disabled={blocked !== null || retryingDeletion} onClick={() => { void retryDeletion(); }}>{retryingDeletion ? "Retrying deletion…" : "Retry deletion"}</button>}</div>;
   const recordingDetails = note.recordingDetails && <details className="recording-details" open><summary>Recording details</summary><p>{note.recordingDetails}</p></details>;
@@ -594,19 +594,26 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
       <div className="note-page">
         {autosave.status === "failed" && <p className="save-status error" role="alert">Couldn't save: {autosave.error} <button type="button" disabled={blocked !== null} onClick={() => { void autosave.retry().catch(() => undefined); }}>Retry save</button></p>}
         <header className="note-detail-header">
-          <input className="note-title" aria-label="Title" value={title} disabled={!ready || blocked !== null} onChange={event => {
-            const value = event.target.value; draft.current.title = value; setTitle(value);
-            autosave.schedule({ title: value.trim() || "Untitled note", content: draft.current.content });
-          }} onBlur={normalizeTitle} />
+          {when === null ? null : <p className="note-when"><span className="note-when-mark" aria-hidden="true" />{when}</p>}
+          {/* The title is the page's heading and a field. A textarea, because at this size a
+              one-line field would cut off most titles; Enter stays out of it, and a line break
+              pasted in becomes a space, since a title has one line to Rust. The heading is
+              named outright, so what it is called does not depend on how a screen reader
+              treats a field inside a heading. */}
+          <h1 className="note-title-heading" aria-label={title}>
+            <textarea className="note-title" rows={1} aria-label="Title" value={title} disabled={!ready || blocked !== null}
+              onKeyDown={event => { if (event.key === "Enter") event.preventDefault(); }}
+              onChange={event => {
+                const value = event.target.value.replace(/\r?\n/g, " "); draft.current.title = value; setTitle(value);
+                autosave.schedule({ title: value.trim() || "Untitled note", content: draft.current.content });
+              }} onBlur={normalizeTitle} />
+          </h1>
           {/* Always drawn: the people item is always there, so a note with nobody on it can be given someone (KNEG-362). */}
           <ul className="note-meta">
-            {date === null ? null : <li><Icon name="calendar" size={15} />{date.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}, {timeOfDay(date)}</li>}
-            {/* At least a minute, as the Meetings list rounds it: a 20-second recording is not "0 min". */}
-            {minutes === null ? null : <li><Icon name="clock" size={15} />{Math.max(1, minutes)} min</li>}
             <NotePeople disabled={blocked !== null} noteId={note.id} participants={note.participants} onSaved={reload} />
-            {/* Where the transcript was made (KNEG-368). Notes saved before it was recorded say nothing. */}
-            {transcribed === null ? null : <li><Icon name="computer" size={15} />{transcribed}</li>}
           </ul>
+          {/* Where the transcript was made (KNEG-368). Notes saved before it was recorded say nothing. */}
+          {transcribed === null ? null : <p className="note-where"><Icon name="computer" size={18} />{transcribed}</p>}
         </header>
         <div className="note-controls">
           <div className="summary-tabs note-tabs" role="tablist" aria-label="Note view">
@@ -624,7 +631,7 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
           <div className="note-actions">
             {/* Keep the live region mounted so save changes are announced reliably. */}
             <p className="save-status" role="status" aria-live="polite">{workspaceSaveText(autosave.status, summarySave)}</p>
-            <button type="button" className="note-action-button" aria-label="Export…" title="Export…" onClick={onExport}><Icon name="export" /></button>
+            <button type="button" className="note-action-button" aria-label="Export…" title="Export…" onClick={onExport}><Icon name="export" size={16} /></button>
             <button type="button" className="note-action-button" disabled={blocked !== null} aria-label="More" title="More" aria-haspopup="dialog" aria-expanded={moreOpen} onClick={event => onMore(event.currentTarget)}><Icon name="more" /></button>
             {/* Only where there is a column to hide. `aria-controls` only while it is on screen, so it never names nothing. */}
             {windowWide && hasTranscript ? <button type="button" className="note-action-button" aria-label={columnHidden ? "Show transcript" : "Hide transcript"}
@@ -644,14 +651,14 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
         <div className="note-workspace">
           <section id={`note-${note.id}-panel-notes`} role="tabpanel" aria-labelledby={`note-${note.id}-tab-notes`} hidden={tab !== "notes"}>
             <div className="note-prose">
-              <h2 className="note-section-heading">Your notes</h2>
+              <h2 className="note-section-heading">your notes</h2>
               {ready && empty && transcript?.rows.some(row => row.text.trim()) && <button type="button" className="start-from-transcript" disabled={blocked !== null} onClick={startFromTranscript}>Start from transcript</button>}
               <NoteEditor readOnly={blocked !== null} key={seed.generation} noteId={note.id} initialContent={seed.content}
                 {...(seed.generation === 0 ? { legacyTitle: note.title } : {})}
                 onReady={content => { draft.current.content = content; setEmpty(!content.trim()); setReady(true); }}
                 onChange={content => { draft.current.content = content; setEmpty(!content.trim()); autosave.schedule({ content }); }} />
             </div>
-            <h2 className="note-section-heading">AI summary</h2>
+            <h2 className="note-section-heading note-summary-heading">ai summary</h2>
             <SummaryPane readOnly={blocked !== null} ref={summaryRef} noteId={note.id} visible={tab === "notes"}
               hasTranscript={transcript === null ? null : transcript.rows.some(row => row.text.trim())}
               focusOnReady={focusSummary}
@@ -680,7 +687,7 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
       className={wide ? "note-side" : "note-transcript-inline"} hidden={!wide && tab !== "transcript"}>
       {!wide && <>{recordingDetails}{disposition}</>}
       <div className="note-side-body">{transcriptShown ? null : <TranscriptHeading />}{transcriptBody}</div>
-      {player && playerSlot === "side" ? <div ref={holdObservedPlayer} className="note-side-player" /> : null}
+      {player && playerSlot === "side" ? <div ref={holdObservedPlayer} className="note-side-player" data-playing={playing} /> : null}
     </div>
     {player && playerSlot === "inline" ? <div className="note-inline-player" hidden={tab === "notes" && !playbackStarted}>
       <div ref={holdObservedPlayer} className="note-mini-player" hidden={tab === "notes" && !playbackStarted} />

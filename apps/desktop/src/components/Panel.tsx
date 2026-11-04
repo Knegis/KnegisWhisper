@@ -134,7 +134,7 @@ export function PanelAction({
   onClick,
   disabled = false,
 }: {
-  icon: IconName;
+  icon?: IconName;
   label: string;
   hint?: string;
   onClick: () => void;
@@ -142,7 +142,7 @@ export function PanelAction({
 }) {
   return (
     <button type="button" className="panel-action" onClick={onClick} disabled={disabled}>
-      <Icon name={icon} />
+      {icon === undefined ? null : <Icon name={icon} size={16} />}
       <span className="panel-action-label">{label}</span>
       {hint === undefined ? null : <span className="panel-action-hint">{hint}</span>}
     </button>

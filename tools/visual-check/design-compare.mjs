@@ -48,7 +48,7 @@ const SETTINGS = (tile) => [["button.nav-pill, .nav-pills button, .settings-pill
 const SCREENS = {
   Dictation: [],
   Meetings: [["button", "Meetings"]],
-  Notes: [["button", "Notes"], ["first", ".notes-entry"]],
+  Notes: [["button", "Notes"], ["first", ".notes-entry[title^='Weekly sync']"]],
   NotesEmpty: [["button", "Notes"]],
   Import: [["button", "Notes"], ["button", "Import audio or video"]],
   Settings: [["button", "Settings"]],

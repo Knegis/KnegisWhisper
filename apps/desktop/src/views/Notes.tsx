@@ -65,9 +65,9 @@ import { askConfirm } from "../components/ConfirmDialog";
 import { Icon } from "../components/Icon";
 import { FolderSharing } from "../components/FolderSharing";
 import { NoteWorkspace, type NoteWorkspaceHandle } from "../components/NoteWorkspace";
-import { PanelAction, PanelHeader, PanelItem, PanelSection } from "../components/Panel";
+import { PanelAction, PanelItem, PanelSection } from "../components/Panel";
 import { Row } from "../components/Row";
-import { SplitView } from "../components/SplitView";
+import { ListToggle, SplitView } from "../components/SplitView";
 import { TrashedNote } from "../components/TrashedNote";
 import {
   createFolder,
@@ -575,8 +575,9 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
 
   if (!data) {
     return (
-      <SplitView label="Notes library" heading="Notes" panel={<PanelHeader title="Notes" />}>
+      <SplitView label="Notes library" panel={<div className="notes-actions"><ListToggle /></div>}>
         <section className="notes-main" aria-label="Note editor">
+          <h1 className="sr-only">Notes</h1>
           <div className="notes-notices">{error ? <p className="error">{error}</p> : <p className="muted">Loading…</p>}</div>
         </section>
       </SplitView>
@@ -601,8 +602,8 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
   const personList = personEmail !== null && personNotes?.email === personEmail ? personNotes.notes : null;
   const now = new Date();
   const renderEntry = (note: NoteListItem) => {
-    // The Meetings list's meta line, "26 Aug · 31 min", so a meeting reads the same in both panels.
-    const meta = recentMeta(note.createdAt, note.audioDurationSeconds, now);
+    // The Meetings list's meta line, "26 aug · 31 min", so a meeting reads the same in both places.
+    const meta = recentMeta(note.createdAt, note.audioDurationSeconds, now).toLowerCase();
     return (
       <PanelItem key={note.id} className="notes-entry" titleClassName="notes-entry-title"
         title={note.title} {...(meta === "" ? {} : { meta })} current={openNoteId === note.id}
@@ -632,11 +633,12 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
   };
   const peopleSection = people.length === 0 ? (
     <div className="panel-section">
-      <h2 className="panel-label">People</h2>
+      <h2 className="panel-label">people</h2>
       <p className="panel-note">No people yet. Add someone to a note, under its title.</p>
     </div>
   ) : (
-    <PanelSection label="People">
+    <PanelSection label="people">
+      <div className="notes-people">
       {people.map((item) => {
         const pressed = personEmail === item.email;
         return (
@@ -644,12 +646,12 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
             // The address behind a name, and the whole of either when the row cuts it off.
             title={item.name === null ? item.email : `${item.name}\n${item.email}`}
             onClick={() => { if (trashOpen) leaveTrash(); setPersonEmail(pressed ? null : item.email); }}>
-            <Icon name="meetings" size={16} />
             <span className="notes-person-name">{personLabel(item)}</span>
             <span className="notes-folder-count"><span aria-hidden="true">{item.noteCount}</span><span className="sr-only">, {noteCount(item.noteCount)}</span></span>
           </button>
         );
       })}
+      </div>
       {morePeople && <button type="button" className="panel-inline" disabled={peopleLoading} onClick={() => { void showMorePeople(); }}>{peopleLoading ? "Loading people…" : "Show more people"}</button>}
     </PanelSection>
   );
@@ -657,7 +659,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
   // Rust, and the way back.
   const personSection = (
     <>
-      <PanelSection label={`Notes with ${personName}`}>
+      <PanelSection label={`notes with ${personName}`}>
         <PanelAction icon="back" label="Show all notes" onClick={() => setPersonEmail(null)} />
         {personList?.map(renderEntry)}
       </PanelSection>
@@ -683,7 +685,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
   );
   const trashSection = (
     <>
-      <PanelSection label="Trash">
+      <PanelSection label="trash">
         <PanelAction icon="back" label="Show all notes" onClick={leaveTrash} />
         {trash.notes.map((item) => (
           <PanelItem key={item.id} className="notes-trashed" titleClassName="notes-entry-title" title={item.title}
@@ -697,15 +699,15 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
 
   const panel = (
     <>
-      <PanelHeader title="Notes" />
       <div className="panel-surface" data-surface="notes.export">
-        <PanelSection label={null}>
-          <PanelAction icon="newNote" label="New note" onClick={() => { void newNote(); }} />
-          <PanelAction icon="import" label="Import audio or video" onClick={onImport} />
-          <PanelAction icon="import" label="Import shared folder…" onClick={() => { shareTrigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; setShareImportRequest(value => value + 1); }} />
-        </PanelSection>
+        <div className="notes-actions">
+          <PanelAction icon="plus" label="New note" onClick={() => { void newNote(); }} />
+          <PanelAction label="Import audio or video" onClick={onImport} />
+          <PanelAction label="Import shared folder…" onClick={() => { shareTrigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; setShareImportRequest(value => value + 1); }} />
+          <ListToggle />
+        </div>
         <label className="panel-search">
-          <Icon name="search" size={15} />
+          <Icon name="search" size={16} />
           {/* Not "Search notes and meetings": that is the title bar's field, and two fields of one name cannot be told apart in a screen reader's list of fields. */}
           <input type="search" aria-label="Filter the library" placeholder="Filter the library" value={query} onChange={event => {
             const next = event.target.value;
@@ -743,7 +745,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
           <>
             <div className="panel-section">
               <div className="notes-folders-head">
-                <h2 className="panel-label">Folders</h2>
+                <h2 className="panel-label">folders</h2>
                 <button ref={newFolderButton} type="button" className="panel-tool" aria-label="New folder" title="New folder" aria-expanded={libraryTool === "new-folder"} aria-controls="notes-library-tool-panel" onClick={() => setLibraryTool(value => value === "new-folder" ? null : "new-folder")}>
                   <Icon name="folderPlus" size={16} />
                 </button>
@@ -774,7 +776,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
                           onClick={() => setCollapsed(prev => { const next = new Set(prev); if (next.has(folder.id)) next.delete(folder.id); else next.add(folder.id); return next; })}
                           onContextMenu={event => { event.preventDefault(); setContext({ kind: "folder", folder, x: event.clientX, y: event.clientY, anchor: event.currentTarget }); }}
                           onKeyDown={event => { if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) { event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); setContext({ kind: "folder", folder, x: rect.left, y: rect.bottom, anchor: event.currentTarget }); } }}>
-                          <Icon name={open ? "chevronDown" : "chevronRight"} size={12} />
+                          <span className="notes-folder-chevron"><Icon name={open ? "chevronDown" : "chevronRight"} size={24} /></span>
                           <Icon name="folder" size={16} />
                           <span className="notes-folder-name" title={folder.name}>{folder.name}</span>
                           <span className="notes-folder-count"><span className="sr-only">, </span>{filed.length}<span className="sr-only">{filed.length === 1 ? " note" : " notes"}</span></span>
@@ -794,7 +796,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
                 </div>
               )}
             </div>
-            {groups.unfiled.length > 0 && <PanelSection label="Not in a folder">{groups.unfiled.map(renderEntry)}</PanelSection>}
+            {groups.unfiled.length > 0 && <PanelSection label="not in a folder">{groups.unfiled.map(renderEntry)}</PanelSection>}
             {/* Under the whole tree, so the folders and the notes in none stay together (ruling, KNEG-362). */}
             {peopleSection}
             {trashEntry}
@@ -805,7 +807,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
   );
 
   return (
-    <SplitView label="Notes library" heading="Notes" panel={panel}>
+    <SplitView label="Notes library" panel={panel}>
       <section className="notes-main" aria-label="Note editor" ref={mainRef}>
         {/* Always drawn, empty when there is nothing to say, so what comes into it -- a failure, "Moved
             to Trash", "Written to" -- is announced: a live region added already filled often is not. */}
@@ -816,6 +818,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
         </div>
         {trashOpen ? (
           <>
+            <h1 className="sr-only">Trash</h1>
             {/* Trash's page (KNEG-401): what its recordings take, and Empty trash. Nothing empties it on its own. */}
             <div className="trash-space">
               <p className="trash-space-line" tabIndex={-1}>{trashSpaceLine(trash)}</p>
@@ -824,7 +827,12 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
             </div>
             {trashedView ?? (trash.notes.length === 0 ? null : <p className="trash-choose muted" tabIndex={-1}>Choose a note in Trash to see it, restore it or delete it forever.</p>)}
           </>
-        ) : trashedView ?? (openNote ? (
+        ) : trashedView !== null ? (
+          <>
+            <h1 className="sr-only">Trash</h1>
+            {trashedView}
+          </>
+        ) : (openNote ? (
           <NoteWorkspace
             focusSummary={openRequest?.id === openNote.id && openRequest.summaryFocus === true}
             onSummarySetup={async target => { await workspaceRef.current?.flush(); onSummarySetup(openNote.id, target); }}
@@ -838,7 +846,19 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
             onMore={anchor => toggleMoreMenu(openNote, anchor)}
             moreOpen={context?.fromButton === true && context.kind === "note" && context.note.id === openNote.id}
           />
-        ) : <div className="notes-empty"><h2>Your writing space</h2><p className="muted">Choose a note or meeting from the list, or start a new note.</p><button type="button" className="primary" onClick={() => { void newNote(); }}>New note</button> <button type="button" onClick={onImport}>Import audio or video</button></div>)}
+        ) : (
+          <div className="notes-empty">
+            <div className="notes-empty-art" aria-hidden="true"><span /><span /><span /></div>
+            <div className="notes-empty-body">
+              <h1 className="notes-empty-title title-ink">Your writing space</h1>
+              <p className="notes-empty-sub">Choose a note or meeting from the list, or start a new note.</p>
+              <div className="notes-empty-actions">
+                <button type="button" className="primary" onClick={() => { void newNote(); }}>New note</button>
+                <button type="button" className="notes-empty-import" onClick={onImport}>Import audio or video</button>
+              </div>
+            </div>
+          </div>
+        ))}
       </section>
       {context && createPortal(<div ref={contextRef} className="notes-context-menu" role="dialog" aria-label={context.kind === "note" ? `Actions for ${context.note.title}` : `Actions for folder ${context.folder.name}`} style={{ left: context.x, top: context.y }} onContextMenu={event => event.preventDefault()} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget) && !(context.fromButton && event.relatedTarget === context.anchor)) setContext(null); }}>
         {context.kind === "note" ? <>
