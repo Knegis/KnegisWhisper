@@ -71,15 +71,12 @@ test("the Settings sheet puts every group screen on exactly one tile", () => {
   const screens = NAV.filter(isGroup).flatMap((group) => childrenOf(group).map((child) => child.id));
   assert.deepEqual([...tiles].sort(), [...screens].sort());
   assert.equal(new Set(tiles).size, tiles.length);
-  // No section is a wall of tiles, and none is a lone tile under a heading.
-  for (const section of SETTINGS_PANEL) {
-    assert.ok(section.views.length >= 2 && section.views.length <= 4, section.heading);
-  }
-  // Developer is still NAV's Developer group: its label, its screens, its order.
-  const developer = NAV.filter(isGroup).find((group) => group.id === "developer");
-  const last = SETTINGS_PANEL[SETTINGS_PANEL.length - 1];
-  assert.equal(last?.heading, developer?.label);
-  assert.deepEqual(last?.views, developer ? childrenOf(developer).map((child) => child.id) : []);
+  // The sheet's two groups are NAV's two groups: their labels, their screens, their order.
+  const groups = NAV.filter(isGroup);
+  assert.deepEqual(SETTINGS_PANEL.map((section) => section.heading), groups.map((group) => group.label.toLowerCase()));
+  groups.forEach((group, index) => {
+    assert.deepEqual(SETTINGS_PANEL[index]?.views, childrenOf(group).map((child) => child.id));
+  });
 });
 
 

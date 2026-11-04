@@ -44,14 +44,14 @@ function parse(argv) {
  * How to reach each board's screen in the fixtures: the text of what to press,
  * in order. A step is `[selector, text]`.
  */
-const SETTINGS = (tile) => [["button.nav-pill, .nav-pills button, .settings-pill, button", "Settings"], [".sheet-tile, button", tile]];
+const SETTINGS = (tile) => [["button.nav-pill", "Settings"], ["button.sheet-tile", tile]];
 const SCREENS = {
   Dictation: [],
   Meetings: [["button", "Meetings"]],
   Notes: [["button", "Notes"], ["first", ".notes-entry[title^='Weekly sync']"]],
   NotesEmpty: [["button", "Notes"]],
   Import: [["button", "Notes"], ["button", "Import audio or video"]],
-  Settings: [["button", "Settings"]],
+  Settings: [["button.nav-pill", "Settings"]],
   Shortcuts: SETTINGS("Shortcuts"),
   MeetingSettings: SETTINGS("Meetings"),
   Vocabulary: SETTINGS("Vocabulary"),

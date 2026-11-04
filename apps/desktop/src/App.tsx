@@ -318,7 +318,7 @@ function Shell() {
     <>{titlebar}<div className="frame">
       <main className="card">{card}</main>
     </div>
-    <SettingsSheet open={sheetOpen} view={view} onSelect={selectFromSheet} onClose={() => setSheetOpen(false)} /></>
+    <SettingsSheet open={sheetOpen} view={view} version={diagnostics?.appVersion ?? null} onSelect={selectFromSheet} onClose={() => setSheetOpen(false)} /></>
   );
 
   if (!diagnostics) {

@@ -1,25 +1,78 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
 
-import { SETTINGS_PANEL, type ViewId } from "../lib/navigation";
-import { NAV_ICON } from "../lib/navIcons";
+import { NAV, SETTINGS_PANEL, childrenOf, isGroup, type ViewId } from "../lib/navigation";
 import { PAGES } from "../lib/pages";
 import { Icon } from "./Icon";
+import { DotMark } from "./NavPills";
 
 type SheetView = (typeof SETTINGS_PANEL)[number]["views"][number];
 
 const FIRST_TILE: SheetView = SETTINGS_PANEL[0].views[0];
 
+/** A tile's word is `NAV`'s: Meetings, CLI, MCP, where the screens' own titles are longer. */
+const LABEL_OF = Object.fromEntries(
+  NAV.filter(isGroup).flatMap((group) => childrenOf(group).map((child) => [child.id, child.label])),
+) as Record<SheetView, string>;
+
 function isSheetView(view: ViewId): view is SheetView {
   return SETTINGS_PANEL.some((section) => (section.views as readonly ViewId[]).includes(view));
 }
 
+/** Today's day of the month, for the calendar's tile: a real date, not a picture of one. */
+const today = () => new Date().getDate();
+
 /**
- * Settings, as a frosted sheet of tiles over the window -- the way oem.care's
- * menu opens over its page. It replaces the Settings list panel: every
- * settings and developer screen is one tile, in the four sections
- * `SETTINGS_PANEL` lays out, each tile carrying its screen's title and the
- * one-sentence intro that screen opens with, so a reader who has never met
- * "Local API" learns what it is before choosing it.
+ * What each tile's picture draws. Decoration, so `aria-hidden` on the holder; the
+ * words are the label under it. Plain markup, styled in `styles.css`, because
+ * pictures here are CSS: generated gradients and shapes, no photographs. Nothing
+ * here is a reading: the meeting's tile says "rec" with no time, since the sheet
+ * knows of no recording, and the calendar's date is today's.
+ */
+function TileArt({ id }: { id: SheetView }) {
+  switch (id) {
+    case "shortcuts":
+      return <span className="art-keys"><span><kbd>ctrl</kbd><kbd>shift</kbd></span><kbd className="art-key-solid">space</kbd></span>;
+    case "meeting-settings":
+      return <><span className="art-weather" /><span className="art-label">rec</span></>;
+    case "vocabulary":
+      return <span className="art-letters">Aa</span>;
+    case "transcription":
+      return <span className="art-orb" />;
+    case "intelligence":
+      return <span className="art-lines"><span /><span /><span /><span /></span>;
+    case "local-llm":
+      return <span className="art-sphere" />;
+    case "providers":
+      return <span className="art-streak" />;
+    case "calendar":
+      return <><span className="art-date">{today()}</span><span className="art-date-dot" /></>;
+    case "api":
+      return <span className="art-api"><span className="art-api-call">GET /</span><span className="art-api-host"><span />127.0.0.1</span></span>;
+    case "cli":
+      return <span className="art-prompt"><span>&gt;</span><span className="art-cursor" /></span>;
+    case "mcp":
+      return (
+        <svg className="art-nodes" width="96" height="96" viewBox="0 0 96 96" fill="none">
+          <path d="M24 70L48 26L72 70Z" stroke="#0e3b8d" strokeWidth="1.4" />
+          <circle cx="48" cy="26" r="10" fill="#0e3b8d" />
+          <circle cx="24" cy="70" r="10" fill="#fff" />
+          <circle cx="72" cy="70" r="10" fill="#7781c0" />
+        </svg>
+      );
+    case "diagnostics":
+      return <span className="art-bars"><span /><span /><span /><span /><span /></span>;
+    default: {
+      const unhandled: never = id;
+      return unhandled;
+    }
+  }
+}
+
+/**
+ * Settings, as a frosted sheet over the window: every settings and developer
+ * screen is one square picture tile, in `SETTINGS_PANEL`'s two groups. What a screen
+ * is for is the tile's tooltip and accessible description, so a reader who has
+ * never met "Local API" can still learn it before choosing it.
  *
  * A modal `<dialog>`, so focus is held inside it and Escape closes it without
  * any code here. The tiles are one tab stop: Tab reaches the grid on the tile
@@ -29,15 +82,11 @@ function isSheetView(view: ViewId): view is SheetView {
  * already showing is marked, so the sheet also says where you are.
  *
  * Pressing outside the sheet closes it, and a press on one of the title bar's
- * controls -- visible under the backdrop, but inert while the dialog is modal
- * -- is passed on to that control, so pressing "Meetings" with the sheet open
- * goes to Meetings rather than only closing the sheet. The Settings pill is
- * the exception: passing that press on would open the sheet it just closed.
- *
- * Each tile's picture is CSS (`.sheet-tile-art[data-art]` in `styles.css`):
- * generated gradients and shapes, no photographs.
+ * controls -- which the sheet's margin can just show -- is passed on to that
+ * control. The Settings pill is the exception: passing that press on would open
+ * the sheet it just closed.
  */
-export function SettingsSheet({ open, view, onSelect, onClose }: { open: boolean; view: ViewId; onSelect: (id: ViewId) => void; onClose: () => void }) {
+export function SettingsSheet({ open, view, version, onSelect, onClose }: { open: boolean; view: ViewId; version: string | null; onSelect: (id: ViewId) => void; onClose: () => void }) {
   const ref = useRef<HTMLDialogElement>(null);
   const [active, setActive] = useState<SheetView>(FIRST_TILE);
   useEffect(() => {
@@ -89,41 +138,47 @@ export function SettingsSheet({ open, view, onSelect, onClose }: { open: boolean
     >
       <div className="settings-sheet-body" onKeyDown={onGridKey}>
         <div className="settings-sheet-head">
-          <h2 id="settings-sheet-title" className="settings-sheet-title">Settings</h2>
-          <button type="button" className="sheet-close" onClick={onClose}>
-            Close
-            <span className="sheet-close-mark" aria-hidden="true"><Icon name="close" size={12} /></span>
+          <span />
+          <DotMark size={34} />
+          <button type="button" className="sheet-close" aria-label="Close settings" title="Close settings" onClick={onClose}>
+            <Icon name="close" size={18} />
           </button>
         </div>
-        {SETTINGS_PANEL.map((section) => (
-          <section key={section.heading} className="settings-sheet-section" aria-labelledby={`sheet-${section.views[0]}`}>
-            <h3 id={`sheet-${section.views[0]}`} className="settings-sheet-label">{section.heading}</h3>
-            <ul className="settings-sheet-grid">
-              {section.views.map((id) => {
-                const page = PAGES[id];
-                return (
-                  <li key={id}>
-                    <button
-                      type="button"
-                      className="sheet-tile"
-                      data-view={id}
-                      tabIndex={id === active ? 0 : -1}
-                      aria-current={view === id ? "page" : undefined}
-                      onFocus={() => setActive(id)}
-                      onClick={() => { onSelect(id); onClose(); }}
-                    >
-                      <span className="sheet-tile-art" data-art={id} aria-hidden="true">
-                        <Icon name={NAV_ICON[id]} size={20} />
-                      </span>
-                      <span className="sheet-tile-label">{page.title}</span>
-                      <span className="sheet-tile-intro">{page.intro}</span>
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-          </section>
-        ))}
+        <div className="settings-sheet-groups">
+          {SETTINGS_PANEL.map((section, group) => {
+            const Heading = group === 0 ? "h2" : "h3";
+            return (
+              <section key={section.heading} className="settings-sheet-section" aria-labelledby={`sheet-${section.heading}`}>
+                <Heading id={group === 0 ? "settings-sheet-title" : `sheet-${section.heading}`} className="settings-sheet-label">{section.heading}</Heading>
+                <ul className="settings-sheet-grid">
+                  {section.views.map((id, index) => {
+                    const page = PAGES[id];
+                    return (
+                      <li key={id}>
+                        <button
+                          type="button"
+                          className="sheet-tile"
+                          data-view={id}
+                          tabIndex={id === active ? 0 : -1}
+                          title={page.intro}
+                          aria-description={page.intro}
+                          aria-current={view === id ? "page" : undefined}
+                          style={{ animationDelay: `${(group * 8 + index) * 30}ms` }}
+                          onFocus={() => setActive(id)}
+                          onClick={() => { onSelect(id); onClose(); }}
+                        >
+                          <span className="sheet-tile-art" data-art={id} aria-hidden="true"><TileArt id={id} /></span>
+                          <span className="sheet-tile-label">{LABEL_OF[id]}<span className="sr-only">{id === "meeting-settings" ? " settings" : ""}</span></span>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </section>
+            );
+          })}
+        </div>
+        {version === null ? null : <p className="settings-sheet-version">KnegisWhisper {version}</p>}
       </div>
     </dialog>
   );
