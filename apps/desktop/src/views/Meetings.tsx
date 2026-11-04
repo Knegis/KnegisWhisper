@@ -18,9 +18,10 @@ import { askConfirm } from "../components/ConfirmDialog";
  *     are captured, a choice kept on this page only, who transcribes in what
  *     language, each chosen in its chip's menu (`ChipMenu`), whether a summary is
  *     made, a toggle that is a link to Cleanup & summaries until a provider and
- *     model are chosen there, and the folder the note is saved to. Then where the
- *     audio goes, which is never hidden, the caveats and what the microphone
- *     check heard.
+ *     model are chosen there, whether speakers are labelled, a toggle that is a
+ *     link to Settings > Meetings until that is set up, and the folder the note
+ *     is saved to. Then where the audio goes, which is never hidden, the caveats
+ *     and what the microphone check heard.
  *     The name and the folder go to Rust with Start and stay with the meeting
  *     (KNEG-365); the page keeps neither for a meeting already running.
  *     While Settings > Meetings deletes each recording once its transcript
@@ -45,7 +46,11 @@ import { askConfirm } from "../components/ConfirmDialog";
  * (and the menus' footers go there, for a language the menu does not list).
  * The Summary toggle likewise writes `reasoning.summaries`, whole, as
  * Cleanup & summaries does; Rust refuses it where the settings are incomplete,
- * and the page shows why.
+ * and the page shows why. The Speaker labels toggle writes `meetings.diarize`, as
+ * Settings > Meetings does, and is read on its own: Rust reads it when a meeting
+ * is saved, so Start has nothing to wait for and a failed read blanks nothing.
+ * While a meeting runs or finishes that chip is a statement, not a control: the
+ * pass may already have asked, so a press there might not reach this meeting.
  * Rust reads the language from the database when the meeting starts
  * (`start_live`); the provider is the one this page read back from
  * `meetings.provider` and passes to `meeting_start` itself. A choice is
@@ -113,6 +118,8 @@ import {
   getRecoverableRecordings,
   getSherpaStatus,
   getSummarySettings,
+  getDiarizationStatus,
+  setDiarizationEnabled,
   setMeetingLanguage,
   setMeetingProvider,
   onMeetingOutcome,
@@ -155,6 +162,8 @@ import {
   MICROPHONE_CHECK_LISTENING,
   microphoneCheckLine,
   privacyProvider,
+  speakerLabelsChip,
+  speakerLabelsNote,
   recentMeta,
   recentPicture,
   recordedSources,
@@ -265,6 +274,9 @@ export function Meetings({
   // same reason: a failure leaves only "No folder", which is where a note
   // goes anyway, and nothing else on the page waits for them.
   const folderRead = useRefresh(getFolders);
+  const speakerLabelsRead = useRefresh(getDiarizationStatus);
+  const speakerLabels = speakerLabelsChip(speakerLabelsRead.data ?? null);
+  const speakerLabelsCost = speakerLabelsNote(speakerLabelsRead.data ?? null);
   const folders = folderRead.data ?? [];
   const reloadFolders = folderRead.reload;
   const recentGuard = recentRead.guard;
@@ -950,6 +962,28 @@ export function Meetings({
                     onClick={() => onGoTo("intelligence")}
                   />
                 )}
+                {/* Written here too (Settings > Meetings keeps its own switch and
+                    says what's missing). See `speakerLabelsChip` and the head of
+                    this file for why it isn't always a toggle. */}
+                {speakerLabels === null ? null : speakerLabels.kind === "setup" ? (
+                  <Chip
+                    icon="speakers"
+                    label="Speaker labels: needs setup"
+                    chevron
+                    title={speakerLabels.title}
+                    onClick={() => onGoTo("meeting-settings")}
+                  />
+                ) : current === "finishing" ? (
+                  speakerLabels.pressed ? <Chip icon="speakers" label="Speaker labels" /> : null
+                ) : (
+                  <Chip
+                    icon="speakers"
+                    label="Speaker labels"
+                    pressed={speakerLabels.pressed}
+                    title={speakerLabels.title}
+                    onClick={() => void speakerLabelsRead.guard(() => setDiarizationEnabled(!speakerLabels.pressed))}
+                  />
+                )}
                 {/* Where the note goes (KNEG-365). Page state, not a
                     setting: it applies to the next meeting started here and
                     goes to Rust with it, so it holds however that meeting
@@ -1104,6 +1138,7 @@ export function Meetings({
                         {liveSources?.systemAudio ? <Chip icon="others" label="Other participants" /> : null}
                         <Chip icon="computer" label={transcriber ? transcriber.name : "Not set up"} />
                         <Chip icon="language" label={language} />
+                        {speakerLabels?.kind === "toggle" && speakerLabels.pressed ? <Chip icon="speakers" label="Speaker labels" /> : null}
                       </div>
                     )}
                     <ul className="control-privacy">
@@ -1295,6 +1330,10 @@ export function Meetings({
               {data.deleteRecordings ? (
                 <p className="control-note">Recordings are deleted once each meeting is transcribed.</p>
               ) : null}
+              {speakerLabelsRead.error !== null ? (
+                <FailureLine text="Speaker labels couldn't be read or saved." detail={speakerLabelsRead.error} />
+              ) : null}
+              {speakerLabelsCost === null ? null : <p className="control-note">{speakerLabelsCost}</p>}
               {caveats}
 
               {/* The Interrupted rows are in Recent, below; what recovering one

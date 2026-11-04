@@ -561,6 +561,19 @@ extended (both measured false before the fixes): 17/17 in both schemes, claim
 same render counts (none of the sections, turns or lines within a line; 1
 section, 2 turns and 2 lines across a line change).
 
+## Meeting speaker labels
+
+```powershell
+node tools/visual-check/meeting-speaker-labels.mjs --url http://127.0.0.1:5191/
+```
+
+Same options as the chip menus (the banner is always removed). It measures the
+Speaker labels chip on Meetings: a link to Settings > Meetings until the models
+and runtime are there (`kw.speakerModels()` installs them in the fixtures), then
+a toggle that writes the setting and says what it costs, a refused write in view,
+a statement while a meeting runs, and no sideways scroll at 720x520. What the
+setting does to a saved note is pinned by `cargo test`, not here.
+
 ## Note meta
 
 ```powershell

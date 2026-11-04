@@ -12,6 +12,21 @@ maintained in place rather than appended to, because its purpose is to be curren
 
 ---
 
+## 2026-11-04 — Speaker labels chosen from Meetings, and the form that names a speaker
+
+**Speaker labels on Meetings (KNEG-513).** The owner asked to pick them on the Meetings tab, where only
+Settings > Meetings had a switch. A chip beside Summary writes the same `meetings.diarize`, so it is one setting
+that stays on for later meetings. A choice per meeting would need Rust to keep it with each meeting. With the
+models or runtime missing, the chip is a link reading "needs setup", even where the setting is on, because a
+note saved then says the labels couldn't run. While it's on, the card gives short forms of the two measured
+caveats, and Settings > Meetings keeps them in full. While a meeting runs or finishes the chip only states
+what's on: Rust reads the setting while saving, so a press might not reach that meeting. `chip-menus` check 8
+now allows three rows of chips on Meetings at 720x520, since seven chips wrap to three while Summary and Speaker
+labels both say needs setup. Nothing overflows. Checked with unit tests and `meeting-speaker-labels.mjs` in
+headless Edge against dev fixtures, not in the real window.
+
+---
+
 ## 2026-11-04 — The app rebuilt to the approved design, screen by screen
 
 Branch `design/artifact-parity`, from `dev` at `9a3e660`, merged to `dev` and pushed at `43e0af8`. The owner said the app

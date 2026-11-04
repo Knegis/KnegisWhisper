@@ -14,6 +14,8 @@ import {
   MICROPHONE_CHECK_LISTENING,
   microphoneCheckLine,
   privacyProvider,
+  speakerLabelsChip,
+  speakerLabelsNote,
   reviewIsFor,
   recentMeta,
   recordedSources,
@@ -424,4 +426,36 @@ test("folderMenu treats a chosen folder that is gone as no folder", () => {
   // And Start sends no folder, as the chip says, rather than the stale id.
   assert.equal(menu.folderId, null);
   assert.deepEqual(menu.options.filter((option) => option.current).map((option) => option.id), [""]);
+});
+
+test("speaker labels are a toggle where they can run, and say what they cost", () => {
+  for (const enabled of [true, false]) {
+    const chip = speakerLabelsChip({ ready: true, enabled });
+    if (chip?.kind !== "toggle") return assert.fail("expected a toggle");
+    assert.equal(chip.pressed, enabled);
+    assert.match(chip.title, /five minutes/);
+  }
+});
+
+test("speaker labels that can't run go to setup and never read as on", () => {
+  const notInstalled = speakerLabelsChip({ ready: false, enabled: false });
+  assert.equal(notInstalled?.kind, "setup");
+  assert.match(notInstalled?.title ?? "", /Settings > Meetings/);
+  // On in the settings with a model since removed: the note would say they
+  // couldn't run, so the chip doesn't offer a pressed state that says they will.
+  const stranded = speakerLabelsChip({ ready: false, enabled: true });
+  assert.equal(stranded?.kind, "setup");
+  assert.match(stranded?.title ?? "", /switched on/);
+  assert.notEqual(stranded?.title, notInstalled?.title);
+});
+
+test("speaker labels not read yet draw no chip, so a load can't flash needs setup", () => {
+  assert.equal(speakerLabelsChip(null), null);
+});
+
+test("what speaker labels cost is said only while they will run", () => {
+  assert.match(speakerLabelsNote({ ready: true, enabled: true }) ?? "", /five minutes.*English/);
+  assert.equal(speakerLabelsNote({ ready: true, enabled: false }), null);
+  assert.equal(speakerLabelsNote({ ready: false, enabled: true }), null);
+  assert.equal(speakerLabelsNote(null), null);
 });

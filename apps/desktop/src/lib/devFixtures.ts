@@ -899,7 +899,7 @@ let detectLists: Lists = {
  * Install buttons and the blocker line. The two models are the registry's
  * (`generated/providers.ts`).
  */
-const DIARIZATION: DiarizationStatus = {
+let diarization: DiarizationStatus = {
   availability: { state: "installable" },
   cliInstalled: false,
   models: [
@@ -2757,7 +2757,14 @@ A fixture summary of "${note.title}", written without a model.
     }) satisfies UpdateCheckResult,
   update_dismiss: () => null,
 
-  diarization_status: () => DIARIZATION,
+  diarization_status: () => diarization,
+  diarization_set_enabled: (a) => {
+    const enabled = arg<boolean>(a, "enabled") ?? false;
+    // Rust refuses to switch them on with a model or the runtime missing.
+    if (enabled && !diarization.ready) throw new Error("Speaker labels need both models: the segmentation model and the speaker embedding model. Install whichever is missing.");
+    diarization = { ...diarization, enabled };
+    return null;
+  },
   meeting_detect_lists: () => detectLists,
   meeting_set_detect_lists: (a) => {
     detectLists = arg<Lists>(a, "lists") ?? detectLists;
@@ -2813,6 +2820,14 @@ const devConsole = {
    * `overlay-preferences` event Rust would, so `#overlay` can be seen in its
    * floating-microphone mode instead of only the label one.
    */
+  speakerModels(installed = true) {
+    diarization = {
+      ...diarization,
+      cliInstalled: installed,
+      ready: installed,
+      models: diarization.models.map((model) => ({ ...model, installed })),
+    };
+  },
   overlayFloating(enabled = true, vertical = false) {
     overlayPreferences = { ...overlayPreferences, enabled, vertical };
     void emit("overlay-preferences", overlayPreferences);
@@ -3091,6 +3106,7 @@ export function installDevFixtures(): void {
       "          kw.meetingState('recording')",
       "          kw.meetingWindowSilent()",
       "          kw.overlayFloating()",
+      "          kw.speakerModels()",
       "          kw.dictationFailed()",
       "          kw.levels()  ·  kw.level(0.75)",
     ].join("\n  "),

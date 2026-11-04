@@ -36,6 +36,7 @@ export type LineIconName =
   | "computer"
   | "language"
   | "others"
+  | "speakers"
   | "tidy"
   | "shortcut"
   | "vocabulary"
@@ -95,6 +96,8 @@ export const ICONS: Record<LineIconName, string> = {
   language: "M3.75 5.75h8M7.75 5.75v12.5M12.75 18.25l3.5-9 3.5 9M14.05 15h4.4",
   others:
     "M4.75 10.25a1 1 0 0 1 1-1h2.5l4.5-4v13.5l-4.5-4h-2.5a1 1 0 0 1-1-1zM16 9a4 4 0 0 1 0 6M18.5 6.5a7.5 7.5 0 0 1 0 11",
+  speakers:
+    "M5.75 4.75h12.5a2 2 0 0 1 2 2v7.5a2 2 0 0 1-2 2h-6.5l-4 3.5v-3.5h-2a2 2 0 0 1-2-2v-7.5a2 2 0 0 1 2-2zM8.5 9h7M8.5 12.25h4.5",
   tidy: "M12 3.5l1.9 6.6 6.6 1.9-6.6 1.9-1.9 6.6-1.9-6.6-6.6-1.9 6.6-1.9z",
   shortcut:
     "M6.25 6.75h11.5a2.5 2.5 0 0 1 2.5 2.5v5.5a2.5 2.5 0 0 1-2.5 2.5h-11.5a2.5 2.5 0 0 1-2.5-2.5v-5.5a2.5 2.5 0 0 1 2.5-2.5zM7.5 10.25h.01M11 10.25h.01M14.5 10.25h.01M8 13.75h8",

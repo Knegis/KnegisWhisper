@@ -609,6 +609,7 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
           value={<span className="state-pixel" data-ready={diarization.ready}>{diarization.ready ? "ready" : "not ready"}</span>}
           detail={diarizationBlocker(diarization) ?? undefined}
         />
+        {/* Meetings' Speaker labels chip writes the same setting. */}
         <div className="row">
           <span className="row-label">Label speakers</span>
           <div className="row-value">
