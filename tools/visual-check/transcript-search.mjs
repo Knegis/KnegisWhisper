@@ -50,7 +50,7 @@ const OPEN = `(() => {
       };
     });
   return {
-    title: document.querySelector('.note-detail input[aria-label="Title"]')?.value ?? null,
+    title: document.querySelector('.note-detail textarea[aria-label="Title"]')?.value ?? null,
     tab: document.querySelector('.note-detail [role="tab"][aria-selected="true"]')?.textContent.trim() ?? null,
     selected,
     marked: document.querySelector('.note-detail')?.__kwMark === true,
@@ -113,7 +113,7 @@ async function chooseTitleHit(cdp, title) {
 }
 
 async function ready(cdp) {
-  await waitFor(cdp, "Boolean(document.querySelector('nav.rail') && document.querySelector('.card .split-main, .card .content'))", "the fixture shell");
+  await waitFor(cdp, "Boolean(document.querySelector('.app-titlebar') && document.querySelector('.split-main, .content'))", "the fixture shell");
   await cdp.evaluate(snippets.removeFixtureBanner());
 }
 
@@ -181,7 +181,7 @@ export async function runTranscriptSearch(options) {
     });
 
     // 3. Back from another page shows the row again.
-    await cdp.evaluate(snippets.clickText("nav.rail .rail-item", "Dictation"));
+    await cdp.evaluate(snippets.clickText("button.nav-pill", "Dictation"));
     await delay(400);
     await cdp.evaluate("(() => { document.querySelector('.app-titlebar button[aria-label=\"Go back\"]').click(); return true; })()");
     await delay(1500);
@@ -199,7 +199,7 @@ export async function runTranscriptSearch(options) {
 
     // 4. A wide window selects the row in the side column and leaves the Notes tab on.
     await viewport(cdp, 1440, 900);
-    await cdp.evaluate(snippets.clickText("nav.rail .rail-item", "Dictation"));
+    await cdp.evaluate(snippets.clickText("button.nav-pill", "Dictation"));
     await delay(300);
     await titleSearch(cdp, "honest");
     await chooseTitleHit(cdp, "Weekly sync");
@@ -220,7 +220,7 @@ export async function runTranscriptSearch(options) {
 
     // 5. The library filter takes the same path, and a hit in the notes says no time.
     await viewport(cdp, 1000, 720);
-    await cdp.evaluate(snippets.clickText("nav.rail .rail-item", "Notes"));
+    await cdp.evaluate(snippets.clickText("button.nav-pill", "Notes"));
     await delay(500);
     const filter = async (query) => {
       await cdp.evaluate(`(() => { const field = document.querySelector('input[aria-label="Filter the library"]'); field.focus(); field.select(); return true; })()`);

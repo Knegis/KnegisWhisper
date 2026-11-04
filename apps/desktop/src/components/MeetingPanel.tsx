@@ -3,6 +3,7 @@ import { clock } from "../MeetingNotification";
 import { confirmMeetingNotesFlush, onMeetingNotesFlush, stopMeeting, updateMeetingNotes } from "../lib/ipc";
 import type { LiveRow } from "../lib/liveTranscript";
 import { useAutosave } from "../lib/useAutosave";
+import { Icon } from "./Icon";
 import { NoteEditor } from "./NoteEditor";
 
 type MeetingPanelProps = { session: number; elapsed: number; detail: string; alert: boolean; transcriptAllowed: boolean; rows: LiveRow[]; initialNotes: string | null; onProblem: (message: string) => void };
@@ -17,8 +18,7 @@ function LiveTranscriptList({ rows, container, active, nearBottom }: { rows: Liv
   }, [rows, container, active]);
   return <ol className="transcript-rows">{rows.map(row => <li key={row.id} className={row.committed ? undefined : "transcript-row-muted"}>
     <span className="transcript-clock">{clock(row.startSeconds)}</span>
-    {row.speaker && <span className="transcript-speaker">{row.speaker}</span>}
-    <span dir="auto">{row.text}</span>
+    <span className="transcript-line">{row.speaker && <span className="transcript-speaker">{row.speaker}</span>}{row.speaker ? " " : null}<span dir="auto">{row.text}</span></span>
   </li>)}</ol>;
 }
 
@@ -66,7 +66,7 @@ export function MeetingPanel({ session, elapsed, detail, alert, transcriptAllowe
     <div className="notify-header" title="Drag to move">
       <span className="indicator indicator-recording" aria-hidden="true" />
       <span className="notify-body"><strong>Recording {clock(elapsed)}</strong><span className={alert ? "notify-detail notify-alert" : "notify-detail"}>{detail}</span></span>
-      <button type="button" onClick={() => { void stop(); }}>Stop</button>
+      <button type="button" className="notify-record" onClick={() => { void stop(); }}>Stop<span className="notify-record-mark" aria-hidden="true"><Icon name="stop" size={14} /></span></button>
     </div>
     <div className="notify-panel-body" data-tauri-drag-region="false" ref={body} onScroll={() => {
       const element = body.current;

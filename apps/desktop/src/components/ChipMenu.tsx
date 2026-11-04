@@ -356,10 +356,10 @@ export const ChipMenu = forwardRef<ChipMenuHandle, ChipMenuProps>(function ChipM
           }
         }}
       >
-        <Icon name={icon} size={16} />
+        <Icon name={icon} size={18} />
         <span className="chip-label">{shown}</span>
         <span className="chip-chevron">
-          <Icon name="chevronDown" size={14} />
+          <Icon name="chevronDown" size={24} />
         </span>
       </button>
       {menu === null ? null : createPortal(menu, document.body)}

@@ -11,10 +11,10 @@ import { Icon } from "./Icon";
  *     value the page does not write, which says so by going there on click
  *     (the redesign's decision 4). It takes the `chevron`.
  *   - **A toggle**, with `pressed`, where the page writes an on-or-off value
- *     itself -- Meetings' "Other participants" (kept on the page only) and
- *     "Summary", Dictation's "Tidy up" (both written once they have been set
- *     up in Settings; until then each is a link) -- and so gets
- *     `aria-pressed`.
+ *     itself -- Meetings' "Other participants" (kept on the page only),
+ *     "Summary" and "Speaker labels", Dictation's "Tidy up" (all written once
+ *     they have been set up in Settings; until then each is a link) -- and so
+ *     gets `aria-pressed`.
  *   - **Static**, with neither: not a control at all but a statement of what
  *     is in effect -- every chip in Meetings' live view, where nothing can be
  *     changed until the meeting ends, the microphone among them: the one the
@@ -79,10 +79,10 @@ export function Chip({
 }) {
   const content = (
     <>
-      <Icon name={icon} size={16} />
+      <Icon name={icon} size={18} />
       <span className="chip-label">{label}</span>
       {srText === undefined ? null : <span className="sr-only">{`. ${srText}`}</span>}
-      {chevron ? <span className="chip-chevron"><Icon name="chevronDown" size={14} /></span> : null}
+      {chevron ? <span className="chip-chevron"><Icon name="chevronDown" size={24} /></span> : null}
     </>
   );
   if (onClick === undefined && pressed === undefined) {

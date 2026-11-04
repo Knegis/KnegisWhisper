@@ -20,11 +20,11 @@ const waitFor = async expression => {
 };
 const click = async selector => { await cdp.evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`); };
 const tab = async value => { await click(`[role="tab"][id$="-${value}"]`); await waitFor(`document.querySelector('[role="tab"][id$="-${value}"]').getAttribute('aria-selected') === 'true'`); };
-const setTitle = async value => cdp.evaluate(`(() => { const input = document.querySelector('input[aria-label="Title"]'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, ${JSON.stringify(value)}); input.dispatchEvent(new Event('input',{bubbles:true})); })()`);
+const setTitle = async value => cdp.evaluate(`(() => { const input = document.querySelector('textarea[aria-label="Title"]'); Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(input, ${JSON.stringify(value)}); input.dispatchEvent(new Event('input',{bubbles:true})); })()`);
 const open = async id => {
   const note = await invoke('notes_get', { id });
   await cdp.evaluate(`Array.from(document.querySelectorAll('.notes-entry')).find(b=>b.querySelector('.notes-entry-title')?.textContent===${JSON.stringify(note.title)})?.click()`);
-  await waitFor(`!!document.querySelector('#note-detail-${id} input[aria-label="Title"]:enabled')`);
+  await waitFor(`!!document.querySelector('#note-detail-${id} textarea[aria-label="Title"]:enabled')`);
 };
 const results = [];
 try {

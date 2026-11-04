@@ -30,6 +30,8 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use kw_network_policy::NetworkPolicy;
+use kw_reasoning_core::LocalServer;
+use kw_security::{LocalApiToken, Secret};
 use kw_sidecar::process::{self, HttpHealth, Launch, Running, StartTimings};
 use kw_sidecar::{catalog::Catalog, pid::PidStore, port};
 use kw_storage::paths;
@@ -43,6 +45,13 @@ use crate::local_model::Restart;
 
 /// The sidecar this module runs.
 const SIDECAR: &str = "llama";
+
+/// Where `llama-server` reads its API key from.
+///
+/// Its `--help` lists this as the environment form of `--api-key`. The argument
+/// form would put the key in the process list, which is the place this key exists
+/// to keep other processes out of.
+const API_KEY_ENV: &str = "LLAMA_API_KEY";
 
 /// Which model was last started, so a restart can bring it back.
 pub const LOCAL_LLM_MODEL_KEY: &str = "reasoning.localModel";
@@ -67,7 +76,9 @@ const IDLE_TICK: Duration = Duration::from_secs(30);
 /// it" gets recorded — a separate `touch()` would be a call somebody forgets.
 #[derive(Debug, Clone, Default)]
 pub struct LocalEndpoint {
-    port: Arc<RwLock<Option<u16>>>,
+    /// The port and the key together, so a reader can never pair the port of one
+    /// start with the key of another.
+    server: Arc<RwLock<Option<LocalServer>>>,
     /// Unix seconds of the last read. `0` means never.
     last_used: Arc<AtomicI64>,
     pub(crate) requests: Arc<Mutex<()>>,
@@ -82,17 +93,32 @@ impl LocalEndpoint {
     /// the network.
     #[must_use]
     pub fn port(&self) -> Option<u16> {
-        let port = self.port.read().ok().and_then(|p| *p);
-        if port.is_some() {
+        self.server().map(|server| server.port)
+    }
+
+    /// The running server's port and key, recording the request as
+    /// [`Self::port`] does.
+    #[must_use]
+    pub fn server(&self) -> Option<LocalServer> {
+        let server = self.server.read().ok().and_then(|held| held.clone());
+        if server.is_some() {
             self.last_used
                 .store(chrono::Utc::now().timestamp(), Ordering::Relaxed);
         }
-        port
+        server
     }
 
-    fn set(&self, port: Option<u16>) {
-        if let Ok(mut held) = self.port.write() {
-            *held = port;
+    /// The port, without recording a use.
+    fn peek_port(&self) -> Option<u16> {
+        self.server
+            .read()
+            .ok()
+            .and_then(|held| held.as_ref().map(|server| server.port))
+    }
+
+    fn set(&self, server: Option<LocalServer>) {
+        if let Ok(mut held) = self.server.write() {
+            *held = server;
         }
         self.last_used
             .store(chrono::Utc::now().timestamp(), Ordering::Relaxed);
@@ -121,7 +147,7 @@ pub struct LocalLlm {
 impl std::fmt::Debug for LocalLlm {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LocalLlm")
-            .field("port", &self.endpoint.port.read().ok().and_then(|p| *p))
+            .field("port", &self.endpoint.peek_port())
             .finish_non_exhaustive()
     }
 }
@@ -152,7 +178,7 @@ impl LocalLlm {
     /// hold six gigabytes indefinitely.
     #[must_use]
     pub fn running_port(&self) -> Option<u16> {
-        self.endpoint.port.read().ok().and_then(|p| *p)
+        self.endpoint.peek_port()
     }
 
     /// Which model the running server loaded.
@@ -289,52 +315,43 @@ impl LocalLlm {
         )
         .map_err(|e| e.to_string())?;
 
-        let mut args = vec![
-            "--model".to_owned(),
-            path.display().to_string(),
-            "--port".to_owned(),
-            chosen.to_string(),
-            // Loopback only, spelled out rather than relied on as a default.
-            // `llama-server` binds 127.0.0.1 by default today; a future release
-            // changing that would silently expose the machine's models.
-            "--host".to_owned(),
-            "127.0.0.1".to_owned(),
-        ];
-
-        if let Some(context) = model.context_length {
-            // Capped: the registry lists context lengths up to 262 144, and
-            // allocating the KV cache for that is several more gigabytes on top
-            // of the weights. A user who wants the full window can raise it once
-            // there is a control for it; a default that fails to allocate is
-            // worse than a smaller one that works.
-            args.push("--ctx-size".to_owned());
-            args.push(context.min(8192).to_string());
-        }
-
-        if let Some(draft) = &model.draft {
-            let draft_path = gguf_path(&draft.file_name);
-            if draft_path.exists() {
-                // Speculative decoding. Skipped rather than refused when the
-                // drafter is absent: the model works without it, more slowly.
-                args.push("--model-draft".to_owned());
-                args.push(draft_path.display().to_string());
-            }
-        }
+        // Speculative decoding. Skipped rather than refused when the drafter is
+        // absent: the model works without it, more slowly.
+        let draft_path = model
+            .draft
+            .as_ref()
+            .map(|draft| gguf_path(&draft.file_name))
+            .filter(|draft| draft.exists());
 
         let launch = Launch {
             executable,
-            args,
+            args: server_args(&path, chosen, model.context_length, draft_path.as_deref()),
             port: chosen,
         };
 
+        // New with every start, so a key read from a previous run opens nothing.
+        let key = LocalApiToken::generate().map_err(|e| e.to_string())?;
+
+        // `/health` answers without the key, measured on b9763 on 2026-11-02, so
+        // the readiness poll needs no change.
         let health = HttpHealth::new(self.policy.clone(), "/health").require_success();
-        let running = process::start(spec, &launch, &self.pids, &health, StartTimings::default())
-            .await
-            .map_err(|e| e.to_string())?;
+        let running = process::start_with_env(
+            spec,
+            &launch,
+            &[(API_KEY_ENV, key.expose())],
+            &self.pids,
+            &health,
+            StartTimings::default(),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
 
         // Published only once it has answered, so a request never reaches a
         // server still loading six gigabytes of weights.
-        self.endpoint.set(Some(chosen));
+        self.endpoint.set(Some(LocalServer {
+            port: chosen,
+            key: Secret::new(key.expose().to_owned()),
+        }));
         if let Ok(mut held) = self.model.write() {
             *held = Some(model_id.to_owned());
         }
@@ -342,6 +359,47 @@ impl LocalLlm {
 
         Ok(chosen)
     }
+}
+
+/// What `llama-server` is started with. Pure, so what it says can be asserted.
+///
+/// The key is deliberately not here: see [`API_KEY_ENV`].
+fn server_args(
+    model: &std::path::Path,
+    port: u16,
+    context_length: Option<u32>,
+    draft: Option<&std::path::Path>,
+) -> Vec<String> {
+    let mut args = vec![
+        "--model".to_owned(),
+        model.display().to_string(),
+        "--port".to_owned(),
+        port.to_string(),
+        // Loopback only, spelled out rather than relied on as a default.
+        // `llama-server` binds 127.0.0.1 by default today; a future release
+        // changing that would silently expose the machine's models.
+        "--host".to_owned(),
+        "127.0.0.1".to_owned(),
+        // Nothing here reads the slots monitor, so nothing is lost by closing it.
+        "--no-slots".to_owned(),
+    ];
+
+    if let Some(context) = context_length {
+        // Capped: the registry lists context lengths up to 262 144, and
+        // allocating the KV cache for that is several more gigabytes on top
+        // of the weights. A user who wants the full window can raise it once
+        // there is a control for it; a default that fails to allocate is
+        // worse than a smaller one that works.
+        args.push("--ctx-size".to_owned());
+        args.push(context.min(8192).to_string());
+    }
+
+    if let Some(draft) = draft {
+        args.push("--model-draft".to_owned());
+        args.push(draft.display().to_string());
+    }
+
+    args
 }
 
 /// What the log should say about a file the server is about to load, if
@@ -435,7 +493,7 @@ fn watch_for_idle(llm: Arc<LocalLlm>, app: AppHandle) {
         loop {
             tokio::time::sleep(IDLE_TICK).await;
 
-            if llm.endpoint.port.read().ok().and_then(|p| *p).is_none() {
+            if llm.endpoint.peek_port().is_none() {
                 // Stopped by hand, or never started. Nothing to watch.
                 return;
             }
@@ -1556,31 +1614,37 @@ mod tests {
         }
     }
 
-    /// A live generation check against the model started through the desktop
-    /// Local models screen. It exercises the real dictation cleanup adapter;
-    /// microphone capture and clipboard insertion are deliberately separate.
+    /// A live generation check against a server this test starts itself, since
+    /// a running desktop's key is out of reach. It exercises the real dictation
+    /// cleanup adapter; microphone capture and clipboard insertion are
+    /// deliberately separate.
+    ///
+    /// Set `KW_AUTOMATION_PROFILE` to a disposable directory holding (or
+    /// junctioning) `sidecars` and `models`, so the PID record stays out of the
+    /// real profile.
     #[tokio::test]
-    #[ignore = "requires KW_LLM_PROBE_PORT and the installed Qwen2.5 1.5B model running locally"]
-    async fn native_cleanup_uses_running_local_model() {
+    #[ignore = "requires the installed llama server and Qwen2.5 1.5B model"]
+    async fn native_cleanup_uses_a_real_local_model() {
         use kw_app_core::dictation::Cleanup as _;
         let _ = tracing_subscriber::fmt()
             .with_max_level(tracing::Level::WARN)
             .try_init();
 
-        let port: u16 = std::env::var("KW_LLM_PROBE_PORT")
-            .expect("set KW_LLM_PROBE_PORT to the desktop's running local model port")
-            .parse()
-            .expect("a port number");
+        const MODEL: &str = "qwen2.5-1.5b-instruct-q5_k_m";
+        let llm = LocalLlm::new(NetworkPolicy::new().unwrap()).unwrap();
+        let port = llm
+            .start_model(MODEL)
+            .await
+            .expect("the model should start");
         assert!((8221..=8240).contains(&port));
-        let endpoint = LocalEndpoint::default();
-        endpoint.set(Some(port));
+        let endpoint = llm.endpoint();
         endpoint.last_used.store(1, Ordering::Relaxed);
         let cleanup = crate::dictation::ModelCleanup::new(
             NetworkPolicy::new().unwrap(),
             Arc::new(kw_security::MemoryCredentialStore::new()),
             Arc::new(RwLock::new(Some((
                 kw_reasoning_core::ChatRoute::Local,
-                "qwen2.5-1.5b-instruct-q5_k_m".to_owned(),
+                MODEL.to_owned(),
             )))),
             endpoint.clone(),
         );
@@ -1591,6 +1655,34 @@ mod tests {
             "raw={raw:?}; cleaned={cleaned:?}; elapsed={:?}",
             began.elapsed()
         );
+
+        // Asked before the assertions, so a failure cannot leave the server up.
+        let client = reqwest::Client::new();
+        let base = format!("http://127.0.0.1:{port}");
+        let without_key = client
+            .post(format!("{base}/v1/chat/completions"))
+            .header("content-type", "application/json")
+            .body(r#"{"messages":[{"role":"user","content":"hi"}],"max_tokens":1}"#)
+            .send()
+            .await
+            .map(|response| response.status().as_u16());
+        let key = endpoint.server().expect("the server is running").key;
+        let slots = client
+            .get(format!("{base}/slots"))
+            .bearer_auth(key.expose())
+            .send()
+            .await
+            .map(|response| response.status().as_u16());
+        let health = client
+            .get(format!("{base}/health"))
+            .send()
+            .await
+            .map(|response| response.status().as_u16());
+        llm.stop().await;
+
+        assert_eq!(without_key.unwrap(), 401, "chat must need the key");
+        assert_eq!(slots.unwrap(), 501, "the slots monitor must be off");
+        assert_eq!(health.unwrap(), 200, "the readiness poll sends no key");
         assert_ne!(
             cleaned, raw,
             "the infallible fallback is not evidence of generation"
@@ -1717,17 +1809,130 @@ mod tests {
         assert!(find_model(registry, "not-a-model").is_err());
     }
 
+    fn a_server(port: u16) -> LocalServer {
+        LocalServer {
+            port,
+            key: Secret::new("a-test-key".to_owned()),
+        }
+    }
+
     /// An endpoint with nothing running answers `None`, not a default port.
     #[test]
     fn an_endpoint_with_no_server_offers_no_port() {
         let endpoint = LocalEndpoint::default();
         assert_eq!(endpoint.port(), None);
+        assert_eq!(endpoint.server(), None);
 
-        endpoint.set(Some(8225));
+        endpoint.set(Some(a_server(8225)));
         assert_eq!(endpoint.port(), Some(8225));
+        assert_eq!(endpoint.server(), Some(a_server(8225)));
 
         endpoint.set(None);
         assert_eq!(endpoint.port(), None);
+        assert_eq!(endpoint.server(), None);
+    }
+
+    /// The endpoint is `Debug`, and a key must not come out of it.
+    #[test]
+    fn an_endpoint_does_not_print_its_key() {
+        let endpoint = LocalEndpoint::default();
+        endpoint.set(Some(a_server(8225)));
+        assert!(!format!("{endpoint:?}").contains("a-test-key"));
+    }
+
+    #[test]
+    fn the_server_arguments_close_the_slots_monitor_and_carry_no_key() {
+        let model = std::path::Path::new("model.gguf");
+        let draft = std::path::Path::new("draft.gguf");
+        let args = server_args(model, 8225, Some(262_144), Some(draft));
+
+        assert!(args.contains(&"--no-slots".to_owned()), "{args:?}");
+        assert!(
+            args.windows(2).any(|pair| pair == ["--host", "127.0.0.1"]),
+            "{args:?}"
+        );
+        assert!(
+            args.windows(2).any(|pair| pair == ["--port", "8225"]),
+            "{args:?}"
+        );
+        assert!(
+            args.windows(2).any(|pair| pair == ["--ctx-size", "8192"]),
+            "{args:?}"
+        );
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["--model-draft", "draft.gguf"]),
+            "{args:?}"
+        );
+        assert!(!args.iter().any(|arg| arg.contains("api-key")), "{args:?}");
+
+        let plain = server_args(model, 8225, None, None);
+        assert!(!plain.contains(&"--ctx-size".to_owned()), "{plain:?}");
+        assert!(!plain.contains(&"--model-draft".to_owned()), "{plain:?}");
+    }
+
+    /// A key the local server refuses would be silent in cleanup: the person just
+    /// gets their raw transcript and a warning in the log. So the wiring from the
+    /// endpoint to the request is checked here, through the real adapter.
+    #[tokio::test]
+    async fn dictation_cleanup_sends_the_running_servers_key() {
+        use kw_app_core::dictation::Cleanup as _;
+        use std::io::{Read as _, Write as _};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let request = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut seen = Vec::new();
+            let mut chunk = [0_u8; 4096];
+            loop {
+                let read = stream.read(&mut chunk).unwrap();
+                if read == 0 {
+                    break;
+                }
+                seen.extend_from_slice(chunk.get(..read).unwrap());
+                let text = String::from_utf8_lossy(&seen);
+                if let Some((head, rest)) = text.split_once("\r\n\r\n") {
+                    let length = head
+                        .lines()
+                        .find_map(|line| {
+                            let line = line.to_ascii_lowercase();
+                            line.strip_prefix("content-length:")
+                                .map(|value| value.trim().parse::<usize>().unwrap())
+                        })
+                        .unwrap_or(0);
+                    if rest.len() >= length {
+                        break;
+                    }
+                }
+            }
+            let body =
+                r#"{"choices":[{"finish_reason":"stop","message":{"content":"Tidied text."}}]}"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\
+                 connection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+            String::from_utf8_lossy(&seen).into_owned()
+        });
+
+        let endpoint = LocalEndpoint::default();
+        endpoint.set(Some(a_server(port)));
+        let cleanup = crate::dictation::ModelCleanup::new(
+            NetworkPolicy::new().unwrap(),
+            Arc::new(kw_security::MemoryCredentialStore::new()),
+            Arc::new(RwLock::new(Some((
+                kw_reasoning_core::ChatRoute::Local,
+                "qwen2.5-1.5b-instruct-q5_k_m".to_owned(),
+            )))),
+            endpoint,
+        );
+
+        assert_eq!(cleanup.clean("um tidy this").await, "Tidied text.");
+        let seen = request.join().unwrap().to_ascii_lowercase();
+        assert!(seen.contains("authorization: bearer a-test-key"), "{seen}");
     }
 
     /// Reading the port counts as using it.
@@ -1738,7 +1943,7 @@ mod tests {
     #[test]
     fn reading_the_port_resets_the_idle_clock() {
         let endpoint = LocalEndpoint::default();
-        endpoint.set(Some(8221));
+        endpoint.set(Some(a_server(8221)));
 
         // Backdate the last use by an hour.
         endpoint

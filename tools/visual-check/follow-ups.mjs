@@ -3,24 +3,26 @@
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import {parseShellArgs} from "./args.mjs";
 import {launchEdge,killBrowser} from "./browser.mjs";
 import {connectCdp} from "./cdp.mjs";
 import {waitFor,reload,pressText,delay} from "./interactions.mjs";
 import * as snippets from "./snippets.mjs";
-const out=resolve("tools/visual-check/out/kneg-422-424");
+const options=parseShellArgs(process.argv.slice(2));
+const out=resolve(options.out);
 await mkdir(out,{recursive:true});
-const browser=await launchEdge({port:9245,out,url:process.argv[2]??"http://127.0.0.1:5199/",width:1440,height:900,extraArgs:["--disable-gpu","--mute-audio"]});
+const browser=await launchEdge({...options,out,width:1440,height:900,extraArgs:["--disable-gpu","--mute-audio"]});
 const cdp=await connectCdp(browser.target.webSocketDebuggerUrl);
 await cdp.send("Page.enable");
 const checks=[];
-const input=".note-detail input[aria-label=Title]";
+const input=".note-detail textarea[aria-label=Title]";
 async function check(name,expression) {assert.ok(await cdp.evaluate(expression),name);checks.push(name);}
 async function fresh() {
- await reload(cdp); await waitFor(cdp,"Boolean(document.querySelector('nav.rail')&&window.__TAURI_INTERNALS__)");
+ await reload(cdp); await waitFor(cdp,"Boolean(document.querySelector('.app-titlebar')&&window.__TAURI_INTERNALS__)");
  await cdp.evaluate(snippets.removeFixtureBanner()); await cdp.evaluate(snippets.installInvokeStub());
 }
 async function notes(title="Word timings") {
- await cdp.evaluate(snippets.clickText("nav.rail button","Notes"));
+ await cdp.evaluate(snippets.clickText("button.nav-pill","Notes"));
  await waitFor(cdp,"Boolean(document.querySelector('.notes-entry'))");
  await cdp.evaluate(snippets.openNotesEntry(title));
  await waitFor(cdp,`document.querySelector(${JSON.stringify(input)})?.value===${JSON.stringify(title)}`);
@@ -79,10 +81,10 @@ try {
  await waitFor(cdp,"document.body.innerText.includes('Saved, but the people could not be refreshed')");
  await check("Committed participant changes remain saved when metadata refresh fails","document.body.innerText.includes('saved@example.com')&&!document.querySelector('.note-people-form')&&document.body.innerText.includes('Retry refresh')");
  await fresh();
- await cdp.evaluate(snippets.clickText("nav.rail button","Settings"));
- await waitFor(cdp,"Boolean(document.querySelector('.panel-item'))");
+ await cdp.evaluate(snippets.clickText("button.nav-pill","Settings"));
+ await waitFor(cdp,"Boolean(document.querySelector('dialog.settings-sheet[open]'))");
  await cdp.evaluate(`(async()=>{window.__installOriginal=window.__TAURI_INTERNALS__.invoke.bind(window.__TAURI_INTERNALS__);window.__hiddenModel=(await window.__installOriginal('sherpa_status')).models.find(model=>model.language==='en'&&model.supportedLanguages?.length===1);window.__TAURI_INTERNALS__.invoke=(cmd,args,opt)=>cmd==='speech_installations'?Promise.resolve({revision:1,jobs:[{id:window.__hiddenModel.id,progress:{id:window.__hiddenModel.id,stage:'model',written:10,total:100}}]}):window.__installOriginal(cmd,args,opt);return true;})()`);
- await cdp.evaluate(snippets.clickText(".panel-item","Transcription"));
+ await cdp.evaluate(snippets.clickText(snippets.SHEET_TILE,"Transcription"));
  await waitFor(cdp,"Boolean(document.querySelector('[aria-label=\"Speech model installation progress\"]'))");
  await check("An install begun elsewhere is visible from the backend snapshot","document.querySelector('[aria-label=\"Speech model installation progress\"]').textContent.includes(window.__hiddenModel.name)");
  await cdp.evaluate(snippets.chooseSelect("Show models for","sv"));
@@ -94,14 +96,14 @@ try {
  await delay(150);
  await check("An older progress event cannot resurrect a finished install","!document.querySelector('[aria-label=\"Speech model installation progress\"]')");
  await cdp.evaluate(snippets.stubInvoke({delay:{dictation_set_local_language:600}}));
- await pressText(cdp,".local-language-picker button","Detect automatically");
- await pressText(cdp,".local-language-options label","Swedish");
- await pressText(cdp,".local-language-options label","English");
+ await pressText(cdp,".local-language-options button.language-pill","Detect automatically");
+ await pressText(cdp,".local-language-options button.language-pill","Swedish");
+ await pressText(cdp,".local-language-options button.language-pill","English");
  await waitFor(cdp,"!document.querySelector('.local-language-picker').getAttribute('aria-busy')");
- await check("Rapid language selections are committed in order and keep the newest choice","window.__chipStub.log.filter(x=>x.cmd==='dictation_set_local_language').slice(-3).map(x=>JSON.stringify(x.args.languages)).join('|')==='[]|[\"sv\"]|[\"sv\",\"en\"]'&&[...document.querySelectorAll('.local-language-options input:checked')].length===2");
+ await check("Rapid language selections are committed in order and keep the newest choice","window.__chipStub.log.filter(x=>x.cmd==='dictation_set_local_language').slice(-3).map(x=>JSON.stringify(x.args.languages)).join('|')==='[]|[\"sv\"]|[\"sv\",\"en\"]'&&document.querySelectorAll('.local-language-options button.language-pill[aria-pressed=true]').length===2");
 
  await fresh();
- await cdp.evaluate(snippets.clickText("nav.rail button","Meetings"));
+ await cdp.evaluate(snippets.clickText("button.nav-pill","Meetings"));
  await waitFor(cdp,"Boolean(document.querySelector('.control-start'))");
  await cdp.evaluate(`window.__micOriginal=window.__TAURI_INTERNALS__.invoke.bind(window.__TAURI_INTERNALS__);window.__TAURI_INTERNALS__.invoke=(cmd,args,opt)=>cmd==='microphone_check'?new Promise(done=>{window.__finishCheck=done;}):window.__micOriginal(cmd,args,opt);true`);
  await cdp.evaluate(snippets.clickText("button.chip","System default"));

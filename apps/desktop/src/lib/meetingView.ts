@@ -25,7 +25,7 @@
  * transcript is sent: a privacy line that errs errs towards saying so.
  */
 
-import type { Detected, Folder, InputDevice, MicrophoneCheck, Sources, SummarySettings } from "../generated/ipc-types.js";
+import type { DiarizationStatus, Detected, Folder, InputDevice, MicrophoneCheck, Sources, SummarySettings } from "../generated/ipc-types.js";
 import { PROVIDER_REGISTRY, type ProviderRegistry } from "../generated/providers.js";
 import type { MenuOption } from "./chipMenu.js";
 import { destinationName, LANGUAGES, languageLabel, microphoneMenu } from "./controlBar.js";
@@ -150,6 +150,51 @@ export function recordedSources(sources: Sources | null): string | null {
     return sources.systemAudioReason ? `Your microphone only — ${sources.systemAudioReason}` : "Your microphone only";
   }
   return "Nothing is being recorded";
+}
+
+/**
+ * The Speaker labels chip: `meetings.diarize`, which Settings > Meetings also
+ * writes and Rust reads when a meeting is saved.
+ *
+ * A toggle only where they can run. `ready` is the answer the save path gets
+ * (`diarization_status`), and Rust refuses to switch them on without it. Where
+ * they can't run the chip is a link to the screen that says what's missing,
+ * even if the setting is on: a note saved then says they couldn't run, so a
+ * pressed chip would be the wrong answer. Not read yet, or not readable, there
+ * is no chip, so a load can't flash "needs setup".
+ */
+export function speakerLabelsChip(status: Pick<DiarizationStatus, "ready" | "enabled"> | null):
+  | { kind: "toggle"; pressed: boolean; title: string }
+  | { kind: "setup"; title: string }
+  | null {
+  if (status === null) return null;
+  if (!status.ready) {
+    return {
+      kind: "setup",
+      title: status.enabled
+        ? "Speaker labels are switched on but can't run. Settings > Meetings says what's missing"
+        : "Speaker labels need setting up. Settings > Meetings says what's missing",
+    };
+  }
+  const cost = "Adds roughly five minutes per hour of recording when you stop";
+  return {
+    kind: "toggle",
+    pressed: status.enabled,
+    title: status.enabled
+      ? `Each saved meeting note says who was speaking. ${cost}`
+      : `Say who was speaking in each saved meeting note. ${cost}`,
+  };
+}
+
+/**
+ * What speaker labels cost, in view while they will run, or `null`. Short forms
+ * of the two measured caveats Settings > Meetings gives in full: choosing them
+ * here shouldn't be the way to miss what they cost.
+ */
+export function speakerLabelsNote(status: Pick<DiarizationStatus, "ready" | "enabled"> | null): string | null {
+  return status?.ready && status.enabled
+    ? "Speaker labels add roughly five minutes per hour of recording when you stop, and they're worse in languages other than English."
+    : null;
 }
 
 /**
@@ -418,4 +463,14 @@ export function microphoneCheckLine(check: MicrophoneCheck): string {
     ? `Heard you on ${tested}.`
     : `Heard nothing from ${tested}. Check it isn't muted, or choose another microphone.`;
   return check.fellBack === null ? result : `${check.fellBack} isn't connected, so this tested ${tested}. ${result}`;
+}
+
+/**
+ * Which of the design's three pictures a recent meeting's tile shows. Decoration,
+ * so all it has to be is stable, and different from its neighbours: notes are
+ * numbered in order, so meetings next to each other in the list usually differ.
+ */
+export function recentPicture(id: number): "dusk" | "streak" | "orb" {
+  const pictures = ["dusk", "streak", "orb"] as const;
+  return pictures[((id % 3) + 3) % 3] ?? "dusk";
 }

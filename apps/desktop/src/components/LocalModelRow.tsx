@@ -10,15 +10,16 @@
  * Details (KNEG-343): the row leads with what a person chooses by.
  */
 
+import { useState } from "react";
+
 import { verificationLabel } from "../lib/labels";
 import {
   languageNames,
   localModelAction,
-  localModelDetail,
-  localModelLine,
+  localModelChips,
+  modelThumb,
   type LocalModelRow as Model,
 } from "../lib/localModels";
-import { LearnMore } from "./LearnMore";
 
 export function LocalModelRow({
   row,
@@ -32,17 +33,47 @@ export function LocalModelRow({
   onUse: () => void;
   onInstall: () => void;
 }) {
+  const [open, setOpen] = useState(false);
+  const thumb = modelThumb(row);
+  const detailsId = `model-details-${row.id}`;
   return (
-    <li>
-      {localModelLine(row)}
-      <em className="row-detail">{localModelDetail(row)}</em>
-      {row.loadedButGoesTo !== null ? (
-        <em className="row-detail warn">Loaded, but dictation goes to {row.loadedButGoesTo}</em>
-      ) : null}
-      <LearnMore summary="Details">
+    <li className="model-row">
+      <span className="model-thumb" data-kind={thumb.kind} data-variant={thumb.variant} aria-hidden="true" />
+      <span className="model-row-name">{row.name}</span>
+      <span className="model-row-action">
+        {row.installed ? (
+          <button
+            type="button"
+            className={row.inUse ? "marked" : undefined}
+            aria-pressed={row.inUse}
+            onClick={onUse}
+          >
+            {localModelAction(row)}
+          </button>
+        ) : (
+          <button type="button" onClick={onInstall}>
+            {localModelAction(row)}
+          </button>
+        )}
+      </span>
+      <span className="model-row-chips">
+        {localModelChips(row).map((chip) => (
+          <span key={chip.text} className="model-chip" data-tone={chip.tone}>{chip.text}</span>
+        ))}
+        <button
+          type="button"
+          className="model-chip model-chip-details"
+          aria-expanded={open}
+          aria-controls={detailsId}
+          onClick={() => setOpen((was) => !was)}
+        >
+          Details
+        </button>
+      </span>
+      <div id={detailsId} className="model-row-details learn-more-body" hidden={!open}>
         <p>
           {row.engine === "whisper"
-            ? "Runs on the speech engine (whisper.cpp)."
+            ? "For dictation, imports and meetings. Runs on the speech engine (whisper.cpp)."
             : "Runs on the Parakeet engine (sherpa-onnx)."}{" "}
           Model id <code>{row.id}</code>.
           {row.verifiedBy !== null
@@ -53,22 +84,8 @@ export function LocalModelRow({
         {row.languages !== "many" && row.languages.length > 2 ? (
           <p>Languages: {languageNames(row.languages).join(", ")}.</p>
         ) : null}
-      </LearnMore>
-      {row.installed ? (
-        <button
-          type="button"
-          className={row.inUse ? "marked" : undefined}
-          aria-pressed={row.inUse}
-          onClick={onUse}
-        >
-          {localModelAction(row)}
-        </button>
-      ) : (
-        <button type="button" onClick={onInstall}>
-          {localModelAction(row)}
-        </button>
-      )}
-      {progress ? <em className="row-detail">{progress}</em> : null}
+      </div>
+      {progress ? <em className="row-detail model-row-progress">{progress}</em> : null}
     </li>
   );
 }

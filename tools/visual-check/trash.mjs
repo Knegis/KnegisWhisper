@@ -13,7 +13,7 @@
  * Buttons are pressed with real pointer presses, the Trash row after scrolling
  * the panel to it, since it sits under People below the panel's fold at
  * 1000x720. A library row's menu is opened with a `contextmenu` event, as a
- * right-click opens it. `window.confirm` is scripted (`scriptConfirm`) and
+ * right-click opens it. the confirmation dialog is scripted (`scriptConfirm`) and
  * keeps every question asked, and `invoke` is wrapped to log what reached
  * Rust's commands. The fixtures answer as Rust's `trash` module does -- a note
  * in Trash left out of every list and search, its recording kept and measured
@@ -36,7 +36,7 @@ import { isEntryPoint } from "../ci/entry.mjs";
 const delay = (ms) => new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
 const isMain = isEntryPoint(import.meta.url);
 
-const RAIL_ITEM = "nav.rail .rail-item";
+const NAV_PILL = "button.nav-pill";
 const WINDOW = { width: 1000, height: 720 };
 const SMALL = { width: 720, height: 520 };
 /**
@@ -56,7 +56,7 @@ const ONE_RECORDING = "3.8 MB";
 
 /** Empties the library's search field through its value setter and an input event, as typing does. */
 const CLEAR_SEARCH = "(() => { const input = document.querySelector('.panel-search input'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, ''); input.dispatchEvent(new Event('input', { bubbles: true })); return true; })()";
-const noteOpen = (title) => `(() => { const input = document.querySelector('.note-detail input[aria-label="Title"]'); return Boolean(input) && !input.disabled && input.value === ${JSON.stringify(title)}; })()`;
+const noteOpen = (title) => `(() => { const input = document.querySelector('.note-detail textarea[aria-label="Title"]'); return Boolean(input) && !input.disabled && input.value === ${JSON.stringify(title)}; })()`;
 const TODAY = "new Date().toLocaleDateString(undefined, { day: 'numeric', month: 'short' })";
 
 
@@ -75,7 +75,7 @@ const state = (cdp) => cdp.evaluate(snippets.trashState());
 /** Where focus should land after a Trash action, as DOM expressions. */
 const FOCUS_ON = {
   undo: "document.activeElement?.matches('.notes-moved button') ?? false",
-  title: (title) => `(document.activeElement?.matches('.note-detail input[aria-label="Title"]') ?? false) && document.activeElement.value === ${JSON.stringify(title)}`,
+  title: (title) => `(document.activeElement?.matches('.note-detail textarea[aria-label="Title"]') ?? false) && document.activeElement.value === ${JSON.stringify(title)}`,
   spaceLine: "document.activeElement?.matches('.trash-space-line') ?? false",
   choose: "document.activeElement?.matches('.trash-choose') ?? false",
   search: "document.activeElement?.matches('.panel-search input') ?? false",
@@ -101,10 +101,10 @@ const titles = (rows) => rows.map((row) => row.title);
 async function freshNotes(cdp) {
   await viewport(cdp, WINDOW);
   await reload(cdp);
-  await waitFor(cdp, "Boolean(document.querySelector('nav.rail') && document.querySelector('.card .split-main, .card .content'))", "the fixture shell");
+  await waitFor(cdp, "Boolean(document.querySelector('.app-titlebar') && document.querySelector('.split-main, .content'))", "the fixture shell");
   await cdp.evaluate(snippets.removeFixtureBanner());
   await cdp.evaluate(snippets.installInvokeStub());
-  await cdp.evaluate(snippets.clickText(RAIL_ITEM, "Notes"));
+  await cdp.evaluate(snippets.clickText(NAV_PILL, "Notes"));
   await waitFor(cdp, "Boolean(document.querySelector('.list-panel .notes-entry'))", "the Notes library");
   await waitFor(cdp, noteOpen(WEEKLY), "the newest note to open");
 }
@@ -236,7 +236,7 @@ export async function runTrash(options) {
       id: "3",
       claim: "Trash lists a deleted note with when it went and how long its recording runs, says what the recordings take, and opens the note read-only.",
       expectation: [
-        `delete "${WEEKLY}" (a 120 s recording), press Trash: the panel's "Trash" section holds "${WEEKLY}" with "Deleted {today} · 2 min" and Show all notes, the Trash row pressed;`,
+        `delete "${WEEKLY}" (a 120 s recording), press Trash: the panel's "trash" section holds "${WEEKLY}" with "Deleted {today} · 2 min" and Show all notes, the Trash row pressed;`,
         `the main area says "Recordings in Trash take ${ONE_RECORDING} on this computer." with Empty trash enabled;`,
         `press "${WEEKLY}" there: "This note is in Trash." with Restore and Delete forever, its title, no field to type in and no workspace; no notes_update in the next second`,
       ].join(" "),
@@ -256,7 +256,7 @@ export async function runTrash(options) {
       await cdp.screenshot(resolve(out, shot));
       return {
         measured: { today, listed, opened, saves },
-        matches: listed.entry?.pressed === true && listed.sections.includes("Trash")
+        matches: listed.entry?.pressed === true && listed.sections.includes("trash")
           && JSON.stringify(listed.trashed.map(({ title, meta }) => ({ title, meta }))) === JSON.stringify([{ title: WEEKLY, meta: `Deleted ${today} · 2 min` }])
           && listed.space?.lines[0] === `Recordings in Trash take ${ONE_RECORDING} on this computer.`
           && listed.space?.emptyTrash?.text === "Empty trash" && listed.space.emptyTrash.disabled === false
@@ -508,7 +508,7 @@ export async function runTrash(options) {
 if (isMain) {
   try {
     const options = parseShellArgs(process.argv.slice(2));
-    if (options.help) process.stdout.write(`${shellUsage().replace("shell-rail.mjs", "trash.mjs")}\n`);
+    if (options.help) process.stdout.write(`${shellUsage().replace("shell-title-bar.mjs", "trash.mjs")}\n`);
     else {
       const failed = failedChecks(await runTrash(options));
       // The run completed; a check measured false still fails it, so a wrapper or CI step sees it.

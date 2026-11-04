@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { hasStoredTranscript, noteMeta, transcribedLine } from "../src/lib/noteMeta.js";
+import { hasStoredTranscript, noteMeta, noteWhen, transcribedLine } from "../src/lib/noteMeta.js";
 import { parseStoredTime } from "../src/lib/dayGroups.js";
 import type { Folder, Note } from "../src/generated/ipc-types.js";
 
@@ -107,4 +107,22 @@ test("a note has a transcript when its stored array has a row, and not otherwise
   assert.equal(hasStoredTranscript("not json"), false);
   assert.equal(hasStoredTranscript('{"text":"not an array"}'), false);
   assert.equal(hasStoredTranscript(JSON.stringify([{ speaker: "Anna", text: "Two more days." }])), true);
+});
+
+test("the line over a note's title is its day, its time and its length", () => {
+  const at = new Date(2026, 7, 26, 11, 0);
+  assert.equal(noteWhen(at, 31), "26.08.26 · 11:00 · 31 min");
+});
+
+test("a note with no recording has no length to give", () => {
+  assert.equal(noteWhen(new Date(2026, 7, 26, 11, 0), null), "26.08.26 · 11:00");
+});
+
+test("a recording under a minute is still at least a minute, as the Meetings list rounds it", () => {
+  assert.equal(noteWhen(new Date(2026, 0, 2, 9, 5), 0), "02.01.26 · 09:05 · 1 min");
+});
+
+test("a note whose date will not read says nothing rather than a guess", () => {
+  assert.equal(noteWhen(null, 31), "31 min");
+  assert.equal(noteWhen(null, null), null);
 });

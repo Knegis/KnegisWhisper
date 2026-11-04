@@ -81,7 +81,7 @@ Every gate passes on the merged tree. Nothing below has been clicked by a person
 2. **Type a name and Save:** every turn of that speaker shows the name; Export in each format
    shows it; the summary's Generate, run afterwards, uses it.
 3. **Remove name** restores `Speaker N`; Escape and Cancel close the form without a change.
-4. **Suggestions:** on a note with calendar participants their names come first in the datalist;
+4. **Suggestions:** on a note with calendar participants their names come first among the pills;
    a name used on another note appears after them; a name already on this note does not.
 5. **A meeting with no speaker labels** heads its turns with plain "You"/"Others" names and no
    rename.
@@ -173,14 +173,14 @@ read from the running application; nothing has been dragged, resized or shared b
    drag the panel by its text. Expect: it moves; the caret does not leave Notepad; Record/Stop still
    click. This is the `WS_EX_NOACTIVATE` + `start_dragging` question, believed and not measured.
 2. **Resize from every edge and both bottom corners.** Expect the resize cursor at the edges, a
-   floor of 392×92, and above about 140 px of height the caption wrapping under a header row with the
+   floor of 392×102, and above about 140 px of height the caption wrapping under a header row with the
    newest words at the bottom. Check that the last few pixels of the Stop button still click.
 3. **Hide and show, then restart.** Stop the meeting, start another: the panel returns where it was
    left, at the size it was left. Quit and relaunch: same.
 4. **Unplug the monitor it was left on** (or change resolution so it no longer fits): expect the
    bottom-right default, not an off-screen window.
 5. **Reset notification window** on Settings > Meetings, once while the panel is visible and once
-   while it is hidden. Expect bottom-right at 392×92, and `meeting.notificationPlacement` absent in
+   while it is hidden. Expect bottom-right at 392×102, and `meeting.notificationPlacement` absent in
    `settings_keys` afterwards in both cases.
 6. **Share the screen from the client you actually use** (Teams, Zoom, a browser) with the panel
    up, both a window share and a whole-screen share, and look at the receiving side. KNEG-60
@@ -278,7 +278,7 @@ route `tools/visual-check/README.md` documents.
   What this does not prove: any recorder that uses a fourth API, any other Windows build, or that
   the panel's *content* is protected — it had none.
 - **KNEG-161 — the rebuilt shell rail, measured in headless Edge against the dev fixtures**
-  (`node tools/visual-check/shell-rail.mjs`; the fixture banner removed for geometry, the
+  (`node tools/visual-check/shell-rail.mjs`, since replaced by `shell-title-bar.mjs` with the rail; the fixture banner removed for geometry, the
   `FIXTURES` title kept; the same engine and version as the WebView2 the application runs in, but
   **not the Tauri window**). The root font size is **14px**, so every pixel figure KNEG-160 quoted
   at a 16px rem is off by a factor of 1.14:
@@ -1115,7 +1115,15 @@ of chunk F is green tests and code review; none of it has touched real hardware 
    import".
 3. **Import an OpenWhispr `transcriptions.db`** through the same screen and confirm the source file
    is unmodified afterward, the report names what was copied and what was dropped per table, and no
-   credential value appears anywhere in the report.
+   credential value appears anywhere in the report. **Run 2026-11-02 (KNEG-90), measured by
+   instrument and not seen by the owner:** a debug build of `dev` at `f02829f` in a disposable
+   profile, through the real button and file dialog, against a byte-identical copy of a real
+   database. `transcriptions.db` and its `-wal` came through unchanged by SHA-256; the `-shm` did not
+   (7 of 32,768 bytes, all in SQLite's wal-index header, and a plain `node:sqlite` read-only open
+   changed the same 7). All 16 tables in the report matched the source and the screen, with nothing
+   skipped. The source's two token tables were empty, so the credential half had nothing to find and
+   proves nothing about real tokens. Tables outside the copy plan go unmentioned. The `-shm` change
+   and the unnamed tables are KNEG-507.
 4. **Kill the application mid-import** (a local file — the URL half of this item went with item 2)
    and restart it. Confirms whether an orphaned per-import scratch directory is left behind — a
    known, disclosed gap with no startup sweep.

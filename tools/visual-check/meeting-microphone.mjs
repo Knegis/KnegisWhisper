@@ -31,7 +31,7 @@ import { isEntryPoint } from "../ci/entry.mjs";
 const delay = (ms) => new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
 const isMain = isEntryPoint(import.meta.url);
 
-const RAIL_ITEM = "nav.rail .rail-item";
+const NAV_PILL = "button.nav-pill";
 const CHIP = "Microphone: ";
 /** The Meetings menu's heading and footer, and the chip's title (`lib/meetingView.ts`, `views/Meetings.tsx`). */
 const HEADING = "Used by meetings and dictation";
@@ -57,9 +57,9 @@ const NO_DEVICE = "no input device is available. Check that a microphone is conn
 const LIVE_TITLE = `This meeting is recording from ${HEADSET}. A microphone chosen now is used from the next recording.`;
 
 const field = (snippet, path) => `(${snippet})?.${path}`;
-const SHELL = "Boolean(document.querySelector('nav.rail') && document.querySelector('.card .split-main, .card .content'))";
+const SHELL = "Boolean(document.querySelector('.app-titlebar') && document.querySelector('.split-main, .content'))";
 const LIVE = "Boolean(document.querySelector('.meeting-live'))";
-const START_ENABLED = "(() => { const start = document.querySelector('.control-start'); return Boolean(start) && !start.disabled; })()";
+const START_ENABLED = "(() => { const start = document.querySelector('.control-start'); return Boolean(start) && !start.disabled && start.textContent.trim() === 'Start recording'; })()";
 const checkState = (cdp) => cdp.evaluate(snippets.microphoneCheckState());
 const chipText = (prefix) => field(snippets.chipState(prefix), "text");
 const firstLine = field(snippets.microphoneCheckState(), "lines[0]?.text");
@@ -103,9 +103,9 @@ async function choose(cdp, name) {
 /** Each page's surface, so a switch waits for the page it went to rather than finding the last one's chip. */
 const SURFACE = { Meetings: "meetings.record", Dictation: "dictation.task" };
 
-/** Goes to `page` in the rail and waits for it, and for its microphone menu chip unless `chip` is false (a live meeting has none). */
+/** Goes to `page` by its pill and waits for it, and for its microphone menu chip unless `chip` is false (a live meeting has none). */
 async function goTo(cdp, page, chip = true) {
-  await cdp.evaluate(snippets.clickText(RAIL_ITEM, page));
+  await cdp.evaluate(snippets.clickText(NAV_PILL, page));
   await waitFor(cdp, `Boolean(document.querySelector('[data-surface="${SURFACE[page]}"]'))`, `the ${page} page`);
   if (chip) await waitFor(cdp, snippets.chipState(CHIP), `the ${page} microphone chip`);
   await delay(300);
@@ -133,9 +133,9 @@ async function checkEnds(cdp, line) {
   await waitFor(cdp, `${firstLine} === ${JSON.stringify(line)}`, `the check to end with "${line}"`, 9_000);
 }
 
-const placedAboveBar = (menu) => menu.open && menu.box.left >= 0 && menu.box.top >= 0
+const placedAboveChip = (menu) => menu.open && menu.box.left >= 0 && menu.box.top >= 0
   && menu.box.right <= menu.viewport.width && menu.box.bottom <= menu.viewport.height
-  && menu.box.bottom <= menu.bar.top + 1 && menu.side === "above";
+  && menu.box.bottom <= menu.chip.top + 1 && menu.side === "above";
 
 const SETUP_NOTE = "Measured in headless Edge against dev fixtures, not in the Tauri window. Each check starts from a fresh load on Meetings (1000x720 unless it says otherwise) with the page's invoke wrapped to log calls; chips, rows and buttons are pressed with real CDP pointer presses. The fixtures' microphone_check sends fake levels on the microphone-check session for 5 s and always hears you; no audio reaches a browser tab, so a real microphone is not measured here.";
 
@@ -179,7 +179,7 @@ export async function runMeetingMicrophone(options) {
       claim: "On Meetings the microphone chip opens a listbox of the microphones under one heading saying the choice is shared, with Test microphone at its foot, and its hover says choosing here changes dictation's too.",
       expectation: [
         `the chip named "${CHIP}System default", aria-haspopup listbox, title "${SHARED}";`,
-        `its menu: a listbox named Microphone, above the control bar inside the window, with the one heading "${HEADING}" over the rows ${JSON.stringify(ROWS)},`,
+        `its menu: a listbox named Microphone, above its chip inside the window, with the one heading "${HEADING}" over the rows ${JSON.stringify(ROWS)},`,
         `System default selected, and the footer "${FOOTER}"`,
       ].join(" "),
     }, async () => {
@@ -190,9 +190,9 @@ export async function runMeetingMicrophone(options) {
       await cdp.screenshot(resolve(out, shot));
       await escape(cdp);
       return {
-        measured: { chip, menu: { kind: menu.kind, name: menu.name, side: menu.side, box: menu.box, barTop: menu.bar?.top, groups: menu.groups, options: menu.options, footer: menu.footer } },
+        measured: { chip, menu: { kind: menu.kind, name: menu.name, side: menu.side, box: menu.box, chipTop: menu.chip?.top, groups: menu.groups, options: menu.options, footer: menu.footer } },
         matches: chip?.name === `${CHIP}System default` && chip.haspopup === "listbox" && chip.title === SHARED
-          && menu.kind === "listbox" && menu.name === "Microphone" && placedAboveBar(menu)
+          && menu.kind === "listbox" && menu.name === "Microphone" && placedAboveChip(menu)
           && JSON.stringify(menu.groups) === JSON.stringify([HEADING])
           && JSON.stringify(menu.options.map((o) => o.name)) === JSON.stringify(ROWS)
           && JSON.stringify(menu.options.filter((o) => o.selected).map((o) => o.name)) === JSON.stringify(["System default"])
@@ -430,7 +430,7 @@ export async function runMeetingMicrophone(options) {
 if (isMain) {
   try {
     const options = parseShellArgs(process.argv.slice(2));
-    if (options.help) process.stdout.write(`${shellUsage().replace("shell-rail.mjs", "meeting-microphone.mjs")}\n`);
+    if (options.help) process.stdout.write(`${shellUsage().replace("shell-title-bar.mjs", "meeting-microphone.mjs")}\n`);
     else {
       const failed = failedChecks(await runMeetingMicrophone(options));
       // The run completed; a check measured false still fails it, so a wrapper or CI step sees it.

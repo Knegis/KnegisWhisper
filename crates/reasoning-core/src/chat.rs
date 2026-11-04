@@ -19,6 +19,18 @@ use crate::enterprise::{self, EnterpriseConfig};
 use crate::params::{build_body, shape_for, Intent, ModelShape, RequestOptions};
 use crate::route::ChatRoute;
 
+/// The llama.cpp server this application manages: where it listens, and the key
+/// it was started with.
+///
+/// The key changes with every start. It reaches the server through its
+/// environment and comes back here, and [`ChatRoute::Local`] is the only route
+/// that reads it. `Debug` is safe to derive because [`Secret`] redacts itself.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalServer {
+    pub port: u16,
+    pub key: Secret,
+}
+
 /// Why a reasoning request failed.
 #[derive(Debug, thiserror::Error)]
 pub enum ChatError {
@@ -88,7 +100,7 @@ pub struct Chat<'a> {
     /// `8221` in this file, which was right only while no other process held
     /// it: `port::allocate` searches 8221–8240, so the second instance on a
     /// machine would have had its requests sent to the first one's server.
-    local_port: Option<u16>,
+    local: Option<LocalServer>,
     summary_request: bool,
 }
 
@@ -105,15 +117,15 @@ impl<'a> Chat<'a> {
         Self {
             policy,
             credentials,
-            local_port: None,
+            local: None,
             summary_request: false,
         }
     }
 
     /// Point local requests at a running server.
     #[must_use]
-    pub const fn with_local_port(mut self, port: Option<u16>) -> Self {
-        self.local_port = port;
+    pub fn with_local_server(mut self, server: Option<LocalServer>) -> Self {
+        self.local = server;
         self
     }
 
@@ -209,14 +221,14 @@ impl<'a> Chat<'a> {
                 // listening on fails with a connection error that reads as a
                 // network problem, and the real answer is "no server is
                 // running" — which the caller can act on.
-                let port = self.local_port.ok_or_else(|| ChatError::Transport {
+                let server = self.local.as_ref().ok_or_else(|| ChatError::Transport {
                     provider: "local".to_owned(),
                     detail: "the local text-generation server is not running".to_owned(),
                 })?;
 
                 (
                     "local".to_owned(),
-                    format!("http://127.0.0.1:{port}/v1"),
+                    format!("http://127.0.0.1:{}/v1", server.port),
                     None,
                     ModelShape::default(),
                     RequestPurpose::ExplicitlyConfiguredSelfHostedEndpoint,
@@ -230,8 +242,11 @@ impl<'a> Chat<'a> {
             }
         };
 
-        let credential = match &key_ref {
-            Some(slot) => match self.credentials.get(slot) {
+        let credential = match (route, &self.local, &key_ref) {
+            // The key this application started its own server with. Matched on
+            // the route, so no other destination can ever be sent it.
+            (ChatRoute::Local, Some(server), _) => Some(server.key.clone()),
+            (_, _, Some(slot)) => match self.credentials.get(slot) {
                 Ok(secret) if !secret.is_empty() => Some(secret),
                 // A self-hosted server legitimately needs none; a cloud
                 // provider does not.
@@ -242,7 +257,7 @@ impl<'a> Chat<'a> {
                     })
                 }
             },
-            None => None,
+            (_, _, None) => None,
         };
 
         let body = build_body(&shape, model, messages, options);
@@ -861,6 +876,149 @@ mod tests {
             .unwrap_err();
 
         assert!(matches!(err, ChatError::Policy(_)), "{err:?}");
+    }
+
+    /* ------------------------------------------------- the local server's key */
+
+    const LOCAL_KEY: &str = "0123456789abcdef-local-server-key";
+    const A_REPLY: &str =
+        r#"{"choices":[{"finish_reason":"stop","message":{"content":"a reply"}}]}"#;
+
+    /// One canned HTTP answer on a loopback port. Joining the handle gives the
+    /// request exactly as it arrived.
+    fn answer_once(status: &str, body: &str) -> (u16, std::thread::JoinHandle<String>) {
+        use std::io::{Read as _, Write as _};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let response = format!(
+            "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\
+             connection: close\r\n\r\n{body}",
+            body.len()
+        );
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut seen = Vec::new();
+            let mut chunk = [0_u8; 4096];
+            loop {
+                let read = stream.read(&mut chunk).unwrap();
+                if read == 0 {
+                    break;
+                }
+                seen.extend_from_slice(chunk.get(..read).unwrap());
+                let text = String::from_utf8_lossy(&seen);
+                if let Some((head, rest)) = text.split_once("\r\n\r\n") {
+                    let length = head
+                        .lines()
+                        .find_map(|line| {
+                            let line = line.to_ascii_lowercase();
+                            line.strip_prefix("content-length:")
+                                .map(|value| value.trim().parse::<usize>().unwrap())
+                        })
+                        .unwrap_or(0);
+                    if rest.len() >= length {
+                        break;
+                    }
+                }
+            }
+            stream.write_all(response.as_bytes()).unwrap();
+            String::from_utf8_lossy(&seen).into_owned()
+        });
+        (port, handle)
+    }
+
+    fn local_server(port: u16) -> LocalServer {
+        LocalServer {
+            port,
+            key: Secret::new(LOCAL_KEY.to_owned()),
+        }
+    }
+
+    #[tokio::test]
+    async fn the_local_route_sends_the_servers_key() {
+        let (port, request) = answer_once("200 OK", A_REPLY);
+        let policy = NetworkPolicy::new().unwrap();
+        let creds = MemoryCredentialStore::new();
+
+        let reply = Chat::new(&policy, &creds)
+            .with_local_server(Some(local_server(port)))
+            .complete(
+                registry(),
+                &ChatRoute::Local,
+                "m",
+                vec![json!({"role": "user", "content": "hi"})],
+                &RequestOptions::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(reply, "a reply");
+
+        let seen = request.join().unwrap();
+        let (head, body) = seen.split_once("\r\n\r\n").unwrap();
+        assert!(
+            head.to_ascii_lowercase()
+                .contains(&format!("authorization: bearer {LOCAL_KEY}")),
+            "{head}"
+        );
+        assert!(!body.contains(LOCAL_KEY), "{body}");
+    }
+
+    /// A server the person runs themselves on this machine is not ours, so it
+    /// must not learn our server's key even when one is at hand.
+    #[tokio::test]
+    async fn a_self_hosted_route_never_gets_the_local_servers_key() {
+        let (port, request) = answer_once("200 OK", A_REPLY);
+        let policy = NetworkPolicy::new().unwrap();
+        let creds = MemoryCredentialStore::new();
+
+        Chat::new(&policy, &creds)
+            .with_local_server(Some(local_server(1)))
+            .complete(
+                registry(),
+                &ChatRoute::SelfHosted {
+                    base_url: format!("http://127.0.0.1:{port}/v1"),
+                    key_ref: None,
+                },
+                "m",
+                vec![json!({"role": "user", "content": "hi"})],
+                &RequestOptions::default(),
+            )
+            .await
+            .unwrap();
+
+        let seen = request.join().unwrap();
+        assert!(!seen.contains(LOCAL_KEY), "{seen}");
+        assert!(
+            !seen.to_ascii_lowercase().contains("authorization:"),
+            "{seen}"
+        );
+    }
+
+    /// The server refusing the key is an error, and the error does not repeat it.
+    #[tokio::test]
+    async fn a_refusal_from_the_local_server_is_an_error_that_omits_the_key() {
+        let (port, request) = answer_once("401 Unauthorized", r#"{"error":{"message":"no"}}"#);
+        let policy = NetworkPolicy::new().unwrap();
+        let creds = MemoryCredentialStore::new();
+
+        let err = Chat::new(&policy, &creds)
+            .with_local_server(Some(local_server(port)))
+            .complete(
+                registry(),
+                &ChatRoute::Local,
+                "m",
+                vec![json!({"role": "user", "content": "hi"})],
+                &RequestOptions::default(),
+            )
+            .await
+            .unwrap_err();
+        request.join().unwrap();
+
+        assert!(
+            matches!(err, ChatError::ProviderRejected { status: 401, .. }),
+            "{err:?}"
+        );
+        assert!(!format!("{err} {err:?}").contains(LOCAL_KEY));
     }
 
     #[tokio::test]

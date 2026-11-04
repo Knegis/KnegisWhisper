@@ -12,6 +12,220 @@ maintained in place rather than appended to, because its purpose is to be curren
 
 ---
 
+## 2026-11-04 — The owner's frog replaces the dot mark
+
+At the owner's request, the frog in a cowboy hat replaces the sixteen-dot diamond the boards draw, in the title
+bar and on the Settings sheet (KNEG-516). `assets/knegis-frog.png` is made from their `KnegisfrogThinBlack.png`,
+which isn't in the repo: an alpha mask trimmed to its ink, drawn over the text colour so it follows the theme. Its
+lines are thickened by 4 source pixels on each side, because at this size on a 100% display the original came out
+faint. They chose 40px after trying 44. It's taller than the controls, so its slot stays 36 high and it overflows
+evenly: the pills don't move and the bar stays 56 high. The app icon, tray and installer still show the old mark.
+Measured in headless Edge against dev fixtures, not in the real window; the owner approved how it looks.
+
+---
+
+## 2026-11-04 — Speaker labels chosen from Meetings, and the form that names a speaker
+
+**Speaker labels on Meetings (KNEG-513).** The owner asked to pick them on the Meetings tab, where only
+Settings > Meetings had a switch. A chip beside Summary writes the same `meetings.diarize`, so it is one setting
+that stays on for later meetings. A choice per meeting would need Rust to keep it with each meeting. With the
+models or runtime missing, the chip is a link reading "needs setup", even where the setting is on, because a
+note saved then says the labels couldn't run. While it's on, the card gives short forms of the two measured
+caveats, and Settings > Meetings keeps them in full. While a meeting runs or finishes the chip only states
+what's on: Rust reads the setting while saving, so a press might not reach that meeting. `chip-menus` check 8
+now allows three rows of chips on Meetings at 720x520, since seven chips wrap to three while Summary and Speaker
+labels both say needs setup. Nothing overflows. Checked with unit tests and `meeting-speaker-labels.mjs` in
+headless Edge against dev fixtures, not in the real window.
+
+**The form that names a speaker (KNEG-514).** It kept its old styling through the redesign, and its suggestions
+were a native `<datalist>`, which CSS can't style. The boards don't draw it, and the owner liked the new languages
+menu, so it follows that: a card with a pixel label, a pill field, the suggestions as pills that narrow as you
+type, up to eight, and Iris Save on the right. A pill fills the field and saves nothing, as the native list did.
+At the owner's request Remove name only shows when there is a name, and an unnamed speaker's field starts empty
+with its label as the placeholder. Rust sends only the name to show, so "named" is worked out by comparing it
+with the label Rust gives an unnamed speaker (`speaker_name`). If that label ever differs, the form treats it as
+a name, which is how it behaved before. Checked with unit tests and `speaker-rename-form.mjs` in headless Edge
+against dev fixtures, in both schemes and at 720x520, not in the real window. The suggestions came from fixtures.
+
+**Seen while checking it (KNEG-515).** At 720x520, on a note's Transcript tab, the notes list toggle sits on the
+"transcript" label. One render, not measured. The toggle moved in KNEG-509, which is believed to be why, not traced.
+
+---
+
+## 2026-11-04 — The app rebuilt to the approved design, screen by screen
+
+Branch `design/artifact-parity`, from `dev` at `9a3e660`, merged to `dev` and pushed at `43e0af8`. The owner said the app
+didn't entirely look like the canvas they had approved. Reading all 24 boards against the code showed
+why: the colours, fonts, pills and copy matched, and the layouts didn't. `07f1b24` had reskinned the
+old list panels and settings rows rather than building what the boards draw.
+
+**What was done.** `tools/visual-check/design-compare.mjs` renders a board beside the fixture screen it
+draws. Each screen was then built from its board and checked against that pair: the title bar and
+Dictation first, stopping for the owner to look, then Meetings, Notes, Import, the Settings sheet,
+twelve settings and developer screens, and the floating windows. Behaviour was meant to stay put:
+this pass changes where things are and how they look.
+
+**The owner's rulings of 2026-11-04.** The design overrules four earlier decisions: Iris switches where
+the boards draw them (KNEG-331), mint for OK states, navy pixel section labels, and the Settings sheet
+of picture tiles labelled Meetings, CLI and MCP. Picture tiles breathe and drift at rest; titles and
+buttons hold still unless recording or busy. The window opens at 1280x800, and the minimum stays 720x520.
+
+**Where the app won't draw what the board shows, because it never read it.** "Microphone · Ready" is
+"Dictation" or "Meeting" with "Ready", since readiness never tests a microphone. A calendar card has no
+failure dot, because only a flat error list exists. The sheet's meeting tile says "rec" with no time, and
+its calendar tile shows today's date. Off, Local API shows `127.0.0.1` alone, with no port to show. MCP's
+wires and the Diagnostics bars only move while what they stand for is up.
+
+**Where it differs on purpose.**
+- The title bar stays fixed, and Notes keeps separate scrolling for the note and the transcript. It stays
+  56 high, with its controls 10px from its top and bottom rather than the board's 20 from the top and none
+  below, because the owner saw them sitting low once a page scrolled up under the bar.
+- The two measured speaker-label caveats stay in view; the board folds them.
+- One left/right box on the dictation card applies to recording any action's shortcut. Each recorder had
+  its own, and the board draws one.
+- Model rows keep a Details chip the board doesn't draw, for the engine, the id and how a download is
+  checked.
+- Company account cards hold every field they need in the board's narrow cards, so long placeholders cut
+  off, with the whole text in a tooltip.
+- Vocabulary's Add is faded until something is typed, because it stays disabled until then.
+- The floating windows have no frost: each is transparent and the size of its card, so there is nothing
+  to blur and no room for a shadow. The board draws no language arrow. It stays the pill's far end, as it
+  was before this pass, at the owner's ruling: 24 by 32, from 16 by 28.
+- The update card's address can be selected but isn't a link: nothing in the app opens a URL, and a link
+  would navigate that window away.
+
+**A trade-off the owner should know about.** At 720x520 Dictation and Meetings stack and the page scrolls,
+so Start and Stop are below the fold: Stop and save at y 673, Meetings' Start at 685, Dictation's Start at
+1009. The approved plan chose this, removing the rule that shrank the hero to fit. At 1000x720 Meetings'
+Start straddles the fold (701-753). At the default 1280x800 everything measured is in view.
+
+**Two regressions of mine, found and fixed on the branch.** The sheet commit deleted the rule that keeps a
+title focused from code from drawing a ring. The Notes commit made the title a textarea while focus after
+creating a note still looked for an `input`.
+
+**A third, which the owner found after the push.** Hovering the floating microphone showed its left side cut
+off. `persistent_overlay.rs` clips that window to a rectangle for painting as well as hit testing, and
+`cfd8995` changed what styles.css draws without changing the rectangle: 8px of the 68px pill were cut on the
+left, the 92px recording pill on both sides, and the language arrow, which I had moved under the pill, was
+outside it altogether, so it could be neither seen nor clicked. The rectangle now covers the pill at its
+widest, and clicks on the transparent space around it still pass through. Seeing the arrow under the pill, the
+owner ruled that it goes back inside, and that the new languages window stays. With nothing clickable below the
+pill, the window's taskbar overlap stays 24 lying flat; upright it goes from 4 to 2, because the recording pill
+reaches 94. The languages window had grown to 272 without moving and would have covered the top 16px of the
+pill, so it now clears the pill above and below. `floating-windows.mjs` now compares what is drawn with that
+rectangle and checks the arrow is inside the pill. Its first version failed against the old rectangle.
+
+**The visual checks had been failing since `07f1b24`,** not because of this branch: nearly all still waited
+for `nav.rail`. They now use the title bar and the sheet, and `shell-title-bar.mjs` replaces
+`shell-rail.mjs`. 22 browser scripts pass against fixtures. `notes-smoke`, `summary-smoke`, `win32` and
+`app-windows` weren't run. `level-meters` check 3 and `chip-menus` check 8 now hold those pages to the
+window's width at 720x520, not its height, for the reason above.
+
+**Evidence.** In headless Edge against dev fixtures: pairs against every board at 1280 wide, a sweep of every
+screen at 1000x720 and 720x520 with no sideways overflow and one `h1` each, and dark at 1280x800 for
+legibility only, since no board is dark. With reduced motion nothing endless runs. In the real window on a
+throwaway profile (`target/real-window`): 1280x800; all three faces load; the meeting window 392x102 and the
+update window 392x104, both painting no ground of their own; the floating microphone 96x96 without taking
+focus, opening to its pill; the languages window 280x272 with Done inside it. The arrow was reached over CDP,
+which goes round the window's clip, so that run said nothing about reaching it by mouse, and in fact it couldn't
+be. After the fix, `GetWindowRgn` on the real window reads one rectangle, 2,32 to 94,64, and `WindowFromPoint`
+hits the window across the pill and on the arrow, and passes through at four points around it. That is Windows'
+hit test, not a click: a mouse click on the arrow and the languages window's new position have not been tried,
+and the microphone wasn't at the bottom of the screen, so the 24px overlap was only read in a unit test.
+
+**Idle cost, real window, whole process tree, 30 s, % of one core of 16 logical processors.** Dictation
+focused 6.6, Meetings focused 13.9, the Settings sheet open 24.2, hidden in the tray 1.1. Dictation partway
+through this work was measured at 14.2 focused and 17.1 hidden, and at 7.1 and 0.5 once tiles stepped and
+paused with the window. Focus was emulated over CDP so the run didn't take the owner's keyboard. Hidden read
+1.1 here and 0.5 earlier, on one run each, so that difference isn't a finding.
+
+**Not verified.** Nobody has physically dragged a window on this build. The meeting offer, finishing card,
+recording panel and update card have not been seen in their real windows: they were measured to fit in
+headless Edge at the same sizes, and the windows' sizes and transparency were read in the real ones, but a
+throwaway profile has no provider to start a meeting and no release to offer. An OS screenshot can't check
+them either, because they are excluded from screen capture. Their look on a real desktop is believed, not
+seen.
+
+**One thing not explained.** During a real-window run the main window once read "Record a meeting" shortly
+after launch, and later "Import audio or video" after closing to the tray. Left alone on a fresh launch, with
+every click logged, it stayed on Dictation, and closing changed nothing. That run's window was visible on the
+owner's desktop, so a person's clicks are the likely cause, but that is believed, not shown.
+
+**Still open from the earlier design audit:** `--dusk-text` contrast, and field edges under 3:1, which the
+boards' borderless fields go against. Focus rings stay on all fields. The palette still uses oem.care's exact
+values, and that remains a blocker before any public release.
+
+---
+
+## 2026-11-02 — KNEG-484 closed, four rulings, KNEG-90, KNEG-498 and KNEG-499
+
+Branch `fix/kneg-498-499`, from `dev` at `f02829f`. Everything below was measured by instrument in
+disposable profiles, or read from code where it says so. The owner saw none of it.
+
+**KNEG-484 closed on the uninstall, at the owner's ruling.** The 2026-09-19 build is gone from
+`C:\Program Files`. The owner's own `tauri:dev` on the guarded code hasn't happened: the real profile
+was last written on 2026-10-02, so its first run will also migrate the database. The two firewall
+rules stay, also the owner's choice, and three kept worktrees predate the guard.
+
+**Rulings.** KNEG-455 item 7 stands, KNEG-87 is declined at no priority, KNEG-299 is met by what
+exists, and the owner reports no Deepgram key on this machine, which settles KNEG-53 against KNEG-56.
+
+**KNEG-90: a real OpenWhispr database was on this machine all along.** The issue said the project had
+none. The run used a byte-identical copy, so the originals were never opened, and `state.rs` gives a
+`KW_AUTOMATION_PROFILE` instance an in-memory credential store, so nothing could reach Credential
+Manager. Results are in `BENCH_CHECK.md`, chunk G item 3. Two things worth keeping:
+
+- **"Never written to" is not quite true of a WAL source.** A read-only open rewrote 7 bytes of the
+  `-shm`, in the wal-index header. A plain `node:sqlite` read-only open changed the same 7 bytes, so
+  this is believed to be SQLite rather than the importer. The main file and the WAL were unchanged.
+  This, and the report naming no table outside the copy plan, are KNEG-507.
+- **The credential half tested nothing.** The source's two token tables were empty. Relocation is
+  still proven only by the unit test with synthetic tokens.
+
+**KNEG-498: `confirm: true` on the two permanent MCP deletes.** The new tests failed first, with a
+one-call delete actually going through. The field makes the step explicit in the call and the schema;
+it isn't authorisation, since an agent talked into a delete can send it too. `destructiveHint: true`
+and `readOnlyHint: false` match the MCP defaults, so the unannotated tools read the same to a client
+that honours them.
+
+**KNEG-499: a per-start key for `llama-server`, and `--no-slots`.** Measured on the pinned b9763 before
+any code changed, because the design depended on it:
+
+- With no flags, chat answers 200 with no key and the server reflects any `Origin`, on the preflight
+  too. That half of the issue was true.
+- `/slots` answered 200 and did **not** contain a synthetic prompt after a completed request. The
+  issue's worry about a cached transcript there did not reproduce on this build. One short prompt
+  measures that case and no other.
+- With `LLAMA_API_KEY` set, `/health` stays open, which is the one thing that could have broken every
+  start, since `HttpHealth` sends no key. Chat and `/props` answer 401 without the key. `/v1/models`
+  stays open. `/slots` answers 501 under `--no-slots`.
+- **Stderr carries the key's last 4 of 64 characters** (`api_keys: ****xxxx`), and a stderr tail can
+  reach logs and the screen. That was judged not to be the key; `NETWORK_BOUNDARY.md` records it.
+
+The key travels in the child's environment rather than `--api-key`, which the process list would show.
+`process::start_with_env` is additive because `Launch` has about 20 literals and derives `Debug`.
+Port and key sit together in `LocalEndpoint`, so a reader can't pair one start's port with another's
+key. A 401 in cleanup would be silent (the raw transcript and a warning), so
+`dictation_cleanup_sends_the_running_servers_key` checks the wiring through the real adapter. The
+header test failed with the key removed.
+
+The real checks, in a throwaway profile with sidecars and models junctioned in: real cleanup through
+Qwen2.5 1.5B; from another process, chat and `/slots` answer 401; the process list shows `--no-slots`
+and no key; the 209 files in those two trees had the same paths, sizes and write times afterwards.
+
+**One summary failed first, and the reason matters.** The first synthetic meeting ended with "The model
+did not return a valid structured summary". A rejected key would have read "rejected the request (HTTP
+401)", and this message comes from `Summary::parse`, after a successful reply, so the key was accepted.
+That is the limit KNEG-278 records for this small model. The next, shorter meeting succeeded. This
+says the key works on the summary route; it says nothing about summary quality.
+
+**Not done.** whisper-server has no key option (`--help`), and the streaming server stays unauthenticated.
+A process with debug rights under the same account can read the child's environment. `NetworkPolicy::new`
+sets no `no_proxy`, so `HTTP_PROXY` without `NO_PROXY` may send the Bearer to that proxy, the same route
+transcripts already take. That last one is read from code and not run.
+
+---
+
 ## 2026-10-24 — KNEG-455 items 6, 8 and 9, KNEG-489 and KNEG-486
 
 Branch `fix/kneg-455-489-486`, from `dev` at `1fd78fd`. Before anything changed, the six transcript
@@ -362,6 +576,7 @@ and 2 lines, and the one leaving it the same, as the stop went to line 1 and bac
   code never disables them, so they stay live (+15 four times reads "1:00 / 0:00"), and the CSS
   rule that would hide the ticks under a disabled range never applies.
 - Collapsing the current line's section while paused leaves Follow on, so Play opens it again.
+  Ruled 2026-11-02: the owner keeps it (KNEG-455 closed).
 - Tab focus, or a text-drag selection, doesn't release Follow: the focused control or the quote
   can be scrolled away at the next line change.
 - Crossing 1280px drew the transcript afresh: Find closed and lost its query, closed sections

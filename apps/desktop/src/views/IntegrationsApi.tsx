@@ -48,35 +48,41 @@ export function IntegrationsApi() {
 
       {api.blockedReason ? <FailureLine text={blockedLine(api.blockedReason)} detail={api.blockedReason} /> : null}
 
-      <section data-surface="integrations.api">
-        <Row
-          label="State"
-          value={
-            api.running ? `Listening on 127.0.0.1:${api.port}` : "Not listening"
-          }
-          detail={
-            api.enabled && !api.running
-              ? "switched on but failed to start"
-              : undefined
-          }
-        />
-        <p className="muted">
+      <section data-surface="integrations.api" className="dev-page dev-page-api">
+        <div className="api-hero" data-on={api.running}>
+          <span className="section-label">state</span>
+          <span className="api-hero-dot" aria-hidden="true"><span /></span>
+          <p className="api-hero-state">
+            {api.running ? `Listening on 127.0.0.1:${api.port}` : "Not listening"}
+          </p>
+          {api.enabled && !api.running ? (
+            <p className="api-hero-detail">switched on but failed to start</p>
+          ) : null}
+          {/* Off, there is no port to show: the address says only where it would listen. */}
+          <p className="api-hero-address" aria-hidden="true">
+            {api.port !== null ? `127.0.0.1:${api.port}` : "127.0.0.1"}
+          </p>
+          <button
+            type="button"
+            className="api-hero-action"
+            onClick={() => {
+              void guard(api.running ? stopLocalApi : startLocalApi);
+            }}
+          >
+            {api.running ? "Stop the local API" : "Start the local API"}
+          </button>
+        </div>
+        <p>
           Off by default. While it is on, any program you run can read every
           note and transcript through it, so it listens only when you turn it on,
           and only to this computer.
         </p>
-        {api.discoveryPath ? (
-          <Row label="Discovery file" value={api.discoveryPath} />
-        ) : null}
-        {api.discoveryPermissions ? <DiscoveryPermissionRows permissions={api.discoveryPermissions} /> : null}
-        <button
-          type="button"
-          onClick={() => {
-            void guard(api.running ? stopLocalApi : startLocalApi);
-          }}
-        >
-          {api.running ? "Stop the local API" : "Start the local API"}
-        </button>
+        <div className="row-group">
+          {api.discoveryPath ? (
+            <Row label="Discovery file" code value={api.discoveryPath} />
+          ) : null}
+          {api.discoveryPermissions ? <DiscoveryPermissionRows permissions={api.discoveryPermissions} /> : null}
+        </div>
       </section>
     </div>
   );

@@ -6,15 +6,15 @@ import { parseShellArgs } from "./args.mjs";
 import { launchEdge, killBrowser } from "./browser.mjs";
 import { connectCdp } from "./cdp.mjs";
 import { waitFor, pressText } from "./interactions.mjs";
-import { clickText, removeFixtureBanner } from "./snippets.mjs";
+import { clickText, confirmQuestions, removeFixtureBanner, scriptConfirm } from "./snippets.mjs";
 const options=parseShellArgs(process.argv.slice(2)), out=resolve(options.out);
 await mkdir(out,{recursive:true}); let browser,cdp;
 const invoke=(command,args={})=>cdp.evaluate(`window.__TAURI_INTERNALS__.invoke(${JSON.stringify(command)},${JSON.stringify(args)})`);
 try {
   browser=await launchEdge({...options,out,extraArgs:["--inprivate"]}); cdp=await connectCdp(browser.target.webSocketDebuggerUrl);
   await cdp.send("Page.enable");
-  cdp.on("Page.javascriptDialogOpening",event=>{void cdp.send("Page.handleJavaScriptDialog",{accept:event.type==="confirm"&&event.message.startsWith("Delete ")});});
-  await waitFor(cdp,"Boolean(document.querySelector('nav.rail'))"); await cdp.evaluate(removeFixtureBanner());
+  await waitFor(cdp,"Boolean(document.querySelector('.app-titlebar'))"); await cdp.evaluate(removeFixtureBanner());
+  await cdp.evaluate(scriptConfirm(true));
   const first=await invoke("notes_create",{request:{title:"First partial purge fixture",content:""}});
   const second=await invoke("notes_create",{request:{title:"Remaining partial purge fixture",content:""}});
   await invoke("notes_trash",{id:first}); await invoke("notes_trash",{id:second});
@@ -22,7 +22,7 @@ try {
     if(command==='notes_empty_trash' && ++window.__purgeCalls===1){await original('notes_delete_forever',{id:${first}});throw Error('Deletion stopped after deleting 1 of the requested notes. A remaining recording could not be deleted. Retry to finish.');}
     return original(command,args);
   }; })()`);
-  await cdp.evaluate(clickText("nav.rail .rail-item","Notes"));
+  await cdp.evaluate(clickText("button.nav-pill","Notes"));
   await waitFor(cdp,"Boolean(document.querySelector('.list-panel .notes-entry'))");
   await cdp.evaluate("[...document.querySelectorAll('.list-panel button')].find(e=>e.textContent.trim().startsWith('Trash')).click()");
   await waitFor(cdp,"Boolean(document.querySelector('.trash-space'))");
@@ -35,6 +35,8 @@ try {
   await pressText(cdp,".trash-space button","Empty trash");
   await waitFor(cdp,"document.querySelector('.trash-space')?.textContent.includes('Trash is empty.')","retry empties the remainder");
   assert.equal((await invoke("notes_trash_list")).notes.length,0);
+  // Only the question this check means to answer yes to was answered.
+  assert.ok((await cdp.evaluate(confirmQuestions())).every(question=>question.startsWith("Delete ")));
   const result={scope:"invented browser fixtures",checks:["partial completion surfaced","library refreshed after error","retry deletes remainder"]};
   await writeFile(`${out}/report.json`,JSON.stringify(result,null,2)); console.log(JSON.stringify(result));
 } finally {if(cdp)await cdp.close();if(browser)await killBrowser(browser.child);}

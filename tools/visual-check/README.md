@@ -1,5 +1,23 @@
 # Visual checks
 
+## The approved design (2026-11-04)
+
+`design-compare.mjs` renders a board from the approved canvas beside the fixture screen it
+draws, at the same size, into `target/design-compare/`. The boards aren't in this repository,
+so it takes `--boards` and `--runtime`. `screen-sweep.mjs` walks every screen at one size and
+theme, and `floating-windows.mjs` every floating window state at its real size. Each leaves a
+contact sheet to look at.
+
+```powershell
+node tools/visual-check/design-compare.mjs --url http://127.0.0.1:5197/ --boards <folder> --runtime <dc-runtime.js> --out target/design-compare/run --only Dictation --sizes 1280x1400
+node tools/visual-check/screen-sweep.mjs http://127.0.0.1:5197/ target/sweep-720 720 520
+node tools/visual-check/floating-windows.mjs http://127.0.0.1:5197/ target/floats dark
+```
+
+At the smallest window, 720x520, Dictation and Meetings stack and the page scrolls, so their
+Start and Stop can be below the fold. That is by design, and `level-meters` and `chip-menus`
+check 8 hold those pages to the window's width there, not its height.
+
 ## Transcript follow-ups, settings drafts and meeting progress (2026-10-12)
 
 ```powershell
@@ -10,7 +28,7 @@ The probe checks stable transcript identity/state/focus at 1000/1280/1440px,
 Ctrl+F, single-line Clear, wide Replay controls and failed media. It checks
 settings Stay/Discard/Save, edits during saving, failed writes, credential-row
 replacement, shortcut/Vocabulary/Corti/company drafts, blur-save navigation and
-calendar failures. Main and compact (392x92) progress checks cover stages, stale
+calendar failures. Main and compact (392x102) progress checks cover stages, stale
 events and completion in light/dark. All data and errors are invented.
 
 The hidden native progress test exercises real typed-only recording recovery,
@@ -60,44 +78,48 @@ instrument, not a frontend test: it records what a particular renderer and
 window show so the orchestrator can distinguish measured evidence from a claim
 that is merely believed from source.
 
-## Shell rail
+## Shell title bar
 
 Start the Vite server in `apps/desktop`, then run:
 
 ```powershell
-node tools/visual-check/shell-rail.mjs
+node tools/visual-check/shell-title-bar.mjs
 ```
 
 It needs Node 22, Microsoft Edge, and the Vite dev server at the loopback URL
 used by the application. `--edge`, `--url`, `--port`, `--out`, and
 `--keep-fixture-banner` are available; `--help` prints the full usage. The
-tool measures eleven shell claims (KNEG-363, KNEG-382, KNEG-390):
+tool measures twelve shell claims (KNEG-363, KNEG-382, KNEG-390):
 
-1. `nav.rail` is 68px wide and exactly one `.rail-item[aria-current=page]`
-   exists.
-2. The rail's Settings shows `.list-panel`, listing Providers and a Developer
-   label.
-3. Choosing Providers leaves exactly one panel item with `aria-current`, and
-   the rail still marks Settings.
-4. The title bar's toggle hides `.list-panel`, and a second press restores it.
-5. After a load at 720x520, `.list-panel` starts hidden and
-   `document.scrollingElement.scrollWidth <= innerWidth`.
-6. Tab reaches every rail entry and the search field, each with a 2px outline.
+1. The title bar has the four `button.nav-pill` -- Dictation, Meetings, Notes,
+   Settings -- and exactly one with `aria-current=page`, Dictation.
+2. The Settings pill opens `dialog.settings-sheet` as a modal, listing Providers
+   under a settings label and a developer label, its tiles one tab stop.
+3. Choosing Providers closes the sheet, leaves the Settings pill the one current
+   pill and puts focus on the page's `h1`; `.page-back`'s pill reopens the sheet
+   with Providers the one current tile, and Escape closes it.
+4. On Notes, the panel's toggle (`ListToggle`) hides `.list-panel`, a second press
+   restores it, and focus is on the toggle after each.
+5. After a load at 720x520, `.list-panel` starts hidden on Notes,
+   `document.scrollingElement.scrollWidth <= innerWidth`, and the sheet opens.
+6. Tab reaches every pill and the search field, each with a 2px outline.
 7. Ctrl+K focuses `input[role=combobox]` (and Escape empties it and leaves).
 8. On Notes, `.note-detail` is one grid track with the Notes, Transcript and
-   Replay tabs at 1000x720; at 1440x900 it is two, with a 340px transcript
+   Replay tabs at 1000x720; at 1440x900 it is two, with a 330px transcript
    column and the Transcript tab hidden; back at 1000x720 the tab returns.
 9. After a load at 720x520 on Notes with the library opened, nothing scrolls
    sideways (the document or `.notes-main`), every tab sits inside
    `.notes-main`, and fixture note 104's long title ellipsises in the panel.
 10. At 1440x900 on Notes, Hide transcript beside the tabs puts the note back to
-    one track with three tabs and Show transcript brings the 340px column
+    one track with three tabs and Show transcript brings the 330px column
     back, the button keeping focus and naming the column in `aria-controls`
     only while it is on screen. While hidden, narrowing to 1000x720 and
     widening again moves nothing, and fixture note 104 opens hidden too;
     showing the column with Transcript open selects Notes.
-11. From that note, Dictation in the rail and then Notes reopens it, marked in the
+11. From that note, the Dictation pill and then Notes reopens it, marked in the
     library; after a reload Notes opens its first note again.
+12. No screen -- the three pages and all twelve tiles -- scrolls sideways at
+    720x520 or 1000x720: document and `.split-main`, measured as each opens.
 
 "Hidden" is measured as the computed display and width, not the `hidden`
 attribute alone. The 720x520 check reloads at that size, because the panel's
@@ -107,7 +129,7 @@ The report explicitly says: **measured in headless Edge against dev fixtures,
 not in the Tauri window**. The ordinary browser dev page invents IPC results.
 By default the tool removes its fixed red fixture banner and resets the body
 padding it introduced so the artificial fixture-only offset does not contaminate
-rail geometry; the `FIXTURES` title prefix remains. Pass
+title-bar geometry; the `FIXTURES` title prefix remains. Pass
 `--keep-fixture-banner` to measure the page exactly as Vite marked it.
 
 Each run writes PNGs, `report.json`, and `report.md` below the selected output
@@ -122,7 +144,7 @@ evaluate the page also exits nonzero.
 node tools/visual-check/chip-menus.mjs --url http://127.0.0.1:5191/
 ```
 
-Same options as the shell rail (`--edge`, `--url`, `--port`, `--out`; the
+Same options as the shell title bar (`--edge`, `--url`, `--port`, `--out`; the
 banner is always removed). It measures what KNEG-385 made the task pages'
 control-bar chips do: change a setting in place. Run it against the fixtures
 only (`npx vite` in `apps/desktop`, any port but the running app's): it clicks
@@ -150,11 +172,11 @@ each reload. It numbers twelve checks (3 is measured in two halves):
 5. During a dictation (the fixtures' dev-console state) the route, language and
    Tidy up chips are held with "Can't change during a dictation", and Stop is
    enabled; all are live again when it ends.
-6. Tidy up and Summary: toggles that flip `aria-pressed` when set up, links when
+6. Tidy up (a switch) and Summary (a chip): toggles when set up, links when
    not (stubbed for Tidy up, the fixture default for Summary), Tidy up's caveat
    line with its link (stubbed route), and a refused write (stubbed) on the
    error line with the chip unchanged.
-7. Meetings: with a saved provider that cannot be used, the hero's "Choose a
+7. Meetings: with a saved provider that cannot be used, the tile's "Choose a
    provider" opens the provider menu without leaving the page, and Start is
    held while `meeting_set_provider` (stubbed slow) is in flight.
 8. At 720x520 nothing scrolls sideways on Dictation or Meetings, and a menu
@@ -178,7 +200,7 @@ each reload. It numbers twelve checks (3 is measured in two halves):
     with Whisper's note. The fixtures send one language and not two; xAI's,
     Mistral's and Corti's own rules are Rust's, tested in `route.rs`.
 
-Like the shell rail, it reports **measured in headless Edge against dev
+Like the shell title bar, it reports **measured in headless Edge against dev
 fixtures, not in the Tauri window**, and a false check makes it exit 1.
 Not covered: Meetings' language-required fix (the fixtures cannot make a
 provider require a language on a blank value without a conditional stub) and
@@ -190,7 +212,7 @@ anything the Tauri window itself does.
 node tools/visual-check/transcript-search.mjs --url http://127.0.0.1:5191/
 ```
 
-Same options as the shell rail. It measures KNEG-406: a search hit in a meeting
+Same options as the shell title bar. It measures KNEG-406: a search hit in a meeting
 transcript opens the note at the row where the words were said, and only
 selects it. Fixture note 101's transcript says "two more days" at 1:12 and
 "honest" at 1:28, and its notes say "Thursday". A count of `play()` calls is
@@ -284,8 +306,8 @@ plays a row with a real pointer press in the row's left padding
 3. Row 3, without words, playing: its text is drawn whole, no row draws a word
    span, and nothing is lit.
 4. Reduced motion: a word span's computed `transition-duration` is not 0s
-   without the preference (the control) and 0s with `prefers-reduced-motion:
-   reduce` emulated, under which two samples still light the expected word,
+   without the preference (the control) and 0.01ms or less (`styles.css`' rule
+   for every element) with `prefers-reduced-motion: reduce` emulated, under which two samples still light the expected word,
    the second later than the first.
 5. The keyboard: with focus on row 1's first word, a real ArrowRight moves it
    to the second and a real Enter plays from that word (the seek ends within
@@ -333,26 +355,24 @@ checks:
    button, "Find in transcript", enabled; three section toggles, all
    expanded, titled "0:00 – 5:00", "5:00 – 10:00" and "10:00 – 11:30" and
    counting "26 lines", "19 lines" and "9 lines"; 41 turn heads, each with a
-   6x6px marker; 54 lines; no per-line Play (`.transcript-play`) anywhere in
-   `.note-side`. Over `.note-side .transcript` and everything in
+   marker element (drawn or not); 54 lines; no per-line Play (`.transcript-play`)
+   anywhere in `.note-side`. Over `.note-side .transcript` and everything in
    it, every element but a control (`button`, `input`, `select`, `textarea`,
-   `mark`, `.transcript-word`) has square corners, and nothing is heavier
-   than 400.
-2. The player is a card floating in the column: `.note-side-player` 12px
-   (±0.5) in from the column's left, right and bottom edges (its padding box,
-   inside the left rule), a 1px solid `--rule` border, a 4px radius and `--bg`
-   behind it, colours compared with the tokens resolved from the root. It holds
-   a 34x34 `button[aria-label="Play"]` centred on its controls row (±0.5px),
+   `mark`, `.transcript-word`) is no heavier than 400.
+2. The player is a picture card at the column's foot: `.note-side-player` flush
+   (±0.5) with the column's left, right and bottom edges, no border, a 40px
+   radius and its picture's `#cfcbb8` behind it. It holds
+   a 44x44 `button[aria-label="Play"]` centred on its controls row (±0.5px),
    Back and Forward 15 seconds, a clock reading `m:ss / m:ss`, one `select`,
    and exactly two `.recording-mark` ticks centred within 1px of where the
    thumb stands at 300/690 and 600/690 (`5px + (width - 10px) x fraction` of the
    range's box). Its `button.follow-chip` reads "Follow", is
    `aria-pressed="true"` from the start and is filled with the resolved
-   `--band`. The two schemes resolve different `--bg`. Paused at 100 s,
+   `--mint`. The two schemes resolve different `--bg`. Paused at 100 s,
    Forward 15 seconds lands on 115 and Back 15 seconds on 100 (±0.1 s).
 3. Scrolled to its end, the column's last transcript line stands at or above
-   the card's top, and the card floats over the scroller (its top above the
-   scroller's bottom), so there is a line it could hide. Then, from the top,
+   the card's top; the card sits below the scroller now, so this holds by layout.
+   Then, from the top,
    paused at 650 s and played with the card's Play: the line the column
    scrolls to as it plays (`aria-current`, in the last section) has its bottom
    at or above the card's top and its top at or below the sticky head's
@@ -361,7 +381,7 @@ checks:
    first animation frame playing after its seek (`watchLanding`) the
    recording is within 0.3 s of the line's start; it is the only
    `aria-selected="true"` line; and the card's `.player-header` names
-   "Jonas" beside a 6x6px marker in `--band`. Pressed again a second later:
+   "Jonas" beside a white 6x6px marker. Pressed again a second later:
    one more `play()`, back at the start, still the only selected line. Then,
    paused, a real drag across the line's text (`lineTextDrag`: pressed 2px
    into its first line box, moved along it, released) leaves a text selection
@@ -541,6 +561,33 @@ extended (both measured false before the fixes): 17/17 in both schemes, claim
 same render counts (none of the sections, turns or lines within a line; 1
 section, 2 turns and 2 lines across a line change).
 
+## Speaker naming form
+
+```powershell
+node tools/visual-check/speaker-rename-form.mjs --url http://127.0.0.1:5191/
+```
+
+Same options as the chip menus (the banner is always removed). It measures the
+form that names a speaker in a note's transcript: a named speaker's form holds the
+name and offers Remove name, an unnamed one's starts empty with its label as the
+placeholder and doesn't, suggestions are the app's own pills and narrow as you type,
+a press fills the field and saves nothing, Escape closes from a pill, and nothing
+leaves the column in either scheme or at 720x520. Which names Rust suggests is
+pinned by `cargo test`, not here.
+
+## Meeting speaker labels
+
+```powershell
+node tools/visual-check/meeting-speaker-labels.mjs --url http://127.0.0.1:5191/
+```
+
+Same options as the chip menus (the banner is always removed). It measures the
+Speaker labels chip on Meetings: a link to Settings > Meetings until the models
+and runtime are there (`kw.speakerModels()` installs them in the fixtures), then
+a toggle that writes the setting and says what it costs, a refused write in view,
+a statement while a meeting runs, and no sideways scroll at 720x520. What the
+setting does to a saved note is pinned by `cargo test`, not here.
+
 ## Note meta
 
 ```powershell
@@ -599,9 +646,9 @@ one fresh load; 5 and 6 each start from their own. Six checks:
    with "Remove {name}", the form closes and focus returns to Add person; the
    People list adds them with 1, in name order among the fixtures' three.
 2. Pressing them in People asks `notes_list` for their email alone, and shows
-   "Notes with {name}" holding only "Scratch" and Show all notes, with no
+   "notes with {name}" holding only "Scratch" and Show all notes, with no
    folders; the person reads pressed.
-3. Show all notes: the Folders, Not in a folder and People headings back in
+3. Show all notes: the folders, not in a folder and people headings back in
    that order, the folders and their notes exactly as before, nobody pressed,
    the same note open.
 4. Remove {name}: `notes_set_participants` gets an empty list, the stored
@@ -634,7 +681,7 @@ Trash left out of every list and search, and a fixture recording measured as a
 16 kHz mono 16-bit file of its length (120 s, 3.8 MB). Buttons are pressed with
 real pointer presses -- the Trash row after scrolling the panel to it, since it
 sits under People, below the panel's fold at 1000x720 -- a library row's menu
-is opened with a `contextmenu` event, `window.confirm` is scripted
+is opened with a `contextmenu` event, the confirmation dialog is scripted
 (`scriptConfirm`) and keeps each question, and `invoke` is wrapped to log what
 reached the commands. Focus is read from `document.activeElement`, waited for
 up to 4 s. Checks 1-6 are one sequence from one fresh load; 7, 8 and 9 each
@@ -705,8 +752,8 @@ for its answer. The fixtures now answer for that window: their
 `plugin:event|emit_to` handler replies `meeting-notes-flushed` with the same
 request id, unless `kw.meetingWindowSilent(true)` was called (the
 `meetingWindowSilent` snippet). Before this, every Stop and Discard in the
-fixtures ran out the 5s and stopped there. `window.confirm` is replaced with a
-scripted answer that is logged in order with the page's calls
+fixtures ran out the 5s and stopped there. The confirmation dialog is answered
+by a script that is logged in order with the page's calls
 (`scriptConfirm`, `installInvokeStub`). Each check starts from a fresh load at
 1000x720 with a meeting started from Start. Six checks:
 
@@ -755,14 +802,14 @@ checks:
    Folder chip reads "Save to Internal". One `meeting_start` carries that
    title and `folderId` 3, from Start recording and, on a fresh page, from
    Record this call. The field's placeholder and accessible name are read too.
-2. While it records, the live view's title and the Now row read the name.
-3. Stop and save: Recent's first row is the name, the field is empty again,
-   and the chip still names the folder. In Notes, the Internal folder lists
+2. While it records, the live view's title reads the name.
+3. Stop and save: the notice says so and Recent's first row is the name; after
+   Record another the field is empty again and the chip still names the folder. In Notes, the Internal folder lists
    the note.
 4. Folder 3 deleted through the fixtures while the meeting records, then Stop:
-   the caveat says "The folder you chose was deleted, so the note isn't in a
-   folder.", the chip is back at "Save to Notes", and Notes lists the note
-   under "Not in a folder".
+   the notice says "The folder you chose was deleted, so the note isn't in a
+   folder.", after Record another the chip is back at "Save to Notes", and Notes
+   lists the note under "not in a folder".
 5. No name and no folder: `meeting_start` gets `null` for both, the live title
    is "Meeting", and the note is named "Meeting — " and when it started, in no
    folder.
@@ -837,21 +884,22 @@ Dictation's recording is announced with `kw.dictationState`. The main window is
 150ms after the meter shows it, once the 80ms fill swap has finished. Six
 checks:
 
-1. While a dictation records, the Dictation hero has exactly one meter, 16
+1. While a dictation records, the Dictation hero has exactly one meter, 9
    segments, hidden from assistive technology with no `role`, showing 0.
-   After one reading of 0.75, it shows 0.75 with 12 segments lit, drawn in a
+   After one reading of 0.75, it shows 0.75 with 7 segments lit, drawn in a
    colour other than the unlit ones. At idle it is gone. Loaded at 720x520
    and recording, the meter is inside the window and nothing scrolls sideways.
 2. With no reading after that 0.75 for 650ms, the same meter shows 0 with
    none lit, still mounted: staleness at 400ms.
-3. A meeting started with Other participants pressed has "You" and "Others"
-   meters in its live header, both above 0 and lit differently. After Stop and
-   save, none. Started with the chip released, one, "You". Loaded at 720x520
+3. A meeting started with Other participants pressed has "you" and "others"
+   meters on its tile, with the 80ms fill swap, both above 0 and lit differently. After Stop and
+   save, none. Started with the chip released, one, "you". Loaded at 720x520
    with both, both meters are inside the window and nothing scrolls sideways,
    measured as chip-menus check 8 measures the idle pages.
 4. The Dictation meter for 2s at ten readings a second, each way. Without
-   emulation the segments' transition is 0.08s and at least 12 changes show.
-   With `prefers-reduced-motion: reduce` emulated it is 0s, with at most 10
+   emulation at least 12 changes show (the hero's wave has no transition of its
+   own; check 3 holds the fill swap on the meters that do).
+   With `prefers-reduced-motion: reduce` emulated it is 0.01ms or less, with at most 10
    changes and none closer than 240ms to the one before. A `MutationObserver`
    in the page timestamps the changes.
 5. `#overlay` at 280x96 (`overlay.rs`), label mode: the 8-segment meter right
@@ -943,7 +991,7 @@ languages. Each check starts from a fresh load on Settings > Transcription at
 1000x720. Eight checks:
 
 1. One list in the local section, a row for each of the nine models, headed
-   only "Local transcription" and "Engines". Every Details is closed and no
+   only "local transcription" and "engines". Every Details is closed and no
    model id is in the text shown; each id is under a row's Details.
 2. The rows in this order: Whisper Small, Whisper Large v3 Turbo, Parakeet
    Unified EN, Parakeet TDT, KB Whisper Large, Whisper Medium, Whisper Base

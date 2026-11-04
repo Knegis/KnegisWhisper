@@ -30,8 +30,7 @@ import { isEntryPoint } from "../ci/entry.mjs";
 const delay = (ms) => new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
 const isMain = isEntryPoint(import.meta.url);
 
-const RAIL_ITEM = "nav.rail .rail-item";
-const PANEL_ITEM = ".list-panel .panel-item";
+const NAV_PILL = "button.nav-pill";
 const ACTION = ".live-actions button";
 
 /** The copy this measures, verbatim from the brief (`SettingsMeetings.tsx`, `Meetings.tsx`, `labels.ts`). */
@@ -50,9 +49,8 @@ const WIDE = { width: 1440, height: 900 };
 const SMALL = { width: 720, height: 520 };
 
 const LIVE = "Boolean(document.querySelector('.meeting-live'))";
-const IDLE = "Boolean(document.querySelector('.control-start')) && !document.querySelector('.meeting-live')";
-const START_ENABLED = "(() => { const start = document.querySelector('.control-start'); return Boolean(start) && !start.disabled; })()";
-const NOTE_OPEN = "Boolean(document.querySelector('.note-detail input[aria-label=\"Title\"]:enabled'))";
+const START_ENABLED = "(() => { const start = document.querySelector('.control-start'); return Boolean(start) && !start.disabled && start.textContent.trim() === 'Start recording'; })()";
+const NOTE_OPEN = "Boolean(document.querySelector('.note-detail textarea[aria-label=\"Title\"]:enabled'))";
 const SETTING_SHOWN = `(${snippets.recordingsSetting(CHECKBOX)}).found`;
 
 
@@ -78,7 +76,7 @@ const noteState = (cdp) => cdp.evaluate(snippets.noteRecordingState());
 async function fresh(cdp, { on, size = WIDE }) {
   await viewport(cdp, size);
   await reload(cdp);
-  await waitFor(cdp, "Boolean(document.querySelector('nav.rail') && document.querySelector('.card .split-main, .card .content'))", "the fixture shell");
+  await waitFor(cdp, "Boolean(document.querySelector('.app-titlebar') && document.querySelector('.split-main, .content'))", "the fixture shell");
   await cdp.evaluate(snippets.removeFixtureBanner());
   await cdp.evaluate(snippets.installInvokeStub());
   if (on) await cdp.evaluate(snippets.invokeFixture("meeting_set_delete_recordings", { enabled: true }));
@@ -86,41 +84,39 @@ async function fresh(cdp, { on, size = WIDE }) {
 }
 
 async function openMeetings(cdp) {
-  await cdp.evaluate(snippets.clickText(RAIL_ITEM, "Meetings"));
+  await cdp.evaluate(snippets.clickText(NAV_PILL, "Meetings"));
   await waitFor(cdp, START_ENABLED, "Start recording to be enabled");
   await delay(300);
 }
 
 async function openMeetingSettings(cdp) {
-  await cdp.evaluate(snippets.clickText(RAIL_ITEM, "Settings"));
-  await waitFor(cdp, "Boolean(document.querySelector('.list-panel .panel-item'))", "the Settings panel");
-  await cdp.evaluate(snippets.clickText(PANEL_ITEM, "Meetings settings"));
+  await cdp.evaluate(snippets.openSettingsScreen("Meetings"));
   await waitFor(cdp, SETTING_SHOWN, "the Recordings checkbox");
   await delay(200);
 }
 
 /** Names the meeting, starts it with Start recording, and waits for the live view. */
 async function begin(cdp) {
-  await press(cdp, await cdp.evaluate(snippets.centerOfText(".control-row input.meeting-name", null)));
+  await press(cdp, await cdp.evaluate(snippets.centerOfText(".tile-form input.meeting-name", null)));
   await cdp.send("Input.insertText", { text: NAME });
   await pressText(cdp, ".control-start", "Start recording");
   await waitFor(cdp, LIVE, "the live meeting view");
   await delay(300);
 }
 
-/** Stop and save, with the fixtures answering for the meeting window, then the page idle. */
+/** Stop and save, with the fixtures answering for the meeting window, then the page saying it was saved. */
 async function stopAndSave(cdp) {
   await pressText(cdp, ACTION, "Stop and save");
-  await waitFor(cdp, IDLE, "the page to go idle");
+  await waitFor(cdp, snippets.MEETING_SAVED, "the page to say the meeting was saved");
   await delay(400);
 }
 
 /** Opens Recent's first row in Notes and its Replay tab, and reads the note. */
 async function openSavedNote(cdp) {
-  const title = `${PANEL_ITEM} .panel-item-title`;
+  const title = ".recent .recent-pill .recent-title";
   await waitFor(cdp, `[...document.querySelectorAll(${JSON.stringify(title)})].some((item) => item.textContent.trim() === ${JSON.stringify(NAME)})`, "the meeting in Recent");
   await pressText(cdp, title, NAME);
-  await waitFor(cdp, `${NOTE_OPEN} && document.querySelector('.note-detail input[aria-label="Title"]').value === ${JSON.stringify(NAME)}`, "the saved note to open");
+  await waitFor(cdp, `${NOTE_OPEN} && document.querySelector('.note-detail textarea[aria-label="Title"]').value === ${JSON.stringify(NAME)}`, "the saved note to open");
   await waitFor(cdp, "document.querySelectorAll('.note-detail .transcript-rows .transcript-text').length > 0", "its transcript rows");
   await pressText(cdp, ".note-detail [role=\"tab\"]", "Replay");
   await waitFor(cdp, "document.querySelector('.note-detail [role=\"tab\"][aria-selected=\"true\"]')?.textContent.trim() === 'Replay'", "the Replay tab");
@@ -167,8 +163,8 @@ export async function runMeetingRecordings(options) {
       id: "1",
       claim: "Settings > Meetings has a Recordings switch, off by default, and pressing it writes the setting once.",
       expectation: [
-        `a section headed "Recordings" with an unticked checkbox labelled "${CHECKBOX}", the caveat "${CAVEAT}"`,
-        `and Learn more "${LEARN_MORE}"; one press: exactly one meeting_set_delete_recordings call, {enabled: true}, and the box ticked`,
+        `a section headed "recordings" with a switch, off, labelled "${CHECKBOX}", the line "${CAVEAT}"`,
+        `and Learn more "${LEARN_MORE}"; one press: exactly one meeting_set_delete_recordings call, {enabled: true}, and the switch on`,
       ].join(" "),
     }, async () => {
       await fresh(cdp, { on: false });
@@ -185,7 +181,7 @@ export async function runMeetingRecordings(options) {
       const after = await setting(cdp);
       return {
         measured: { before, calls, after },
-        matches: before.found && before.checked === false && before.heading === "Recordings"
+        matches: before.found && before.checked === false && before.heading === "recordings"
           && before.caveats.includes(CAVEAT) && before.learnMore.includes(LEARN_MORE)
           && calls.length === 1 && calls[0]?.enabled === true && after.checked === true,
         screenshots: [shot],
@@ -194,10 +190,10 @@ export async function runMeetingRecordings(options) {
 
     await check({
       id: "2",
-      claim: "While the switch is on, the Meetings page says so beside Start and at the foot of its list, and still fits a 720x520 window.",
+      claim: "While the switch is on, the Meetings page says so beside Start and at the head of Recent, and still fits a 720x520 window.",
       expectation: [
-        `off: no control note "${CONTROL_NOTE}" and the panel foot "${FOOT_OFF}";`,
-        `on: that control note and the panel foot "${FOOT_ON}"; at 720x520 with it on, document, .split-main and .control-bar scrollWidth <= clientWidth`,
+        `off: no control note "${CONTROL_NOTE}" and Recent's line "${FOOT_OFF}";`,
+        `on: that control note and Recent's line "${FOOT_ON}"; at 720x520 with it on, document, .split-main and .control-bar scrollWidth <= clientWidth`,
       ].join(" "),
     }, async () => {
       await fresh(cdp, { on: false });
@@ -217,8 +213,8 @@ export async function runMeetingRecordings(options) {
         && scroll.mainScrollWidth <= scroll.mainClientWidth && scroll.barScrollWidth <= scroll.barClientWidth;
       return {
         measured: { off, on, small },
-        matches: !off.controlNotes.includes(CONTROL_NOTE) && off.panelFoot.includes(FOOT_OFF)
-          && on.controlNotes.includes(CONTROL_NOTE) && on.panelFoot.includes(FOOT_ON) && !on.panelFoot.includes(FOOT_OFF)
+        matches: !off.controlNotes.includes(CONTROL_NOTE) && off.recentNote.includes(FOOT_OFF)
+          && on.controlNotes.includes(CONTROL_NOTE) && on.recentNote.includes(FOOT_ON) && !on.recentNote.includes(FOOT_OFF)
           && small.notes.controlNotes.includes(CONTROL_NOTE) && fits(small),
         screenshots: [shot, smallShot],
         note: "Off and on are two fresh loads. At 720x520 the control bar is measured as chip-menus check 8 measures it.",
@@ -243,9 +239,9 @@ export async function runMeetingRecordings(options) {
       const shot = "03-live-on-1440x900.png";
       await cdp.screenshot(resolve(out, shot));
       await cdp.evaluate(snippets.invokeFixture("meeting_set_delete_recordings", { enabled: false }));
-      await cdp.evaluate(snippets.clickText(RAIL_ITEM, "Settings"));
-      await waitFor(cdp, "Boolean(document.querySelector('.list-panel .panel-item'))", "the Settings panel");
-      await cdp.evaluate(snippets.clickText(RAIL_ITEM, "Meetings"));
+      await cdp.evaluate(snippets.openSettingsScreen("Meetings"));
+      await waitFor(cdp, SETTING_SHOWN, "the Recordings switch");
+      await cdp.evaluate(snippets.clickText(NAV_PILL, "Meetings"));
       await waitFor(cdp, LIVE, "the live meeting view again");
       await delay(400);
       const turnedOff = await notesOnPage(cdp);
@@ -266,7 +262,7 @@ export async function runMeetingRecordings(options) {
     await check({
       id: "4",
       claim: "Stopping a meeting started with the switch on says the recording was deleted, and gives no path.",
-      expectation: `after Start and Stop and save: a caveat starting "Saved as a note (31 min). ${DELETED}"; its Learn more is "Note N." with no ".wav" or "AppData" anywhere in the caveat or its Learn more`,
+      expectation: `after Start and Stop and save: the notice reading a sentence starting "Saved as a note (31 min). ${DELETED}"; its Learn more is "Note N." with no ".wav" or "AppData" anywhere in the sentence or its Learn more`,
     }, async () => {
       await fresh(cdp, { on: true });
       await openMeetings(cdp);
@@ -276,10 +272,10 @@ export async function runMeetingRecordings(options) {
       const said = await notesOnPage(cdp);
       const shot = "04-deleted-outcome-1440x900.png";
       await cdp.screenshot(resolve(out, shot));
-      const caveat = page.caveats.find((text) => text.startsWith("Saved as a note")) ?? null;
+      const caveat = (page.saved ?? "").startsWith("Saved as a note") ? page.saved : null;
       const more = said.learnMore.find((text) => text.startsWith("Note ")) ?? null;
       return {
-        measured: { caveats: page.caveats, more },
+        measured: { saved: page.saved, more },
         matches: caveat !== null && caveat.startsWith(`Saved as a note (31 min). ${DELETED}`)
           && more !== null && /^Note \d+\.$/.test(more)
           && !/\.wav|AppData/.test(`${caveat} ${more}`),
@@ -338,7 +334,7 @@ export async function runMeetingRecordings(options) {
 if (isMain) {
   try {
     const options = parseShellArgs(process.argv.slice(2));
-    if (options.help) process.stdout.write(`${shellUsage().replace("shell-rail.mjs", "meeting-recordings.mjs")}\n`);
+    if (options.help) process.stdout.write(`${shellUsage().replace("shell-title-bar.mjs", "meeting-recordings.mjs")}\n`);
     else {
       const failed = failedChecks(await runMeetingRecordings(options));
       // The run completed; a check measured false still fails it, so a wrapper or CI step sees it.

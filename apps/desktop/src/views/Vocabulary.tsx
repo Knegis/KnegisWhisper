@@ -1,15 +1,17 @@
 import { useSettingsDraft, useSettingsNavigation } from "../components/SettingsDrafts";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getVocabulary, updateVocabulary, editVocabulary, deleteVocabulary, restoreVocabulary, reviewVocabulary, getDictationRoute, getLocalStatus, getSherpaStatus, getMeetingStatus, getMeetingProviders, type VocabularyReview } from "../lib/ipc";
+import { Icon } from "../components/Icon";
+import { LearnMore } from "../components/LearnMore";
 import { useRefresh } from "../lib/useRefresh";
 
-function Usage({ title, review }: { title: string; review: VocabularyReview }) {
-  return <section className="vocabulary-usage">
-    <h3>{title}{review.model ? ` · ${review.model}` : ""}</h3>
+function Usage({ title, review, sub = false }: { title: string; review: VocabularyReview; sub?: boolean }) {
+  return <div className="vocabulary-usage">
+    <h2 className={sub ? "vocabulary-usage-sub" : "section-label"}>{title}{review.model ? ` · ${review.model}` : ""}</h2>
     <p>{review.supported ? `${review.included.length} of ${review.included.length + review.omitted.length} terms included` : "Not supported by this integration"}</p>
     {review.supported && <p className="muted">{review.limit}</p>}
-    {review.omitted.length > 0 && <details><summary>{review.omitted.length} omitted terms</summary><ul>{review.omitted.map(item => <li key={item.word}><strong>{item.word}</strong> — {item.reason}</li>)}</ul></details>}
-  </section>;
+    {review.omitted.length > 0 && <LearnMore summary={<span className="muted"><span className="vocabulary-count">{review.omitted.length}</span> omitted terms</span>}><ul>{review.omitted.map(item => <li key={item.word}><strong>{item.word}</strong> — {item.reason}</li>)}</ul></LearnMore>}
+  </div>;
 }
 
 export function Vocabulary() {
@@ -40,18 +42,25 @@ export function Vocabulary() {
   useEffect(() => { const refresh = () => { void reload(); }; window.addEventListener("focus", refresh); return () => window.removeEventListener("focus", refresh); }, [reload]);
   const saveEdit = () => editGuard.run(persistEdit).catch(cause => { fail(cause); });
   return <div className="view vocabulary-view" data-surface="vocabulary">{addGuard.feedback}{editGuard.feedback}
-    <section>
+    <section aria-label="Add a term" className="vocabulary-intro">
       <p>Add names, words and phrases you want transcription to recognize. Saved terms apply automatically where supported.</p>
       <p className="muted">Hints do not guarantee spelling or train the model. Keep the list focused on important names and terminology. Local Whisper keeps them on this device. Supported cloud providers receive applicable terms. Changes apply to the next dictation request or new meeting.</p>
       {error && <p role="alert" className="error">{error}</p>}
-      <form className="controls vocabulary-add" onSubmit={event => { event.preventDefault(); void addGuard.run(persistAdd).catch(fail); }}>
+      <form className="vocabulary-add" onSubmit={event => { event.preventDefault(); void addGuard.run(persistAdd).catch(fail); }}>
         <input aria-label="Word or phrase" placeholder="e.g. KnegisWhisper or Åsa Karlsson" value={draft} onChange={event => setDraft(event.target.value)} maxLength={100} disabled={busy} />
-        <button type="submit" disabled={busy || !draft.trim()}>Add</button>
+        <button type="submit" className="action-iris" disabled={busy || !draft.trim()}>Add</button>
       </form>
-      <input type="search" aria-label="Search vocabulary" placeholder="Search vocabulary" value={query} onChange={event => setQuery(event.target.value)} />
-      {removed !== null && <p role="status">Removed “{removed}”. <button type="button" disabled={busy} onClick={() => { void act(async () => { await restoreVocabulary(); setRemoved(null); }); }}>Undo</button></p>}
+    </section>
+    <section aria-labelledby="vocabulary-saved" className="vocabulary-saved">
+      <div className="vocabulary-head">
+        <h2 id="vocabulary-saved" className="section-label">{data ? `${data.words.length} saved terms` : "saved terms"}</h2>
+        <label className="vocabulary-search">
+          <Icon name="search" size={16} />
+          <input type="search" aria-label="Search vocabulary" placeholder="Search vocabulary" value={query} onChange={event => setQuery(event.target.value)} />
+        </label>
+      </div>
+      {removed !== null && <p role="status" className="vocabulary-undo">Removed “{removed}”. <button type="button" disabled={busy} onClick={() => { void act(async () => { await restoreVocabulary(); setRemoved(null); }); }}>Undo</button></p>}
       {!data ? <p>Loading vocabulary…</p> : <>
-        <p className="muted">{data.words.length} saved terms</p>
         <ul className="vocabulary-list">{data.words.filter(word => word.word.toLocaleLowerCase().includes(query.toLocaleLowerCase())).map(word => <li key={word.id}>
           {editing === word.id ? <>
             <input aria-label="Edit word or phrase" value={editText} autoFocus maxLength={100} disabled={busy} onChange={event => setEditText(event.target.value)} onKeyDown={event => { if (event.key === "Escape") setEditing(null); if (event.key === "Enter") { event.preventDefault(); void saveEdit(); } }} />
@@ -66,12 +75,16 @@ export function Vocabulary() {
         {data.words.length === 0 && <p>No vocabulary yet. Add a name or phrase above.</p>}
       </>}
     </section>
-    {data && <div className="vocabulary-support">
-      <Usage title="Next dictation" review={data.dictationReview} />
-      <section><label>Meeting provider preview <select aria-label="Vocabulary meeting provider" value={data.provider} onChange={event => setMeetingPreview(event.target.value)}>{data.providers.map(provider => <option key={provider.id} value={provider.id}>{provider.name}</option>)}</select></label>
+    {data && <section aria-label="Where terms are used" className="vocabulary-support">
+      <div className="vocabulary-card">
+        <Usage title="next dictation" review={data.dictationReview} />
+      </div>
+      <div className="vocabulary-card">
+        <label htmlFor="vocabulary-preview" className="section-label">meeting provider preview</label>
+        <select id="vocabulary-preview" aria-label="Vocabulary meeting provider" value={data.provider} onChange={event => setMeetingPreview(event.target.value)}>{data.providers.map(provider => <option key={provider.id} value={provider.id}>{provider.name}</option>)}</select>
         <p className="muted">Preview only; this does not change your meeting provider.{data.meeting.provider ? " An active meeting retains its original vocabulary until it ends." : ""}</p>
-        <Usage title="Next meeting" review={data.meetingReview} />
-      </section>
-    </div>}
+        <Usage title="next meeting" review={data.meetingReview} sub />
+      </div>
+    </section>}
   </div>;
 }

@@ -33,7 +33,7 @@ pub const LABEL: &str = "update";
 /// Size from the porting matrix's window-role table -- the same as the meeting
 /// notification, which is the row directly above this one.
 const WIDTH: f64 = 392.0;
-const HEIGHT: f64 = 92.0;
+const HEIGHT: f64 = 104.0;
 
 /// Create the window, hidden.
 ///
@@ -119,11 +119,10 @@ mod tests {
 
     #[test]
     fn the_size_matches_the_meeting_notifications_role() {
-        // Both rows in the porting matrix's window-role table say 392x92.
-        // `meeting_window::WIDTH`/`HEIGHT` are private to that module, so this
-        // pins the literal the table settled on rather than reaching in.
+        // The porting matrix's window-role table says 392x104: the meeting
+        // offer's width, and the height its wrapped link needs.
         assert!((WIDTH - 392.0).abs() < f64::EPSILON);
-        assert!((HEIGHT - 92.0).abs() < f64::EPSILON);
+        assert!((HEIGHT - 104.0).abs() < f64::EPSILON);
     }
 
     #[test]

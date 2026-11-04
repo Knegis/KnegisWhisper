@@ -216,11 +216,13 @@ because nothing looked.
 
 The MCP server talks to the desktop application through this authenticated local API. Stdio is its
 only transport: there is no Streamable HTTP listener in `tools/knegiswhisper-mcp`, so the MCP
-layer opens no port of its own. Destructive MCP tools take no confirmation field; a call is the
-whole decision. `notes_delete` moves a note to Trash, where the app can restore it, but
-`transcriptions_delete` (a dictation and its transcript) and `transcriptions_forget_audio` (its
-kept recording) delete permanently in one call. An MCP client should be set to ask before running
-those two; the server itself does not.
+layer opens no port of its own. `notes_delete` moves a note to Trash, where the app can restore it,
+and takes no confirmation. `transcriptions_delete` (a dictation and its transcript) and
+`transcriptions_forget_audio` (its kept recording) delete permanently, so they refuse any call
+without a literal `confirm: true` and declare `destructiveHint`. That makes the step explicit; it
+is not authorisation, because an agent talked into deleting something can send the field too. An
+MCP client should still be set to ask before running those two; the server cannot ask a person
+itself. The CLI and the local API's `DELETE` routes take no such field.
 
 ## Webview
 

@@ -62,7 +62,6 @@ export function NotePeople({ noteId, participants, onSaved, disabled = false }: 
 
   return (
     <li className="note-people" data-open={adding || undefined} data-error={error !== null || undefined}>
-      <Icon name="meetings" size={15} />
       {list.length === 0 ? null : (
         <ul className="note-people-list" aria-label="People">
           {list.map((participant, index) => {
@@ -84,7 +83,7 @@ export function NotePeople({ noteId, participants, onSaved, disabled = false }: 
       )}
       <button disabled={disabled} ref={addButton} type="button" className="note-people-add" aria-expanded={adding} aria-controls={adding ? formId : undefined}
         onClick={() => { if (adding) close(); else { setError(null); setAdding(true); } }}>
-        <Icon name="plus" size={14} />Add person
+        <Icon name="plus" size={12} />Add person
       </button>
       {adding ? (
         // `noValidate`: whether the address is one is Rust's to say, in its own words.

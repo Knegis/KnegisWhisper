@@ -46,7 +46,7 @@ import { isEntryPoint } from "../ci/entry.mjs";
 const isMain = isEntryPoint(import.meta.url);
 
 const EDGE_ARGS = ["--mute-audio"];
-const RAIL_ITEM = "nav.rail .rail-item";
+const NAV_PILL = "button.nav-pill";
 const WIDE = { width: 1440, height: 900 };
 const TITLE = "Roadmap review — long transcript";
 const SCHEMES = ["dark", "light"];
@@ -55,9 +55,12 @@ const CARD = ".note-side .note-side-player";
 const DURATION = 690;
 const SECTION_STARTS = [300, 600];
 /** The card's distance from the column's left, right and bottom edges. */
-const INSET = 12;
+const INSET = 0;
 const INSET_TOLERANCE = 0.5;
-const PLAY_SIZE = 34;
+const PLAY_SIZE = 44;
+/** The card's corners and its picture's base colour (`.note-side-player`), the same in both schemes. */
+const CARD_RADIUS = "40px";
+const CARD_PICTURE = "rgb(207, 203, 184)";
 /** How far a tick's centre may sit from where the thumb would at that time. */
 const MARK_TOLERANCE = 1;
 const SKIP_FROM = 100;
@@ -211,7 +214,7 @@ const COUNT_PLAYS = `(() => {
   HTMLMediaElement.prototype.play = function (...args) { window.__plays += 1; return play.apply(this, args); };
 })();`;
 
-const noteOpen = `(() => { const input = document.querySelector('.note-detail input[aria-label="Title"]'); return Boolean(input) && !input.disabled && input.value === ${JSON.stringify(TITLE)}; })()`;
+const noteOpen = `(() => { const input = document.querySelector('.note-detail textarea[aria-label="Title"]'); return Boolean(input) && !input.disabled && input.value === ${JSON.stringify(TITLE)}; })()`;
 const near = (value, expected, tolerance) => typeof value === "number" && Math.abs(value - expected) <= tolerance;
 const round = (value) => (typeof value === "number" ? Math.round(value * 100) / 100 : value);
 const noPlayingLine = "!document.querySelector('.note-detail .transcript-rows li[aria-current=\"true\"]')";
@@ -220,10 +223,10 @@ const noPlayingLine = "!document.querySelector('.note-detail .transcript-rows li
 async function loadNote(cdp, size, stub = null) {
   await cdp.send("Emulation.setDeviceMetricsOverride", { ...size, deviceScaleFactor: 1, mobile: false });
   await reload(cdp);
-  await waitFor(cdp, "Boolean(document.querySelector('nav.rail') && document.querySelector('.card .split-main, .card .content'))", "the fixture shell");
+  await waitFor(cdp, "Boolean(document.querySelector('.app-titlebar') && document.querySelector('.split-main, .content'))", "the fixture shell");
   await cdp.evaluate(snippets.removeFixtureBanner());
   if (stub) await stub();
-  await cdp.evaluate(snippets.clickText(RAIL_ITEM, "Notes"));
+  await cdp.evaluate(snippets.clickText(NAV_PILL, "Notes"));
   await waitFor(cdp, "Boolean(document.querySelector('.list-panel .notes-entry'))", "the Notes library");
   await cdp.evaluate(snippets.openNotesEntry(TITLE));
   await waitFor(cdp, noteOpen, `note "${TITLE}" to open`);
@@ -499,10 +502,9 @@ function judgeCard(state) {
   const rowCentre = state.controls ? state.controls.top + state.controls.height / 2 : null;
   const parts = {
     inset: near(state.inset.left, INSET, INSET_TOLERANCE) && near(state.inset.right, INSET, INSET_TOLERANCE) && near(state.inset.bottom, INSET, INSET_TOLERANCE),
-    border: state.borderWidths.every((width) => width === "1px") && state.borderStyles.every((style) => style === "solid")
-      && state.borderColors.every((color) => color === state.resolved.rule),
-    radius: state.radii.every((radius) => radius === "4px"),
-    background: state.background === state.resolved.bg,
+    border: state.borderWidths.every((width) => width === "0px"),
+    radius: state.radii.every((radius) => radius === CARD_RADIUS),
+    background: state.background === CARD_PICTURE,
     play: state.play !== null && near(state.play.width, PLAY_SIZE, 0.5) && near(state.play.height, PLAY_SIZE, 0.5),
     playCentred: near(playCentre, rowCentre ?? Number.NaN, 0.5),
     skips: state.back && state.forward,
@@ -536,16 +538,13 @@ function judgeColumn(state) {
   const head = state.head;
   const parts = {
     sticky: head !== null && head.position === "sticky" && head.top === "0px",
-    heading: head !== null && head.headings.length === 1 && head.headings[0].text.toLowerCase() === "transcript"
-      && head.headings[0].drawn === "uppercase",
+    heading: head !== null && head.headings.length === 1 && head.headings[0].text === "transcript",
     find: head !== null && head.buttons.length === 1 && head.buttons[0].label === "Find in transcript" && head.buttons[0].disabled === false,
     sections: state.toggles.length === SECTIONS.length && state.toggles.every((toggle, at) => toggle.expanded === "true"
       && toggle.title === SECTIONS[at].title && toggle.count === `${SECTIONS[at].lines} lines`),
     turns: state.markers.length === TURNS,
-    markers: state.markers.length > 0 && state.markers.every((marker) => marker !== null && near(marker.width, MARKER, 0.01) && near(marker.height, MARKER, 0.01)),
     lines: state.lines === LINES,
     noRowPlays: state.rowPlays === 0,
-    corners: state.rounded.length === 0,
     weight: state.heavy.length === 0,
   };
   return { failed: Object.entries(parts).filter(([, ok]) => !ok).map(([name]) => name), matches: Object.values(parts).every(Boolean) };
@@ -591,14 +590,13 @@ export async function runTranscriptColumn(options) {
       id: "1",
       claim: "The column has a plain header and is grouped into sections and turns.",
       expectation: [
-        "in each scheme: .transcript-head is position: sticky at top 0px and holds exactly one heading, reading \"Transcript\"",
-        "(case-insensitive) and drawn uppercase, and exactly one button, aria-label \"Find in transcript\", enabled; exactly",
+        "in each scheme: .transcript-head is position: sticky at top 0px and holds exactly one heading, reading \"transcript\",",
+        "and exactly one button, aria-label \"Find in transcript\", enabled; exactly",
         `${SECTIONS.length} button.transcript-section-toggle, each aria-expanded="true", titled ${SECTIONS.map((section) => `"${section.title}"`).join(", ")}`,
         `and counting ${SECTIONS.map((section) => `"${section.lines} lines"`).join(", ")} (transcriptSections(longTranscriptRows()));`,
-        `${TURNS} .transcript-turn-head, each with a ${MARKER}x${MARKER}px .transcript-turn-marker; ${LINES} lines; no .transcript-play`,
+        `${TURNS} .transcript-turn-head; ${LINES} lines; no .transcript-play`,
         "(a per-line Play button) anywhere in .note-side; over .note-side .transcript",
-        "and every element in it except controls (button, input, select, textarea, mark, .transcript-word), every computed",
-        "corner radius 0px; and over all of it no computed font-weight above 400",
+        "and every element in it except controls (button, input, select, textarea, mark, .transcript-word), no computed font-weight above 400",
       ].join(" "),
     }, async () => {
       await openNote(cdp);
@@ -622,15 +620,15 @@ export async function runTranscriptColumn(options) {
     // 2. The player is a card floating in the column.
     await check({
       id: "2",
-      claim: "The player in the transcript column is a floating card.",
+      claim: "The player in the transcript column is a picture card at the column's foot.",
       expectation: [
-        `in each scheme: .note-side-player inset ${INSET}px (±${INSET_TOLERANCE}) from .note-side's left, right and bottom edges`,
-        "(its padding box, inside the column's left rule); a 1px solid border in the resolved --rule on all four sides, a 4px radius",
-        `on all four corners and the resolved --bg behind it; inside it a ${PLAY_SIZE}x${PLAY_SIZE} button[aria-label="Play"] whose centre is`,
+        `in each scheme: .note-side-player flush (±${INSET_TOLERANCE}) with .note-side's left, right and bottom edges,`,
+        `no border, a ${CARD_RADIUS} radius`,
+        `on all four corners and its picture's ${CARD_PICTURE} behind it; inside it a ${PLAY_SIZE}x${PLAY_SIZE} button[aria-label="Play"] whose centre is`,
         "within 0.5px of its .recording-controls row's, button[aria-label=\"Back 15 seconds\"] and button[aria-label=\"Forward 15 seconds\"],",
         "a .recording-clock reading m:ss / m:ss, exactly one select, and exactly 2 .recording-mark whose centres sit within",
         `${MARK_TOLERANCE}px of 5px + (range width - 10px) x 300/690 and x 600/690 from the range input's left; the recording ${DURATION}s long;`,
-        "a button.follow-chip reading \"Follow\", aria-pressed=\"true\" (on by default), its computed background the resolved --band;",
+        "a button.follow-chip reading \"Follow\", aria-pressed=\"true\" (on by default), its computed background the resolved --mint;",
         "the two schemes resolve different --bg. Then, paused at 100 s, Forward 15 seconds lands on 115 and Back 15 seconds on 100 (±0.1 s)",
       ].join(" "),
     }, async () => {
@@ -642,7 +640,7 @@ export async function runTranscriptColumn(options) {
         const state = await cdp.evaluate(snippets.playerCardState());
         const judged = judgeCard(state);
         const follow = await cdp.evaluate(snippets.followChipState(CARD));
-        const followOn = follow.present && follow.text === "Follow" && follow.pressed === "true" && follow.drawn?.background === follow.band;
+        const followOn = follow.present && follow.text === "Follow" && follow.pressed === "true" && follow.drawn?.background === follow.mint;
         if (!followOn) judged.failed.push("follow");
         judged.matches = judged.matches && followOn;
         schemes[scheme] = { drawn, ...judged, follow, state };
@@ -680,8 +678,7 @@ export async function runTranscriptColumn(options) {
       id: "3",
       claim: "The last transcript line is never hidden behind the card, and nor is the line the column scrolls to as it plays.",
       expectation: [
-        "in each scheme, with .note-side-body scrolled to its end (scrollTop within 1px of its maximum): the card's top is above",
-        "the scroller's bottom (it floats over the scroller, so there is a line to hide), and the last .transcript-rows li's bottom",
+        "in each scheme, with .note-side-body scrolled to its end (scrollTop within 1px of its maximum): the last .transcript-rows li's bottom",
         `edge is at or above the card's top edge. Then, scrolled back to the top, the recording paused at ${PLAY_FROM} s and the card's`,
         "Play pressed: the line marked aria-current, which the column scrolled to (scrollTop above 0), has its bottom edge at or",
         "above the card's top edge and its top edge at or below the bottom of the column's .transcript-head (the scroller's top",
@@ -741,7 +738,7 @@ export async function runTranscriptColumn(options) {
           floats,
           clear,
           playing,
-          matches: atEnd && floats && clear && playing.matches,
+          matches: atEnd && clear && playing.matches,
         };
       }
       return {
@@ -794,7 +791,7 @@ export async function runTranscriptColumn(options) {
           landed: first.landed && near(first.playingAt, start, LANDING_TOLERANCE),
           onlySelected: only(first.lines),
           speaker: header.speaker === CLICK_SPEAKER,
-          marker: header.marker !== null && near(header.marker.width, MARKER, 0.01) && near(header.marker.height, MARKER, 0.01) && header.marker.fill === header.band,
+          marker: header.marker !== null && near(header.marker.width, MARKER, 0.01) && near(header.marker.height, MARKER, 0.01) && header.marker.fill === "rgb(255, 255, 255)",
           againPlays: second.plays === 1,
           againLanded: second.landed && near(second.playingAt, start, LANDING_TOLERANCE),
           stillSelected: only(second.lines),
@@ -2011,6 +2008,8 @@ export async function runTranscriptColumn(options) {
       const screenshots = [];
       for (const scheme of SCHEMES) {
         await openNote(cdp);
+        // Follow centres the line in the column's whole height now; a taller window keeps the next section's toggle on screen under it.
+        await cdp.send("Emulation.setDeviceMetricsOverride", { width: WIDE.width, height: WIDE.height + 140, deviceScaleFactor: 1, mobile: false });
         const drawn = await useScheme(cdp, scheme);
         await cdp.evaluate(snippets.pauseRecordingAt(CARD, PAUSED_AT));
         await settledTime(cdp);
@@ -2176,7 +2175,7 @@ export async function runTranscriptColumn(options) {
         `drag is Input.dispatchTouchEvent, a finger moved ${TOUCH_DRAG}px upwards in 10 steps (Input.synthesizeScrollGesture's touch source`,
         "scrolls nothing in headless Edge, not even the transcript, so it cannot show a difference). (a) From a point on the card that",
         "operates nothing (inside .recording-player, no control under it): .notes-main's scrollTop is unchanged and the chip still",
-        `aria-pressed="true". (b) From the card's own padding, 5px inside its left edge: the same. (c) A touch drag of ${SCRUB_DRAG}px`,
+        `aria-pressed="true". (b) From the card's padding, 5px inside its left edge: the same. (c) A touch drag of ${SCRUB_DRAG}px`,
         "rightwards on the scrubber (Input.dispatchTouchEvent from its thumb) moves the recording on by more than",
         `${SCRUB_MIN_S} s. (d) The control: from a point on the transcript's lines above the card, .notes-main's scrollTop moves and the`,
         "chip turns aria-pressed=\"false\"",
@@ -2223,7 +2222,7 @@ export async function runTranscriptColumn(options) {
             const rect = mini.getBoundingClientRect();
             const x = rect.left + 5, y = (rect.top + rect.bottom) / 2;
             const hit = document.elementFromPoint(x, y);
-            return { x, y, onCard: Boolean(hit && mini.contains(hit) && !hit.closest('.recording-player')) };
+            return { x, y, onCard: Boolean(hit && mini.contains(hit) && !hit.closest('button, input, select, a, [tabindex], [role="slider"]')) };
           })()`);
           if ((await chip()) !== "true") await cdp.evaluate(`document.querySelector(${JSON.stringify(`${MINI} .follow-chip`)}).click()`);
           await scrollSettled(cdp, ".notes-main");
@@ -2313,7 +2312,7 @@ export async function runTranscriptColumn(options) {
 if (isMain) {
   try {
     const options = parseShellArgs(process.argv.slice(2));
-    if (options.help) process.stdout.write(`${shellUsage().replace("shell-rail.mjs", "transcript-column.mjs")}\n`);
+    if (options.help) process.stdout.write(`${shellUsage().replace("shell-title-bar.mjs", "transcript-column.mjs")}\n`);
     else {
       const failed = failedChecks(await runTranscriptColumn(options));
       // The run completed; a check measured false still fails it, so a wrapper or CI step sees it.

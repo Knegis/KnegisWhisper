@@ -52,7 +52,7 @@ import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type Reac
 import { FailureLine } from "../components/FailureLine";
 import { Icon } from "../components/Icon";
 import { LearnMore } from "../components/LearnMore";
-import { PageHeader } from "../components/PageHeader";
+import { StatusDot } from "../components/Row";
 import {
   getCredentialSlots,
   getMeetingProviders,
@@ -65,7 +65,6 @@ import {
   type ProbeReport,
 } from "../lib/ipc";
 import type { ViewId } from "../lib/navigation";
-import { PAGES } from "../lib/pages";
 import { filterRows, keyRowShown, providerRows, SPEECH, TEXT, type ProviderFilter, type ProviderRow } from "../lib/providerRows";
 import { message, useRefresh } from "../lib/useRefresh";
 
@@ -215,9 +214,7 @@ export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) 
     }).catch(cause => rowError(slot.slot, { text: "Couldn't remove the key.", detail: message(cause) }));
   };
 
-  const header = (actions?: ReactNode) =>
-    actions === undefined ? <PageHeader page={PAGES.providers} /> : <PageHeader page={PAGES.providers} actions={actions} />;
-  if (!data) return <div className="view">{keyDraft.feedback}{header()}{error ? <FailureLine text="This page couldn't load." detail={error} /> : <p className="muted">Loading...</p>}</div>;
+  if (!data) return <div className="view">{keyDraft.feedback}{error ? <FailureLine text="This page couldn't load." detail={error} /> : <p className="muted">Loading...</p>}</div>;
   const { slots, transcription, meetings } = data;
   const bySlot = new Map(slots.map(slot => [slot.slot, slot]));
   const lists = providerRows(slots, transcription, meetings);
@@ -273,7 +270,8 @@ export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) 
     return dispatch && dispatch.state !== "ready" ? dispatch.reason : undefined;
   };
 
-  const tile = (row: ProviderRow) => <span className="provider-tile" aria-hidden="true">{row.letter}</span>;
+  // The colours are decoration, per slot, in `styles.css`.
+  const tile = (row: ProviderRow) => <span className="provider-tile" data-slot={row.slot} aria-hidden="true">{row.letter}</span>;
 
   /** A slot that takes one secret: a provider or a custom endpoint. */
   const keyRow = (row: ProviderRow) => {
@@ -307,15 +305,14 @@ export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) 
             <span className="provider-purposes">
               {/* One span per purpose, so a narrow row wraps between them, not inside "Live meetings". */}
               {row.purposes.map((purpose, i) => (
-                <span key={purpose} className="provider-purpose">{i > 0 ? ` · ${purpose}` : purpose}</span>
+                <span key={purpose} className="provider-purpose">{i < row.purposes.length - 1 ? `${purpose} ·` : purpose}</span>
               ))}
             </span>
           ) : null}
         </span>
         <span className="provider-actions">
           {state ? (
-            <span className={`provider-state provider-state-${state.tone}`} {...(state.title ? { title: state.title } : {})}>
-              {state.tone === "failed" ? null : <Icon name="check" size={14} />}
+            <span className={`model-chip provider-state provider-state-${state.tone}`} data-tone={state.tone === "failed" ? "warn" : "installed"} {...(state.title ? { title: state.title } : {})}>
               {state.label}
             </span>
           ) : null}
@@ -327,10 +324,10 @@ export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) 
               Change
             </button>
           ) : row.unsupported ? (
-            <span className="provider-unsupported" {...(reason ? { title: reason } : {})}>Not supported yet</span>
+            <span className="model-chip provider-unsupported" {...(reason ? { title: reason } : {})}>not supported yet</span>
           ) : (
             <button type="button" className="provider-add" aria-label={`Add a key for ${row.name}`} aria-expanded={isOpen} aria-controls={isOpen ? formId : undefined} data-toggle-for={formId} onClick={() => toggle(row.slot)}>
-              <Icon name="plus" size={20} />
+              <Icon name="plus" size={16} />
             </button>
           )}
         </span>
@@ -366,7 +363,7 @@ export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) 
                 }
               }}
             />
-            <button type="button" className="primary" disabled={draft.trim() === ""} onClick={() => save(slot)}>
+            <button type="button" className="action-iris" disabled={draft.trim() === ""} onClick={() => save(slot)}>
               Save
             </button>
             {row.stored ? (
@@ -386,7 +383,7 @@ export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) 
   // rather than silently absent — a slot that exists and appears nowhere is
   // indistinguishable from a slot nobody implemented.
   const companyRow = (row: ProviderRow) => (
-    <li key={row.slot} className="provider-row">
+    <li key={row.slot} className="provider-row provider-row-company">
       {tile(row)}
       <span className="provider-text">
         <span className="provider-name">{row.name}</span>
@@ -395,7 +392,7 @@ export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) 
         </button>
       </span>
       <span className="provider-actions">
-        {row.stored ? <span className="provider-state provider-state-saved"><Icon name="check" size={14} />Saved</span> : null}
+        {row.stored ? <span className="model-chip provider-state provider-state-saved" data-tone="installed">Saved</span> : null}
       </span>
     </li>
   );
@@ -416,7 +413,7 @@ export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) 
   const company = filterRows(lists.enterprise, filter, query).map(companyRow);
   const local = (
     <li key="this-computer" className="provider-row provider-row-local">
-      <span className="provider-tile provider-tile-local" aria-hidden="true"><Icon name="computer" size={22} /></span>
+      <span className="provider-tile provider-tile-local" aria-hidden="true"><span /></span>
       <span className="provider-text">
         <span className="provider-name">This computer</span>
         <span className="provider-purposes">Speech to text and text models. No key needed.</span>
@@ -430,26 +427,10 @@ export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) 
 
   return (
     <div className="view providers" data-surface="settings.providers">{keyDraft.feedback}
-      {header(
-        <>
-          <label className="providers-search">
-            <Icon name="search" size={16} />
-            <input
-              type="search"
-              aria-label="Search providers"
-              placeholder="Search providers"
-              value={query}
-              onChange={(e) => narrow(filter, e.target.value)}
-            />
-          </label>
-          <button type="button" className="secondary providers-test" onClick={() => void runProbe()} disabled={probing}>
-            {probing ? "Testing…" : "Test connections"}
-          </button>
-        </>,
-      )}
-
       {error ? <FailureLine text="That didn't work." detail={error} /> : null}
 
+      <div className="providers-top">
+      <div className="providers-toolbar">
       <div className="providers-tabs" role="tablist" aria-label="Filter providers" onKeyDown={onTabKey}>
         {TABS.map((t) => (
           <button
@@ -466,20 +447,40 @@ export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) 
           </button>
         ))}
       </div>
+      <div className="providers-tools">
+        <label className="providers-search">
+          <Icon name="search" size={16} />
+          <input
+            type="search"
+            aria-label="Search providers"
+            placeholder="Search providers"
+            value={query}
+            onChange={(e) => narrow(filter, e.target.value)}
+          />
+        </label>
+        <button type="button" className="action-iris providers-test" onClick={() => void runProbe()} disabled={probing}>
+          {probing ? "Testing…" : "Test connections"}
+        </button>
+      </div>
+      </div>
 
+      <div className="providers-lines">
       <p className="providers-lock">
         <Icon name="lock" size={14} />
         A saved key sends nothing by itself. Audio or text goes to a provider only when you choose it under Transcription, Meetings or Cleanup &amp; summaries.
       </p>
-      <p className="providers-line">
+      <p className="providers-lock">
+        <Icon name="globe" size={14} />
         Test connections is the only thing on this page that reaches the network, and only when you press it: it sends a real request with each saved speech-to-text key.
       </p>
       {/* Who a press would send to, named -- it is data leaving this computer, so it is never folded away. */}
       <p className="providers-line providers-ready">
+        <StatusDot tone={testable.length === 0 ? "off" : "ok"} />
         {testable.length === 0
           ? "Ready to test: nothing yet. Save a key for a speech-to-text provider first."
           : `Ready to test: ${testable.map((s) => s.name).join(", ")}.`}
       </p>
+      </div>
 
       {testNote ? <p className="providers-line" role="status">{testNote}</p> : null}
       {probe ? (
@@ -523,19 +524,20 @@ export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) 
           ) : null}
         </div>
       ) : null}
+      </div>
 
-      <div id="providers-lists" role="tabpanel" aria-labelledby={`providers-tab-${filter}`}>
-        {group("in-use", "In use", [...(showLocal ? [local] : []), ...inUse])}
-        {group("available", "Available", available)}
+      <div id="providers-lists" className="providers-lists" role="tabpanel" aria-labelledby={`providers-tab-${filter}`}>
+        {group("in-use", "in use", [...(showLocal ? [local] : []), ...inUse])}
+        {group("available", "available", available)}
         {group(
           "custom",
-          "Custom endpoints",
+          "custom endpoints",
           custom,
           "For servers of your own. Your own server's key goes with cleanup and summary requests to the address you enter under Cleanup & summaries. The others do nothing yet: the screens where you enter their servers' addresses aren't built.",
         )}
         {group(
           "company",
-          "Company accounts",
+          "company accounts",
           company,
           "These use your organisation's settings rather than one key, so they are set up under Cleanup & summaries.",
         )}

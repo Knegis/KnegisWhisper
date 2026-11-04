@@ -8,7 +8,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { keycapGroups } from "../src/lib/keycaps.js";
+import { keycapGroups, keyName, shortcutText } from "../src/lib/keycaps.js";
 
 test("one accelerator is one group, a cap per key", () => {
   assert.deepEqual(keycapGroups(["Control+Shift+D"]), [["Control", "Shift", "D"]]);
@@ -26,4 +26,24 @@ test("the comma key keeps its cap, wherever it falls in the list", () => {
 test("a key with no modifier is a single cap, and no accelerators is no caps", () => {
   assert.deepEqual(keycapGroups(["F9"]), [["F9"]]);
   assert.deepEqual(keycapGroups([]), []);
+});
+
+test("on Windows the Super key is called what the keyboard calls it", () => {
+  assert.equal(keyName("Super", "Win32"), "Win");
+  assert.equal(keyName("LeftSuper", "Win32"), "Left Win");
+  assert.equal(keyName("RightSuper", "Win32"), "Right Win");
+});
+
+test("every other key, and every other platform, keeps its name", () => {
+  assert.equal(keyName("Control", "Win32"), "Control");
+  assert.equal(keyName("D", "Win32"), "D");
+  assert.equal(keyName("Super", "Linux x86_64"), "Super");
+  assert.equal(keyName("LeftSuper", "Linux x86_64"), "LeftSuper");
+});
+
+test("a shortcut as words uses the same names, and leaves the comma key and the separator alone", () => {
+  assert.equal(shortcutText("Control+Super", "Win32"), "Control+Win");
+  assert.equal(shortcutText("Control+Super, Alt+F", "Win32"), "Control+Win, Alt+F");
+  assert.equal(shortcutText("Control+,", "Win32"), "Control+,");
+  assert.equal(shortcutText("Control+Super", "Linux x86_64"), "Control+Super");
 });

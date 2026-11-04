@@ -1,6 +1,6 @@
 //! The meeting notification window.
 //!
-//! Compact offers are 392×92; the recording panel defaults to 440×560 and
+//! Compact offers are 392×102; the recording panel defaults to 440×560 and
 //! preserves its own placement. Both are content-protected. The role settled in
 //! `docs/PORTING_MATRIX.md`. It does two jobs in one window, which is why it is
 //! one window:
@@ -37,7 +37,7 @@ use tauri::{
 /// The window label, and the fragment the frontend routes on.
 pub const LABEL: &str = "meeting";
 
-const COMPACT: (f64, f64) = (392.0, 92.0);
+const COMPACT: (f64, f64) = (392.0, 102.0);
 const PANEL: (f64, f64) = (440.0, 560.0);
 const PANEL_MIN: (f64, f64) = (392.0, 280.0);
 const PLACEMENT_KEY: &str = "meeting.notificationPlacement";
@@ -456,8 +456,8 @@ mod tests {
 
     #[test]
     fn both_window_modes_keep_their_default_and_minimum_sizes() {
-        assert_eq!(Mode::Compact.size(), (392.0, 92.0));
-        assert_eq!(Mode::Compact.min_size(), (392.0, 92.0));
+        assert_eq!(Mode::Compact.size(), (392.0, 102.0));
+        assert_eq!(Mode::Compact.min_size(), (392.0, 102.0));
         assert_eq!(Mode::Panel.size(), (440.0, 560.0));
         assert_eq!(Mode::Panel.min_size(), (392.0, 280.0));
     }

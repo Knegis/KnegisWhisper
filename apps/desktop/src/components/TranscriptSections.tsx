@@ -2,7 +2,7 @@ import { Fragment, memo, useEffect, useId, useRef, useState, type FormEvent, typ
 
 import { scrollBehavior } from "../lib/followScroll";
 import type { TranscriptRow } from "../lib/ipc";
-import { normaliseSpeakerName, renameHeading, suggestionsFor } from "../lib/speakerNames";
+import { canSaveSpeakerName, matchingSuggestions, normaliseSpeakerName, renameHeading, speakerIsNamed } from "../lib/speakerNames";
 import { sameMatchesOver, textParts, type FindMatch } from "../lib/transcriptFind";
 import { sameProps, sameSelectionOver, type LineKey, type TranscriptSection, type TranscriptTurn } from "../lib/transcriptLayout";
 import { message } from "../lib/useRefresh";
@@ -12,7 +12,7 @@ import { formatClock } from "./RecordingPlayer";
 
 /**
  * A note's transcript as the M6 canvas draws it (KNEG-448): time sections, each a
- * collapsible header over its speaker turns, each turn a head -- a square marker,
+ * collapsible header over its speaker turns, each turn a head -- a round marker,
  * who, and when -- over its lines at the column's full width. `TranscriptPanel`
  * owns the state, the header and the effects; this file only draws.
  *
@@ -74,12 +74,17 @@ export function RenameForm({ target, suggestions, onRename, onClose }: {
   onRename: TranscriptActions["rename"];
   onClose: (speakerId: string) => void;
 }) {
-  const [value, setValue] = useState(target.current);
+  const named = speakerIsNamed(target.current, target.speakerId);
+  // A name is there to edit. "Speaker 1" isn't one: it would only have to be cleared first.
+  const [value, setValue] = useState(named ? target.current : "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const datalistId = useId();
+  const fieldId = useId();
   const formRef = useRef<HTMLFormElement>(null);
+  const fieldRef = useRef<HTMLInputElement>(null);
   const heading = renameHeading(target.current);
+  const typed = normaliseSpeakerName(value).toLocaleLowerCase();
+  const shown = matchingSuggestions(target.current, value, suggestions);
 
   // Opened under a turn near the foot of the column, the form would be behind the player card:
   // brought into view, its scroll margins (`styles.css`) clear the card and the sticky header.
@@ -106,18 +111,23 @@ export function RenameForm({ target, suggestions, onRename, onClose }: {
     void submitName(normaliseSpeakerName(value));
   };
 
-  return <form ref={formRef} className="transcript-rename" aria-label={heading} onSubmit={onSubmit}>
-    <label htmlFor={`${datalistId}-name`}>{heading}</label>
-    <input id={`${datalistId}-name`} type="text" list={datalistId} autoFocus maxLength={100}
-      value={value} onChange={event => setValue(event.target.value)} onKeyDown={event => {
-        if (event.key === "Escape") { event.preventDefault(); onClose(target.speakerId); }
-      }} />
-    <datalist id={datalistId}>
-      {suggestionsFor(target.current, suggestions).map(name => <option key={name} value={name} />)}
-    </datalist>
-    <button type="submit" disabled={saving || normaliseSpeakerName(value) === normaliseSpeakerName(target.current)}>Save</button>
-    <button type="button" disabled={saving} onClick={() => { void submitName(""); }}>Remove name</button>
-    <button type="button" disabled={saving} onClick={() => onClose(target.speakerId)}>Cancel</button>
+  // Escape on the form, not the field: it closes from a suggestion or a button too.
+  return <form ref={formRef} className="transcript-rename" aria-label={heading} onSubmit={onSubmit} onKeyDown={event => {
+    if (event.key === "Escape") { event.preventDefault(); onClose(target.speakerId); }
+  }}>
+    <label className="section-label" htmlFor={fieldId}>name this speaker</label>
+    <input id={fieldId} ref={fieldRef} type="text" autoFocus autoComplete="off" maxLength={100} placeholder={named ? undefined : target.current}
+      value={value} onChange={event => setValue(event.target.value)} />
+    {shown.length > 0 ? <div className="transcript-rename-suggestions" role="group" aria-label="Suggested names">
+      {/* Fills the field and hands focus back to it, so Enter saves; nothing is saved by the press. */}
+      {shown.map(name => <button key={name} type="button" className="language-pill" title={name} disabled={saving}
+        aria-pressed={name.toLocaleLowerCase() === typed} onClick={() => { setValue(name); fieldRef.current?.focus(); }}>{name}</button>)}
+    </div> : null}
+    <div className="transcript-rename-actions">
+      {named ? <button type="button" disabled={saving} onClick={() => { void submitName(""); }}>Remove name</button> : null}
+      <button type="button" disabled={saving} onClick={() => onClose(target.speakerId)}>Cancel</button>
+      <button type="submit" className="primary" disabled={saving || !canSaveSpeakerName(value, target)}>Save</button>
+    </div>
     {error && <p className="error" role="alert">{error}</p>}
   </form>;
 }
@@ -311,9 +321,9 @@ function holds(found: readonly FindMatch[] | undefined, ordinal: number | null):
 }
 
 /**
- * One speaker's run of lines: a 6px square (`--band` while one of them plays), the name -- the
+ * One speaker's run of lines: a 6px dot (`--band` while one of them plays), the name -- the
  * button that renames that speaker, or plain text when there is no label to rename -- and when
- * the turn starts. A turn with no speaker shows only the square and the time. The rename form
+ * the turn starts. A turn with no speaker shows only the dot and the time. The rename form
  * opens between the head and the lines. The lines are a listbox named by who and when.
  */
 export const Turn = memo(function Turn({ turn, activeIndex, stopIndex, renaming, findCurrent, idPrefix, selected, found, readOnly, canPlay, suggestions, actions }: TurnProps) {

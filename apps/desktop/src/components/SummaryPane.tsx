@@ -105,7 +105,7 @@ export const SummaryPane = forwardRef<SummaryPaneHandle, { noteId: number; visib
     if (source) onSource(source.rowIndex);
   }}>
     <div className="summary-toolbar controls">
-      <button ref={actionRef} type="button" data-summary-action disabled={readOnly || pending || busy || !state || hasTranscript !== true || (readiness === null && readinessError === null)} onClick={() => {
+      <button ref={actionRef} type="button" className="primary" data-summary-action disabled={readOnly || pending || busy || !state || hasTranscript !== true || (readiness === null && readinessError === null)} onClick={() => {
         if (readinessError) void refreshReadiness().catch(() => undefined);
         else void generate();
       }}>{readinessError ? "Retry setup check" : needsSetup ? "Set up summaries" : state?.status === "failed" || state?.status === "interrupted" ? "Retry summary" : state?.content ? "Regenerate summary" : "Generate summary"}</button>

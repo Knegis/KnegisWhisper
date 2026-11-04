@@ -60,7 +60,7 @@ export function TitleBarSearch({ onOpenNote }: { onOpenNote: (id: number, transc
   // No `title` on the field: the trailing hint already says Ctrl+K, and the
   // window's tooltip would open under the field exactly where the results do.
   return <div className="titlebar-search" ref={root} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false); }}>
-    <Icon name="search" size={15} />
+    <Icon name="search" size={16} />
     <input ref={input} type="search" role="combobox" aria-label="Search notes and meetings" placeholder="Search notes and meetings" aria-keyshortcuts="Control+K Meta+K"
       value={query} aria-expanded={open} aria-controls={open ? "titlebar-search-results" : undefined} aria-autocomplete="list"
       aria-activedescendant={open && hits[active] ? `titlebar-hit-${hits[active].id}` : undefined}
@@ -77,7 +77,7 @@ export function TitleBarSearch({ onOpenNote }: { onOpenNote: (id: number, transc
         }
         if (event.key === "Enter" && open && hits[active]) { event.preventDefault(); choose(hits[active]); }
       }} />
-    <span className="titlebar-search-key" aria-hidden="true">CTRL K</span>
+    <span className="titlebar-search-key" aria-hidden="true">ctrl k</span>
     {open && <div className="titlebar-search-popup">
       <div className="titlebar-search-status" role="status">{!query.trim() ? "Search note titles and content" : loading ? "Searching…" : error ? "Search unavailable" : hits.length ? `${hits.length} result${hits.length === 1 ? "" : "s"}` : "No matching notes"}</div>
       {error && <p className="error" role="alert">{error}</p>}

@@ -130,10 +130,11 @@ function EnterpriseForm({
   const save = () => { void companyDraft.run(persist).catch(() => undefined); };
 
   return (
-    <div className="row">
-      <span className="row-label">{status.name}</span>
-      <span className="row-value">
-        {status.configured ? "Set up" : "Not set up"}
+    <div className="company-card">
+      <div className="provider-card-head">
+        <span className="company-card-name">{status.name}</span>
+        <span className="model-chip" data-tone={status.configured ? "installed" : "plain"}>{status.configured ? "Set up" : "Not set up"}</span>
+      </div>
         {status.problem ? (
           <FailureLine
             text="The saved settings can't be used. Enter them again."
@@ -149,22 +150,22 @@ function EnterpriseForm({
         ) : null}
 
         {fields.map((f) => (
-          <span key={f.key} className="controls">
             <input
+              key={f.key}
               type={f.secret ? "password" : "text"}
               autoComplete="off"
               aria-label={`${status.name} ${f.label}`}
+              title={f.hint ? `${f.label} — ${f.hint}` : f.label}
               placeholder={f.hint ? `${f.label} — ${f.hint}` : f.label}
               value={values[f.key] ?? ""}
               onChange={(e) =>
                 setValues((prev) => ({ ...prev, [f.key]: e.target.value }))
               }
             />
-          </span>
         ))}
 
         {companyDraft.feedback}
-        <span className="controls">
+        <div className="action-row company-card-actions">
           {/* Never disabled: a control that silently does nothing is the defect. */}
           <button type="button" onClick={save}>
             Save
@@ -174,8 +175,7 @@ function EnterpriseForm({
               Clear
             </button>
           ) : null}
-        </span>
-      </span>
+        </div>
     </div>
   );
 }
@@ -250,19 +250,23 @@ export function SettingsIntelligence({
         <span className="row-value">
           {/* The local route has no key: `configured` is whether a model is
               running. It read "Key saved" / "No key saved" (branch review). */}
-          {local
-            ? p.configured
-              ? "A model is running"
-              : "No model is running"
-            : p.enterprise
-              ? "Company account"
-              : p.configured
-                ? "Key saved"
-                : "No key saved"}
-          <em className="row-detail">
-            {dispatch.text} · {p.models.length} model
-            {p.models.length === 1 ? "" : "s"}
-          </em>
+          <span className="provider-row-chips">
+            <span className="model-chip" data-tone={!p.enterprise && p.configured ? "installed" : "plain"}>
+              {local
+                ? p.configured
+                  ? "A model is running"
+                  : "No model is running"
+                : p.enterprise
+                  ? "Company account"
+                  : p.configured
+                    ? "Key saved"
+                    : "No key saved"}
+            </span>
+            <span className="model-chip">
+              {dispatch.text} · {p.models.length} model
+              {p.models.length === 1 ? "" : "s"}
+            </span>
+          </span>
           <LearnMore summary="Details">
             {dispatch.more ? <p>{dispatch.more}</p> : null}
             <p>
@@ -288,8 +292,8 @@ export function SettingsIntelligence({
 
       <SummarySettingsPanel focusRequest={summaryFocus} onGoToProviders={onGoToProviders} onGoToLocalModels={onGoToLocalModels} />
       <section data-surface="settings.intelligence">
-        <h2>Dictation cleanup</h2>
-        <p className="muted">
+        <h2>dictation cleanup</h2>
+        <p>
           An AI model can tidy a dictation — punctuation, filler words, names —
           before it is typed. It is off by default: with a cloud provider, what
           you said leaves this computer.
@@ -303,16 +307,17 @@ export function SettingsIntelligence({
           </p>
         </LearnMore>
 
-        <Row label="Currently" value={current.value} detail={current.detail} />
-        {current.more ? (
-          <LearnMore summary="Details">
-            <p>{current.more}</p>
-          </LearnMore>
-        ) : null}
+        <Row label="Currently" value={current.value} detail={current.detail}>
+          {current.more ? (
+            <LearnMore summary="Details">
+              <p>{current.more}</p>
+            </LearnMore>
+          ) : null}
+        </Row>
 
         <div className="row">
           <span className="row-label">Provider</span>
-          <span className="row-value controls">
+          <span className="row-value">
             <select
               aria-label="cleanup provider"
               value={provider}
@@ -341,7 +346,7 @@ export function SettingsIntelligence({
 
         <div className="row">
           <span className="row-label">Model</span>
-          <span className="row-value controls">
+          <span className="row-value">
             {selfHosted ? (
               // A server the user runs has no model list to offer. Typed, and
               // required all the same: `params::shape_for` needs the real id.
@@ -375,7 +380,7 @@ export function SettingsIntelligence({
 
         <div className="row">
           <span className="row-label">Or a server you run</span>
-          <span className="row-value controls">
+          <div className="row-value">
             <input
               type="url"
               aria-label="self-hosted endpoint"
@@ -383,31 +388,34 @@ export function SettingsIntelligence({
               value={url}
               onChange={(e) => setDraftUrl(e.target.value)}
             />
-          </span>
+            <em className="row-detail">
+              {selfHosted
+                ? "This address is in use, so the provider above is ignored."
+                : "An address here is used instead of the provider above."}
+            </em>
+            <LearnMore summary="About your own server">
+              <p>
+                Plain <code>http://</code> is only allowed to this computer or your
+                own network, so a key is never sent over the internet unencrypted.
+                Requests to your server go without a key unless you save one under
+                Providers › Your own server. Summaries use the same key.
+              </p>
+            </LearnMore>
+          </div>
         </div>
-        <p className="caveat">
-          {selfHosted
-            ? "This address is in use, so the provider above is ignored."
-            : "An address here is used instead of the provider above."}
-        </p>
-        <LearnMore summary="About your own server">
-          <p>
-            Plain <code>http://</code> is only allowed to this computer or your
-            own network, so a key is never sent over the internet unencrypted.
-            Requests to your server go without a key unless you save one under
-            Providers › Your own server. Summaries use the same key.
-          </p>
-        </LearnMore>
 
-        <span className="controls">
+        <div className="action-row cleanup-actions">
           {/* Never disabled: a control that silently does nothing is the defect. */}
-          <button type="button" onClick={() => apply(true)}>
+          <button type="button" className="action-iris" onClick={() => apply(true)}>
             Turn cleanup on
           </button>
           <button type="button" onClick={() => apply(false)}>
             Turn it off
           </button>
-        </span>
+          <button type="button" onClick={onGoToProviders}>
+            Open Providers
+          </button>
+        </div>
         {cleanupDraft.feedback}
         {said ? (
           <p className="muted" role="status">
@@ -419,13 +427,10 @@ export function SettingsIntelligence({
             No provider can be used yet. Add a key on the Providers page first.
           </p>
         ) : null}
-        <button type="button" onClick={onGoToProviders}>
-          Open Providers
-        </button>
       </section>
 
       <section data-surface="settings.intelligence.enterprise">
-        <h2>Company accounts</h2>
+        <h2>company accounts</h2>
         <p className="muted">
           AWS Bedrock, Azure OpenAI and Vertex AI use your organisation's
           settings rather than one key, so they are set up here. They are saved
@@ -436,7 +441,7 @@ export function SettingsIntelligence({
           chosen, transcripts are sent to it. The first wording read as a claim
           about the app ("no request has been sent") -- caught in review.
         */}
-        <p className="caveat">
+        <p className="caveat warn caveat-tint">
           <strong>Not yet tried against a real account.</strong> The requests
           are built and tested, but the people who make this app have not been
           able to run one against any of the three.
@@ -451,18 +456,20 @@ export function SettingsIntelligence({
             <code>docs/PLATFORM_SUPPORT.md</code>.
           </p>
         </LearnMore>
-        {enterprise.map((e) => (
-          <EnterpriseForm
-            key={e.provider}
-            status={e}
-            onSave={async config => { await setEnterpriseConfig(config); await reload(); }}
-            onClear={async () => { await clearEnterpriseConfig(e.provider); await reload(); }}
-          />
-        ))}
+        <div className="company-cards">
+          {enterprise.map((e) => (
+            <EnterpriseForm
+              key={e.provider}
+              status={e}
+              onSave={async config => { await setEnterpriseConfig(config); await reload(); }}
+              onClear={async () => { await clearEnterpriseConfig(e.provider); await reload(); }}
+            />
+          ))}
+        </div>
       </section>
 
       <section>
-        <h2>All providers</h2>
+        <h2>all providers</h2>
         <p className="muted">
           Every provider for cleanup and summaries, including the ones this
           version can't use yet, with the reason.

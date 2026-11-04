@@ -20,7 +20,7 @@ type PlayerHeaderProps = {
 
 /**
  * The line across the top of the player card while the transcript is on screen (KNEG-448): who
- * is speaking -- a 6px square, `--band` while the recording plays and muted while it is paused,
+ * is speaking -- a 6px dot, `--band` while the recording plays and muted while it is paused,
  * and the name -- or, while lines are selected, "Play selection (a–b)" and a button that clears
  * the selection; and at the far end the Follow chip, `--band` while it is on. A fixed 24px row
  * whichever it shows, so the card does not change height as playback passes a line nobody is

@@ -32,7 +32,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { importActive, importProgressText, pollImport } from "../lib/importProgress";
+import { importActive, importProgressText, importStages, pollImport } from "../lib/importProgress";
+import { Icon } from "../components/Icon";
 import { LearnMore } from "../components/LearnMore";
 import { Row } from "../components/Row";
 import { destinationName } from "../lib/controlBar";
@@ -100,6 +101,7 @@ export function NotesUpload({ onOpenNote }: { onOpenNote: (id: number) => void }
     (value) => { setSnapshot(value); setSnapshotError(null); },
     (error) => setSnapshotError(`Could not check import progress: ${message(error)}`)), []);
   const mediaBusy = pending || importActive(snapshot);
+  const stages = importStages(snapshot);
   const result = snapshot?.stage === "succeeded" ? snapshot.result : null;
   const mediaResult = result ? { noteId: result.noteId, result } : null;
 
@@ -182,7 +184,7 @@ export function NotesUpload({ onOpenNote }: { onOpenNote: (id: number) => void }
         <span className="row-label">{label}</span>
         <span className="row-value controls">
           {status.installed ? (
-            <span>Installed</span>
+            <span className="status-ok"><span className="status-dot" aria-hidden="true" />Installed</span>
           ) : unavailable ? (
             <span>Not available</span>
           ) : (
@@ -213,7 +215,79 @@ export function NotesUpload({ onOpenNote }: { onOpenNote: (id: number) => void }
     <div className="view">
       {error ? <p className="error">{error}</p> : null}
 
-      <section data-surface="notes.upload">
+      <section data-surface="notes.upload" className="import-file" aria-labelledby="import-file-title">
+        <div className="picture-tile tile-streak import-tile" data-busy={mediaBusy}>
+          <div className="tile-streak-art" aria-hidden="true" />
+          <h2 id="import-file-title" className="tile-label">audio or video file</h2>
+          <div className="tile-actions">
+            <button type="button" className="glass-action import-choose" disabled={mediaBusy} onClick={() => { void chooseLocalFile("audio"); }}>
+              Choose an audio file…
+              <span className="glass-action-end" aria-hidden="true"><Icon name="plus" size={16} /></span>
+            </button>
+            <button type="button" className="glass-action import-choose" disabled={mediaBusy} onClick={() => { void chooseLocalFile("video"); }}>
+              Choose a video file…
+              <span className="glass-action-end" aria-hidden="true"><Icon name="plus" size={16} /></span>
+            </button>
+          </div>
+          {/* Its name here, and all of it under the pointer: two files of one name are told apart by where they are. */}
+          {localPick ? (
+            <span className="import-picked" title={localPick.path}>
+              <span className="import-picked-label">Selected</span>
+              <span className="import-picked-name">{localPick.path.split(/[\\/]/).pop()}</span>
+            </span>
+          ) : null}
+        </div>
+
+        <div className="import-run">
+          <p className="import-status" role="status">
+            {snapshot && snapshot.stage !== "succeeded" ? `${importProgressText(snapshot)}${snapshot.provider ? ` · ${snapshot.provider}${snapshot.model ? ` / ${snapshot.model}` : ""}` : ""}` : ""}
+          </p>
+          <button
+            type="button"
+            className="primary"
+            disabled={!localPick || !ffmpegReady || mediaBusy}
+            onClick={() => {
+              void runLocalImport();
+            }}
+          >
+            Import and transcribe
+          </button>
+        </div>
+        {!ffmpegReady && localPick ? (
+          <p className="caveat">ffmpeg must be installed below before this can run.</p>
+        ) : null}
+
+        {stages === null ? null : (
+          <ol className="import-stages">
+            {stages.map((stage) => (
+              <li key={stage.number} className="import-stage" data-state={stage.state} {...(stage.state === "current" ? { "aria-current": "step" as const } : {})}>
+                <span className="import-stage-number">{stage.number}</span>
+                {stage.label}
+              </li>
+            ))}
+          </ol>
+        )}
+        {importActive(snapshot) ? <p className="muted">You can leave this screen and return while the import continues. Local transcription may take time; elapsed time does not measure how much audio has been processed.</p> : null}
+        {snapshotError ? <p className="error">{snapshotError}</p> : null}
+        {snapshot?.stage === "failed" ? <p className="error" role="alert">{snapshot.error}</p> : null}
+        {snapshot?.stage === "interrupted" ? <p className="caveat" role="alert">{snapshot.error}</p> : null}
+        {mediaResult ? (
+          <div className="import-done" role="status">
+            <span className="import-done-text">
+              <span>Import complete</span>
+              <span className="import-done-detail">
+                {`Saved as note ${mediaResult.noteId} · ${mediaImportSourceLabel(mediaResult.result.source)} · ${mediaResult.result.provider}${
+                  mediaResult.result.model ? ` / ${mediaResult.result.model}` : ""
+                } · ${Math.round(mediaResult.result.durationMs / 1000)}s of audio · ${(mediaResult.result.retainedBytes / (1024 * 1024)).toFixed(1)} MB retained`}
+              </span>
+            </span>
+            <button type="button" className="import-open" onClick={() => onOpenNote(mediaResult.noteId)}>Open imported note</button>
+          </div>
+        ) : null}
+        {mediaError ? <p className="error">{mediaError}</p> : null}
+      </section>
+
+      <section aria-label="How it is transcribed">
         <Row
           label="Transcription goes to"
           value={route.problem ? "Nowhere usable" : destinationName(route.destination)}
@@ -238,8 +312,10 @@ export function NotesUpload({ onOpenNote }: { onOpenNote: (id: number) => void }
             failure a dictation would show, for the same reason.
           </p>
         </LearnMore>
+      </section>
 
-        <h3>Sidecars</h3>
+      <section aria-labelledby="import-sidecars">
+        <h2 id="import-sidecars" className="section-label">sidecars</h2>
         {sidecarRow("ffmpeg", ffmpeg, () => installMediaImportSidecar("ffmpeg"))}
         {progress ? <Row label="Progress" value={progress} /> : null}
         <LearnMore summary="What ffmpeg is for">
@@ -249,70 +325,12 @@ export function NotesUpload({ onOpenNote }: { onOpenNote: (id: number) => void }
             server is on Settings &gt; Transcription &gt; Local.
           </p>
         </LearnMore>
-
-        <p className="muted">Converted audio is retained for playback until you delete its note. Your original file is preserved.</p>
-        <h3>Audio or video file</h3>
-        <div className="row">
-          <span className="row-label">File</span>
-          <span className="row-value controls">
-            <button
-              type="button"
-              disabled={mediaBusy}
-              onClick={() => {
-                void chooseLocalFile("audio");
-              }}
-            >
-              Choose an audio file…
-            </button>
-            <button
-              type="button"
-              disabled={mediaBusy}
-              onClick={() => {
-                void chooseLocalFile("video");
-              }}
-            >
-              Choose a video file…
-            </button>
-          </span>
-        </div>
-        {localPick ? (
-          <Row label="Selected" value={localPick.path} detail={localPick.kind} />
-        ) : null}
-        <button
-          type="button"
-          className="primary"
-          disabled={!localPick || !ffmpegReady || mediaBusy}
-          onClick={() => {
-            void runLocalImport();
-          }}
-        >
-          Import and transcribe
-        </button>
-        {!ffmpegReady && localPick ? (
-          <p className="caveat">ffmpeg must be installed above before this can run.</p>
-        ) : null}
-
-        {snapshot ? <p role="status">{importProgressText(snapshot)}{snapshot.provider ? ` · ${snapshot.provider}${snapshot.model ? ` / ${snapshot.model}` : ""}` : ""}</p> : null}
-        {importActive(snapshot) ? <p className="muted">You can leave this screen and return while the import continues. Local transcription may take time; elapsed time does not measure how much audio has been processed.</p> : null}
-        {snapshotError ? <p className="error">{snapshotError}</p> : null}
-        {snapshot?.stage === "failed" ? <p className="error" role="alert">{snapshot.error}</p> : null}
-        {snapshot?.stage === "interrupted" ? <p className="caveat" role="alert">{snapshot.error}</p> : null}
-        {mediaResult ? (
-          <Row
-            label="Imported"
-            value={`Saved as note ${mediaResult.noteId}`}
-            detail={`${mediaImportSourceLabel(mediaResult.result.source)} · ${mediaResult.result.provider}${
-              mediaResult.result.model ? ` / ${mediaResult.result.model}` : ""
-            } · ${Math.round(mediaResult.result.durationMs / 1000)}s of audio · ${(mediaResult.result.retainedBytes / (1024 * 1024)).toFixed(1)} MB retained`}
-          />
-        ) : null}
-        {mediaResult ? <button type="button" onClick={() => onOpenNote(mediaResult.noteId)}>Open imported note</button> : null}
-        {mediaError ? <p className="error">{mediaError}</p> : null}
+        <p className="muted import-retained">Converted audio is retained for playback until you delete its note. Your original file is preserved.</p>
       </section>
 
       <section>
-        <h2>Import from OpenWhispr</h2>
-        <p className="muted">
+        <h2 className="section-label">import from openwhispr</h2>
+        <p>
           Copies your notes, transcriptions and related records from
           OpenWhispr into this application; some OpenWhispr-only data is left
           behind.

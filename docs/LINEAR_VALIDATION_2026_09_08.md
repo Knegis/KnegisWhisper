@@ -91,7 +91,8 @@ A separate 600-second synthetic WAV reached the transcribing stage before the
 isolated application process was terminated. After restart its conversion
 scratch was cleaned up. The upload screen showed neither the interrupted job
 nor a retry notice. This user-visible recovery gap is filed as KNEG-177.
-The real OpenWhispr database check remains outstanding on KNEG-90.
+The real OpenWhispr database check stayed outstanding on KNEG-90 until 2026-11-02; see
+`docs/BENCH_CHECK.md`, chunk G item 3.
 
 ## Reproduction and evidence
 

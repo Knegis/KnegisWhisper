@@ -1,13 +1,14 @@
 /**
  * Dictation: the task, and what came of it.
  *
- * Three parts, the way the canvas draws them:
+ * Top to bottom, the way the canvas draws it:
  *
- *   - **The hero**, centred: whether dictation will work (`lib/readiness.ts`)
- *     and, when it will, the shortcut to press. When it will not, the one
- *     problem and the button that fixes it; while recording, "Listening…", a
- *     timer, and the microphone's live level (`LevelMeter`, KNEG-371).
- *   - **The control bar** at the foot: the microphone, and where speech
+ *   - **The status notice** (`lib/dictationNotice.ts`): whether dictation will
+ *     work and which microphone it would use, or that it is recording.
+ *   - **The title**, centred: the shortcut to press (`lib/readiness.ts`). When
+ *     dictation will not work, the one problem; while recording, "Listening…"
+ *     and the microphone's live level (`LevelMeter`, KNEG-371).
+ *   - **The white card** (`ControlBar`): the microphone, and where speech
  *     becomes text -- an installed model on this computer or a cloud
  *     provider -- each chosen right here in its chip's menu (`ChipMenu`);
  *     on every route but a Parakeet model's, the languages, in a panel
@@ -17,13 +18,15 @@
  *     are held while a dictation is under way, because Rust reads them at
  *     Stop. Then the
  *     privacy line, which is never hidden and follows a switch as soon as it
- *     lands; the last result with a Copy button; the Tidy up chip -- a switch
+ *     lands; the last result with a Copy button; and Tidy up -- a switch
  *     once cleanup has been set up in Cleanup & summaries (held during a
  *     dictation too, since it applies to the running session at once, and
- *     saying under itself when it cannot run), until then the way there; and
- *     Start, which waits while a route switch or the Tidy up write is applied.
- *   - **The history**, in the list panel (`components/DictationHistoryPanel.tsx`),
- *     with the way to the shortcut editor and the vocabulary at its top.
+ *     saying under itself when it cannot run), until then the way there.
+ *   - **The picture tile** beside it: the state in a word, the orb breathing at
+ *     the state's pace, and the page's button -- Start, which waits while a
+ *     route switch or the Tidy up write is applied, or Discard and Stop.
+ *   - **The history** under them (`components/DictationHistory.tsx`), with the
+ *     way to the shortcut editor and the vocabulary at its head.
  *
  * The loop this page used to hold on one screen -- bind a key, press it, read
  * the result -- still has to hold across the two screens it is split over.
@@ -36,12 +39,10 @@
  *
  * Dictation state arrives from Rust by event rather than being tracked here: the
  * hotkey works while this window is hidden, so the window cannot be the thing
- * that knows. The title bar's Dictation pill carries no recording mark; the hero says it.
+ * that knows. The title bar's Dictation pill carries no recording mark; the notice says it.
  *
- * Rendered by `App.tsx` straight into the card, with no `PageHeader`: the
- * panel's title is the page's `h1` -- `SplitView`'s `heading` stands in for
- * it while the panel is collapsed -- and the intro sentence that used to sit
- * under a header is the hero's own line under the shortcut.
+ * Rendered by `App.tsx` straight into the card, with no `PageHeader`: the title
+ * is the page's `h1`, and this page scrolls in its own `.split-main`.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -49,16 +50,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Chip } from "../components/Chip";
 import { ChipMenu } from "../components/ChipMenu";
 import { ControlBar } from "../components/ControlBar";
-import { DictationHistoryPanel } from "../components/DictationHistoryPanel";
-import { Icon, IconFilled } from "../components/Icon";
+import { DictationHistory } from "../components/DictationHistory";
+import { Icon } from "../components/Icon";
 import { Keycaps } from "../components/Keycaps";
 import { LearnMore } from "../components/LearnMore";
 import { LevelMeter } from "../components/LevelMeter";
 import { LocalLanguagePicker } from "../components/LocalLanguagePicker";
 import { LocalServerHealth } from "../components/LocalServerHealth";
-import { PanelHeader } from "../components/Panel";
-import { SplitView } from "../components/SplitView";
-import { TaskHero } from "../components/TaskHero";
+import { StatusNotice } from "../components/StatusNotice";
 import { cleanupConfigured, effectiveCleanup } from "../lib/cleanup";
 import {
   cleanupLabel,
@@ -69,6 +68,7 @@ import {
   privacyLines,
 } from "../lib/controlBar";
 import { timeOfDay } from "../lib/dayGroups";
+import { dictationStatus } from "../lib/dictationNotice";
 import {
   languagesApply,
   localEngine,
@@ -112,7 +112,7 @@ import { useRefresh } from "../lib/useRefresh";
 
 /**
  * The sentence that was this page's `PageHeader` intro (`lib/pages.ts`), now
- * the hero's line under whatever it is asking you to do.
+ * the line under the title, whatever it is asking you to do.
  */
 const INTRO = "Speak, and your words are typed where your cursor is.";
 
@@ -292,11 +292,12 @@ export function DictationView({
 
   if (!data) {
     return (
-      <SplitView label="Dictation history" heading="Dictation" panel={<PanelHeader title="Dictation" />}>
+      <div className="split-main">
         <section data-surface="dictation.task" className="task" aria-label="Dictation">
+          <h1 className="sr-only">Dictation</h1>
           {error ? <p className="error">{error}</p> : <p className="muted">Loading…</p>}
         </section>
-      </SplitView>
+      </div>
     );
   }
 
@@ -390,6 +391,9 @@ export function DictationView({
   };
   // Why a stored setup cannot run, for the line under the chip: a caveat on a
   // route that resolves (no key), or a setup that no longer resolves.
+  // The switch's word, and "needs setup" where it cannot run: the switch alone
+  // says on or off, which is what is stored, not what will happen.
+  const tidyLabel = cleanupLabel(cleanup) === "Tidy up: needs setup" ? "Tidy up: needs setup" : "Tidy up";
   const tidyCaveat =
     cleanup.state === "ready" ? cleanup.caveat : cleanup.state === "problem" ? cleanup.reason : null;
   // The route chip's label: the row in effect, by its own words. Failing
@@ -428,81 +432,60 @@ export function DictationView({
     }
   };
 
-  // The hero. Readiness answers "will starting work?", which means nothing
+  // The title. Readiness answers "will starting work?", which means nothing
   // once a dictation has started -- "Ready" over a recording, or over text
   // being typed, reads as a claim about the session -- so while one is under
-  // way the hero speaks for the session instead.
+  // way the page speaks for the session instead.
+  const elapsed = clock(recordingSince === null ? 0 : (now - recordingSince) / 1000);
+  const status = dictationStatus({
+    recording,
+    busyLabel: mic.busy ? sessionStateLabel(state) : null,
+    ready: readiness.state === "ready",
+    microphone: microphone.label,
+    microphoneMissing: microphone.missing !== null,
+    elapsed,
+  });
+
   const hero = recording ? (
-    <TaskHero
-      icon="dictation"
-      status={{
-        tone: "recording",
-        label: sessionStateLabel(state),
-        extra: clock(recordingSince === null ? 0 : (now - recordingSince) / 1000),
-      }}
-      heading="Listening…"
-      meter={<LevelMeter session="dictation" source="microphone" segments={16} />}
-      sub="Speak now, then press Stop and transcribe. The overlay is visible while you record."
-    />
+    <>
+      <h1 id="dictation-title" className="page-title title-ink">Listening…</h1>
+      <div className="hero-meter"><LevelMeter session="dictation" source="microphone" segments={9} className="level-wave" /></div>
+      <p className="page-sub">Speak now, then press Stop and transcribe. The overlay is visible while you record.</p>
+    </>
   ) : mic.busy ? (
-    <TaskHero
-      icon="dictation"
-      status={{ tone: "busy", label: sessionStateLabel(state) }}
-      heading="Your words are on their way"
-      sub={INTRO}
-    />
+    <>
+      <h1 id="dictation-title" className="page-title title-ink">Your words are on their way</h1>
+      <p className="page-sub">{INTRO}</p>
+    </>
   ) : readiness.state === "ready" ? (
-    <TaskHero
-      icon="dictation"
-      status={{ tone: "ready", label: "Ready" }}
-      heading={<>Press <Keycaps accelerators={pressable} /> to dictate</>}
-      sub={
-        <>
-          <p>{INTRO}</p>
-          {readiness.caution ? <p className="hero-note">{readiness.caution}</p> : null}
-        </>
-      }
-    />
+    <>
+      <h1 id="dictation-title" className="page-title page-title-keys">
+        <span className="title-ink">Press</span>{" "}
+        <Keycaps accelerators={pressable} />{" "}
+        <span className="title-ink">to dictate</span>
+      </h1>
+      <p className="page-sub">{INTRO}</p>
+      {readiness.caution ? <p className="hero-note">{readiness.caution}</p> : null}
+    </>
   ) : (
-    <TaskHero
-      icon={readiness.fix.view === "shortcuts" ? "shortcut" : "transcription"}
-      status={{ tone: "setup", label: "Needs setup" }}
-      heading={readiness.problem}
-      sub={INTRO}
-    >
-      {/* The fix takes the page's one filled button only when Start cannot
-          be pressed; otherwise Start keeps it and this stays plain. */}
-      <button
-        type="button"
-        className={startBlocked ? "primary" : undefined}
-        onClick={() => onGoTo(readiness.fix.view)}
-      >
-        {readiness.fix.label}
-      </button>
+    <>
+      {/* A sentence rather than three words, so it steps down a size. */}
+      <h1 id="dictation-title" className="page-title page-title-long title-ink">{readiness.problem}</h1>
+      <p className="page-sub">{INTRO}</p>
       {readiness.detail ? <LearnMore>{readiness.detail}</LearnMore> : null}
-    </TaskHero>
+    </>
   );
 
   return (
-    <SplitView
-      label="Dictation history"
-      heading="Dictation"
-      panel={
-        <DictationHistoryPanel
-          history={history}
-          historyOn={historyOn}
-          keepRaw={keepRaw}
-          shortcut={shortcut}
-          onGoTo={onGoTo}
-          guard={guard}
-          reload={reload}
-        />
-      }
-    >
-      <section data-surface="dictation.task" className="task" aria-label="Dictation">
-        <div className="task-hero">{hero}</div>
+    <div className="split-main">
+      <div className="task-page">
+        <div className="task-notice">
+          <StatusNotice tone={status.tone} {...status.notice} />
+        </div>
+        <section data-surface="dictation.task" className="task" aria-labelledby="dictation-title">
+          <div className="task-hero" data-tone={status.tone}>{hero}</div>
 
-        <div className="task-bar">
+          <div className="task-grid">
           <ControlBar
             strip={
               <>
@@ -566,7 +549,7 @@ export function DictationView({
                 <>
                   <div className="control-result-head">
                     <span className="control-result-label">
-                      Last dictation{last.at ? ` · ${timeOfDay(last.at)}` : ""}
+                      last dictation{last.at ? ` · ${timeOfDay(last.at)}` : ""}
                     </span>
                     <button
                       type="button"
@@ -575,7 +558,7 @@ export function DictationView({
                         void copyLast(last.text);
                       }}
                     >
-                      <Icon name="copy" size={14} />
+                      <Icon name="copy" size={16} />
                       {copyNotice ?? "Copy"}
                     </button>
                   </div>
@@ -599,7 +582,7 @@ export function DictationView({
                       user asked to keep it -- see `raw_for_history`. So its
                       presence is the finding, and it is labelled rather than
                       shown as a bare second line. */}
-                  {last.raw ? <p className="control-note">Before cleanup: {last.raw}</p> : null}
+                  {last.raw ? <p className="control-note"><em>Before cleanup:</em> {last.raw}</p> : null}
                 </>
               ) : (
                 <p className="control-result-empty">Nothing dictated yet.</p>
@@ -620,44 +603,23 @@ export function DictationView({
 
             <div className="control-row">
               {tidyConfigured ? (
-                <Chip
-                  icon="tidy"
-                  label={cleanupLabel(cleanup)}
-                  pressed={reasoning.settings.enabled}
-                  onClick={toggleCleanup}
-                  held={held}
-                />
+                <label className="switch-row control-tidy">
+                  <span className="control-tidy-label"><Icon name="tidy" size={16} />{tidyLabel}</span>
+                  {/* `aria-disabled` while held, as the chips are, so a keyboard
+                      user on it keeps focus when the hold starts. */}
+                  <input
+                    type="checkbox"
+                    role="switch"
+                    checked={reasoning.settings.enabled}
+                    onChange={toggleCleanup}
+                    aria-disabled={held !== null ? true : undefined}
+                    aria-description={held ?? undefined}
+                    {...(held === null ? {} : { title: held })}
+                  />
+                </label>
               ) : (
                 <Chip icon="tidy" label={cleanupLabel(cleanup)} chevron onClick={() => onGoTo("intelligence")} />
               )}
-              <div className="control-spacer" />
-              {recording ? (
-                <button
-                  type="button"
-                  className="secondary"
-                  onClick={() => {
-                    void guard(cancelDictation);
-                  }}
-                >
-                  <Icon name="discard" size={16} />
-                  Discard
-                </button>
-              ) : null}
-              <button
-                type="button"
-                className={startBlocked ? "control-start" : "primary control-start"}
-                disabled={mic.disabled || startBlocked || startWaits}
-                onClick={() => {
-                  void guard(toggleDictation);
-                }}
-              >
-                {recording ? <IconFilled name="stop" size={14} /> : <Icon name="microphone" size={16} />}
-                {recording
-                  ? "Stop and transcribe"
-                  : mic.busy
-                    ? sessionStateLabel(state)
-                    : "Start dictation"}
-              </button>
             </div>
             {/* Under the chip, and not only in its label: "needs setup" says
                 that it cannot run, this says why and where it is fixed. */}
@@ -675,6 +637,57 @@ export function DictationView({
               ) : null}
             </div>
           </ControlBar>
+
+          <div className="picture-tile tile-lavender" data-tone={status.tone}>
+            <div className="tile-orb" aria-hidden="true" />
+            <span className="tile-label"><span className="tile-label-dot" aria-hidden="true" />{status.tile}</span>
+            <div className="tile-actions">
+              {/* The fix takes the filled button only when Start cannot be
+                  pressed; otherwise Start keeps it and this stays plain. */}
+              {readiness.state === "needs-setup" && !recording && !mic.busy ? (
+                <button
+                  type="button"
+                  className={startBlocked ? "tile-cta primary" : "glass-plain"}
+                  onClick={() => onGoTo(readiness.fix.view)}
+                >
+                  {readiness.fix.label}
+                </button>
+              ) : null}
+              {recording ? (
+                <button
+                  type="button"
+                  className="glass-plain"
+                  onClick={() => {
+                    void guard(cancelDictation);
+                  }}
+                >
+                  <Icon name="discard" size={16} />
+                  Discard
+                </button>
+              ) : null}
+              {mic.busy && !recording ? (
+                <button type="button" className="tile-cta primary" data-busy="true" disabled>
+                  {sessionStateLabel(state)}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className={recording ? "glass-action glass-action-signal control-start" : "glass-action control-start"}
+                  disabled={mic.disabled || startBlocked || startWaits}
+                  onClick={() => {
+                    void guard(toggleDictation);
+                  }}
+                >
+                  {recording ? "Stop and transcribe" : "Start dictation"}
+                  <span className="glass-action-end" aria-hidden="true">
+                    {recording ? <span className="glass-action-stop" /> : <Icon name="microphone" size={18} />}
+                  </span>
+                </button>
+              )}
+            </div>
+          </div>
+          </div>
+
           {/* The whisper server's health, so on its route alone: under a
               Parakeet model it describes a server dictation is not using.
               Plain: nothing while it works, and no model id or port
@@ -684,8 +697,18 @@ export function DictationView({
               <LocalServerHealth plain />
             </div>
           ) : null}
-        </div>
-      </section>
-    </SplitView>
+        </section>
+
+        <DictationHistory
+          history={history}
+          historyOn={historyOn}
+          keepRaw={keepRaw}
+          shortcut={shortcut}
+          onGoTo={onGoTo}
+          guard={guard}
+          reload={reload}
+        />
+      </div>
+    </div>
   );
 }

@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { CdpClient } from "./cdp.mjs";
-import { clipRail } from "./shell-rail.mjs";
+import { clipRect } from "./shell-title-bar.mjs";
 
 class FakeWebSocket {
   static OPEN = 1;
@@ -81,9 +81,9 @@ test("a close rejects every pending request", async () => {
   await assert.rejects(two, /closed/);
 });
 
-test("rail clips translate viewport geometry into page coordinates", () => {
+test("clips translate viewport geometry into page coordinates", () => {
   assert.deepEqual(
-    clipRail({
+    clipRect({
       rect: { left: 0, top: 12, width: 182, height: 708 },
       scrollX: 40,
       scrollY: 600,

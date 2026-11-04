@@ -27,8 +27,7 @@ import { isEntryPoint } from "../ci/entry.mjs";
 const delay = (ms) => new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
 const isMain = isEntryPoint(import.meta.url);
 
-const RAIL_ITEM = "nav.rail .rail-item";
-const PANEL_ITEM = ".list-panel .panel-item";
+const NAV_PILL = "button.nav-pill";
 
 const WIDE = { width: 1000, height: 720 };
 const SMALL = { width: 720, height: 520 };
@@ -58,7 +57,7 @@ const LOADED_BUT = "Loaded, but dictation goes to Parakeet Unified EN 0.6B";
 const ROUTE_CALLS = ["sherpa_use_model", "sherpa_use_stream_model", "dictation_use_local", "local_server_start"];
 const INSTALL_CALLS = ["local_model_install", "sherpa_install_model"];
 
-const SECTION_READY = `Boolean(document.querySelector('[data-surface="settings.transcription.local"] ul.list > li'))`;
+const SECTION_READY = `Boolean(document.querySelector('[data-surface="settings.transcription.local"] ul.model-list > li.model-row'))`;
 
 async function waitFor(cdp, expression, description, timeout = 10_000) {
   const deadline = Date.now() + timeout;
@@ -139,12 +138,10 @@ const notInUse = (page, name, text) => {
 async function fresh(cdp, size = WIDE) {
   await viewport(cdp, size);
   await reload(cdp);
-  await waitFor(cdp, "Boolean(document.querySelector('nav.rail') && document.querySelector('.card .split-main, .card .content'))", "the fixture shell");
+  await waitFor(cdp, "Boolean(document.querySelector('.app-titlebar') && document.querySelector('.split-main, .content'))", "the fixture shell");
   await cdp.evaluate(snippets.removeFixtureBanner());
   await cdp.evaluate(snippets.installInvokeStub());
-  await cdp.evaluate(snippets.clickText(RAIL_ITEM, "Settings"));
-  await waitFor(cdp, "Boolean(document.querySelector('.list-panel .panel-item'))", "the Settings panel");
-  await cdp.evaluate(snippets.clickText(PANEL_ITEM, "Transcription"));
+  await cdp.evaluate(snippets.openSettingsScreen("Transcription"));
   await waitFor(cdp, SECTION_READY, "the local models list");
   await delay(300);
   await cdp.evaluate(snippets.clearStubCalls());
@@ -201,7 +198,7 @@ export async function runLocalModels(options) {
       claim: "The local models are one list: no separate Parakeet list or heading, and model ids only inside closed Details.",
       expectation: [
         "one ul in the local section, holding a row for each of the fixtures' nine models; its headings exactly",
-        "h2 'Local transcription' and h3 'Engines'; every Details closed; no model id in the shown text, and every id somewhere in the section (under Details)",
+        "h2 'local transcription' and h2 'engines'; every Details closed; no model id in the shown text, and every id somewhere in the section (under Details)",
       ].join(" "),
     }, async () => {
       await fresh(cdp);
@@ -214,7 +211,7 @@ export async function runLocalModels(options) {
       return {
         measured: { ids, lists: page.lists, rows: page.rows.length, headings: page.headings, openDetails: page.openDetails, idsShown: page.idsShown, idsAnywhere: page.idsAnywhere },
         matches: ids.length === 9 && page.lists === 1 && page.rows.length === 9
-          && JSON.stringify(page.headings) === JSON.stringify(["h2:Local transcription", "h3:Engines"])
+          && JSON.stringify(page.headings) === JSON.stringify(["h2:local transcription", "h2:engines"])
           && page.openDetails === 0 && page.idsShown.length === 0 && page.idsAnywhere.length === ids.length,
         screenshots: [shot],
       };
@@ -397,14 +394,14 @@ export async function runLocalModels(options) {
 
     await check({
       id: "7",
-      claim: "Under Engines, the Parakeet engine's caveat is in view with its fold, beside the speech engine's row and the two engines' Learn more.",
-      expectation: `the caveat "${CAVEAT}"; Details summaries include 'Why, and which folder' and 'About the two engines'; engine rows 'Speech engine' and 'Parakeet engine'`,
+      claim: "Under engines, the Parakeet engine's caveat is in view with its fold, beside the speech engine's card and the two engines' Learn more.",
+      expectation: `the caveat "${CAVEAT}"; Details summaries include 'Why, and which folder' and 'About the two engines'; engine cards 'Speech engine' and 'Parakeet engine'`,
       note: "The fixtures' Parakeet engine reports its build as unknown, which is when the caveat shows.",
     }, async () => {
       await fresh(cdp);
       const page = await state(cdp);
       const shot = "07-engines-1000x720.png";
-      await cdp.evaluate(`[...document.querySelectorAll('[data-surface="settings.transcription.local"] h3')].find((h) => h.textContent.trim() === 'Engines')?.scrollIntoView({ block: "start" })`);
+      await cdp.evaluate(`[...document.querySelectorAll('.content-transcription h2')].find((h) => h.textContent.trim() === 'engines')?.scrollIntoView({ block: "start" })`);
       await delay(150);
       await cdp.screenshot(resolve(out, shot));
       return {
@@ -460,7 +457,7 @@ export async function runLocalModels(options) {
 if (isMain) {
   try {
     const options = parseShellArgs(process.argv.slice(2));
-    if (options.help) process.stdout.write(`${shellUsage().replace("shell-rail.mjs", "local-models.mjs")}\n`);
+    if (options.help) process.stdout.write(`${shellUsage().replace("shell-title-bar.mjs", "local-models.mjs")}\n`);
     else {
       const failed = failedChecks(await runLocalModels(options));
       // The run completed; a check measured false still fails it, so a wrapper or CI step sees it.

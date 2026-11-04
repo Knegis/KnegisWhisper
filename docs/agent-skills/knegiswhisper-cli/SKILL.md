@@ -133,6 +133,10 @@ copy here would be a second thing to keep in step.
   good. The content is the user's own either way: ask before `notes delete`,
   `history delete`, or their tool equivalents, unless that is exactly what was
   requested.
+- **The two permanent MCP tools need `confirm: true`.** `transcriptions_delete`
+  and `transcriptions_forget_audio` answer a JSON-RPC error without it and change
+  nothing. Send it only after the user has said yes: the field records that step,
+  it does not stand in for it.
 - **Never print the bearer token** out of `~/.knegiswhisper/local-api.json`, and
   do not read that file yourself when a CLI command will do — both tools already
   handle it.

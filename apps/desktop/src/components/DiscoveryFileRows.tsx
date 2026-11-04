@@ -1,7 +1,7 @@
-import type { DiscoveryPermissions } from "../generated/ipc-types";
-import { discoveryPermissionsLabel } from "../lib/labels";
+import type { BinaryLocation, DiscoveryPermissions } from "../generated/ipc-types";
+import { binaryLocationLabel, discoveryPermissionsLabel } from "../lib/labels";
 import { LearnMore } from "./LearnMore";
-import { Row } from "./Row";
+import { Row, StatusDot } from "./Row";
 
 type Props = {
   discoveryPath: string;
@@ -27,18 +27,17 @@ export function DiscoveryPermissionRows({ permissions }: { permissions: Discover
   const stated = discoveryPermissionsLabel(permissions);
   if (permissionsAsIntended(permissions)) {
     return (
-      <>
-        <Row label="Discovery file permissions" value={stated.text} />
+      <Row label="Discovery file permissions" tone="ok" value={stated.text}>
         <LearnMore summary="How this was checked">
           <p>{stated.detail}.</p>
           {stated.caveat ? <p>{stated.caveat}</p> : null}
         </LearnMore>
-      </>
+      </Row>
     );
   }
   return (
     <>
-      <Row label="Discovery file permissions" value={stated.text} detail={stated.detail} />
+      <Row label="Discovery file permissions" tone="bad" value={stated.text} detail={stated.detail} />
       {stated.caveat ? <p className="caveat">{stated.caveat}</p> : null}
     </>
   );
@@ -57,15 +56,60 @@ export function DiscoveryPermissionRows({ permissions }: { permissions: Discover
 export function DiscoveryFileRows({ discoveryPath, permissions }: Props) {
   return (
     <>
-      <Row label="Discovery file" value={discoveryPath} />
+      <Row label="Discovery file" code value={discoveryPath} />
       {permissions ? (
         <DiscoveryPermissionRows permissions={permissions} />
       ) : (
-        <p className="muted">
-          Nothing to report about the discovery file's permissions: it does not
-          exist while the local API is not running.
-        </p>
+        <Row
+          label="Discovery file permissions"
+          value="Nothing to report"
+          detail="it does not exist while the local API is not running"
+        />
       )}
     </>
+  );
+}
+
+/** Where the client's binary is. Both found states lead with its path. */
+export function BinaryRow({ location }: { location: BinaryLocation }) {
+  const stated = binaryLocationLabel(location);
+  return location.state === "not-found" ? (
+    <Row label="Binary" tone="bad" value={stated.text} detail={stated.detail} />
+  ) : (
+    <Row
+      label="Binary"
+      tone="ok"
+      value={stated.text}
+      detail={
+        <>
+          <code>{location.path}</code>
+          {stated.detail.slice(location.path.length)}
+        </>
+      }
+    />
+  );
+}
+
+/** Whether the Local API is up, and the way to the screen that changes it. */
+export function LocalApiRow({
+  running,
+  detail,
+  onOpen,
+}: {
+  running: boolean;
+  detail: string;
+  onOpen: () => void;
+}) {
+  return (
+    <Row
+      label="Local API"
+      value={
+        <button type="button" className="row-link" onClick={onOpen}>
+          <StatusDot tone={running ? "ok" : "off"} />
+          {running ? "Running" : "Not running"}
+        </button>
+      }
+      detail={running ? undefined : detail}
+    />
   );
 }

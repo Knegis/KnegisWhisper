@@ -76,8 +76,9 @@ export function NoteEditor({
           floatingUIOptions: {
             // Replace the default flip middleware: the Notes rail must not
             // move row controls to the opposite side of the document.
-            // Keep Crepe's left/left-start alignment and 16px row spacing.
-            middleware: [{ name: "rowSpacing", fn: ({ x }) => ({ x: x - 16 }) }],
+            // Keep Crepe's left/left-start alignment, 2px off the text: the note's
+            // sheet has a 44px margin, which the scroller would clip anything past.
+            middleware: [{ name: "rowSpacing", fn: ({ x }) => ({ x: x - 2 }) }],
           },
         },
       })

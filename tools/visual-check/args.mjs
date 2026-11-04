@@ -1,5 +1,5 @@
 /** Parses the side-effect-free command-line contracts for visual-check tools. */
-const SHELL_USAGE = `Usage: node tools/visual-check/shell-rail.mjs [options]
+const SHELL_USAGE = `Usage: node tools/visual-check/shell-title-bar.mjs [options]
 
   --url <url>                 Dev server URL (default: http://127.0.0.1:5183/)
   --out <directory>           Report directory (default: timestamped out directory)

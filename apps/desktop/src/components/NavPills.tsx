@@ -14,22 +14,32 @@ const JOBS = RAIL.filter((id): id is Exclude<RailId, "settings"> => id !== "sett
  * They replace the rail. Exactly one reads as current when a job's screen is
  * showing -- `railOf(view)`, so Notes > Upload marks Notes -- and none does on
  * a settings screen, where the Settings pill is the marked one.
+ *
+ * While a meeting records, the Meetings pill carries the pulsing signal dot
+ * from anywhere in the window, so leaving the page does not hide that the
+ * microphone is open. Its name says so too: the dot alone says nothing to a
+ * screen reader.
  */
-export function JobPills({ view, onSelect }: { view: ViewId; onSelect: (id: ViewId) => void }) {
+export function JobPills({ view, onSelect, meetingRecording }: { view: ViewId; onSelect: (id: ViewId) => void; meetingRecording: boolean }) {
   const current = railOf(view);
   return (
     <nav className="nav-pills" aria-label="Main navigation">
-      {JOBS.map((id) => (
-        <button
-          key={id}
-          type="button"
-          className="nav-pill"
-          aria-current={current === id ? "page" : undefined}
-          onClick={() => onSelect(id)}
-        >
-          {labelOf(id)}
-        </button>
-      ))}
+      {JOBS.map((id) => {
+        const recording = meetingRecording && id === "meetings";
+        return (
+          <button
+            key={id}
+            type="button"
+            className="nav-pill"
+            aria-current={current === id ? "page" : undefined}
+            aria-label={recording ? `${labelOf(id)}, recording` : undefined}
+            onClick={() => onSelect(id)}
+          >
+            {recording ? <span className="nav-pill-dot" aria-hidden="true" /> : null}
+            {labelOf(id)}
+          </button>
+        );
+      })}
     </nav>
   );
 }
@@ -55,20 +65,10 @@ export function SettingsPill({ view, open, onOpen }: { view: ViewId; open: boole
 }
 
 /**
- * KnegisWhisper's mark: a diamond of sixteen dots, the dot-matrix motif of the
- * design language in the application's own shape. Columns of 1, 2, 3, 4, 3, 2
- * and 1 dots, each centred on the middle row.
+ * KnegisWhisper's mark: the owner's frog in a cowboy hat. Drawn as a mask over the text colour, so it
+ * follows the theme. The file is their drawing as an alpha mask, trimmed to its ink, with its lines
+ * thickened slightly so the eye and the hat still read at 40px on a 100% display.
  */
-const MARK_DOTS = [1, 2, 3, 4, 3, 2, 1].flatMap((count, column) =>
-  Array.from({ length: count }, (_, row) => ({ cx: 3 + column * 4, cy: 15 - (count - 1) * 2 + row * 4 })),
-);
-
-export function DotMark({ size = 30 }: { size?: number }) {
-  return (
-    <svg className="dot-mark" role="img" aria-label="KnegisWhisper" width={size} height={size} viewBox="0 0 30 30">
-      <g fill="currentColor">
-        {MARK_DOTS.map(({ cx, cy }) => <circle key={`${cx}-${cy}`} cx={cx} cy={cy} r={1.7} />)}
-      </g>
-    </svg>
-  );
+export function KnegisMark({ size = 40 }: { size?: number }) {
+  return <span className="knegis-mark" role="img" aria-label="KnegisWhisper" style={{ width: size, height: size }} />;
 }

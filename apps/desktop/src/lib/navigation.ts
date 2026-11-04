@@ -55,8 +55,7 @@
  * (Dictation's), Meetings, and Vocabulary, which dictation and meetings both
  * read -- and the setup screens after them: Transcription, Cleanup &
  * summaries, Local text models, then Providers and Calendar. The sheet lays
- * the same screens out by part of the application instead (`SETTINGS_PANEL`):
- * speech to text, meetings and calendar, AI and cloud services, developer.
+ * them out in that order (`SETTINGS_PANEL`).
  *
  * # The ids are mostly unchanged
  *
@@ -118,8 +117,8 @@ export const NAV = [
       { id: "api", label: "Local API" },
       // Named for what they are to someone who has not met the acronym;
       // the acronym stays where it is the thing you would search for.
-      { id: "cli", label: "Command line" },
-      { id: "mcp", label: "AI assistants (MCP)" },
+      { id: "cli", label: "CLI" },
+      { id: "mcp", label: "MCP" },
       { id: "diagnostics", label: "Diagnostics" },
     ],
   },
@@ -249,6 +248,19 @@ export function groupOf(view: ViewId): string | null {
 }
 
 /**
+ * The small label over a page's title: the part of the application it belongs to,
+ * in the pixel voice's lower case. `null` for a top-level destination, whose title
+ * stands alone.
+ */
+export function eyebrowOf(view: ViewId): string | null {
+  const group = NAV.find((entry) => isGroup(entry) && entry.id === groupOf(view));
+  if (group !== undefined) return group.label.toLowerCase();
+  const inner = INNER_VIEWS.find((entry) => entry.id === view);
+  if (inner === undefined) return null;
+  return NAV.find((entry) => entry.id === inner.parent)?.label.toLowerCase() ?? null;
+}
+
+/**
  * The title bar's pills: the three jobs, then `Settings`.
  *
  * Written out rather than derived from `NAV`, because it is not `NAV`'s
@@ -279,20 +291,11 @@ export function railOf(view: ViewId): RailId {
 }
 
 /**
- * The Settings sheet's sections, in order, and the screens in each.
- *
- * Twelve tiles in two blocks was a gallery: eight equal tiles under no
- * heading asked a reader to recognise every one by name. Four sections of
- * two to four tiles let them find the part of the application first and the
- * screen second. The sections are the sheet's own grouping, not `NAV`'s:
- * `NAV` still holds the two groups `config/ui-surfaces.json` files these
- * surfaces under, and `Developer` is still exactly that group, in its order,
- * under its label. The navigation test holds the rest -- every screen of
- * both groups on exactly one tile.
+ * The Settings sheet's two groups, in `NAV`'s order, and the screens in each. The
+ * headings are `NAV`'s labels in the pixel voice's lower case; the navigation test
+ * holds the rest -- every screen of both groups on exactly one tile, in order.
  */
 export const SETTINGS_PANEL = [
-  { heading: "Speech to text", views: ["transcription", "vocabulary", "shortcuts"] },
-  { heading: "Meetings and calendar", views: ["meeting-settings", "calendar"] },
-  { heading: "AI and cloud services", views: ["intelligence", "local-llm", "providers"] },
-  { heading: "Developer", views: ["api", "cli", "mcp", "diagnostics"] },
+  { heading: "settings", views: ["shortcuts", "meeting-settings", "vocabulary", "transcription", "intelligence", "local-llm", "providers", "calendar"] },
+  { heading: "developer", views: ["api", "cli", "mcp", "diagnostics"] },
 ] as const satisfies readonly { heading: string; views: readonly ViewId[] }[];

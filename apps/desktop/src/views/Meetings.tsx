@@ -7,38 +7,38 @@ import { askConfirm } from "../components/ConfirmDialog";
  *
  * Three parts, the way the canvas draws them:
  *
- *   - **Idle**, a task page like Dictation's. The hero says whether a meeting
- *     can be recorded (`lib/readiness.ts`) and, when it cannot, the one
- *     problem and the button that fixes it. Under it, a card while a meeting
- *     application is in a call, with a way to record that call. At the foot,
- *     the control bar: the microphone, chosen in its chip's menu and shared
- *     with dictation, whose footer runs a five-second "Test microphone"
- *     (KNEG-364) -- whether the other participants are captured, a choice
- *     kept on this page only, who transcribes in what language, each chosen in
- *     its chip's menu (`ChipMenu`), whether a summary is made, a toggle
- *     that is a link to Cleanup & summaries until a provider and model are
- *     chosen there, and the folder the note is saved to. Then where the audio
- *     goes, which is never hidden, the caveats, what the microphone check
- *     heard, the meeting's name, and Start.
+ *   - **Idle**, a task page like Dictation's. The status notice says whether a
+ *     meeting can be recorded (`lib/readiness.ts`, `lib/meetingNotice.ts`) and,
+ *     when it cannot, the title carries the one problem and the Dusk tile the
+ *     button that fixes it. Under the title, a card while a meeting application
+ *     is in a call, with a way to record that call. Then the Dusk tile, with the
+ *     clock, the meeting's name and Start, beside the white card: the microphone,
+ *     chosen in its chip's menu and shared with dictation, whose footer runs a
+ *     five-second "Test microphone" (KNEG-364) -- whether the other participants
+ *     are captured, a choice kept on this page only, who transcribes in what
+ *     language, each chosen in its chip's menu (`ChipMenu`), whether a summary is
+ *     made, a toggle that is a link to Cleanup & summaries until a provider and
+ *     model are chosen there, whether speakers are labelled, a toggle that is a
+ *     link to Settings > Meetings until that is set up, and the folder the note
+ *     is saved to. Then where the audio goes, which is never hidden, the caveats
+ *     and what the microphone check heard.
  *     The name and the folder go to Rust with Start and stay with the meeting
  *     (KNEG-365); the page keeps neither for a meeting already running.
  *     While Settings > Meetings deletes each recording once its transcript
- *     is saved, a note beside Start and the list's foot say so, and the live
+ *     is saved, a note in the card and the list's head say so, and the live
  *     view says it of a meeting started that way (KNEG-409).
- *   - **Live**, while a meeting is running: its state and a timer, which
- *     captures opened and where the audio goes, how loud each capture is
- *     ("You", and "Others" with system audio; `LevelMeter`, KNEG-371), the
- *     live transcript, and a bar with what is in effect -- the microphone the
- *     meeting actually opened, from Rust, not the one chosen now (KNEG-364)
- *     -- Discard, and Stop.
- *   - **The list panel**: the meeting under way, the meetings saved lately --
- *     each opens its note in Notes -- and any recording an earlier session
- *     left behind, with Recover.
+ *   - **Live**, while a meeting is running, while it is finishing, and once it is
+ *     saved: its state, a Dusk tile with the clock, how loud each capture is
+ *     ("you", and "others" with system audio; `LevelMeter`, KNEG-371) and
+ *     Discard and Stop, beside the live transcript and what is in effect -- the
+ *     microphone the meeting actually opened, from Rust, not the one chosen now
+ *     (KNEG-364). Finishing keeps the idle chips live, since turning Summary on
+ *     then applies to the meeting being saved (below). Saved offers the note.
+ *   - **Recent**, under either: the meetings saved lately -- each opens its note
+ *     in Notes -- and any recording an earlier session left behind, with Recover.
  *
- * Rendered by `App.tsx` straight into the card, with no `PageHeader`: the
- * panel's title is the page's `h1` -- `SplitView`'s `heading` stands in for
- * it while the panel is collapsed -- and the intro sentence that used to sit
- * under a header is the hero's.
+ * Rendered by `App.tsx` straight into the card, with no `PageHeader`: the title
+ * is the page's `h1`, and this page scrolls in its own `.split-main`.
  *
  * The provider and the language are chosen here, in their chips' menus, and
  * saved as they are chosen -- the same `meetings.provider` and
@@ -46,7 +46,11 @@ import { askConfirm } from "../components/ConfirmDialog";
  * (and the menus' footers go there, for a language the menu does not list).
  * The Summary toggle likewise writes `reasoning.summaries`, whole, as
  * Cleanup & summaries does; Rust refuses it where the settings are incomplete,
- * and the page shows why.
+ * and the page shows why. The Speaker labels toggle writes `meetings.diarize`, as
+ * Settings > Meetings does, and is read on its own: Rust reads it when a meeting
+ * is saved, so Start has nothing to wait for and a failed read blanks nothing.
+ * While a meeting runs or finishes that chip is a statement, not a control: the
+ * pass may already have asked, so a press there might not reach this meeting.
  * Rust reads the language from the database when the meeting starts
  * (`start_live`); the provider is the one this page read back from
  * `meetings.provider` and passes to `meeting_start` itself. A choice is
@@ -83,19 +87,17 @@ import { askConfirm } from "../components/ConfirmDialog";
  * soon as one starts or the page is left.
  */
 
-import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { Chip } from "../components/Chip";
 import { ChipMenu, type ChipMenuHandle } from "../components/ChipMenu";
 import { ControlBar } from "../components/ControlBar";
 import { FailureLine } from "../components/FailureLine";
-import { Icon, IconFilled } from "../components/Icon";
+import { Icon } from "../components/Icon";
 import { LearnMore } from "../components/LearnMore";
 import { LevelMeter } from "../components/LevelMeter";
-import { PanelAction, PanelHeader, PanelItem, PanelSection } from "../components/Panel";
 import { formatClock } from "../components/RecordingPlayer";
-import { PanelCollapsed, SplitView } from "../components/SplitView";
-import { TaskHero } from "../components/TaskHero";
+import { StatusNotice } from "../components/StatusNotice";
 import { languageLabel, privacyLines } from "../lib/controlBar";
 import { timeOfDay } from "../lib/dayGroups";
 import {
@@ -116,6 +118,8 @@ import {
   getRecoverableRecordings,
   getSherpaStatus,
   getSummarySettings,
+  getDiarizationStatus,
+  setDiarizationEnabled,
   setMeetingLanguage,
   setMeetingProvider,
   onMeetingOutcome,
@@ -142,6 +146,7 @@ import {
   systemAudioValue,
 } from "../lib/labels";
 import { emptyLiveTranscript, foldTranscriptEvent, liveRows, type LiveRow } from "../lib/liveTranscript";
+import { meetingStatus } from "../lib/meetingNotice";
 import { providerMenu, selectProvider } from "../lib/meetingProvider";
 import {
   activeCall,
@@ -157,7 +162,10 @@ import {
   MICROPHONE_CHECK_LISTENING,
   microphoneCheckLine,
   privacyProvider,
+  speakerLabelsChip,
+  speakerLabelsNote,
   recentMeta,
+  recentPicture,
   recordedSources,
   sameMeetingStart,
   summaryPrivacyLine,
@@ -191,7 +199,7 @@ export function Meetings({
   onGoTo,
   onOpenNote,
 }: {
-  /** Where the hero's fix, the chips and the panel's Calendar take you. */
+  /** Where the setup fix, the chips and Recent's Calendar take you. */
   onGoTo: (id: ViewId) => void;
   /** Opens a Recent meeting's note in Notes. */
   onOpenNote: (id: number) => void;
@@ -223,7 +231,7 @@ export function Meetings({
 
   // The Recent list, read on its own: it is only a list of notes, and a
   // failure to read it used to blank Start and Stop with it. Its error and
-  // its retry stay in the panel. Retried through `guard`, which clears the
+  // its retry stay in its own section. Retried through `guard`, which clears the
   // last error before reading again -- a plain `reload` keeps it even when
   // the read succeeds.
   const loadRecent = useCallback(() => getNoteSummaries({ noteType: "meeting", limit: 20 }), []);
@@ -266,6 +274,9 @@ export function Meetings({
   // same reason: a failure leaves only "No folder", which is where a note
   // goes anyway, and nothing else on the page waits for them.
   const folderRead = useRefresh(getFolders);
+  const speakerLabelsRead = useRefresh(getDiarizationStatus);
+  const speakerLabels = speakerLabelsChip(speakerLabelsRead.data ?? null);
+  const speakerLabelsCost = speakerLabelsNote(speakerLabelsRead.data ?? null);
   const folders = folderRead.data ?? [];
   const reloadFolders = folderRead.reload;
   const recentGuard = recentRead.guard;
@@ -309,7 +320,11 @@ export function Meetings({
   const [stalledAt, setStalledAt] = useState<Date | null>(null);
   /** The clock's "now", moved on once a second while a meeting records. */
   const [clockNow, setClockNow] = useState(() => new Date());
-  const liveHeading = useRef<HTMLHeadingElement>(null);
+  /** What was heard in the meeting just saved, kept for the page that says so. */
+  const [savedRows, setSavedRows] = useState<readonly LiveRow[]>([]);
+  const liveRowsNow = useRef<readonly LiveRow[]>([]);
+  /** The saved meeting's name: `status.plan` is gone by then. */
+  const lastTitle = useRef("Meeting");
   const checkGeneration = useRef(0);
   useEffect(() => () => { checkGeneration.current++; }, []);
 
@@ -367,6 +382,7 @@ export function Meetings({
     void onMeetingOutcome((result) => {
       if (disposed) return;
       setOutcome(result);
+      setSavedRows(result.outcome === "saved" ? liveRowsNow.current : []);
       setTranscript(emptyLiveTranscript());
       void reloadAll();
     }).then(keep);
@@ -442,6 +458,7 @@ export function Meetings({
   }, [idle]);
 
   const rows = useMemo(() => liveRows(transcript), [transcript]);
+  liveRowsNow.current = rows;
 
   // Computed defensively before `data` is known to have loaded, and reused
   // below once it has, so the review hook can sit above the loading guard
@@ -471,16 +488,14 @@ export function Meetings({
     data?.language ?? "",
     (data?.keyterms ?? []).join("\n"),
   );
-  // Whether the list panel is showing, for the one sentence that points into it.
-  const panelCollapsed = useContext(PanelCollapsed);
-
   if (!data) {
     return (
-      <SplitView label="Meetings list" heading="Meetings" panel={<PanelHeader title="Meetings" />}>
+      <div className="split-main">
         <section data-surface="meetings.record" className="task" aria-label="Meeting">
+          <h1 className="sr-only">Meetings</h1>
           {error ? <p className="error">{error}</p> : <p className="muted">Loading…</p>}
         </section>
-      </SplitView>
+      </div>
     );
   }
 
@@ -738,296 +753,132 @@ export function Meetings({
         </p>
       ) : null}
       {recording && notesFlushFailed && <p className="caveat">The meeting window didn't confirm it saved your latest notes. Stop recording anyway saves the meeting; Discard anyway deletes the recording. Either way, notes the app already has are kept, and your most recent edit may be missing.</p>}
-      {outcome ? <OutcomeCaveat outcome={outcome} /> : null}
+      {outcome && outcome.outcome !== "saved" ? <OutcomeCaveat outcome={outcome} /> : null}
     </>
   );
 
-  const panel = (
-    <>
-      <PanelHeader title="Meetings" />
-      <PanelSection label={null}>
-        <PanelAction icon="calendar" label="Calendar" onClick={() => onGoTo("calendar")} />
-      </PanelSection>
-      {recording ? (
-        <PanelSection label="Now">
-          <PanelItem
-            title={liveTitle}
-            tooltip={liveTitle}
-            current
-            meta={
-              // Stalled is not recording -- nothing is being captured -- so
-              // not the recording dot: the hollow square Interrupted uses.
-              <span className={stalled ? "panel-rec panel-rec-stalled" : "panel-rec"}>
-                <span className={stalled ? "mark-hollow" : "rec-dot"} aria-hidden="true" />
-                {stalled ? "Stopped unexpectedly" : "Recording"} · {elapsedLabel(elapsed)}
-              </span>
-            }
-            onClick={() => liveHeading.current?.focus()}
-          />
-        </PanelSection>
-      ) : null}
+  const pictureIndex = (position: number) => String(position + 1).padStart(2, "0");
+  const recoverButton = (candidate: RecoverableRecording, title: string) => {
+    const busy = recoveringKey === candidate.storageKey;
+    return (
+      <button
+        type="button"
+        className="pill"
+        aria-label={`${busy ? "Recovering" : "Recover"} ${candidate.title ?? lowerFirst(title)}`}
+        disabled={recording || current === "finishing" || recoveringKey !== null}
+        onClick={() => recover(candidate)}
+      >
+        {busy ? "Recovering…" : "Recover"}
+      </button>
+    );
+  };
+  // Picture tiles on the idle page; a line of pills while a meeting has the page,
+  // as the canvas draws each.
+  const recentSection = (compact: boolean) => (
+    <section className="recent" aria-labelledby="recent-title">
+      {compact ? (
+        <h2 id="recent-title" className="section-label">recent</h2>
+      ) : (
+        <div className="history-head">
+          <div className="history-title">
+            <h2 id="recent-title" className="section-label">recent</h2>
+            <span className="history-privacy">
+              <Icon name="lock" size={16} />
+              {data.deleteRecordings ? "Recordings are deleted after transcribing." : "Recordings are saved on this computer."}
+            </span>
+          </div>
+          <div className="history-actions">
+            <button type="button" className="pill" onClick={() => onGoTo("calendar")}>
+              <Icon name="calendar" size={16} />
+              Calendar
+            </button>
+          </div>
+        </div>
+      )}
       {/* Recent's own states, since it is read on its own: a failure to
           list notes says so here and offers to read again, and leaves the
           recording controls beside it alone. */}
       {recentRead.error !== null ? (
-        <div className="panel-note panel-note-error" role="alert">
+        <div className="recent-error" role="alert">
           <p className="error">{`Couldn't load recent meetings: ${recentRead.error}`}</p>
-          <button type="button" className="panel-inline" onClick={() => { void reloadRecent(); }}>
+          <button type="button" className="pill" onClick={() => { void reloadRecent(); }}>
             Try again
           </button>
         </div>
       ) : null}
-      {recent === null ? (
-        recentRead.error === null ? <p className="panel-note">Loading recent meetings…</p> : null
-      ) : recent.length === 0 ? (
-        <p className="panel-note">No meetings saved yet.</p>
-      ) : (
-        <PanelSection label="Recent">
-          {recent.map((note) => {
-            const meta = recentMeta(note.createdAt, note.audioDurationSeconds, now);
-            return (
-              <PanelItem
-                key={note.id}
-                title={note.title}
-                tooltip={note.title}
-                {...(meta === "" ? {} : { meta })}
-                onClick={() => onOpenNote(note.id)}
-              />
+      {recent === null && recentRead.error === null ? <p className="history-note">Loading recent meetings…</p> : null}
+      {recent !== null && recent.length === 0 ? <p className="history-note">No meetings saved yet.</p> : null}
+      {(recent !== null && recent.length > 0) || recoverable.length > 0 ? (
+        <div className={compact ? "recent-pills" : "recent-grid"}>
+          {(recent ?? []).map((note, position) => {
+            const meta = recentMeta(note.createdAt, note.audioDurationSeconds, now).toLowerCase();
+            return compact ? (
+              <button type="button" key={note.id} className="recent-pill" title={note.title} onClick={() => onOpenNote(note.id)}>
+                <span className="recent-index">{pictureIndex(position)}</span>
+                <span className="recent-title">{note.title}</span>
+                {meta === "" ? null : <span className="recent-pill-meta">{meta}</span>}
+              </button>
+            ) : (
+              <button type="button" key={note.id} className="recent-tile" title={note.title} onClick={() => onOpenNote(note.id)}>
+                <span className="recent-picture" data-picture={recentPicture(note.id)}>
+                  <span className="recent-art" aria-hidden="true" />
+                  <span className="recent-name">
+                    <span className="recent-index">{pictureIndex(position)}</span>
+                    <span className="recent-title">{note.title}</span>
+                  </span>
+                </span>
+                {meta === "" ? null : <span className="recent-meta">{meta}</span>}
+              </button>
             );
           })}
-        </PanelSection>
-      )}
-      {recoverable.length === 0 ? null : (
-        <PanelSection label="Interrupted">
           {recoverable.map((candidate) => {
             // The name it was given before Start, from the plan Rust kept
-            // beside it (KNEG-365); otherwise when it started.
+            // beside it (KNEG-365); otherwise when it started. The storage key
+            // is the title's tooltip.
             const title = candidate.title ?? interruptedTitle(candidate.storageKey, now);
-            const busy = recoveringKey === candidate.storageKey;
-            return (
-              // Not a `PanelItem`: that is a button, and Recover is a button
-              // inside the row. The storage key, which this row used to show
-              // as its label, is the title's tooltip.
-              <div className="panel-row" key={candidate.storageKey}>
-                <span className="panel-item-title" title={candidate.storageKey}>{title}</span>
-                <span className="panel-item-meta panel-row-meta">
-                  <span className="mark-hollow" aria-hidden="true" />
-                  Not transcribed{candidate.hasNotes ? " · Typed notes found" : ""}
-                  <button
-                    type="button"
-                    className="panel-inline"
-                    aria-label={`${busy ? "Recovering" : "Recover"} ${candidate.title ?? lowerFirst(title)}`}
-                    disabled={recording || current === "finishing" || recoveringKey !== null}
-                    onClick={() => recover(candidate)}
-                  >
-                    {busy ? "Recovering…" : "Recover"}
-                  </button>
+            return compact ? (
+              <div className="recent-pill recent-pill-interrupted" key={candidate.storageKey}>
+                <span className="recent-interrupted-label">interrupted</span>
+                <span className="recent-title" title={candidate.storageKey}>{title}</span>
+                {recoverButton(candidate, title)}
+              </div>
+            ) : (
+              <div className="recent-interrupted" key={candidate.storageKey}>
+                <span className="recent-interrupted-label">interrupted</span>
+                <span className="recent-interrupted-body">
+                  <span className="recent-interrupted-title" title={candidate.storageKey}>{title}</span>
+                  <span className="recent-interrupted-meta">
+                    <span className="recent-interrupted-mark" aria-hidden="true" />
+                    Not transcribed{candidate.hasNotes ? " · Typed notes found" : ""}
+                  </span>
                 </span>
+                {recoverButton(candidate, title)}
               </div>
             );
           })}
-        </PanelSection>
-      )}
-      <div className="panel-foot">
-        <Icon name="lock" size={14} />
-        <span>{data.deleteRecordings ? "Recordings are deleted after transcribing." : "Recordings are saved on this computer."}</span>
-      </div>
+        </div>
+      ) : null}
+    </section>
+  );
+
+  // What recovering a recording did, and any failure, wherever the page is.
+  const recoveryNotes = (
+    <>
+      {recoveringKey !== null ? (
+        <p className="control-note" role="status">
+          Recovering{" "}
+          {recoverable.find((candidate) => candidate.storageKey === recoveringKey)?.title ??
+            `the ${lowerFirst(interruptedTitle(recoveringKey, now))}`}
+          …
+        </p>
+      ) : null}
+      {recoveryOutcome && <OutcomeCaveat outcome={recoveryOutcome} />}
+      {recoveryError && <p className="error" role="alert">{recoveryError}</p>}
     </>
   );
 
-  if (recording) {
-    const sub = [
-      startedAt === null ? null : `Started ${timeOfDay(startedAt)}`,
-      recordedSources(liveSources),
-      transcriber === null
-        ? null
-        : transcriber.audioLeavesDevice
-          ? `Sent to ${transcriber.name}`
-          : "Transcribed on this computer",
-      // This meeting's own choice, taken at its Start (KNEG-409): the
-      // setting may have changed since, and applies to the next one.
-      status.plan?.deleteRecording ? "Recording deleted after saving" : null,
-    ].filter((part): part is string => part !== null);
-    // The microphone this meeting opened, as Rust reports it, and not the
-    // setting: a choice made now applies to the next recording (KNEG-364).
-    const openedMicrophone = liveMicrophone(liveSources);
-    return (
-      <SplitView label="Meetings list" heading="Meetings" panel={panel}>
-        <section data-surface="meetings.record" className="meeting-live" aria-label="Meeting">
-          <header className="live-head">
-            {/* Stalled draws the hollow `--text` square and drops the
-                recording red: the round dot says something is being
-                recorded, and a stalled meeting records nothing. */}
-            <p className={stalled ? "live-status live-status-stalled" : "live-status"}>
-              <span className={stalled ? "mark-hollow" : "rec-dot"} aria-hidden="true" />
-              {/* Only the state is a live region: the clock beside it ticks
-                  every second. */}
-              <span role="status">{meetingStateLabel(current)}</span>
-              <span className="live-clock">{elapsedLabel(elapsed)}</span>
-            </p>
-            <h2 className="live-title" ref={liveHeading} tabIndex={-1}>{liveTitle}</h2>
-            <p className="live-sub">{sub.join(" · ")}</p>
-            {/* How loud each capture is (KNEG-371): you, and the others only
-                when system audio opened -- the sub-line above says which.
-                Decoration, labels included: `LevelMeter` says why. */}
-            <div className="live-levels" aria-hidden="true">
-              <span className="live-level">
-                <span className="live-level-label">You</span>
-                <LevelMeter session="meeting" source="microphone" />
-              </span>
-              {liveSources?.systemAudio ? (
-                <span className="live-level">
-                  <span className="live-level-label">Others</span>
-                  <LevelMeter session="meeting" source="system" />
-                </span>
-              ) : null}
-            </div>
-          </header>
-          {error || stalled || transcriptEnded || notesFlushFailed || outcome ? (
-            <div className="live-caveats">
-              {error && !notesFlushFailed ? <p className="error">{error}</p> : null}
-              {caveats}
-            </div>
-          ) : null}
-          <LiveTranscript rows={rows} ended={transcriptEnded || stalled} />
-          {/* Nothing here can be changed while the meeting runs -- Settings >
-              Meetings disables its fields too -- so the chips are statements
-              rather than controls. */}
-          <div className="live-bar">
-            <div className="live-chips" role="group" aria-label="In effect for this meeting">
-              <Chip icon="microphone" label={openedMicrophone.label} title={openedMicrophone.title} srText={openedMicrophone.title} />
-              {liveSources?.systemAudio ? <Chip icon="others" label="Other participants" /> : null}
-              <Chip icon="computer" label={transcriber ? transcriber.name : "Not set up"} />
-              <Chip icon="language" label={language} />
-            </div>
-            <ul className="control-privacy">
-              {privacy.map((line) => (
-                <li key={line}>
-                  <Icon name="lock" size={14} />
-                  {line}
-                </li>
-              ))}
-            </ul>
-            <div className="control-spacer" />
-            {/* Never held back by readiness: a meeting that is running has to
-                be stoppable whatever the settings now say. */}
-            <div className="live-actions">
-              {notesFlushFailed ? (
-                <>
-                  <button type="button" onClick={stopAnyway}>Stop recording anyway</button>
-                  <button type="button" onClick={discardAnyway}>Discard anyway</button>
-                </>
-              ) : null}
-              <button type="button" className="secondary" onClick={discard}>
-                <Icon name="discard" size={16} />
-                Discard
-              </button>
-              <button type="button" className="primary" onClick={stop}>
-                <IconFilled name="stop" size={14} />
-                Stop and save
-              </button>
-            </div>
-          </div>
-        </section>
-      </SplitView>
-    );
-  }
-
-  // The hero. Readiness answers "will starting work?", which means nothing
-  // while a recording is being transcribed -- "Ready" above "Transcribing"
-  // would be two answers on one screen -- so then the hero speaks for that.
-  const hero =
-    current === "finishing" ? (
-      <TaskHero
-        icon="meetings"
-        status={{ tone: "busy", label: meetingStateLabel(current) }}
-        heading="Finishing your meeting"
-        sub={<><MeetingProgress progress={finalisation} /><span className="muted">Your recording and notes are being preserved. Recovery or speaker analysis may take longer.</span></>}
-      />
-    ) : readiness.state === "ready" ? (
-      <TaskHero
-        icon="meetings"
-        status={{ tone: "ready", label: "Ready" }}
-        heading="Record a meeting"
-        sub={
-          <>
-            <p>{meetingIntro(summaries.enabled)}</p>
-            {readiness.caution ? <p className="hero-note">{readiness.caution}</p> : null}
-          </>
-        }
-      />
-    ) : (
-      <TaskHero
-        icon="meetings"
-        status={{ tone: "setup", label: "Needs setup" }}
-        heading="Record a meeting"
-        sub={
-          <>
-            <p>{meetingIntro(summaries.enabled)}</p>
-            <p className="hero-note">{readiness.problem}</p>
-          </>
-        }
-      >
-        {/* Needs setup always holds Start back (see Start's comment), so the
-            fix is the one thing to do next and takes the filled button. */}
-        <button
-          type="button"
-          className="primary"
-          onClick={() => {
-            const view = readiness.fix.view;
-            // The two choices this page makes itself open their menus; the
-            // rest are somewhere else.
-            if (view === "provider-menu") providerMenuRef.current?.open();
-            else if (view === "language-menu") languageMenuRef.current?.open();
-            else onGoTo(view);
-          }}
-        >
-          {readiness.fix.label}
-        </button>
-        {readiness.detail ? <LearnMore>{readiness.detail}</LearnMore> : null}
-      </TaskHero>
-    );
-
-  return (
-    <SplitView label="Meetings list" heading="Meetings" panel={panel}>
-      <section data-surface="meetings.record" className="task" aria-label="Meeting">
-        <div className="task-hero">
-          {hero}
-          {call === null ? null : (
-            <div className="call-card">
-              <span className="call-card-icon">
-                <Icon name="call" size={20} />
-              </span>
-              <span className="call-card-text">
-                <span className="call-card-title">{call.name} is in a call</span>
-                <span className="call-card-detail">Detected just now. Nothing is recorded until you start.</span>
-              </span>
-              {/* Held back exactly as Start is (ruling R9), and recording
-                  what the "Other participants" chip below says, as Start
-                  does (R21): the card is a quicker way to the same start,
-                  not a second choice about who is recorded. Both are pinned
-                  by tools/visual-check/chip-menus.mjs check 10. */}
-              <button
-                type="button"
-                className="secondary"
-                disabled={startHeld}
-                onClick={() => start(wantSystem && systemAudioAvailable)}
-              >
-                Record this call
-              </button>
-            </div>
-          )}
-        </div>
-
-        {/* The lines heard during the meeting, kept until it is saved: they
-            went at Stop, while the meeting was still being finished, and the
-            outcome event clears them (KNEG-377). */}
-        {current === "finishing" && rows.length > 0 ? <LiveTranscript rows={rows} ended finishing /> : null}
-
-        <div className="task-bar">
-          <ControlBar
-            strip={
-              <>
+  const chips = (
+    <>
                 {/* Chosen here as on Dictation, one choice for both tasks
                     (KNEG-341, KNEG-364): the rows sit under a heading that
                     says so, and the `title` says choosing here changes
@@ -1111,6 +962,28 @@ export function Meetings({
                     onClick={() => onGoTo("intelligence")}
                   />
                 )}
+                {/* Written here too (Settings > Meetings keeps its own switch and
+                    says what's missing). See `speakerLabelsChip` and the head of
+                    this file for why it isn't always a toggle. */}
+                {speakerLabels === null ? null : speakerLabels.kind === "setup" ? (
+                  <Chip
+                    icon="speakers"
+                    label="Speaker labels: needs setup"
+                    chevron
+                    title={speakerLabels.title}
+                    onClick={() => onGoTo("meeting-settings")}
+                  />
+                ) : current === "finishing" ? (
+                  speakerLabels.pressed ? <Chip icon="speakers" label="Speaker labels" /> : null
+                ) : (
+                  <Chip
+                    icon="speakers"
+                    label="Speaker labels"
+                    pressed={speakerLabels.pressed}
+                    title={speakerLabels.title}
+                    onClick={() => void speakerLabelsRead.guard(() => setDiarizationEnabled(!speakerLabels.pressed))}
+                  />
+                )}
                 {/* Where the note goes (KNEG-365). Page state, not a
                     setting: it applies to the next meeting started here and
                     goes to Rust with it, so it holds however that meeting
@@ -1122,160 +995,390 @@ export function Meetings({
                   options={folderChoice.options}
                   onChoose={(id) => setFolderId(id === "" ? null : Number(id))}
                 />
-              </>
-            }
-            privacy={privacy}
-          >
-            {error ? <p className="error">{error}</p> : null}
-            {pollError ? (
-              <p className="error">{`Couldn't check whether a meeting app is in a call: ${pollError}`}</p>
-            ) : null}
-            {/* The microphone chip's own read and write (KNEG-364): a choice
-                that couldn't be saved, or a list that couldn't be read, in
-                view, with what the software said under Details. */}
-            {microphoneRefresh.error !== null ? (
-              <FailureLine text="The microphone choice couldn't be read or saved." detail={microphoneRefresh.error} />
-            ) : null}
-            {microphone.missing !== null ? (
-              <p className="control-note">
-                Not connected, so meetings and dictation use the system default
-                until it is plugged back in.
-              </p>
-            ) : null}
-            {/* The microphone check (KNEG-364). One live region from
-                "Listening" to what it heard, so the result is read out when
-                it replaces the line; the meter beside the line is decoration
-                (`LevelMeter`). Heard nothing is a caveat: something to look
-                at before a meeting, not a failure. A refusal or a failure is
-                `FailureLine`'s, outside the region, as an alert. */}
-            {check !== null && check.state !== "failed" ? (
-              <div className="microphone-check" role="status">
-                {check.state === "listening" ? (
-                  <>
-                    <p className="control-note">{MICROPHONE_CHECK_LISTENING}</p>
-                    <LevelMeter session="microphone-check" source="microphone" />
-                  </>
-                ) : (
-                  <p className={check.result.heard ? "control-note" : "caveat"}>{microphoneCheckLine(check.result)}</p>
-                )}
+    </>
+  );
+
+  // What the notice and the tile say, in every state.
+  const savedOutcome = current === "idle" && outcome?.outcome === "saved" ? outcome : null;
+  const savedLabel = savedOutcome === null ? null : meetingOutcomeLabel(savedOutcome);
+  const destination = transcriber === null
+    ? "Not set up"
+    : transcriber.audioLeavesDevice
+      ? `Sent to ${transcriber.name}`
+      : "Transcribed on this computer";
+  // A page opened while a meeting finishes has no start to count from, and a
+  // clock at zero would say the meeting was empty.
+  const liveClock = startedAt === null ? null : elapsedLabel(elapsed);
+  const statusView = meetingStatus({
+    state: current,
+    saved: savedLabel === null ? null : savedLabel.text,
+    ready: readiness.state === "ready",
+    microphone: microphone.label,
+    microphoneMissing: microphone.missing !== null,
+    elapsed: liveClock,
+    destination,
+  });
+  if (recording) lastTitle.current = liveTitle;
+
+  // The meeting's own page, from its first second to the note it became.
+  if (recording || current === "finishing" || savedOutcome !== null) {
+    const finishing = current === "finishing";
+    const sub = recording
+      ? [
+          recordedSources(liveSources),
+          destination,
+          // This meeting's own choice, taken at its Start (KNEG-409): the
+          // setting may have changed since, and applies to the next one.
+          status.plan?.deleteRecording ? "Recording deleted after saving" : null,
+        ].filter((part): part is string => part !== null)
+      : [];
+    // The microphone this meeting opened, as Rust reports it, and not the
+    // setting: a choice made now applies to the next recording (KNEG-364).
+    const openedMicrophone = liveMicrophone(liveSources);
+    const shownRows = savedOutcome !== null ? savedRows : rows;
+    const clock = savedOutcome !== null ? elapsedLabel(savedOutcome.durationSeconds) : liveClock;
+    return (
+      <div className="split-main">
+        <div className="task-page task-page-live">
+          <div className="task-notice">
+            <StatusNotice tone={statusView.tone} wide {...statusView.notice} />
+          </div>
+          <section data-surface="meetings.record" className="meeting-live" aria-labelledby="live-title">
+            <header className="live-head" data-tone={statusView.tone}>
+              <span className="section-label live-stage">{savedOutcome !== null ? "saved to notes" : meetingStateLabel(current).toLowerCase()}</span>
+              <h1 id="live-title" className="page-title live-title title-ink">
+                {finishing ? "Finishing your meeting" : savedOutcome !== null ? lastTitle.current : liveTitle}
+              </h1>
+              {sub.length === 0 && startedAt === null ? null : recording ? (
+                <p className="live-sub">
+                  {startedAt === null ? null : <>Started <span className="live-sub-time">{timeOfDay(startedAt)}</span>{sub.length > 0 ? " · " : ""}</>}
+                  {sub.join(" · ")}
+                </p>
+              ) : null}
+            </header>
+            {error || pollError || stalled || transcriptEnded || notesFlushFailed || recoveringKey !== null || recoveryOutcome || recoveryError ? (
+              <div className="live-caveats">
+                {error && !notesFlushFailed ? <p className="error">{error}</p> : null}
+                {pollError ? <p className="error">{`Couldn't check whether a meeting app is in a call: ${pollError}`}</p> : null}
+                {caveats}
+                {recoveryNotes}
               </div>
             ) : null}
-            {check?.state === "failed" ? (
-              <FailureLine text="The microphone couldn't be tested." detail={check.error} />
-            ) : null}
-            {/* Why the chip is off, said beside it in every state -- the
-                hero's caution is only there while the page is Ready, and a
-                switched-off control with no reason on screen is the button
-                that silently does nothing. The failure is in view; why, which
-                names the platform's mechanism (about 70 words on macOS, and
-                PulseAudio, PipeWire and ALSA on Linux), is folded with the
-                device it would capture (KNEG-354). */}
-            {status.systemAudio.state === "available" ? null : (
-              <p className="control-note">Other participants can't be recorded on this computer.</p>
-            )}
-            {/* Believed, not tested, said in view rather than only in the fold
-                below: the one place a colleague would learn it (KNEG-351). */}
-            {status.systemAudio.state === "available" && status.systemAudio.unverified ? (
-              <p className="control-note">
-                Recording the other participants is available on this operating system but has never been tested here.
-              </p>
-            ) : null}
-            <LearnMore
-              summary={
-                status.systemAudio.state === "available"
-                  ? "How the other participants are recorded"
-                  : "Why they can't be recorded"
-              }
-            >
-              <p>
-                {status.systemAudio.state === "unsupported"
-                  ? status.systemAudio.reason
-                  : `System audio: ${systemAudioValue(status.systemAudio)} — ${
-                      status.systemAudio.state === "available"
-                        ? `${status.systemAudio.mechanism} — ${status.systemAudio.device}`
-                        : `${status.systemAudio.mechanism}. ${asSentence(status.systemAudio.reason)}`
-                    }`}
-              </p>
-            </LearnMore>
-            {/* Said in view while it is on (KNEG-409): the switch is on
-                Settings > Meetings, and a note with no recording would
-                otherwise be the first anyone heard of it. */}
-            {data.deleteRecordings ? (
-              <p className="control-note">Recordings are deleted once each meeting is transcribed.</p>
-            ) : null}
-            {caveats}
-
-            {/* The Interrupted rows are in the list panel; what recovering
-                one did, and the sentence that changes what you get back,
-                stay here. What these are and how Recover works is folded. */}
-            {/* With the panel collapsed, "the list" is nowhere on screen, so
-                the sentence also says where the list is. */}
-            {recoverable.length > 0 ? (
-              <>
-                <p className="caveat">
-                  A recording from an earlier session was interrupted. Recover
-                  it from Interrupted in the list
-                  {panelCollapsed ? " (Show list in the title bar)" : ""}; the
-                  audio may end abruptly.
-                </p>
-                <LearnMore>
-                  <p>
-                    These recordings are not attached to a saved note. Recover
-                    uses the local whole-recording transcriber and saves any
-                    notes typed during the meeting.
-                  </p>
-                </LearnMore>
-              </>
-            ) : null}
-            {recoveringKey !== null ? (
-              <p className="control-note" role="status">
-                Recovering{" "}
-                {recoverable.find((candidate) => candidate.storageKey === recoveringKey)?.title ??
-                  `the ${lowerFirst(interruptedTitle(recoveringKey, now))}`}
-                …
-              </p>
-            ) : null}
-            {recoveryOutcome && <OutcomeCaveat outcome={recoveryOutcome} />}
-            {recoveryError && <p className="error" role="alert">{recoveryError}</p>}
-
-            <div className="control-row">
-              {/* The meeting's name, the note's title (KNEG-365); left
-                  blank, the note is named for when the meeting started.
-                  Rust caps a title at 200 characters. */}
-              <input
-                type="text"
-                className="meeting-name"
-                value={meetingName}
-                maxLength={200}
-                placeholder="Name this meeting (optional)"
-                aria-label="Meeting name (optional)"
-                onChange={(event) => setMeetingName(event.target.value)}
-              />
-              {/* Off whenever the hero says Needs setup, not only when no
-                  provider is selected: with a language the provider requires
-                  left blank, `start_live` refuses (`resolve_provider_config`,
-                  src-tauri/src/meeting.rs), so the button would lead straight
-                  into an error, and with the saved provider unusable it would
-                  record with one nobody chose. The hero says what is wrong,
-                  and its fix -- not this -- is the filled button then.
-                  Records what the "Other participants" chip says, as the
-                  call card does (R21): where system audio can't be captured
-                  the chip reads unpressed, so Start doesn't ask for it
-                  (KNEG-412). */}
-              <button
-                type="button"
-                className={startBlocked ? "control-start" : "primary control-start"}
-                disabled={startHeld}
-                onClick={() => start(wantSystem && systemAudioAvailable)}
-              >
-                <span className="start-dot" aria-hidden="true" />
-                Start recording
-              </button>
+            <div className="live-grid">
+              <div className="picture-tile tile-dusk tile-live" data-tone={statusView.tone}>
+                <div className="tile-weather" aria-hidden="true" />
+                <span className="tile-label"><span className="tile-label-dot" aria-hidden="true" />{statusView.tile}</span>
+                {clock === null ? null : <p className="tile-clock tile-clock-live" role="timer" aria-label="Elapsed recording time">{clock}</p>}
+                {/* How loud each capture is (KNEG-371): you, and the others only
+                    when system audio opened -- the line above says which.
+                    Decoration, labels included: `LevelMeter` says why. Mounted
+                    only while the capture runs. */}
+                {recording ? (
+                  <div className="live-levels" aria-hidden="true">
+                    <span className="live-level-label">you</span>
+                    <LevelMeter session="meeting" source="microphone" />
+                    {liveSources?.systemAudio ? (
+                      <>
+                        <span className="live-level-label">others</span>
+                        <LevelMeter session="meeting" source="system" />
+                      </>
+                    ) : null}
+                  </div>
+                ) : null}
+                {finishing ? (
+                  <div className="live-finishing">
+                    <span className="live-finishing-pill"><MeetingProgress progress={finalisation} /></span>
+                    <span className="live-finishing-note">Your recording and notes are being preserved. Recovery or speaker analysis may take longer.</span>
+                  </div>
+                ) : null}
+                {savedOutcome !== null ? (
+                  <div className="live-actions">
+                    <button type="button" className="glass-plain" onClick={() => { setOutcome(null); setSavedRows([]); }}>Record another</button>
+                    <button type="button" className="glass-action" onClick={() => onOpenNote(savedOutcome.noteId)}>
+                      Open the note
+                      <span className="glass-action-end" aria-hidden="true"><Icon name="forward" size={16} /></span>
+                    </button>
+                  </div>
+                ) : null}
+                {/* Never held back by readiness: a meeting that is running has to
+                    be stoppable whatever the settings now say. */}
+                {recording ? (
+                  <div className="live-actions">
+                    {notesFlushFailed ? (
+                      <>
+                        <button type="button" className="glass-plain" onClick={stopAnyway}>Stop recording anyway</button>
+                        <button type="button" className="glass-plain" onClick={discardAnyway}>Discard anyway</button>
+                      </>
+                    ) : null}
+                    <button type="button" className="glass-plain" onClick={discard}>
+                      <Icon name="discard" size={16} />
+                      Discard
+                    </button>
+                    <button type="button" className="glass-action glass-action-signal" onClick={stop}>
+                      Stop and save
+                      <span className="glass-action-end" aria-hidden="true"><span className="glass-action-stop" /></span>
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+              <LiveTranscript rows={shownRows} ended={transcriptEnded || stalled} finishing={finishing} saved={savedOutcome !== null}>
+                {savedOutcome !== null ? (
+                  savedLabel?.more ? <LearnMore><p>{savedLabel.more}</p></LearnMore> : null
+                ) : (
+                  /* Nothing here can be changed while the meeting runs -- Settings >
+                     Meetings disables its fields too -- so the chips are statements
+                     rather than controls. While it finishes they are live again:
+                     see the head of this file. */
+                  <div className="live-bar">
+                    {finishing ? (
+                      <div className="live-chips" role="group" aria-label="Settings in effect">{chips}</div>
+                    ) : (
+                      <div className="live-chips" role="group" aria-label="In effect for this meeting">
+                        <Chip icon="microphone" label={openedMicrophone.label} title={openedMicrophone.title} srText={openedMicrophone.title} />
+                        {liveSources?.systemAudio ? <Chip icon="others" label="Other participants" /> : null}
+                        <Chip icon="computer" label={transcriber ? transcriber.name : "Not set up"} />
+                        <Chip icon="language" label={language} />
+                        {speakerLabels?.kind === "toggle" && speakerLabels.pressed ? <Chip icon="speakers" label="Speaker labels" /> : null}
+                      </div>
+                    )}
+                    <ul className="control-privacy">
+                      {privacy.map((line) => (
+                        <li key={line}>
+                          <Icon name="lock" size={16} />
+                          {line}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </LiveTranscript>
             </div>
-          </ControlBar>
+          </section>
+          {recentSection(true)}
         </div>
-      </section>
-    </SplitView>
+      </div>
+    );
+  }
+
+  // The title. Readiness answers "will starting work?"; when it will not, the
+  // sentence under the title says why and the tile holds the fix.
+  const hero = (
+    <>
+      <h1 id="meetings-title" className="page-title title-ink">Record a meeting</h1>
+      <p className="page-sub">{meetingIntro(summaries.enabled)}</p>
+      {readiness.state === "ready" ? (
+        readiness.caution ? <p className="hero-note">{readiness.caution}</p> : null
+      ) : (
+        <>
+          <p className="hero-note">{readiness.problem}</p>
+          {readiness.detail ? <LearnMore>{readiness.detail}</LearnMore> : null}
+        </>
+      )}
+    </>
+  );
+
+  return (
+    <div className="split-main">
+      <div className="task-page">
+        <div className="task-notice">
+          <StatusNotice tone={statusView.tone} {...statusView.notice} />
+        </div>
+        <section data-surface="meetings.record" className="task task-meetings" aria-labelledby="meetings-title">
+          <div className="task-hero" data-tone={statusView.tone}>
+            {hero}
+            {call === null ? null : (
+              <div className="call-card">
+                <span className="call-card-dot" aria-hidden="true" />
+                <span className="call-card-text" role="status">
+                  <span className="call-card-title">{call.name} is in a call</span>
+                  <span className="call-card-detail">Detected just now. Nothing is recorded until you start.</span>
+                </span>
+                {/* Held back exactly as Start is (ruling R9), and recording
+                    what the "Other participants" chip below says, as Start
+                    does (R21): the card is a quicker way to the same start,
+                    not a second choice about who is recorded. Both are pinned
+                    by tools/visual-check/chip-menus.mjs check 10. */}
+                <button
+                  type="button"
+                  className="glass-action call-card-record"
+                  disabled={startHeld}
+                  onClick={() => start(wantSystem && systemAudioAvailable)}
+                >
+                  Record this call
+                  <span className="glass-action-end" aria-hidden="true"><Icon name="plus" size={12} /></span>
+                </button>
+              </div>
+            )}
+          </div>
+
+          <div className="task-grid">
+            <div className="picture-tile tile-dusk" data-tone={statusView.tone}>
+              <div className="tile-weather" aria-hidden="true" />
+              <span className="tile-label"><span className="tile-label-dot" aria-hidden="true" />{statusView.tile} · {timeOfDay(now)}</span>
+              <p className="tile-clock" aria-hidden="true">00:00:00</p>
+              <div className="tile-form">
+                {startBlocked ? (
+                  /* Needs setup always holds Start back (see Start's comment), so the
+                     fix is the one thing to do next and takes the filled button. */
+                  <button
+                    type="button"
+                    className="primary tile-cta"
+                    onClick={() => {
+                      const view = readiness.fix.view;
+                      // The two choices this page makes itself open their menus; the
+                      // rest are somewhere else.
+                      if (view === "provider-menu") providerMenuRef.current?.open();
+                      else if (view === "language-menu") languageMenuRef.current?.open();
+                      else onGoTo(view);
+                    }}
+                  >
+                    {readiness.fix.label}
+                  </button>
+                ) : null}
+                {/* The meeting's name, the note's title (KNEG-365); left
+                    blank, the note is named for when the meeting started.
+                    Rust caps a title at 200 characters. */}
+                <input
+                  type="text"
+                  className="meeting-name"
+                  value={meetingName}
+                  maxLength={200}
+                  placeholder="Name this meeting (optional)"
+                  aria-label="Meeting name (optional)"
+                  onChange={(event) => setMeetingName(event.target.value)}
+                />
+                {/* Off whenever the page says Needs setup, not only when no
+                    provider is selected: with a language the provider requires
+                    left blank, `start_live` refuses (`resolve_provider_config`,
+                    src-tauri/src/meeting.rs), so the button would lead straight
+                    into an error, and with the saved provider unusable it would
+                    record with one nobody chose. The page says what is wrong,
+                    and its fix -- not this -- is the filled button then.
+                    Records what the "Other participants" chip says, as the
+                    call card does (R21): where system audio can't be captured
+                    the chip reads unpressed, so Start doesn't ask for it
+                    (KNEG-412). */}
+                <button
+                  type="button"
+                  className="glass-action glass-action-wide glass-action-signal control-start"
+                  disabled={startHeld}
+                  onClick={() => start(wantSystem && systemAudioAvailable)}
+                >
+                  Start recording
+                  <span className="glass-action-end" aria-hidden="true"><span className="start-dot" /></span>
+                </button>
+              </div>
+            </div>
+
+            <ControlBar strip={chips} privacy={privacy} label="this recording">
+              {error ? <p className="error">{error}</p> : null}
+              {pollError ? (
+                <p className="error">{`Couldn't check whether a meeting app is in a call: ${pollError}`}</p>
+              ) : null}
+              {/* The microphone chip's own read and write (KNEG-364): a choice
+                  that couldn't be saved, or a list that couldn't be read, in
+                  view, with what the software said under Details. */}
+              {microphoneRefresh.error !== null ? (
+                <FailureLine text="The microphone choice couldn't be read or saved." detail={microphoneRefresh.error} />
+              ) : null}
+              {microphone.missing !== null ? (
+                <p className="control-note">
+                  Not connected, so meetings and dictation use the system default
+                  until it is plugged back in.
+                </p>
+              ) : null}
+              {/* The microphone check (KNEG-364). One live region from
+                  "Listening" to what it heard, so the result is read out when
+                  it replaces the line; the meter beside the line is decoration
+                  (`LevelMeter`). Heard nothing is a caveat: something to look
+                  at before a meeting, not a failure. A refusal or a failure is
+                  `FailureLine`'s, outside the region, as an alert. */}
+              {check !== null && check.state !== "failed" ? (
+                <div className="microphone-check" role="status">
+                  {check.state === "listening" ? (
+                    <>
+                      <p className="control-note">{MICROPHONE_CHECK_LISTENING}</p>
+                      <LevelMeter session="microphone-check" source="microphone" />
+                    </>
+                  ) : (
+                    <p className={check.result.heard ? "control-note" : "caveat"}>{microphoneCheckLine(check.result)}</p>
+                  )}
+                </div>
+              ) : null}
+              {check?.state === "failed" ? (
+                <FailureLine text="The microphone couldn't be tested." detail={check.error} />
+              ) : null}
+              {/* Why the chip is off, said beside it in every state -- a
+                  switched-off control with no reason on screen is the button
+                  that silently does nothing. The failure is in view; why, which
+                  names the platform's mechanism (about 70 words on macOS, and
+                  PulseAudio, PipeWire and ALSA on Linux), is folded with the
+                  device it would capture (KNEG-354). */}
+              {status.systemAudio.state === "available" ? null : (
+                <p className="control-note">Other participants can't be recorded on this computer.</p>
+              )}
+              {/* Believed, not tested, said in view rather than only in the fold
+                  below: the one place a colleague would learn it (KNEG-351). */}
+              {status.systemAudio.state === "available" && status.systemAudio.unverified ? (
+                <p className="control-note">
+                  Recording the other participants is available on this operating system but has never been tested here.
+                </p>
+              ) : null}
+              {/* Said in view while it is on (KNEG-409): the switch is on
+                  Settings > Meetings, and a note with no recording would
+                  otherwise be the first anyone heard of it. */}
+              {data.deleteRecordings ? (
+                <p className="control-note">Recordings are deleted once each meeting is transcribed.</p>
+              ) : null}
+              {speakerLabelsRead.error !== null ? (
+                <FailureLine text="Speaker labels couldn't be read or saved." detail={speakerLabelsRead.error} />
+              ) : null}
+              {speakerLabelsCost === null ? null : <p className="control-note">{speakerLabelsCost}</p>}
+              {caveats}
+
+              {/* The Interrupted rows are in Recent, below; what recovering one
+                  did, and the sentence that changes what you get back, stay
+                  here. What these are and how Recover works is folded. */}
+              {recoverable.length > 0 ? (
+                <>
+                  <p className="caveat">
+                    A recording from an earlier session was interrupted. Recover
+                    it from Recent, below; the audio may end abruptly.
+                  </p>
+                  <LearnMore>
+                    <p>
+                      These recordings are not attached to a saved note. Recover
+                      uses the local whole-recording transcriber and saves any
+                      notes typed during the meeting.
+                    </p>
+                  </LearnMore>
+                </>
+              ) : null}
+              {recoveryNotes}
+
+              <LearnMore
+                summary={
+                  status.systemAudio.state === "available"
+                    ? "How the other participants are recorded"
+                    : "Why they can't be recorded"
+                }
+              >
+                <p>
+                  {status.systemAudio.state === "unsupported"
+                    ? status.systemAudio.reason
+                    : `System audio: ${systemAudioValue(status.systemAudio)} — ${
+                        status.systemAudio.state === "available"
+                          ? `${status.systemAudio.mechanism} — ${status.systemAudio.device}`
+                          : `${status.systemAudio.mechanism}. ${asSentence(status.systemAudio.reason)}`
+                      }`}
+                </p>
+              </LearnMore>
+            </ControlBar>
+          </div>
+        </section>
+        {recentSection(false)}
+      </div>
+    </div>
   );
 }
 
@@ -1286,6 +1389,12 @@ const LIVE_NOTE =
 /** The same, once nothing more will arrive. */
 const ENDED_NOTE =
   "These are the last lines the provider sent before the live transcription stopped. Nothing further will appear here, and the transcript that gets saved comes from one pass over the whole recording when the meeting ends.";
+
+/** The same, once the meeting is a note. */
+const SAVED_NOTE = "What was heard while the meeting ran.";
+
+/** The same, for a saved meeting whose lines this page never saw. */
+const SAVED_EMPTY_NOTE = "Open the note to read what was saved.";
 
 /** The same, after Stop and before the meeting is saved. */
 const FINISHING_NOTE =
@@ -1317,17 +1426,20 @@ function OutcomeCaveat({ outcome }: { outcome: MeetingOutcome }) {
  * following once scrolled up, so a line being read is not pulled away -- the
  * rule the meeting window's transcript tab keeps (`MeetingPanel.tsx`).
  */
-function LiveTranscript({ rows, ended, finishing = false }: { rows: readonly LiveRow[]; ended: boolean; finishing?: boolean }) {
+function LiveTranscript({ rows, ended, finishing = false, saved = false, children }: { rows: readonly LiveRow[]; ended: boolean; finishing?: boolean; saved?: boolean; children?: ReactNode }) {
   const list = useRef<HTMLOListElement>(null);
   const following = useRef(true);
   useLayoutEffect(() => {
     const element = list.current;
     if (element !== null && following.current) element.scrollTop = element.scrollHeight;
   }, [rows]);
+  const note = saved
+    ? (rows.length > 0 ? SAVED_NOTE : SAVED_EMPTY_NOTE)
+    : finishing ? FINISHING_NOTE : ended ? ENDED_NOTE : LIVE_NOTE;
   return (
     <div className="live-transcript" role="region" aria-label="Live transcript">
-      <h3 className="live-label">Live transcript</h3>
-      <p className="live-note">{finishing ? FINISHING_NOTE : ended ? ENDED_NOTE : LIVE_NOTE}</p>
+      <h2 className="section-label live-label">live transcript</h2>
+      <p className="live-note">{note}</p>
       <ol
         className="live-rows"
         ref={list}
@@ -1352,6 +1464,7 @@ function LiveTranscript({ rows, ended, finishing = false }: { rows: readonly Liv
           );
         })}
       </ol>
+      {children}
     </div>
   );
 }

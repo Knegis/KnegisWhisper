@@ -31,7 +31,7 @@ const delay = (ms) => new Promise((resolveDelay) => setTimeout(resolveDelay, ms)
 const isMain = isEntryPoint(import.meta.url);
 
 const EDGE_ARGS = ["--mute-audio"];
-const RAIL_ITEM = "nav.rail .rail-item";
+const NAV_PILL = "button.nav-pill";
 const WIDE = { width: 1440, height: 900 };
 const NOTE_ID = 105;
 const TITLE = "Word timings";
@@ -44,7 +44,7 @@ const SAMPLE_GAP_MS = 1200;
 /** The later word clicked in check 2: "nästa", row 1's thirteenth word, at 8.3 s. */
 const LATER_WORD = 12;
 
-const noteOpen = `(() => { const input = document.querySelector('.note-detail input[aria-label="Title"]'); return Boolean(input) && !input.disabled && input.value === ${JSON.stringify(TITLE)}; })()`;
+const noteOpen = `(() => { const input = document.querySelector('.note-detail textarea[aria-label="Title"]'); return Boolean(input) && !input.disabled && input.value === ${JSON.stringify(TITLE)}; })()`;
 const playingFrom = (seconds) => `(() => { const audio = document.querySelector('audio'); return Boolean(audio) && !audio.paused && audio.readyState >= 3 && audio.currentTime >= ${seconds}; })()`;
 const rowIsCurrent = (row) => `(document.querySelectorAll('.note-detail .transcript .transcript-rows li')[${row}]?.getAttribute('aria-current') === 'true')`;
 
@@ -66,9 +66,9 @@ function wordAt(words, seconds) {
 async function openNote(cdp) {
   await cdp.send("Emulation.setDeviceMetricsOverride", { ...WIDE, deviceScaleFactor: 1, mobile: false });
   await reload(cdp);
-  await waitFor(cdp, "Boolean(document.querySelector('nav.rail') && document.querySelector('.card .split-main, .card .content'))", "the fixture shell");
+  await waitFor(cdp, "Boolean(document.querySelector('.app-titlebar') && document.querySelector('.split-main, .content'))", "the fixture shell");
   await cdp.evaluate(snippets.removeFixtureBanner());
-  await cdp.evaluate(snippets.clickText(RAIL_ITEM, "Notes"));
+  await cdp.evaluate(snippets.clickText(NAV_PILL, "Notes"));
   await waitFor(cdp, "Boolean(document.querySelector('.list-panel .notes-entry'))", "the Notes library");
   await cdp.evaluate(snippets.openNotesEntry(TITLE));
   await waitFor(cdp, noteOpen, `note "${TITLE}" to open`);
@@ -241,7 +241,8 @@ export async function runWordHighlight(options) {
       const first = await sample(cdp, words, 0);
       await delay(SAMPLE_GAP_MS);
       const second = await sample(cdp, words, 0);
-      const zero = (value) => typeof value === "string" && value.split(",").every((part) => part.trim() === "0s");
+      // .01ms is `styles.css`' reduced-motion rule for every element: a transition no one can see, set !important over `.transcript-word`'s own `transition: none`.
+      const zero = (value) => typeof value === "string" && value.split(",").every((part) => Number.parseFloat(part) <= 0.00001);
       return {
         measured: { transition: { plain, reduced }, samples: [first, second] },
         matches: typeof plain === "string" && !zero(plain) && zero(reduced)
@@ -312,7 +313,7 @@ export async function runWordHighlight(options) {
 if (isMain) {
   try {
     const options = parseShellArgs(process.argv.slice(2));
-    if (options.help) process.stdout.write(`${shellUsage().replace("shell-rail.mjs", "word-highlight.mjs")}\n`);
+    if (options.help) process.stdout.write(`${shellUsage().replace("shell-title-bar.mjs", "word-highlight.mjs")}\n`);
     else {
       const failed = failedChecks(await runWordHighlight(options));
       // The run completed; a check measured false still fails it, so a wrapper or CI step sees it.

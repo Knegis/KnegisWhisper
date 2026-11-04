@@ -2,7 +2,7 @@
 /**
  * Measures, against dev fixtures, naming a meeting and choosing its folder
  * before it is recorded (KNEG-365): that Start and Record this call hand both
- * to `meeting_start`, that the live view and the list panel's Now row show the
+ * to `meeting_start`, that the live view shows the
  * name, that the saved note has the name and sits in that folder in Notes, and
  * that a folder deleted while the meeting ran is said in the outcome.
  *
@@ -26,7 +26,7 @@ import { isEntryPoint } from "../ci/entry.mjs";
 const delay = (ms) => new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
 const isMain = isEntryPoint(import.meta.url);
 
-const RAIL_ITEM = "nav.rail .rail-item";
+const NAV_PILL = "button.nav-pill";
 const ACTION = ".live-actions button";
 /** The name typed before Start. */
 const NAME = "Board review";
@@ -45,7 +45,8 @@ const UNNAMED = /^Meeting — \d{4}-\d{2}-\d{2} \d{2}:\d{2}$/;
 const field = (snippet, path) => `(${snippet})?.${path}`;
 const LIVE = "Boolean(document.querySelector('.meeting-live'))";
 const IDLE = "Boolean(document.querySelector('.control-start')) && !document.querySelector('.meeting-live')";
-const START_ENABLED = "(() => { const start = document.querySelector('.control-start'); return Boolean(start) && !start.disabled; })()";
+const NAME_FIELD = ".tile-form input.meeting-name";
+const START_ENABLED = "(() => { const start = document.querySelector('.control-start'); return Boolean(start) && !start.disabled && start.textContent.trim() === 'Start recording'; })()";
 const RECORD_ENABLED = "(() => { const button = [...document.querySelectorAll('.call-card button')].find((item) => item.textContent.trim() === 'Record this call'); return Boolean(button) && !button.disabled; })()";
 
 async function waitFor(cdp, expression, description, timeout = 10_000) {
@@ -106,14 +107,14 @@ const startCalls = (cdp) => cdp.evaluate(snippets.stubCalls("meeting_start"));
  */
 async function prepared(cdp, { name, folder }) {
   await reload(cdp);
-  await waitFor(cdp, "Boolean(document.querySelector('nav.rail') && document.querySelector('.card .split-main, .card .content'))", "the fixture shell");
+  await waitFor(cdp, "Boolean(document.querySelector('.app-titlebar') && document.querySelector('.split-main, .content'))", "the fixture shell");
   await cdp.evaluate(snippets.removeFixtureBanner());
   await cdp.evaluate(snippets.installInvokeStub());
-  await cdp.evaluate(snippets.clickText(RAIL_ITEM, "Meetings"));
+  await cdp.evaluate(snippets.clickText(NAV_PILL, "Meetings"));
   await waitFor(cdp, START_ENABLED, "Start recording to be enabled");
   await waitFor(cdp, snippets.chipState(FOLDER_CHIP), "the Folder chip");
   if (name !== null) {
-    await press(cdp, await cdp.evaluate(snippets.centerOfText(".control-row input.meeting-name", null)));
+    await press(cdp, await cdp.evaluate(snippets.centerOfText(NAME_FIELD, null)));
     await cdp.send("Input.insertText", { text: name });
     await waitFor(cdp, `${field(snippets.meetingPlanState(), "name.value")} === ${JSON.stringify(name)}`, "the name to be typed");
   }
@@ -138,16 +139,23 @@ async function begin(cdp, how) {
   await delay(300);
 }
 
-/** Stop and save, with the fixtures answering for the meeting window, then the page idle. */
+/** Stop and save, with the fixtures answering for the meeting window, then the page saying it was saved. */
 async function stopAndSave(cdp) {
   await pressText(cdp, ACTION, "Stop and save");
-  await waitFor(cdp, IDLE, "the page to go idle", 10_000);
+  await waitFor(cdp, snippets.MEETING_SAVED, "the page to say the meeting was saved", 10_000);
   await delay(400);
 }
 
-/** Opens Notes from the rail and reads its library's folders. */
+/** The saved meeting's Record another, back to the idle page and its name field. */
+async function recordAnother(cdp) {
+  await pressText(cdp, ACTION, "Record another");
+  await waitFor(cdp, IDLE, "the page to go idle", 10_000);
+  await delay(200);
+}
+
+/** Opens Notes from its pill and reads its library's folders. */
 async function notesLibrary(cdp) {
-  await cdp.evaluate(snippets.clickText(RAIL_ITEM, "Notes"));
+  await cdp.evaluate(snippets.clickText(NAV_PILL, "Notes"));
   await waitFor(cdp, "Boolean(document.querySelector('.list-panel .notes-entry'))", "the Notes library");
   await delay(300);
   return cdp.evaluate(snippets.notesFolders());
@@ -224,8 +232,9 @@ export async function runMeetingPlan(options) {
 
     await check({
       id: "2",
-      claim: "While the meeting records, the live view's title and the list panel's Now row are its name.",
-      expectation: `after Start with "${NAME}" typed: .live-title reads "${NAME}" and the Now section's one row reads "${NAME}"`,
+      claim: "While the meeting records, the live view's title is its name.",
+      expectation: `after Start with "${NAME}" typed: .live-title reads "${NAME}"`,
+      note: "The list panel's Now row this also read went with Meetings' list panel.",
     }, async () => {
       await prepared(cdp, { name: NAME, folder: FOLDER.name });
       await begin(cdp, "start");
@@ -233,8 +242,8 @@ export async function runMeetingPlan(options) {
       const shot = "02-live-title-1000x720.png";
       await cdp.screenshot(resolve(out, shot));
       return {
-        measured: { liveTitle: plan.liveTitle, now: plan.sections.Now ?? null },
-        matches: plan.liveTitle === NAME && JSON.stringify(plan.sections.Now) === JSON.stringify([NAME]),
+        measured: { liveTitle: plan.liveTitle },
+        matches: plan.liveTitle === NAME,
         screenshots: [shot],
       };
     });
@@ -243,25 +252,27 @@ export async function runMeetingPlan(options) {
       id: "3",
       claim: "Stop saves the meeting under its name in the folder chosen: Recent lists it by name, Notes files it in that folder, and the name field is empty for the next meeting while the folder stays chosen.",
       expectation: [
-        `after Start and Stop and save: the page idle with a caveat starting "Saved as a note" and no "${FOLDER_GONE}";`,
-        `Recent's first row "${NAME}"; the name field empty and the Folder chip still "Save to ${FOLDER.name}";`,
-        `then in Notes, the ${FOLDER.name} folder lists "${NAME}" and "Not in a folder" does not`,
+        `after Start and Stop and save: the notice reads a sentence starting "Saved as a note" with no "${FOLDER_GONE}";`,
+        `Recent's first row "${NAME}"; after Record another, the name field empty and the Folder chip still "Save to ${FOLDER.name}";`,
+        `then in Notes, the ${FOLDER.name} folder lists "${NAME}" and "not in a folder" does not`,
       ].join(" "),
     }, async () => {
       await prepared(cdp, { name: NAME, folder: FOLDER.name });
       await begin(cdp, "start");
       await stopAndSave(cdp);
       const page = await pageState(cdp);
-      const plan = await planState(cdp);
-      const chip = await cdp.evaluate(snippets.chipState(FOLDER_CHIP));
+      const saved = await planState(cdp);
       const shot = "03-saved-1000x720.png";
       await cdp.screenshot(resolve(out, shot));
+      await recordAnother(cdp);
+      const plan = await planState(cdp);
+      const chip = await cdp.evaluate(snippets.chipState(FOLDER_CHIP));
       const library = await notesLibrary(cdp);
       return {
-        measured: { caveats: page.caveats, recent: plan.sections.Recent ?? null, name: plan.name, chip: chip?.text ?? null, library },
-        matches: page.caveats.some((text) => text.startsWith("Saved as a note"))
-          && !page.caveats.some((text) => text.includes(FOLDER_GONE))
-          && plan.sections.Recent?.[0] === NAME
+        measured: { saved: page.saved, recent: saved.sections.Recent, recentIdle: plan.sections.Recent, name: plan.name, chip: chip?.text ?? null, library },
+        matches: (page.saved ?? "").startsWith("Saved as a note")
+          && !page.saved.includes(FOLDER_GONE)
+          && saved.sections.Recent[0] === NAME && plan.sections.Recent[0] === NAME
           && plan.name?.value === "" && chip?.text === `Save to ${FOLDER.name}`
           && (library.folders[FOLDER.name] ?? []).includes(NAME) && !library.unfiled.includes(NAME),
         screenshots: [shot],
@@ -273,8 +284,8 @@ export async function runMeetingPlan(options) {
       claim: "A folder deleted while the meeting records is left out of the save, and the outcome says so.",
       expectation: [
         `after Start with "${NAME}" in ${FOLDER.name}, folder_delete ${FOLDER.id} through the fixtures, then Stop and save:`,
-        `a caveat starting "Saved as a note (31 min). ${FOLDER_GONE}"; the Folder chip back at "Save to Notes";`,
-        `in Notes, "${NAME}" under "Not in a folder"`,
+        `the notice reading a sentence starting "Saved as a note (31 min). ${FOLDER_GONE}"; after Record another, the Folder chip back at "Save to Notes";`,
+        `in Notes, "${NAME}" under "not in a folder"`,
       ].join(" "),
       note: "The fixtures' meeting_stop makes Rust's call on the folder (`create_meeting_note`): a folder no longer listed is no folder, with folderMissing. The race Rust also covers -- deleted between its lookup and its insert -- is a Rust test.",
     }, async () => {
@@ -283,13 +294,14 @@ export async function runMeetingPlan(options) {
       await cdp.evaluate(snippets.invokeFixture("folder_delete", { id: FOLDER.id }));
       await stopAndSave(cdp);
       const page = await pageState(cdp);
-      const chip = await cdp.evaluate(snippets.chipState(FOLDER_CHIP));
       const shot = "04-folder-deleted-1000x720.png";
       await cdp.screenshot(resolve(out, shot));
+      await recordAnother(cdp);
+      const chip = await cdp.evaluate(snippets.chipState(FOLDER_CHIP));
       const library = await notesLibrary(cdp);
       return {
-        measured: { caveats: page.caveats, chip: chip?.text ?? null, library },
-        matches: page.caveats.some((text) => text.startsWith(`Saved as a note (31 min). ${FOLDER_GONE}`))
+        measured: { saved: page.saved, chip: chip?.text ?? null, library },
+        matches: (page.saved ?? "").startsWith(`Saved as a note (31 min). ${FOLDER_GONE}`)
           && chip?.text === "Save to Notes"
           && library.unfiled.includes(NAME) && !(FOLDER.name in library.folders),
         screenshots: [shot],
@@ -301,7 +313,7 @@ export async function runMeetingPlan(options) {
       claim: "A meeting started with no name and no folder chosen asks for neither, reads Meeting while it records, and is saved named for when it started, in no folder.",
       expectation: [
         "with the field left empty and the Folder chip at \"Save to Notes\": one meeting_start call with title null and folderId null;",
-        ".live-title reads \"Meeting\"; after Stop and save, Recent's first row matches \"Meeting — YYYY-MM-DD HH:MM\" and Notes lists it under \"Not in a folder\"",
+        ".live-title reads \"Meeting\"; after Stop and save, Recent's first row matches \"Meeting — YYYY-MM-DD HH:MM\" and Notes lists it under \"not in a folder\"",
       ].join(" "),
     }, async () => {
       await prepared(cdp, { name: null, folder: null });
@@ -339,7 +351,7 @@ export async function runMeetingPlan(options) {
 if (isMain) {
   try {
     const options = parseShellArgs(process.argv.slice(2));
-    if (options.help) process.stdout.write(`${shellUsage().replace("shell-rail.mjs", "meeting-plan.mjs")}\n`);
+    if (options.help) process.stdout.write(`${shellUsage().replace("shell-title-bar.mjs", "meeting-plan.mjs")}\n`);
     else {
       const failed = failedChecks(await runMeetingPlan(options));
       // The run completed; a check measured false still fails it, so a wrapper or CI step sees it.

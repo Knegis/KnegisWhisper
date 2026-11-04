@@ -22,7 +22,7 @@ const CURRENT_WORD = "transcript-word-current";
  */
 export function TranscriptHeading({ children, labelled = true }: { children?: ReactNode; labelled?: boolean }) {
   return <div className="transcript-head">
-    {labelled ? <h2 className="transcript-label">Transcript</h2> : null}
+    {labelled ? <h2 className="transcript-label">transcript</h2> : null}
     {children}
   </div>;
 }

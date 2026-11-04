@@ -154,15 +154,17 @@ export function SettingsIntelligenceLocal() {
     const asks = m.integrity.state === "changed" || m.integrity.state === "failed-recheck";
 
     return (
-      <li key={m.id}>
-        {m.name}
-        <em className="row-detail">
-          {size(m.sizeBytes)}
-          {m.recommended ? " · recommended" : ""}
-          {/* Before the button, for the same reason the size is: a guarantee
-              nobody was told about is a guarantee nobody can weigh. */}
-          {installed ? "" : ` · ${downloadCheckPlain(m.verifiedBy)}`}
-        </em>
+      <li key={m.id} className="text-model">
+        <span className="text-model-art" aria-hidden="true"><span /></span>
+        <div className="text-model-body">
+        <span className="text-model-name">{m.name}</span>
+        <span className="engine-card-chips">
+          <span className="model-chip">{size(m.sizeBytes)}</span>
+          {m.recommended ? <span className="model-chip" data-tone="recommended">recommended</span> : null}
+        </span>
+        {/* Before the button, for the same reason the size is: a guarantee
+            nobody was told about is a guarantee nobody can weigh. */}
+        {installed ? null : <em className="row-detail">{downloadCheckPlain(m.verifiedBy)}</em>}
         {installed ? (
           <em className={asks ? "row-detail warn" : "row-detail"}>{state.text}</em>
         ) : null}
@@ -189,6 +191,7 @@ export function SettingsIntelligenceLocal() {
             </p>
           ) : null}
         </LearnMore>
+        <div className="action-row text-model-actions">
         {installed ? (
           <>
             <button
@@ -213,6 +216,16 @@ export function SettingsIntelligenceLocal() {
                 ? "Reading the whole file…"
                 : `Check the file (reads ${size(m.sizeBytes)})`}
             </button>
+            {running && data.runningModel === m.id ? (
+              <button
+                type="button"
+                onClick={() => {
+                  void guard(stopLocalLlm);
+                }}
+              >
+                Stop the model
+              </button>
+            ) : null}
           </>
         ) : (
           <button
@@ -226,6 +239,7 @@ export function SettingsIntelligenceLocal() {
             Install ({size(m.sizeBytes)})
           </button>
         )}
+        </div>
         {checked?.id === m.id ? (
           <>
             <em className={checked.failed ? "row-detail warn" : "row-detail"} role="status">
@@ -237,6 +251,7 @@ export function SettingsIntelligenceLocal() {
             </LearnMore>
           </>
         ) : null}
+        </div>
       </li>
     );
   };
@@ -246,19 +261,21 @@ export function SettingsIntelligenceLocal() {
       {error ? <FailureLine text="That didn't work." detail={error} /> : null}
 
       <section data-surface="settings.intelligence.local">
-        <h2>On this computer</h2>
+        <h2>on this computer</h2>
 
         {data.availability.state === "not-published" ? (
-          <>
-            <Row
-              label="Availability"
-              value="Not available on this computer yet"
-            />
+          <div className="local-hero">
+            <div className="local-hero-art" aria-hidden="true">
+              <span className="local-hero-shadow" />
+              <span className="local-hero-sphere" />
+            </div>
+            <span className="local-hero-label">Availability</span>
+            <p className="local-hero-state">Not available on this computer yet</p>
             <LearnMore summary="Why">
               <p>{data.availability.reason}</p>
               <p>{data.availability.tracking}</p>
             </LearnMore>
-          </>
+          </div>
         ) : (
           <>
             <p className="muted">
@@ -271,11 +288,13 @@ export function SettingsIntelligenceLocal() {
             <Row
               label="Text engine"
               value={
-                running
-                  ? "Running"
-                  : data.serverInstalled
-                    ? "Installed, not running"
-                    : "Not installed"
+                <span className="model-chip" data-tone={running ? "installed" : "plain"}>
+                  {running
+                    ? "Running"
+                    : data.serverInstalled
+                      ? "Installed, not running"
+                      : "Not installed"}
+                </span>
               }
               detail={
                 runningName
@@ -296,7 +315,7 @@ export function SettingsIntelligenceLocal() {
             */}
             {freshness ? (
               <>
-                <p className={data.serverFreshness.state === "current" ? "muted" : "muted warn"}>
+                <p className={data.serverFreshness.state === "stale" ? "caveat warn" : "muted"}>
                   {freshness.text}
                 </p>
                 {freshness.more ? (
@@ -371,19 +390,7 @@ export function SettingsIntelligenceLocal() {
 
             {progress ? <Row label="Progress" value={progress} /> : null}
 
-            {/* `list`, not `purposes`: a model row carries its own button. */}
-            <ul className="list">{data.models.map(modelRow)}</ul>
-
-            {running ? (
-              <button
-                type="button"
-                onClick={() => {
-                  void guard(stopLocalLlm);
-                }}
-              >
-                Stop the model
-              </button>
-            ) : null}
+            <ul className="text-models">{data.models.map(modelRow)}</ul>
           </>
         )}
       </section>

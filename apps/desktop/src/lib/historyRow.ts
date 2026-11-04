@@ -3,7 +3,7 @@
  * tooltip that carries the rest.
  *
  * Pure, and with no React: `tests/historyRow.test.ts` imports this directly,
- * and `components/DictationHistoryPanel.tsx` only draws it.
+ * and `components/DictationHistory.tsx` only draws it.
  *
  * # Failed is not the same as empty
  *
@@ -36,6 +36,10 @@ export type HistoryRow = {
   muted: boolean;
   /** `HH:MM`, then the failure's reason, then "Cleaned up" -- each when present. */
   meta: string;
+  /** The `HH:MM` alone, which the row sets in the pixel face. `null` when the stored time did not parse. */
+  time: string | null;
+  /** The meta after the time. */
+  detail: string;
   /** The row's full text and what moved off the row, or `null` when there is nothing. */
   tooltip: string | null;
   /** What pressing the row puts on the clipboard: the text, or failing that the reason. */
@@ -55,13 +59,11 @@ export function historyRow(h: Transcription): HistoryRow {
   const failed = h.status === "failed";
   const empty = h.text === "";
   const cleaned = h.rawText !== null && h.rawText !== "";
-  const meta = [
-    at === null ? null : timeOfDay(at),
-    failed ? h.errorMessage : null,
-    cleaned ? "Cleaned up" : null,
-  ]
+  const time = at === null ? null : timeOfDay(at);
+  const detail = [failed ? h.errorMessage : null, cleaned ? "Cleaned up" : null]
     .filter((part): part is string => part !== null && part !== "")
     .join(" · ");
+  const meta = [time, detail].filter((part): part is string => part !== null && part !== "").join(" · ");
   const tooltip = [
     empty ? null : h.text,
     cleaned ? `Before cleanup: ${h.rawText}` : null,
@@ -73,6 +75,8 @@ export function historyRow(h: Transcription): HistoryRow {
     title: empty ? "Didn't work" : h.text,
     muted: empty,
     meta,
+    time,
+    detail,
     tooltip: tooltip === "" ? null : tooltip,
     copyText: h.text || h.errorMessage || "",
     copyDescription: !empty

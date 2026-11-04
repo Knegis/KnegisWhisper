@@ -25,7 +25,7 @@ import { isEntryPoint } from "../ci/entry.mjs";
 const delay = (ms) => new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
 const isMain = isEntryPoint(import.meta.url);
 
-const RAIL_ITEM = "nav.rail .rail-item";
+const NAV_PILL = "button.nav-pill";
 const ACTION = ".live-actions button";
 const HERO_METER = ".hero-meter .level-meter";
 /** `STALE_MS` in `apps/desktop/src/lib/levelMeter.ts`. */
@@ -37,9 +37,8 @@ const LABEL_WINDOW = { width: 280, height: 96 };
 const FLOATING_WINDOW = { width: 96, height: 96 };
 
 const LIVE = "Boolean(document.querySelector('.meeting-live'))";
-const IDLE = "Boolean(document.querySelector('.control-start')) && !document.querySelector('.meeting-live')";
-const START_ENABLED = "(() => { const start = document.querySelector('.control-start'); return Boolean(start) && !start.disabled; })()";
-const SHELL = "Boolean(document.querySelector('nav.rail') && document.querySelector('.card .split-main, .card .content'))";
+const START_ENABLED = "(() => { const start = document.querySelector('.control-start'); return Boolean(start) && !start.disabled && start.textContent.trim() === 'Start recording'; })()";
+const SHELL = "Boolean(document.querySelector('.app-titlebar') && document.querySelector('.split-main, .content'))";
 const meterShows = (selector, level) => `document.querySelector(${JSON.stringify(selector)})?.dataset.level === ${JSON.stringify(level.toFixed(2))}`;
 const noMeters = "document.querySelectorAll('.level-meter').length === 0";
 
@@ -118,13 +117,13 @@ async function mainPage(cdp, url, page, size = MAIN_WINDOW) {
   await load(cdp, url);
   await waitFor(cdp, SHELL, "the fixture shell");
   await cdp.evaluate(snippets.removeFixtureBanner());
-  await cdp.evaluate(snippets.clickText(RAIL_ITEM, page));
+  await cdp.evaluate(snippets.clickText(NAV_PILL, page));
 }
 
 /** Dictation, recording as the session announces it, with its meter mounted. */
 async function dictationRecording(cdp, url, size = MAIN_WINDOW) {
   await mainPage(cdp, url, "Dictation", size);
-  await waitFor(cdp, "Boolean(document.querySelector('.hero'))", "the Dictation hero");
+  await waitFor(cdp, "Boolean(document.querySelector('.task-hero'))", "the Dictation hero");
   await cdp.evaluate(snippets.emitDictationState("recording"));
   await waitFor(cdp, `Boolean(document.querySelector(${JSON.stringify(HERO_METER)}))`, "the Dictation meter");
 }
@@ -157,6 +156,13 @@ const inside = (inner, outer) => inner.left >= outer.left - 0.5 && inner.top >= 
   && inner.right <= outer.right + 0.5 && inner.bottom <= outer.bottom + 0.5;
 const inViewport = (meter) => meter.box.width > 0 && meter.box.height > 0
   && inside(meter.box, { left: 0, top: 0, right: meter.viewport.width, bottom: meter.viewport.height });
+/**
+ * Inside the window's width, wherever it is down the page. Meetings stacks at the
+ * smallest window, and the page scrolls there by design, so a meter's height on the
+ * page is not the claim; a meter cut off at the side would be.
+ */
+const inWidth = (meter) => meter.box.width > 0 && meter.box.height > 0
+  && meter.box.left >= 0 && meter.box.right <= meter.viewport.width;
 /** Decoration, as ruled: hidden from assistive technology, no `role`. */
 const decoration = (meter) => meter.hiddenFromAssistiveTechnology && meter.role === null;
 const drawsWhatItSays = (meter) => meter.litDrawn === meter.lit && meter.colours.lit !== meter.colours.unlit;
@@ -207,8 +213,8 @@ export async function runLevelMeters(options) {
       id: "1",
       claim: "While a dictation records, the Dictation hero shows one meter, hidden from assistive technology, that follows the level it is sent; at idle it is gone.",
       expectation: [
-        "after `dictation-state` recording: exactly one `.level-meter`, in `.hero-meter`, inside the window, `aria-hidden` and no `role`, 16 segments, showing 0;",
-        "after one reading of 0.75: `data-level` 0.75 and 12 of 16 segments lit and drawn lit, in a colour other than the unlit ones;",
+        "after `dictation-state` recording: exactly one `.level-meter`, in `.hero-meter`, inside the window, `aria-hidden` and no `role`, 9 segments, showing 0;",
+        "after one reading of 0.75: `data-level` 0.75 and 7 of 9 segments lit and drawn lit, in a colour other than the unlit ones;",
         "after `dictation-state` idle: no `.level-meter` on the page;",
         "on a fresh load at 720x520, recording: the meter inside the window, and nothing wider than the window",
       ].join(" "),
@@ -234,9 +240,9 @@ export async function runLevelMeters(options) {
       const [meter] = following;
       return {
         measured: { atStart, following, atIdle, smallest, overflow },
-        matches: atStart.length === 1 && atStart[0].className === "level-meter" && atStart[0].level === 0 && atStart[0].lit === 0
-          && following.length === 1 && meter.ariaHidden === "true" && decoration(meter) && meter.segments === 16
-          && meter.level === 0.75 && meter.lit === 12 && drawsWhatItSays(meter) && inViewport(meter)
+        matches: atStart.length === 1 && atStart[0].className === "level-meter level-wave" && atStart[0].level === 0 && atStart[0].lit === 0
+          && following.length === 1 && meter.ariaHidden === "true" && decoration(meter) && meter.segments === 9
+          && meter.level === 0.75 && meter.lit === 7 && drawsWhatItSays(meter) && inViewport(meter)
           && atIdle.length === 0
           && smallest.length === 1 && inViewport(smallest[0])
           && overflow.scrollWidth <= overflow.innerWidth
@@ -248,7 +254,7 @@ export async function runLevelMeters(options) {
     await check({
       id: "2",
       claim: "A level not heard again for 400 ms falls to 0 while the meter is still up, so a meter cannot stay lit over a capture that went away without its last 0.",
-      expectation: `one reading of 0.75 shows 12 segments lit; after ${STALE_MS + 250} ms with no reading the same meter shows 0 with none lit, and is still mounted`,
+      expectation: `one reading of 0.75 shows 7 of the hero's 9 segments lit; after ${STALE_MS + 250} ms with no reading the same meter shows 0 with none lit, and is still mounted`,
     }, async () => {
       await dictationRecording(cdp, options.url);
       await cdp.evaluate(snippets.emitLevel(0.75));
@@ -258,7 +264,7 @@ export async function runLevelMeters(options) {
       const stale = await meters(cdp);
       return {
         measured: { fresh, stale },
-        matches: fresh.length === 1 && fresh[0].lit === 12
+        matches: fresh.length === 1 && fresh[0].lit === 7
           && stale.length === 1 && stale[0].level === 0 && stale[0].lit === 0 && stale[0].litDrawn === 0,
       };
     });
@@ -267,10 +273,10 @@ export async function runLevelMeters(options) {
       id: "3",
       claim: "A meeting recording both sources shows \"You\" and \"Others\" meters in its live header, each with its own level, without making the smallest window scroll sideways; one recording the microphone only shows \"You\" alone; Stop and save takes them away.",
       expectation: [
-        "Start recording with Other participants pressed: two `.live-level` meters labelled You and Others, both inside the window and hidden from assistive technology with no role, both above 0 and lit differently (the fixtures' microphone moves around 0.62, the others around 0.3);",
-        "after Stop and save, the page idle with no `.level-meter`;",
-        "on a fresh page, Start recording with the chip released: one meter, labelled You, above 0;",
-        "on a fresh load at 720x520, Start recording with the chip pressed: both meters inside the window, and neither the document nor `.split-main` wider than it shows (scrollWidth <= innerWidth, as chip-menus check 8 measures)",
+        "Start recording with Other participants pressed: two meters in `.live-levels` labelled you and others, both inside the window and hidden from assistive technology with no role, a segment's transition-duration 0.08s, both above 0 and lit differently (the fixtures' microphone moves around 0.62, the others around 0.3);",
+        "after Stop and save, the page saying so with no `.level-meter`;",
+        "on a fresh page, Start recording with the chip released: one meter, labelled you, above 0;",
+        "on a fresh load at 720x520, Start recording with the chip pressed: both meters inside the window's width, the page scrolling down to them by design, and neither the document nor `.split-main` wider than it shows (scrollWidth <= innerWidth, as chip-menus check 8 measures)",
       ].join(" "),
     }, async () => {
       const bothPressed = await meetingRecording(cdp, options.url, true);
@@ -278,7 +284,7 @@ export async function runLevelMeters(options) {
       const shot = "03-meeting-both-sources-1000x720.png";
       await cdp.screenshot(resolve(out, shot));
       await press(cdp, await cdp.evaluate(snippets.centerOfText(ACTION, "Stop and save")));
-      await waitFor(cdp, IDLE, "the page to go idle");
+      await waitFor(cdp, snippets.MEETING_SAVED, "the page to say the meeting was saved");
       const afterStop = await meters(cdp);
 
       const micOnlyPressed = await meetingRecording(cdp, options.url, false);
@@ -295,12 +301,12 @@ export async function runLevelMeters(options) {
       return {
         measured: { bothPressed, both, afterStop, micOnlyPressed, micOnly, smallest, overflow },
         matches: bothPressed.systemAudio === true && both.length === 2
-          && you.label === "You" && others.label === "Others"
-          && both.every((meter) => decoration(meter) && inViewport(meter) && meter.level > 0 && meter.lit > 0 && drawsWhatItSays(meter))
+          && you.label === "you" && others.label === "others"
+          && both.every((meter) => decoration(meter) && inViewport(meter) && meter.transition === "0.08s" && meter.level > 0 && meter.lit > 0 && drawsWhatItSays(meter))
           && you.level !== others.level && you.lit !== others.lit
           && afterStop.length === 0
-          && micOnlyPressed.systemAudio === false && micOnly.length === 1 && micOnly[0].label === "You" && micOnly[0].level > 0
-          && smallest.length === 2 && smallest.every(inViewport)
+          && micOnlyPressed.systemAudio === false && micOnly.length === 1 && micOnly[0].label === "you" && micOnly[0].level > 0
+          && smallest.length === 2 && smallest.every(inWidth)
           && overflow.scrollWidth <= overflow.innerWidth
           && (overflow.mainScrollWidth === null || overflow.mainScrollWidth <= overflow.mainClientWidth),
         screenshots: [shot, shotMic, shotSmall],
@@ -309,11 +315,11 @@ export async function runLevelMeters(options) {
 
     await check({
       id: "4",
-      claim: "Under reduced motion a meter has no transition and changes at most four times a second; without it, the fill swap is 80 ms and every reading shows.",
+      claim: "Under reduced motion a meter has no transition and changes at most four times a second; without it every reading shows.",
       expectation: [
         "on the Dictation meter with the fixtures sending ten readings a second for 2 s each way:",
-        "without emulation, a segment's transition-duration 0.08s and at least 12 changes;",
-        `with prefers-reduced-motion: reduce emulated, 0s, at most 10 changes, and none closer than ${REDUCED_MOTION_INTERVAL_MS - 10} ms to the one before`,
+        "without emulation, at least 12 changes (the hero's wave draws no transition of its own: `.level-wave .level-segment`; check 3 holds the 80 ms fill swap on the meters that keep it);",
+        `with prefers-reduced-motion: reduce emulated, 0.01ms or less (styles.css' rule for every element), at most 10 changes, and none closer than ${REDUCED_MOTION_INTERVAL_MS - 10} ms to the one before`,
       ].join(" "),
       note: "Changes are the meter's `data-level` attribute, timestamped by a MutationObserver in the page; a reading equal to the one shown changes nothing, so the counts are at most the readings sent. The 10 ms allowance is for timer and commit jitter.",
     }, async () => {
@@ -333,8 +339,8 @@ export async function runLevelMeters(options) {
       const reduced = await sample();
       return {
         measured: { normal, reduced },
-        matches: normal.transition === "0.08s" && normal.changes >= 12
-          && reduced.transition === "0s" && reduced.changes <= 10
+        matches: normal.transition === "0s" && normal.changes >= 12
+          && Number.parseFloat(reduced.transition) <= 0.00001 && reduced.changes <= 10
           && reduced.minGapMs !== null && reduced.minGapMs >= REDUCED_MOTION_INTERVAL_MS - 10,
       };
     });
@@ -422,7 +428,7 @@ export async function runLevelMeters(options) {
 if (isMain) {
   try {
     const options = parseShellArgs(process.argv.slice(2));
-    if (options.help) process.stdout.write(`${shellUsage().replace("shell-rail.mjs", "level-meters.mjs")}\n`);
+    if (options.help) process.stdout.write(`${shellUsage().replace("shell-title-bar.mjs", "level-meters.mjs")}\n`);
     else {
       const failed = failedChecks(await runLevelMeters(options));
       // The run completed; a check measured false still fails it, so a wrapper or CI step sees it.

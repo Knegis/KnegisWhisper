@@ -14,7 +14,7 @@ import { useEffect, useState } from "react";
 
 import { LearnMore } from "../components/LearnMore";
 import { LocalServerHealth } from "../components/LocalServerHealth";
-import { Row } from "../components/Row";
+import { Row, type RowTone } from "../components/Row";
 import {
   checkForUpdate,
   getLastUpdateCheck,
@@ -29,6 +29,17 @@ import {
   nonActivatingLabel,
   updateCheckLabel,
 } from "../lib/labels";
+
+/** No dot on a mechanism nobody has listened to: it is neither fine nor off. */
+function systemAudioTone(s: SystemAudioSupport): RowTone | undefined {
+  if (s.state !== "available") return "off";
+  return s.unverified ? undefined : "ok";
+}
+
+function updateTone(result: UpdateCheckResult): RowTone | undefined {
+  if (result.state === "up-to-date") return "ok";
+  return result.state === "update-available" ? undefined : "bad";
+}
 
 function systemAudioDetail(s: SystemAudioSupport): string {
   switch (s.state) {
@@ -67,8 +78,8 @@ export function DiagnosticsView({ diagnostics }: { diagnostics: Diagnostics }) {
     <div className="view">
       <LocalServerHealth />
       <section>
-        <h2>Runtime</h2>
-        <Row label="Version" value={diagnostics.appVersion} />
+        <h2>runtime</h2>
+        <Row label="Version" value={<span className="row-pixel">{diagnostics.appVersion}</span>} />
         <Row
           label="Platform"
           value={`${diagnostics.os} ${diagnostics.arch}`}
@@ -86,17 +97,19 @@ export function DiagnosticsView({ diagnostics }: { diagnostics: Diagnostics }) {
               : "Unavailable"
           }
           {...(diagnostics.credentialStore.state === "unavailable"
-            ? { detail: "keys can't be saved or read until it works" }
+            ? { detail: "keys can't be saved or read until it works", tone: "bad" as const }
             : {})}
-        />
-        {/* The failure in view, the system's reason under Details (KNEG-343). */}
-        {diagnostics.credentialStore.state === "unavailable" ? (
-          <LearnMore summary="Details">
-            <p>{diagnostics.credentialStore.reason}</p>
-          </LearnMore>
-        ) : null}
+        >
+          {/* The failure in view, the system's reason under Details (KNEG-343). */}
+          {diagnostics.credentialStore.state === "unavailable" ? (
+            <LearnMore summary="Details">
+              <p>{diagnostics.credentialStore.reason}</p>
+            </LearnMore>
+          ) : null}
+        </Row>
         <Row
           label="Model cache"
+          code
           value={diagnostics.modelCache.path}
           {...(diagnostics.modelCache.fellBack
             ? {
@@ -108,17 +121,24 @@ export function DiagnosticsView({ diagnostics }: { diagnostics: Diagnostics }) {
       </section>
 
       <section>
-        <h2>Privacy overlay</h2>
+        <h2>privacy overlay</h2>
         <Row
           label="Window"
+          tone={diagnostics.overlay.created ? "ok" : "bad"}
           value={diagnostics.overlay.created ? "created" : "not created"}
         />
         <Row
           label="Capture exclusion"
+          tone={captureConfirmed ? "ok" : "bad"}
           value={capture.text}
           detail={capture.detail}
         />
-        <Row label="Focus" value={focus.text} detail={focus.detail} />
+        <Row
+          label="Focus"
+          tone={diagnostics.overlay.nonActivating.state === "active" ? "ok" : "bad"}
+          value={focus.text}
+          detail={focus.detail}
+        />
         {/*
           A live reading, not a setting — and it used to read like one. "Recording
           indicator: hidden" alongside "the overlay is visible whenever the
@@ -139,7 +159,7 @@ export function DiagnosticsView({ diagnostics }: { diagnostics: Diagnostics }) {
           }
         />
         {!captureConfirmed ? (
-          <p className="caveat">
+          <p className="caveat warn">
             This system cannot confirm the overlay is excluded from screen
             capture. Treat it as visible to recording software until verified.
             Display server: {diagnostics.overlay.displayServer}.
@@ -154,9 +174,10 @@ export function DiagnosticsView({ diagnostics }: { diagnostics: Diagnostics }) {
       </section>
 
       <section>
-        <h2>Input and audio</h2>
+        <h2>input and audio</h2>
         <Row
           label="Modifier-only shortcuts"
+          tone={diagnostics.modifierOnlyShortcuts.state === "available" ? "ok" : "off"}
           value={
             diagnostics.modifierOnlyShortcuts.state === "available"
               ? "Supported"
@@ -170,6 +191,7 @@ export function DiagnosticsView({ diagnostics }: { diagnostics: Diagnostics }) {
         />
         <Row
           label="System audio"
+          tone={systemAudioTone(diagnostics.systemAudio)}
           value={systemAudioValue(diagnostics.systemAudio)}
           detail={systemAudioDetail(diagnostics.systemAudio)}
         />
@@ -184,13 +206,14 @@ export function DiagnosticsView({ diagnostics }: { diagnostics: Diagnostics }) {
       </section>
 
       <section>
-        <h2>Software update</h2>
+        <h2>software update</h2>
         <p className="muted">
           Checked only when the button below is pressed. Nothing here runs at
           startup, on a timer, or without this click.
         </p>
         <button
           type="button"
+          className="action-iris"
           disabled={checkingForUpdate}
           onClick={() => {
             setCheckingForUpdate(true);
@@ -199,11 +222,13 @@ export function DiagnosticsView({ diagnostics }: { diagnostics: Diagnostics }) {
               .finally(() => setCheckingForUpdate(false));
           }}
         >
+          {checkingForUpdate ? <span className="action-spinner" aria-hidden="true" /> : null}
           {checkingForUpdate ? "Checking…" : "Check for updates"}
         </button>
         {updateResult ? (
           <Row
             label="Last check"
+            tone={updateTone(updateResult)}
             value={updateCheckLabel(updateResult).text}
             detail={updateCheckLabel(updateResult).detail}
           />
@@ -213,7 +238,7 @@ export function DiagnosticsView({ diagnostics }: { diagnostics: Diagnostics }) {
       </section>
 
       <section>
-        <h2>Network boundary</h2>
+        <h2>network boundary</h2>
         {/*
           It said "no screen reaches the network any other way" than a
           connection test and an update check, under a list naming calendar,
@@ -223,7 +248,7 @@ export function DiagnosticsView({ diagnostics }: { diagnostics: Diagnostics }) {
           (`summaries::start`, which marks only in-flight jobs interrupted).
           Read from code (KNEG-343).
         */}
-        <p className="muted">
+        <p>
           Outbound requests are permitted only for these purposes, and each one
           follows something you set up or pressed: dictation, a meeting, cleanup
           or a summary sent to a service you chose; a model or tool you chose to
