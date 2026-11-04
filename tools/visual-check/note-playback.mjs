@@ -35,9 +35,9 @@ const delay = (ms) => new Promise((resolveDelay) => setTimeout(resolveDelay, ms)
 const isMain = isEntryPoint(import.meta.url);
 
 const EDGE_ARGS = ["--mute-audio"];
-const RAIL_ITEM = "nav.rail .rail-item";
-const NOTE_OPEN = "Boolean(document.querySelector('.note-detail input[aria-label=\"Title\"]:enabled'))";
-const TITLE = "document.querySelector('.note-detail input[aria-label=\"Title\"]')?.value ?? null";
+const NAV_PILL = "button.nav-pill";
+const NOTE_OPEN = "Boolean(document.querySelector('.note-detail textarea[aria-label=\"Title\"]:enabled'))";
+const TITLE = "document.querySelector('.note-detail textarea[aria-label=\"Title\"]')?.value ?? null";
 // Fixture note 101 (`apps/desktop/src/lib/devFixtures.ts`), the note Notes opens first.
 const NOTE_101 = "Weekly sync — platform";
 const WIDE = { width: 1440, height: 900 };
@@ -127,9 +127,9 @@ class SetupError extends Error {
 async function playingNote(cdp) {
   await viewport(cdp, WIDE);
   await reload(cdp);
-  await waitFor(cdp, "Boolean(document.querySelector('nav.rail') && document.querySelector('.card .split-main, .card .content'))", "the fixture shell");
+  await waitFor(cdp, "Boolean(document.querySelector('.app-titlebar') && document.querySelector('.split-main, .content'))", "the fixture shell");
   await cdp.evaluate(snippets.removeFixtureBanner());
-  await cdp.evaluate(snippets.clickText(RAIL_ITEM, "Notes"));
+  await cdp.evaluate(snippets.clickText(NAV_PILL, "Notes"));
   await waitFor(cdp, NOTE_OPEN, "a note to open");
   const title = await cdp.evaluate(TITLE);
   if (title !== NOTE_101) throw new SetupError(`Notes opened "${title}", not fixture note 101`, null);
@@ -427,7 +427,7 @@ export async function runNotePlayback(options) {
 if (isMain) {
   try {
     const options = parseShellArgs(process.argv.slice(2));
-    if (options.help) process.stdout.write(`${shellUsage().replace("shell-rail.mjs", "note-playback.mjs")}\n`);
+    if (options.help) process.stdout.write(`${shellUsage().replace("shell-title-bar.mjs", "note-playback.mjs")}\n`);
     else {
       const failed = failedChecks(await runNotePlayback(options));
       // The run completed; a check measured false still fails it, so a wrapper or CI step sees it.

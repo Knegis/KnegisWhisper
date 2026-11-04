@@ -31,7 +31,7 @@ import { isEntryPoint } from "../ci/entry.mjs";
 const delay = (ms) => new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
 const isMain = isEntryPoint(import.meta.url);
 
-const RAIL_ITEM = "nav.rail .rail-item";
+const NAV_PILL = "button.nav-pill";
 const WINDOW = { width: 1000, height: 720 };
 const SMALL = { width: 720, height: 520 };
 /** Fixture notes (`apps/desktop/src/lib/devFixtures.ts`): 103 has nobody on it, 101 has two people. */
@@ -44,7 +44,7 @@ const FIXTURE_PEOPLE = ["Anna Lindqvist", "Jonas Berg", "Ravi Menon"];
 const REFUSED = "'maja@' isn't an email address.";
 
 const field = (snippet, path) => `(${snippet})?.${path}`;
-const noteOpen = (title) => `(() => { const input = document.querySelector('.note-detail input[aria-label="Title"]'); return Boolean(input) && !input.disabled && input.value === ${JSON.stringify(title)}; })()`;
+const noteOpen = (title) => `(() => { const input = document.querySelector('.note-detail textarea[aria-label="Title"]'); return Boolean(input) && !input.disabled && input.value === ${JSON.stringify(title)}; })()`;
 const FOCUS = "document.activeElement?.className ?? null";
 
 
@@ -65,14 +65,14 @@ const names = (people) => people.map((person) => person.name);
 async function freshShell(cdp) {
   await viewport(cdp, WINDOW);
   await reload(cdp);
-  await waitFor(cdp, "Boolean(document.querySelector('nav.rail') && document.querySelector('.card .split-main, .card .content'))", "the fixture shell");
+  await waitFor(cdp, "Boolean(document.querySelector('.app-titlebar') && document.querySelector('.split-main, .content'))", "the fixture shell");
   await cdp.evaluate(snippets.removeFixtureBanner());
   await cdp.evaluate(snippets.installInvokeStub());
 }
 
-/** Notes from the rail, then the note titled `title` from its library, with its people item drawn. */
+/** Notes from its pill, then the note titled `title` from its library, with its people item drawn. */
 async function openNote(cdp, title) {
-  await cdp.evaluate(snippets.clickText(RAIL_ITEM, "Notes"));
+  await cdp.evaluate(snippets.clickText(NAV_PILL, "Notes"));
   await waitFor(cdp, "Boolean(document.querySelector('.list-panel .notes-entry'))", "the Notes library");
   await cdp.evaluate(snippets.openNotesEntry(title));
   await waitFor(cdp, noteOpen(title), `note "${title}" to open`);
@@ -170,8 +170,8 @@ export async function runPeople(options) {
       claim: "Pressing a person in People shows only their notes, fetched by their email, in place of the folders.",
       expectation: [
         `press "${MAJA.name}" in People: notes_list_summaries sent with person "${MAJA.email}";`,
-        `a section "Notes with ${MAJA.name}" holding exactly ["${SCRATCH.title}"] and the action "Show all notes";`,
-        "no folder groups and no Folders or Not in a folder heading; the person shown pressed"
+        `a section "notes with ${MAJA.name}" holding exactly ["${SCRATCH.title}"] and the action "Show all notes";`,
+        "no folder groups and no folders or not in a folder heading; the person shown pressed"
       ].join(" "),
     }, async () => {
       await cdp.evaluate(snippets.clearStubCalls());
@@ -188,10 +188,10 @@ export async function runPeople(options) {
       return {
         measured: { after, asked },
         matches: asked.some((args) => args?.person === MAJA.email && args?.folderId === null && args?.noteType === null)
-          && after.filtered?.label === `Notes with ${MAJA.name}`
+          && after.filtered?.label === `notes with ${MAJA.name}`
           && JSON.stringify(after.filtered?.titles) === JSON.stringify([SCRATCH.title])
           && JSON.stringify(after.filtered?.actions) === JSON.stringify(["Show all notes"])
-          && after.folders === 0 && !after.sections.includes("Folders") && !after.sections.includes("Not in a folder")
+          && after.folders === 0 && !after.sections.includes("folders") && !after.sections.includes("not in a folder")
           && after.people.find((person) => person.name === MAJA.name)?.pressed === true,
         screenshots: [shot],
       };
@@ -200,7 +200,7 @@ export async function runPeople(options) {
     await check({
       id: "3",
       claim: "Show all notes brings the library's tree back as it was.",
-      expectation: "press Show all notes: no \"Notes with\" section; the Folders, Not in a folder and People headings back in that order, People under the whole tree; the folders and their notes as before check 2 (notesFolders); nobody pressed; the open note unchanged",
+      expectation: "press Show all notes: no \"notes with\" section; the folders, not in a folder and people headings back in that order, People under the whole tree; the folders and their notes as before check 2 (notesFolders); nobody pressed; the open note unchanged",
     }, async () => {
       await cdp.evaluate(snippets.scrollToText(".list-panel .panel-action", "Show all notes"));
       await delay(150);
@@ -208,11 +208,11 @@ export async function runPeople(options) {
       await waitFor(cdp, `${field(snippets.peopleState(), "folders")} > 0`, "the folders to come back");
       const after = await state(cdp);
       const restored = await cdp.evaluate(snippets.notesFolders());
-      const title = await cdp.evaluate("document.querySelector('.note-detail input[aria-label=\"Title\"]')?.value ?? null");
+      const title = await cdp.evaluate("document.querySelector('.note-detail textarea[aria-label=\"Title\"]')?.value ?? null");
       return {
         measured: { after, restored, before: tree, title },
         matches: after.filtered === null
-          && JSON.stringify(after.sections.filter((label) => label !== null)) === JSON.stringify(["Folders", "Not in a folder", "People"])
+          && JSON.stringify(after.sections.filter((label) => label !== null)) === JSON.stringify(["folders", "not in a folder", "people"])
           && JSON.stringify(restored) === JSON.stringify(tree)
           && after.people.every((person) => !person.pressed)
           && title === SCRATCH.title,
@@ -309,7 +309,7 @@ export async function runPeople(options) {
 if (isMain) {
   try {
     const options = parseShellArgs(process.argv.slice(2));
-    if (options.help) process.stdout.write(`${shellUsage().replace("shell-rail.mjs", "people.mjs")}\n`);
+    if (options.help) process.stdout.write(`${shellUsage().replace("shell-title-bar.mjs", "people.mjs")}\n`);
     else {
       const failed = failedChecks(await runPeople(options));
       // The run completed; a check measured false still fails it, so a wrapper or CI step sees it.

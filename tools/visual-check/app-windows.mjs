@@ -119,16 +119,10 @@ async function commandStart(ctx) {
   try {
     // The provider select lives on Settings > Meetings since KNEG-334, not on
     // the Meetings task page that starts the recording, so both routes visit
-    // Settings first: the rail's Settings, then the panel's item. The item
-    // reads "Meetings" on screen and "Meetings settings" in its text -- a
-    // visually hidden suffix, so it is not named the same as the rail's
-    // entry -- and `clickText` compares `textContent`, so it is found by the
-    // full name. The rail's own "Meetings" is a different selector below. A
-    // collapsed panel does not matter: `clickText` calls `click()`, which
-    // fires on an element that is not displayed.
-    await main.cdp.evaluate(snippets.clickText("nav.rail .rail-item", "Settings"));
-    await delay(100);
-    await main.cdp.evaluate(snippets.clickText(".list-panel .panel-item", "Meetings settings"));
+    // Settings first: the Settings pill, then the sheet's tile. The tile reads
+    // "Meetings" on screen; `openSettingsScreen` reads its label, without the
+    // visually hidden " settings" that keeps it apart from the Meetings pill.
+    await main.cdp.evaluate(snippets.openSettingsScreen("Meetings"));
     await delay(100);
     if (ctx.options.via === "invoke") {
       // Resolve the displayed label to the live option value instead of
@@ -136,7 +130,7 @@ async function commandStart(ctx) {
       const provider = await main.cdp.evaluate(
         snippets.meetingProviderValue(ctx.options.providerLabel),
       );
-      await main.cdp.evaluate(snippets.clickText("nav.rail .rail-item", "Meetings"));
+      await main.cdp.evaluate(snippets.clickText("button.nav-pill", "Meetings"));
       await delay(100);
       await main.cdp.evaluate(
         snippets.invoke("meeting_start", {
@@ -149,7 +143,7 @@ async function commandStart(ctx) {
         snippets.selectMeetingProvider(ctx.options.providerLabel),
       );
       await delay(100);
-      await main.cdp.evaluate(snippets.clickText("nav.rail .rail-item", "Meetings"));
+      await main.cdp.evaluate(snippets.clickText("button.nav-pill", "Meetings"));
       await delay(100);
       await main.cdp.evaluate(
         snippets.startMeetingRecording(ctx.options.systemAudio),

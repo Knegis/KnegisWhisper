@@ -26,7 +26,7 @@ import { isEntryPoint } from "../ci/entry.mjs";
 const delay = (ms) => new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
 const isMain = isEntryPoint(import.meta.url);
 
-const RAIL_ITEM = "nav.rail .rail-item";
+const NAV_PILL = "button.nav-pill";
 /** What a held chip says, as `routeHeld` in the app words it. */
 const HELD = "Can't change during a dictation";
 /** The fixture's greyed Dictation row: a provider with no key stored. */
@@ -73,6 +73,8 @@ async function key(cdp, name) {
 
 const pressChip = async (cdp, prefix) => press(cdp, await cdp.evaluate(snippets.chipCenter(prefix)));
 const pressOption = async (cdp, name) => press(cdp, await cdp.evaluate(snippets.optionCenter(name)));
+const tidyState = (cdp) => cdp.evaluate(snippets.tidyState());
+const pressTidy = async (cdp) => press(cdp, await cdp.evaluate(snippets.tidyCenter()));
 
 const screenshot = async (cdp, out, name) => {
   await cdp.screenshot(resolve(out, name));
@@ -94,11 +96,11 @@ async function closeMenu(cdp) {
   await waitFor(cdp, "!document.querySelector('.chip-menu')", "the menu to close");
 }
 
-/** Whether the menu's box is inside the window, and above the control bar. */
-const placedAboveBar = (menu) => menu.open
+/** Whether the menu's box is inside the window, and above its chip. */
+const placedAboveChip = (menu) => menu.open
   && menu.box.left >= 0 && menu.box.top >= 0
   && menu.box.right <= menu.viewport.width && menu.box.bottom <= menu.viewport.height
-  && menu.box.bottom <= menu.bar.top + 1 && menu.side === "above";
+  && menu.box.bottom <= menu.chip.top + 1 && menu.side === "above";
 const placedInside = (menu) => menu.open
   && menu.box.left >= 0 && menu.box.top >= 0
   && menu.box.right <= menu.viewport.width && menu.box.bottom <= menu.viewport.height;
@@ -107,7 +109,7 @@ const placedInside = (menu) => menu.open
 async function shellReady(cdp) {
   await waitFor(
     cdp,
-    "Boolean(document.querySelector('nav.rail') && document.querySelector('.card .split-main, .card .content'))",
+    "Boolean(document.querySelector('.app-titlebar') && document.querySelector('.split-main, .content'))",
     "the fixture shell",
   );
   await cdp.evaluate(snippets.removeFixtureBanner());
@@ -130,9 +132,9 @@ const CHIP_OF = { Dictation: "Transcription: ", Meetings: "Meeting transcription
 /** Leaves the page for the other one and comes back, so it reads again; the stub stays. */
 async function enterPage(cdp, page) {
   const other = page === "Meetings" ? "Dictation" : "Meetings";
-  await cdp.evaluate(snippets.clickText(RAIL_ITEM, other));
+  await cdp.evaluate(snippets.clickText(NAV_PILL, other));
   await delay(250);
-  await cdp.evaluate(snippets.clickText(RAIL_ITEM, page));
+  await cdp.evaluate(snippets.clickText(NAV_PILL, page));
   await waitFor(cdp, snippets.chipState(CHIP_OF[page]), `the ${page} chips`);
   await delay(450);
 }
@@ -162,19 +164,19 @@ async function checkPlacement(cdp, out, report) {
   await closeMenu(cdp);
 
   const summary = Object.fromEntries(Object.entries(measured).map(([name, menu]) => [name, {
-    kind: menu.kind, name: menu.name, side: menu.side, box: menu.box, barTop: menu.bar?.top,
-    viewport: menu.viewport, ok: placedAboveBar(menu),
+    kind: menu.kind, name: menu.name, side: menu.side, box: menu.box, chipTop: menu.chip?.top,
+    viewport: menu.viewport, ok: placedAboveChip(menu),
   }]));
   addCheck(report, {
     id: "1",
-    claim: "At 1000x720 each menu opens fully inside the window and above the control bar.",
+    claim: "At 1000x720 each menu opens fully inside the window and above its chip.",
     measured: summary,
     expectation: [
       "for the microphone, route, Dictation language, Meetings provider and Meetings language menus:",
-      "an open menu with side above, box.bottom <= the bar's top (1px), left/top >= 0, right/bottom inside the window;",
+      "an open menu with side above, box.bottom <= the chip's top (1px), left/top >= 0, right/bottom inside the window;",
       "the language panel is a dialog named Language, the others listboxes",
     ].join(" "),
-    matches: Object.values(measured).every(placedAboveBar)
+    matches: Object.values(measured).every(placedAboveChip)
       && measured.language.kind === "dialog" && measured.language.name === "Language"
       && ["microphone", "route", "provider", "meetingLanguage"].every((name) => measured[name].kind === "listbox"),
     screenshots: [shot],
@@ -339,12 +341,12 @@ async function checkDictationChoices(cdp, out, report, cloudChoice) {
   });
 }
 
-/** 5. During a dictation the route, language and Tidy up chips are held; Stop is not. */
+/** 5. During a dictation the route and language chips and the Tidy up switch are held; Stop is not. */
 async function checkDictationHeld(cdp, out, report) {
   const read = async () => ({
     route: await cdp.evaluate(snippets.chipState("Transcription: ")),
     language: await cdp.evaluate(snippets.chipState("Language: ")),
-    tidy: await cdp.evaluate(snippets.chipState("Tidy up")),
+    tidy: await tidyState(cdp),
     page: await lastState(cdp),
   });
   const measured = { idle: await read() };
@@ -364,11 +366,11 @@ async function checkDictationHeld(cdp, out, report) {
   const { recording: rec } = measured;
   addCheck(report, {
     id: "5",
-    claim: "During a dictation the route, language and Tidy up chips are held, with the reason; Stop and transcribe stays enabled.",
+    claim: "During a dictation the route and language chips and the Tidy up switch are held, with the reason; Stop and transcribe stays enabled.",
     measured,
     expectation: [
       `while recording (state announced through the fixtures' dev console): the route and language chips keep their labels, are aria-disabled with title and aria-description "${HELD}" and do not open when pressed;`,
-      `the Tidy up chip is aria-disabled, not disabled (so focus stays), with title and aria-description "${HELD}"; Stop and transcribe is enabled;`,
+      `the Tidy up switch is aria-disabled, not disabled (so focus stays), with title and aria-description "${HELD}"; Stop and transcribe is enabled;`,
       "after the session goes idle all three are live again",
     ].join(" "),
     matches: measured.idle.route.ariaDisabled === null && measured.idle.language.ariaDisabled === null
@@ -401,23 +403,24 @@ const SUMMARY_SETTINGS = {
 async function checkToggles(cdp, out, report) {
   const measured = { tidy: {}, summary: {} };
   const settled = (prefix, pressed) => waitFor(cdp, `${chipField(prefix, "pressed")} === ${JSON.stringify(pressed)}`, `${prefix} to read ${pressed}`);
+  const tidySettled = (pressed) => waitFor(cdp, `${field(snippets.tidyState(), "pressed")} === ${JSON.stringify(pressed)}`, `Tidy up to read ${pressed}`);
 
   // Tidy up, configured and on in the fixtures.
   await freshPage(cdp, "Dictation");
-  measured.tidy.initial = await cdp.evaluate(snippets.chipState("Tidy up"));
-  await pressChip(cdp, "Tidy up");
-  await settled("Tidy up", "false");
-  measured.tidy.off = await cdp.evaluate(snippets.chipState("Tidy up"));
-  await pressChip(cdp, "Tidy up");
-  await settled("Tidy up", "true");
-  measured.tidy.on = await cdp.evaluate(snippets.chipState("Tidy up"));
+  measured.tidy.initial = await tidyState(cdp);
+  await pressTidy(cdp);
+  await tidySettled("false");
+  measured.tidy.off = await tidyState(cdp);
+  await pressTidy(cdp);
+  await tidySettled("true");
+  measured.tidy.on = await tidyState(cdp);
   // A refused write.
   await cdp.evaluate(snippets.stubInvoke({
     reject: { reasoning_set_cleanup: "cleanup needs a model. Providers disagree about parameter names, so there is no safe default to fall back on." },
   }));
-  await pressChip(cdp, "Tidy up");
+  await pressTidy(cdp);
   await waitFor(cdp, `${field(snippets.taskPageState(), "errors.length")} > 0`, "the error line");
-  measured.tidy.refused = { chip: await cdp.evaluate(snippets.chipState("Tidy up")), errors: (await lastState(cdp)).errors };
+  measured.tidy.refused = { chip: await tidyState(cdp), errors: (await lastState(cdp)).errors };
   const shotRefused = await screenshot(cdp, out, "06-tidy-refused.png");
   // A route with a caveat.
   await cdp.evaluate(snippets.stubInvoke({
@@ -426,7 +429,7 @@ async function checkToggles(cdp, out, report) {
   }));
   await enterPage(cdp, "Dictation");
   measured.tidy.caveat = {
-    chip: await cdp.evaluate(snippets.chipState("Tidy up")),
+    chip: await tidyState(cdp),
     notes: (await lastState(cdp)).notes,
     privacy: (await lastState(cdp)).privacy,
   };
@@ -437,8 +440,8 @@ async function checkToggles(cdp, out, report) {
     merge: { reasoning_status: { settings: NEVER_CONFIGURED, route: { state: "off" } } },
   }));
   await enterPage(cdp, "Dictation");
-  measured.tidy.unconfigured = { chip: await cdp.evaluate(snippets.chipState("Tidy up")) };
-  await pressChip(cdp, "Tidy up");
+  measured.tidy.unconfigured = { chip: await tidyState(cdp) };
+  await pressTidy(cdp);
   await delay(400);
   measured.tidy.unconfigured.leftThePage = await cdp.evaluate("!document.querySelector('.control-bar')");
   measured.tidy.unconfigured.writes = (await cdp.evaluate(snippets.stubCalls("reasoning_set_cleanup"))).length;
@@ -466,21 +469,21 @@ async function checkToggles(cdp, out, report) {
   const s = measured.summary;
   addCheck(report, {
     id: "6",
-    claim: "Tidy up and Summary toggle in place once set up, are links until then, show a route's caveat with a link, and show a refused write without changing.",
+    claim: "Tidy up (a switch) and Summary (a chip) toggle in place once set up, are links until then, show a route's caveat with a link, and show a refused write without changing.",
     measured,
     expectation: [
-      "Tidy up (fixture: configured, on): a button with aria-pressed true, no chevron; a press flips it to false and back; with the write stubbed to reject, the message is on the error line and aria-pressed stays true;",
-      "with reasoning_status stubbed to a route with a caveat: the chip reads needs setup and a status line shows the caveat with the link Open Cleanup & summaries, and the privacy line does not say text is sent;",
-      "with reasoning_status stubbed to never-configured: no aria-pressed, a chevron, and a press leaves the page and writes nothing;",
+      "Tidy up (fixture: configured, on): a switch that is on, labelled Tidy up; a press turns it off and back; with the write stubbed to reject, the message is on the error line and it stays on;",
+      "with reasoning_status stubbed to a route with a caveat: its label reads needs setup and a status line shows the caveat with the link Open Cleanup & summaries, and the privacy line does not say text is sent;",
+      "with reasoning_status stubbed to never-configured: a chip with no aria-pressed, a chevron, and a press leaves the page and writes nothing;",
       "Summary (fixture: unconfigured): the link Summary: needs setup, which leaves the page; once configured through the fixture's own write, aria-pressed false, a press makes it true, and a rejected write shows on the error line with aria-pressed still true",
     ].join(" "),
-    matches: t.initial.pressed === "true" && !t.initial.chevron && t.initial.text === "Tidy up: on"
-      && t.off.pressed === "false" && t.off.text === "Tidy up: off" && t.on.pressed === "true"
+    matches: t.initial.kind === "switch" && t.initial.pressed === "true" && t.initial.text === "Tidy up"
+      && t.off.pressed === "false" && t.off.text === "Tidy up" && t.on.pressed === "true"
       && t.refused.errors.some((text) => text.startsWith("cleanup needs a model")) && t.refused.chip.pressed === "true"
       && t.caveat.chip.text === "Tidy up: needs setup" && t.caveat.notes.length === 1
       && t.caveat.notes[0].text.includes("no key is stored for anthropic") && t.caveat.notes[0].link === "Open Cleanup & summaries"
       && t.caveat.privacy.length > 0 && !t.caveat.privacy.some((line) => line.startsWith("Text is sent"))
-      && t.unconfigured.chip.pressed === null && t.unconfigured.chip.chevron
+      && t.unconfigured.chip.kind === "link" && t.unconfigured.chip.pressed === null && t.unconfigured.chip.chevron
       && t.unconfigured.leftThePage && t.unconfigured.writes === 0
       && s.unconfigured.chip.text === "Summary: needs setup" && s.unconfigured.chip.pressed === null
       && s.unconfigured.chip.chevron && s.unconfigured.leftThePage
@@ -565,7 +568,7 @@ async function checkMeetingsHero(cdp, out, report) {
   await enterPage(cdp, "Meetings");
   const measured = { hero: await lastState(cdp) };
   const shotHero = await screenshot(cdp, out, "07-hero-choose-provider.png");
-  await press(cdp, await cdp.evaluate(snippets.centerOfText(".task-hero button", "Choose a provider")));
+  await press(cdp, await cdp.evaluate(snippets.centerOfText(".tile-form button.tile-cta", "Choose a provider")));
   await waitFor(cdp, snippets.menuVisible(), "the provider menu from the hero");
   await delay(120);
   measured.opened = {
@@ -587,16 +590,16 @@ async function checkMeetingsHero(cdp, out, report) {
   const greyed = measured.opened.menu.options.filter((row) => row.greyed);
   addCheck(report, {
     id: "7",
-    claim: "Meetings' hero button Choose a provider opens the provider menu without leaving the page, and Start is held while the provider is being written.",
+    claim: "Meetings' tile button Choose a provider opens the provider menu without leaving the page, and Start is held while the provider is being written.",
     measured: {
       heroButtons: measured.hero.hero, startBefore: measured.hero.start,
       opened: { name: measured.opened.menu.name, expanded: measured.opened.chip.expanded, greyed: greyed.map((row) => row.name), current: measured.opened.menu.options.filter((row) => row.selected).map((row) => row.name) },
       writing: measured.writing, after: measured.after,
     },
     expectation: [
-      "with a saved provider the page cannot use (set through the fixture's own write): the hero offers Choose a provider and Start is disabled;",
+      "with a saved provider the page cannot use (set through the fixture's own write): the tile offers Choose a provider and Start is disabled;",
       "pressing it opens the Meeting transcription menu (chip aria-expanded true, control bar still there) with a greyed row and one current row;",
-      "Enter on the current row with meeting_set_provider stubbed 1.5s slower: one write, Start disabled while it is in flight and enabled after, the hero no longer offering the choice",
+      "Enter on the current row with meeting_set_provider stubbed 1.5s slower: one write, Start disabled while it is in flight and enabled after, the tile no longer offering the choice",
     ].join(" "),
     matches: measured.hero.hero.includes("Choose a provider") && measured.hero.start?.disabled === true
       && measured.opened.menu.name === "Meeting transcription" && measured.opened.chip.expanded === "true"
@@ -617,7 +620,7 @@ async function checkMinimumWindow(cdp, out, report) {
     await freshPage(cdp, page);
     const state = await lastState(cdp);
     measured[page] = state.scroll;
-    measured[`${page}Chips`] = await cdp.evaluate(`(() => { const chips=[...document.querySelectorAll('.control-strip .chip')].map(el=>{const r=el.getBoundingClientRect();return {text:el.textContent,top:Math.round(r.top),left:r.left,right:r.right,bottom:r.bottom,height:r.height};});return {chips,rows:new Set(chips.map(chip=>chip.top)).size,fit:chips.every(chip=>chip.left>=0&&chip.right<=innerWidth&&chip.bottom<=innerHeight)};})()`);
+    measured[`${page}Chips`] = await cdp.evaluate(`(() => { const chips=[...document.querySelectorAll('.control-strip .chip')].map(el=>{const r=el.getBoundingClientRect();return {text:el.textContent,top:Math.round(r.top),left:r.left,right:r.right,bottom:r.bottom,height:r.height};});return {chips,rows:new Set(chips.map(chip=>chip.top)).size,fit:chips.every(chip=>chip.left>=0&&chip.right<=innerWidth)};})()`);
     const prefix = CHIP_OF[page];
     measured[`${page}Menu`] = await openMenu(cdp, prefix).then((menu) => ({ box: menu.box, viewport: menu.viewport, inside: placedInside(menu) }));
     await closeMenu(cdp);
@@ -637,7 +640,7 @@ async function checkMinimumWindow(cdp, out, report) {
     id: "8",
     claim: "At 720x520 nothing scrolls sideways on Dictation or Meetings, and a menu still opens inside the window.",
     measured,
-    expectation: "after a load at 720x520, for each page: document, .split-main and .control-bar scrollWidth <= clientWidth; the page's first menu and the Meetings microphone menu are inside the window; strip chip positions occupy at most the two designed rows",
+    expectation: "after a load at 720x520, for each page: document, .split-main and .control-bar scrollWidth <= clientWidth; the page's first menu and the Meetings microphone menu are inside the window; strip chips inside the window's width, in at most the two designed rows; the page scrolls down to them at this height by design",
     matches: fits(measured.Dictation) && fits(measured.Meetings)
       && measured.DictationMenu.inside && measured.MeetingsMenu.inside && measured.MicrophoneMenu.inside
       && measured.DictationChips.fit && measured.MeetingsChips.fit && measured.DictationChips.rows >= 1 && measured.DictationChips.rows <= 2 && measured.MeetingsChips.rows >= 1 && measured.MeetingsChips.rows <= 2,
@@ -656,7 +659,7 @@ async function checkThemes(cdp, out, report) {
     for (const scheme of ["light", "dark"]) {
       await theme(cdp, scheme);
       const menu = await openMenu(cdp, prefix);
-      measured[`${what}-${scheme}`] = { ...(await cdp.evaluate(snippets.themeState())), inside: placedAboveBar(menu), rows: menu.options.length };
+      measured[`${what}-${scheme}`] = { ...(await cdp.evaluate(snippets.themeState())), inside: placedAboveChip(menu), rows: menu.options.length };
       screenshots.push(await screenshot(cdp, out, shotName("09", what, scheme)));
       await closeMenu(cdp);
     }
@@ -778,12 +781,9 @@ const NOTES = {
 const panelField = (path) => field(snippets.languagePanel(), path);
 const LANGUAGE_CHIP_GONE = `${snippets.chipState("Language: ")} === null`;
 
-/** Presses something in the open language panel: `Detect automatically`, or a language's box by its name. */
+/** Presses a pill in the open language panel: `Detect automatically`, or a language by its name. */
 async function pressInPanel(cdp, name) {
-  const selector = name === "Detect automatically"
-    ? ".chip-menu .local-language-picker > button"
-    : ".chip-menu .local-language-options label";
-  await press(cdp, await cdp.evaluate(snippets.centerOfText(selector, name)));
+  await press(cdp, await cdp.evaluate(snippets.centerOfText(".chip-menu .local-language-options button.language-pill", name)));
 }
 
 /** 11. Dictation's language chip on a cloud route, its note, and the routes it leaves (KNEG-370). */
@@ -920,7 +920,7 @@ export async function runChipMenus(options) {
 if (isMain) {
   try {
     const options = parseShellArgs(process.argv.slice(2));
-    if (options.help) process.stdout.write(`${shellUsage().replace("shell-rail.mjs", "chip-menus.mjs")}\n`);
+    if (options.help) process.stdout.write(`${shellUsage().replace("shell-title-bar.mjs", "chip-menus.mjs")}\n`);
     else {
       const failed = failedChecks(await runChipMenus(options));
       // The run completed; a check measured false still fails it, so a wrapper or CI step sees it.

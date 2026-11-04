@@ -14,7 +14,7 @@ import { waitFor, reload, press, pressText } from "./interactions.mjs";
  * here. The fixtures now answer for the meeting window, and
  * `kw.meetingWindowSilent(true)` stops them, as a window that hung would.
  *
- * `window.confirm` is replaced with a scripted answer that keeps each
+ * the confirmation dialog is answered by a script that keeps each
  * question (`scriptConfirm`); the page's `invoke` is wrapped
  * (`installInvokeStub`) to log calls in order and, for check 4, to make the
  * fixtures report another meeting while the question is open. Each check
@@ -33,7 +33,7 @@ import { isEntryPoint } from "../ci/entry.mjs";
 const delay = (ms) => new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
 const isMain = isEntryPoint(import.meta.url);
 
-const RAIL_ITEM = "nav.rail .rail-item";
+const NAV_PILL = "button.nav-pill";
 const ACTION = ".live-actions button";
 /** How long `flushMeetingPanelNotes` waits for the meeting window (`lib/ipc.ts`). */
 const FLUSH_TIMEOUT_MS = 5000;
@@ -45,15 +45,15 @@ const ANYWAY_QUESTION = "Discard this meeting? The recording so far (under a min
 const DISCARD_QUESTION = "Discard this meeting? The recording so far (under a minute) will be deleted and can't be recovered. Any notes you typed are kept as a separate note.";
 /** `meetingOutcomeLabel` for a cancelled meeting with no notes kept (`lib/labels.ts`). */
 const DISCARDED = "Discarded. The recording was deleted.";
-/** The calls whose order the checks read; `window.confirm` is the scripted question, logged with them. */
-const WATCHED = ["meeting_status", "window.confirm", "plugin:event|emit_to", "meeting_cancel", "meeting_stop"];
+/** The calls whose order the checks read; `askConfirm` is the scripted question, logged with them. */
+const WATCHED = ["meeting_status", "askConfirm", "plugin:event|emit_to", "meeting_cancel", "meeting_stop"];
 /** What Discard anyway's guard does, in order, before it deletes: read, ask, read again (KNEG-394). */
-const GUARD = ["meeting_status", "window.confirm", "meeting_status"];
+const GUARD = ["meeting_status", "askConfirm", "meeting_status"];
 
 const field = (snippet, path) => `(${snippet})?.${path}`;
 const LIVE = "Boolean(document.querySelector('.meeting-live'))";
 const IDLE = "Boolean(document.querySelector('.control-start')) && !document.querySelector('.meeting-live')";
-const START_ENABLED = "(() => { const start = document.querySelector('.control-start'); return Boolean(start) && !start.disabled; })()";
+const START_ENABLED = "(() => { const start = document.querySelector('.control-start'); return Boolean(start) && !start.disabled && start.textContent.trim() === 'Start recording'; })()";
 const ANYWAY_SHOWN = `${field(snippets.meetingPageState(), "actions")}.includes('Stop recording anyway')`;
 
 
@@ -80,11 +80,11 @@ const flushes = (calls) => calls.filter((args) => args?.target?.label === "meeti
  */
 async function recordingMeeting(cdp, { silent }) {
   await reload(cdp);
-  await waitFor(cdp, "Boolean(document.querySelector('nav.rail') && document.querySelector('.card .split-main, .card .content'))", "the fixture shell");
+  await waitFor(cdp, "Boolean(document.querySelector('.app-titlebar') && document.querySelector('.split-main, .content'))", "the fixture shell");
   await cdp.evaluate(snippets.removeFixtureBanner());
   await cdp.evaluate(snippets.installInvokeStub());
   if (silent) await cdp.evaluate(snippets.meetingWindowSilent(true));
-  await cdp.evaluate(snippets.clickText(RAIL_ITEM, "Meetings"));
+  await cdp.evaluate(snippets.clickText(NAV_PILL, "Meetings"));
   await waitFor(cdp, START_ENABLED, "Start recording to be enabled");
   await pressText(cdp, ".control-start", "Start recording");
   await waitFor(cdp, LIVE, "the live meeting view");
@@ -118,7 +118,7 @@ async function anywayButtons(cdp) {
   return stopped;
 }
 
-const SETUP_NOTE = "Each check starts from a fresh load at 1000x720 with a meeting started from Meetings' Start (the fixtures' meeting_start). Buttons are pressed with real CDP pointer presses; window.confirm is scripted and logged in order with the calls.";
+const SETUP_NOTE = "Each check starts from a fresh load at 1000x720 with a meeting started from Meetings' Start (the fixtures' meeting_start). Buttons are pressed with real CDP pointer presses; the confirmation dialog is scripted and logged in order with the calls.";
 
 export async function runMeetingDiscard(options) {
   const out = resolve(options.out);
@@ -184,7 +184,7 @@ export async function runMeetingDiscard(options) {
       id: "2",
       claim: "Discard anyway asks first, saying the latest edit may be missing, and a no deletes nothing.",
       expectation: [
-        "after check 1's state, Discard anyway with window.confirm answering false: one question, exactly",
+        "after check 1's state, Discard anyway with the confirmation dialog answering false: one question, exactly",
         `"${ANYWAY_QUESTION}";`,
         "the meeting's status read, then the question; no meeting_cancel and no plugin:event|emit_to;",
         "the live view still up with both anyway buttons",
@@ -212,7 +212,7 @@ export async function runMeetingDiscard(options) {
       id: "3",
       claim: "Discard anyway with a yes deletes the meeting it asked about without asking the meeting window again, the page goes idle saying it was discarded, and the next meeting starts without the anyway buttons.",
       expectation: [
-        "after check 1's state, Discard anyway with window.confirm answering true: the status read, the question, the status read again, then exactly one meeting_cancel;",
+        "after check 1's state, Discard anyway with the confirmation dialog answering true: the status read, the question, the status read again, then exactly one meeting_cancel;",
         "no plugin:event|emit_to and no meeting_stop; the page idle with the caveat",
         `"${DISCARDED}"; then Start again: the live view with only Discard and Stop and save, and not the caveat`,
       ].join(" "),
@@ -268,7 +268,7 @@ export async function runMeetingDiscard(options) {
       return {
         measured: { questions, calls, mergedAfter, page },
         matches: questions.length === 1
-          && calls.some((call, at) => call === "window.confirm" && calls[at - 1] === "meeting_status" && calls[at + 1] === "meeting_status")
+          && calls.some((call, at) => call === "askConfirm" && calls[at - 1] === "meeting_status" && calls[at + 1] === "meeting_status")
           && mergedAfter?.elapsedSeconds === 1
           && count(calls, "meeting_cancel") === 0
           && page.live && page.actions.includes("Discard anyway"),
@@ -280,14 +280,14 @@ export async function runMeetingDiscard(options) {
       claim: "With the meeting window answering, Stop and save asks it to save its notes once and saves the meeting, without waiting out the timeout.",
       expectation: [
         "Stop and save: exactly one plugin:event|emit_to, to the meeting window's meeting-notes-flush, then one meeting_stop and no meeting_cancel;",
-        `the page idle in under ${FLUSH_TIMEOUT_MS}ms with a caveat starting "Saved as a note", no error, and not the caveat`,
+        `the page saying so in under ${FLUSH_TIMEOUT_MS}ms, in a notice reading a sentence starting "Saved as a note", no error, and not the caveat`,
       ].join(" "),
     }, async () => {
       await recordingMeeting(cdp, { silent: false });
       await cdp.evaluate(snippets.clearStubCalls());
       const at = Date.now();
       await pressText(cdp, ACTION, "Stop and save");
-      await waitFor(cdp, IDLE, "the page to go idle", FLUSH_TIMEOUT_MS + 5000);
+      await waitFor(cdp, snippets.MEETING_SAVED, "the page to say the meeting was saved", FLUSH_TIMEOUT_MS + 5000);
       const idleAfterMs = Date.now() - at;
       await delay(300);
       const calls = await sequence(cdp);
@@ -301,7 +301,7 @@ export async function runMeetingDiscard(options) {
           && count(calls, "plugin:event|emit_to") === 1 && sent.length === 1
           && calls.indexOf("plugin:event|emit_to") < calls.indexOf("meeting_stop")
           && count(calls, "meeting_stop") === 1 && count(calls, "meeting_cancel") === 0
-          && !page.live && page.caveats.some((text) => text.startsWith("Saved as a note"))
+          && (page.saved ?? "").startsWith("Saved as a note")
           && page.errors.length === 0 && !page.caveats.includes(CAVEAT),
         screenshots: [shot],
       };
@@ -311,7 +311,7 @@ export async function runMeetingDiscard(options) {
       id: "6",
       claim: "With the meeting window answering, Discard asks its own question, asks the meeting window to save its notes, then deletes the meeting.",
       expectation: [
-        `Discard with window.confirm answering true: one question, exactly "${DISCARD_QUESTION}";`,
+        `Discard with the confirmation dialog answering true: one question, exactly "${DISCARD_QUESTION}";`,
         "the status read, the question, the status read again, one plugin:event|emit_to to the meeting window's meeting-notes-flush, then exactly one meeting_cancel;",
         `the page idle with the caveat "${DISCARDED}"`,
       ].join(" "),
@@ -352,7 +352,7 @@ export async function runMeetingDiscard(options) {
 if (isMain) {
   try {
     const options = parseShellArgs(process.argv.slice(2));
-    if (options.help) process.stdout.write(`${shellUsage().replace("shell-rail.mjs", "meeting-discard.mjs")}\n`);
+    if (options.help) process.stdout.write(`${shellUsage().replace("shell-title-bar.mjs", "meeting-discard.mjs")}\n`);
     else {
       const failed = failedChecks(await runMeetingDiscard(options));
       // The run completed; a check measured false still fails it, so a wrapper or CI step sees it.

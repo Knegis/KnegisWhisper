@@ -60,13 +60,13 @@
       "surfaceId": "dictation.task",
       "component": "apps/desktop/src/views/Dictation.tsx",
       "built": true,
-      "note": "The dictation task: whether it will work (lib/readiness.ts) and the shortcut to press, in a centred hero; then a control bar with the microphone, the route (an installed model on this computer or a cloud provider) and, on every route but a Parakeet model's, the languages with a line saying what the route does with them (KNEG-370), each chosen in place in its chip's menu -- the route and the languages only between dictations, since Rust reads them at Stop, and they are also set on Settings > Transcription, which owns them; a Tidy up chip that switches cleanup on and off once it has been set up in Settings > Cleanup & summaries (held during a dictation, and saying under itself when it cannot run), and until then links there; the privacy line; the last result; and the Start button, held while a route switch is applied. The shortcut editor is on Settings > Shortcuts, reached from the history panel."
+      "note": "The dictation task: whether it will work (lib/readiness.ts) and the shortcut to press, in a status notice and a centred title; then a white card with the microphone, the route (an installed model on this computer or a cloud provider) and, on every route but a Parakeet model's, the languages with a line saying what the route does with them (KNEG-370), each chosen in place in its chip's menu -- the route and the languages only between dictations, since Rust reads them at Stop, and they are also set on Settings > Transcription, which owns them; a Tidy up switch that switches cleanup on and off once it has been set up in Settings > Cleanup & summaries (held during a dictation, and saying under itself when it cannot run), and until then links there; the privacy line; the last result; and the Start button, held while a route switch is applied. The shortcut editor is on Settings > Shortcuts, reached from the history section."
     },
     "Dictation > History": {
       "surfaceId": "dictation.history",
       "component": "apps/desktop/src/components/DictationHistory.tsx",
       "built": true,
-      "note": "Dictation's list panel: the history grouped by day, and under History options the switches that turn history off and keep the pre-cleanup transcript, and Clear history. The first two controls exist because the backend honoured history.enabled and history.keepRawText with no way in (KNEG-98, KNEG-99) -- the pattern tools/settings-audit/scan.mjs now gates. Moved out of views/Dictation.tsx into the panel in KNEG-363."
+      "note": "The section under Dictation's cards: the history grouped by day, and under History options the switches that turn history off and keep the pre-cleanup transcript, and Clear history. The first two controls exist because the backend honoured history.enabled and history.keepRawText with no way in (KNEG-98, KNEG-99) -- the pattern tools/settings-audit/scan.mjs now gates. Moved out of views/Dictation.tsx into the panel in KNEG-363."
     },
     "Integrations > Calendar": {
       "surfaceId": "integrations.calendar",

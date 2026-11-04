@@ -2,16 +2,18 @@
 /** Measures the actual sharing UI against invented browser data, not native IPC. */
 import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { parseShellArgs } from "./args.mjs";
 import { launchEdge, killBrowser } from "./browser.mjs";
 import { connectCdp } from "./cdp.mjs";
 import { clickText, clickSelector, removeFixtureBanner } from "./snippets.mjs";
 
-const targetUrl = new URL(process.argv[2] ?? "http://127.0.0.1:5197/");
+const options = parseShellArgs(process.argv.slice(2));
+const targetUrl = new URL(options.url);
 targetUrl.searchParams.set("sharingSlow", "1");
 const url = targetUrl.href;
-const out = resolve("tools/visual-check/out/kneg-411");
+const out = resolve(options.out);
 await mkdir(out, { recursive: true });
-const browser = await launchEdge({ port: 9237, out, url });
+const browser = await launchEdge({ ...options, out, url });
 const cdp = await connectCdp(browser.target.webSocketDebuggerUrl);
 const checks = [];
 async function wait(expression) {
@@ -25,9 +27,9 @@ async function check(name, expression) {
   if (!passed) throw new Error(`${name}; focus: ${await cdp.evaluate("document.activeElement?.outerHTML.slice(0, 300)")}`);
 }
 try {
-  await wait("Boolean(document.querySelector('nav.rail'))");
+  await wait("Boolean(document.querySelector('.app-titlebar'))");
   await cdp.evaluate(removeFixtureBanner());
-  await cdp.evaluate(clickText("nav.rail button", "Notes"));
+  await cdp.evaluate(clickText("button.nav-pill", "Notes"));
   await wait("Boolean(document.querySelector('.notes-folder-more'))");
   await cdp.evaluate(clickSelector(".notes-folder-more"));
   await wait("Boolean(document.querySelector('.notes-context-menu'))");
@@ -51,6 +53,8 @@ try {
   await cdp.evaluate("new Promise(resolveFrame => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)))");
   await cdp.evaluate(clickSelector('button[aria-controls="list-panel"]'));
   await wait("!document.querySelector('#list-panel').hidden");
+  // The press hands focus to the panel's own toggle on the next frame; a menu opened before that loses it.
+  await wait("document.activeElement?.matches('button.list-toggle')");
   await cdp.evaluate(clickSelector(".notes-folder-more"));
   await wait("Boolean(document.querySelector('.notes-context-menu'))");
   await cdp.evaluate(clickText(".notes-context-menu button", "Share folder…"));
@@ -59,9 +63,9 @@ try {
   await wait("document.querySelector('dialog[open]')?.textContent.includes('Copying notes and recordings')");
   await cdp.evaluate(clickText("dialog[open] button", "Keep working"));
   await wait("!document.querySelector('dialog[open]')");
-  await cdp.evaluate(clickText("nav.rail button", "Settings"));
+  await cdp.evaluate(clickText("button.nav-pill", "Dictation"));
   await wait("!document.querySelector('.notes-folder-more')");
-  await cdp.evaluate(clickText("nav.rail button", "Notes"));
+  await cdp.evaluate(clickText("button.nav-pill", "Notes"));
   await wait("Boolean(document.querySelector('dialog[open]'))");
   await check("Returning to Notes reconnects to the running operation", "document.querySelector('dialog[open]').textContent.includes('Copying notes and recordings')");
   await wait("Boolean(document.querySelector('dialog[open] .folder-sharing-path'))");

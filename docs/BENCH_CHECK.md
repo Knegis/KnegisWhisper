@@ -278,7 +278,7 @@ route `tools/visual-check/README.md` documents.
   What this does not prove: any recorder that uses a fourth API, any other Windows build, or that
   the panel's *content* is protected — it had none.
 - **KNEG-161 — the rebuilt shell rail, measured in headless Edge against the dev fixtures**
-  (`node tools/visual-check/shell-rail.mjs`; the fixture banner removed for geometry, the
+  (`node tools/visual-check/shell-rail.mjs`, since replaced by `shell-title-bar.mjs` with the rail; the fixture banner removed for geometry, the
   `FIXTURES` title kept; the same engine and version as the WebView2 the application runs in, but
   **not the Tauri window**). The root font size is **14px**, so every pixel figure KNEG-160 quoted
   at a 16px rem is off by a factor of 1.14:

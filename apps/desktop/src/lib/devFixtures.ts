@@ -1698,7 +1698,7 @@ let notes: Note[] = [
       "This note is the real one.\n\nIt has several paragraphs, a list:\n\n- one\n- two\n- three\n\nand a trailing line.",
     // An import transcribed in the cloud, so a note says "Transcribed by OpenAI" (KNEG-368).
     noteType: "import",
-    // A transcript of its own, so `tools/visual-check/shell-rail.mjs` check 10 has a second note
+    // A transcript of its own, so `tools/visual-check/shell-title-bar.mjs` has a second note
     // with a transcript column: one with no transcript has no column (KNEG-377). 102 and 103 are
     // the notes without.
     transcript: JSON.stringify([

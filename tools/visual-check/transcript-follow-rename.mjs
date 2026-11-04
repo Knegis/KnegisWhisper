@@ -28,9 +28,9 @@ try {
     await cdp.send("Emulation.setDeviceMetricsOverride", { width, height: 900, deviceScaleFactor: 1, mobile: false });
     await cdp.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: scheme }] });
     await reload(cdp);
-    await waitFor(cdp, "Boolean(document.querySelector('nav.rail'))");
+    await waitFor(cdp, "Boolean(document.querySelector('.app-titlebar'))");
     await cdp.evaluate(removeFixtureBanner());
-    await cdp.evaluate(clickText("nav.rail .rail-item", "Notes"));
+    await cdp.evaluate(clickText("button.nav-pill", "Notes"));
     await waitFor(cdp, "Boolean(document.querySelector('.notes-entry'))");
     await cdp.evaluate(openNotesEntry("Roadmap review — long transcript"));
     if (width < 1280) {
