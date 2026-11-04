@@ -70,7 +70,7 @@ import { PageHeader } from "./components/PageHeader";
 import { BackToSettings, SettingsSheet } from "./components/SettingsSheet";
 import { ConfirmHost } from "./components/ConfirmDialog";
 import { PanelCollapsed } from "./components/SplitView";
-import { getDiagnostics, getMeetingStatus, onMeetingState, type Diagnostics } from "./lib/ipc";
+import { getDiagnostics, getMeetingStatus, onMeetingState, type Diagnostics, type MeetingState } from "./lib/ipc";
 import { railOf, type ViewId } from "./lib/navigation";
 import { defaultDestination, initialHistory, navigationHistory } from "./lib/navigationHistory";
 import { PAGES } from "./lib/pages";
@@ -294,12 +294,14 @@ function Shell() {
 
   // Rust announces the meeting's state wherever the window is, so the pill can
   // say so from any page. The first read covers a window opened mid-meeting.
+  // Only while audio is being captured: stalled and finishing record nothing.
+  const capturing = (state: MeetingState) => state === "recording" || state === "recording-without-transcript";
   const [meetingRecording, setMeetingRecording] = useState(false);
   useEffect(() => {
     let disposed = false;
     let stop: (() => void) | undefined;
-    void getMeetingStatus().then((status) => { if (!disposed) setMeetingRecording(status.state !== "idle"); }).catch(() => {});
-    void onMeetingState((state) => { if (!disposed) setMeetingRecording(state !== "idle"); }).then((unlisten) => {
+    void getMeetingStatus().then((status) => { if (!disposed) setMeetingRecording(capturing(status.state)); }).catch(() => {});
+    void onMeetingState((state) => { if (!disposed) setMeetingRecording(capturing(state)); }).then((unlisten) => {
       if (disposed) unlisten(); else stop = unlisten;
     });
     return () => { disposed = true; stop?.(); };

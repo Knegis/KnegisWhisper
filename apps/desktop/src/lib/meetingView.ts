@@ -419,3 +419,13 @@ export function microphoneCheckLine(check: MicrophoneCheck): string {
     : `Heard nothing from ${tested}. Check it isn't muted, or choose another microphone.`;
   return check.fellBack === null ? result : `${check.fellBack} isn't connected, so this tested ${tested}. ${result}`;
 }
+
+/**
+ * Which of the design's three pictures a recent meeting's tile shows. Decoration,
+ * so all it has to be is stable, and different from its neighbours: notes are
+ * numbered in order, so meetings next to each other in the list usually differ.
+ */
+export function recentPicture(id: number): "dusk" | "streak" | "orb" {
+  const pictures = ["dusk", "streak", "orb"] as const;
+  return pictures[((id % 3) + 3) % 3] ?? "dusk";
+}

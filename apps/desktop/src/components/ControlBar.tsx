@@ -21,14 +21,18 @@ import { Icon } from "./Icon";
 export function ControlBar({
   strip,
   privacy,
+  label,
   children,
 }: {
   strip: ReactNode;
   privacy: readonly string[];
+  /** A label over the strip, in the pixel voice; a card with one has no rule under its privacy line. */
+  label?: string;
   children: ReactNode;
 }) {
   return (
-    <div className="control-bar">
+    <div className={label === undefined ? "control-bar" : "control-bar control-bar-labelled"}>
+      {label === undefined ? null : <span className="section-label control-label">{label}</span>}
       <div className="control-strip" role="group" aria-label="Settings in effect">
         <div className="control-chips">{strip}</div>
         <div className="control-spacer" />

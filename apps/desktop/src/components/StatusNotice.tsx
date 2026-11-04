@@ -14,14 +14,17 @@ export function StatusNotice({
   label,
   value,
   extra,
+  wide = false,
 }: {
   tone: "ready" | "recording" | "busy" | "setup";
   label: string;
   value: string;
   extra?: string;
+  /** For a sentence rather than a few words: a saved meeting's outcome. */
+  wide?: boolean;
 }) {
   return (
-    <div className={`notice notice-${tone}`}>
+    <div className={wide ? `notice notice-wide notice-${tone}` : `notice notice-${tone}`}>
       {tone === "busy" ? null : <span className="notice-dot" aria-hidden="true" />}
       <span className="notice-body">
         <span className="notice-label">{label}</span>
