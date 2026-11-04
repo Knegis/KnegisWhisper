@@ -27,28 +27,7 @@ import { Icon } from "./Icon";
  */
 
 /**
- * The panel's title, and any buttons that belong beside it.
- *
- * `h1` by default, as on the canvas: on a task page -- Dictation, which has
- * no `PageHeader` -- this is the page's title. `level={2}` where the page
- * beside the panel has its own `h1`, as every settings screen does in its
- * `PageHeader`; two `h1`s there made "Settings" and "Providers" read as two
- * pages. That was the Settings list panel, which the Settings sheet has
- * replaced, so no panel passes it now.
- */
-export function PanelHeader({ title, level = 1, children }: { title: string; level?: 1 | 2; children?: ReactNode }) {
-  const Heading = level === 1 ? "h1" : "h2";
-  return (
-    <div className="panel-head">
-      <Heading className="panel-title">{title}</Heading>
-      {children}
-    </div>
-  );
-}
-
-/**
- * A run of rows under an optional heading. `null` draws no heading, for the
- * section directly under a `PanelHeader` whose title already names it.
+ * A run of rows under an optional heading. `null` draws no heading.
  */
 export function PanelSection({ label, children }: { label: string | null; children: ReactNode }) {
   return (

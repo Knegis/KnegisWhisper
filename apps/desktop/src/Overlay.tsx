@@ -5,6 +5,7 @@ import { getDictationState, onDictationState, onDictationOutcome, toggleDictatio
 import { microphoneState, isMicrophoneDrag } from "./lib/microphone";
 import { Icon } from "./components/Icon";
 import { LevelMeter } from "./components/LevelMeter";
+import { StatusDot } from "./components/Row";
 import "./styles.css";
 export function Overlay() {
   const [state, setState] = useState<SessionState | null>(null);
@@ -121,13 +122,13 @@ export function Overlay() {
   if (!prefs?.enabled) {
     const label = state === null ? unavailable ? "State unknown" : "..." : state === "recording" ? "Recording" : state === "transcribing" ? "Transcribing" : state === "inserting" ? "Inserting" : "Ready";
     // The microphone's live level beside "Recording" (KNEG-371), mounted only while recording.
-    return <div className={`overlay overlay-${state ?? "idle"}`}><span className={`indicator indicator-${state === "recording" ? "recording" : "idle"}`} aria-hidden="true"/><span className="overlay-text">{label}</span>{state === "recording" ? <LevelMeter session="dictation" source="microphone" segments={8} className="overlay-level"/> : null}</div>;
+    return <div className={`overlay overlay-${state ?? "idle"}`}><span className={`indicator indicator-${state === "recording" ? "recording" : "idle"}`} aria-hidden="true"/><span className="overlay-text">{label}</span>{state === "recording" ? <LevelMeter session="dictation" source="microphone" segments={8} className="overlay-level"/> : null}{state === "transcribing" ? <span className="overlay-dots" aria-hidden="true"><span /><span /><span /></span> : null}</div>;
   }
   const view = microphoneState(state, unavailable);
   return <div className={`microphone-overlay ${prefs.vertical ? "is-vertical" : ""}`}>
-  {!menuOpen && error && <div className="microphone-error" role="alert"><span>{error}</span>{state === null && <button onClick={() => { void getDictationState().then(value => { setState(value); setUnavailable(false); setError(null); }).catch(e => setError(String(e))); }}>Retry status</button>}<button aria-label="Dismiss message" onClick={() => setError(null)}><Icon name="close" size={14} /></button></div>}
+  {!menuOpen && error && <div className="microphone-error" role="alert"><div className="microphone-error-head"><span className="microphone-error-text"><StatusDot tone="bad" /><span>{error}</span></span><button className="microphone-error-close" aria-label="Dismiss message" onClick={() => setError(null)}><Icon name="close" size={14} /></button></div>{state === null && <button className="microphone-error-retry" onClick={() => { void getDictationState().then(value => { setState(value); setUnavailable(false); setError(null); }).catch(e => setError(String(e))); }}>Retry status</button>}</div>}
   <div key="microphone-controls" role="group" aria-label="Dictation controls" className={`microphone-controls ${holdHover ? "hold-hover" : ""}`} style={{ transform: `translate(${anchorOffset.x}px, ${anchorOffset.y}px)` }}>
-  <button className={`floating-microphone ${view.recording ? "is-recording" : ""}`} data-expanded={state !== "idle" || pending || error !== null} aria-label={view.label} title={`${view.label}. Drag to move.`} aria-disabled={view.disabled || pending} aria-busy={view.busy || pending} onPointerDown={e => {
+  <button className={`floating-microphone ${view.recording ? "is-recording" : ""} ${view.busy ? "is-busy" : ""}`} data-expanded={state !== "idle" || pending || error !== null} aria-label={view.label} title={`${view.label}. Drag to move.`} aria-disabled={view.disabled || pending} aria-busy={view.busy || pending} onPointerDown={e => {
       if (menuOpen || e.button !== 0)
         return;
       e.preventDefault();
@@ -158,8 +159,8 @@ export function Overlay() {
     return;
   } if (e.detail === 0 && !view.disabled && !pending)
     void act(); }}>
-   {view.busy ? <span className="microphone-spinner" aria-hidden="true"/> : <span className={`microphone-glyph ${view.recording ? "speaking" : ""}`} aria-hidden="true"/>}
-   {/* A strip of the live level under the glyph while recording (KNEG-371). `speaking` stays the recording flag: the glyph is the privacy indicator, and a level-driven one would look idle through a pause. */}
+   {view.busy ? <span className="microphone-dots" aria-hidden="true"><span /><span /><span /></span> : view.recording ? <span className="microphone-rec-dot" aria-hidden="true"/> : <span className="microphone-glyph" aria-hidden="true"/>}
+   {/* The live level beside the dot while recording (KNEG-371). The dot stays the recording flag: it is the privacy indicator, and a level-driven one would look idle through a pause. */}
    {view.recording ? <LevelMeter session="dictation" source="microphone" segments={6} className="microphone-level"/> : null}
   </button>
   <button type="button" className="microphone-language-toggle" aria-label="Choose dictation languages" aria-expanded={menuOpen} title="Dictation languages" onClick={() => { setHoldHover(true); setMenuOpen(value => !value); }}><Icon name={menuOpen ? "close" : "chevronRight"} size={16} /></button>

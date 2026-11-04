@@ -465,7 +465,7 @@ pub fn create_language_popup(app: &AppHandle) -> tauri::Result<()> {
         tauri::WebviewUrl::App("index.html#dictation-languages".into()),
     )
     .title("Dictation languages")
-    .inner_size(280.0, 252.0)
+    .inner_size(280.0, 272.0)
     .resizable(false)
     .decorations(false)
     .transparent(true)

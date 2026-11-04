@@ -57,12 +57,12 @@ export function LanguagePopup() {
   }, []);
   return <div className="language-popup" onPointerDown={event => { if (event.target === event.currentTarget) close(); }}>
     <div className="microphone-language-menu" role="dialog" aria-label="Dictation languages">
-      {/* Replaced rather than shown disabled: the window is 252px tall, and the
+      {/* Replaced rather than shown disabled: the window is 272px tall, and the
           picker plus a line saying why it is off pushed Done out of it. */}
       {shown !== undefined && !shown.applies
         ? <p className="muted">Parakeet is the local engine, and it uses its model's own languages, so there is nothing to choose here.</p>
         : <LocalLanguagePicker disabled={shown === undefined} note={shown?.note ?? LANGUAGE_NOTE_LEAD} />}
-      <button type="button" onClick={close}>Done</button>
+      <button type="button" className="language-done" onClick={close}>Done</button>
     </div>
   </div>;
 }

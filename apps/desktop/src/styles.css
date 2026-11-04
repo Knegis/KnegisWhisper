@@ -18,20 +18,19 @@
  *   3. Colour comes from two gradients, not from a palette of flat accents.
  *      Iris (lavender to marigold) is the one thing to do next -- a primary
  *      button -- and the titles; Dusk (navy to orange) is time passing: the
- *      recording tile, a live clock, words still being heard. Both drift
- *      only while something is happening (see motion, below). Flat colour
- *      is kept for meaning: mint for an offer or an
- *      update, the pink signal dot for recording.
+ *      recording tile, a live clock, words still being heard. Flat colour is
+ *      kept for meaning: mint for what is fine, an update or an on chip,
+ *      the pink signal dot for recording and for what has failed.
  *   4. Three faces with a job each. Geist sets everything people read. Tiny5,
  *      a pixel face, is the machine talking about itself -- dates, times,
  *      small labels -- in the string's own case. Doto, round dot-matrix
  *      numerals, is reserved for big clocks and counts.
  *
- * Motion is kept for meaning. This window stays open all day, so nothing
- * moves while the application is simply ready: gradients rest at one
- * position and the hero's orb is still. Motion says something is happening --
- * the orb breathes and the heading drifts while recording or working, a live
- * line drifts while it may still change, the recording dot pulses. Hovers are
+ * Motion, by the owner's ruling of 2026-11-04: picture tiles breathe and drift
+ * slowly at rest, and titles and buttons hold still unless the application is
+ * recording or busy. It stays open all day, so a tile moves a child layer by
+ * transform and opacity in steps, never an animated gradient, and every endless
+ * animation pauses with the window (`:root[data-window-active="false"]`). Hovers are
  * a .3s colour change; a view settles in about a third of a second on
  * `--ease-out`, with no delay before it starts. Under
  * `prefers-reduced-motion` one rule (below the keyframes) stills all of it.
@@ -270,14 +269,6 @@
  * text-safe variant on a track three times its width, at rest unless a rule
  * gives it something to say (see the motion note above).
  */
-.iris-text, .dusk-text {
-  background-size: 300% 100%;
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-}
-.iris-text { background-image: var(--iris-text); }
-.dusk-text { background-image: var(--dusk-text); }
 
 /*
  * Reserve the scrollbar's gutter for the whole session, in a window that
@@ -405,14 +396,6 @@ p { line-height: 1.5; }
 .list-panel[hidden] { display: none; }
 .split-main { flex: 1; min-width: 0; overflow-y: auto; scrollbar-gutter: stable; position: relative; container: main / inline-size; }
 
-/*
- * What a panel is built from (`components/Panel.tsx`). The title is an `h1`
- * -- or an `h2` beside a page with its own `h1` (`PanelHeader`'s `level`) -- and a
- * section label an `h2`, so both restate the margins and the face the
- * generic heading rules set.
- */
-.panel-head { display: flex; align-items: center; gap: 2px; padding: 16px 10px 10px 20px; }
-.panel-title { flex: 1; margin: 0; font-family: var(--font-sans); font-size: 22px; line-height: 28px; font-weight: 400; letter-spacing: .02em; text-transform: none; color: var(--text); }
 /* A section label in the pixel voice, navy as the reference frames draw it. */
 .panel-label { margin: 0; padding: 20px 20px 6px; font: 16px/18px var(--font-mono); color: var(--band-text); }
 .panel-list { display: flex; flex-direction: column; gap: 1px; padding: 0 8px; }
@@ -434,27 +417,12 @@ p { line-height: 1.5; }
 .panel-item-muted .panel-item-title { color: var(--muted); }
 .panel-action-label { flex: 1; min-width: 0; font-size: 14px; line-height: 20px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .panel-action-hint { font: 15px/18px var(--font-mono); letter-spacing: .5px; color: var(--muted); }
-.panel-foot { margin-top: auto; display: flex; align-items: center; gap: 8px; padding: 12px 20px; border-top: 1px solid var(--rule); font-size: 12.5px; color: var(--muted); }
 /*
- * A panel whose content carries a `data-surface` wrapper (Dictation's
- * history) keeps the column the foot's `margin-top: auto` needs: the wrapper
- * grows to the panel's height, so the foot still sits at the bottom.
+ * A panel whose content carries a `data-surface` wrapper keeps the panel's
+ * column, growing to its height.
  */
 .panel-surface { flex: 1 0 auto; display: flex; flex-direction: column; }
 .panel-note { margin: 0; padding: 14px 20px 0; font-size: 13px; line-height: 18px; color: var(--muted); }
-/*
- * A foot holding a line and a disclosure under it -- Dictation's "History
- * stays on this computer" over its History options -- stacks them. The
- * controls inside are `--text`, as controls are anywhere; only the
- * explanations stay muted.
- */
-.panel-foot-stack { flex-direction: column; align-items: stretch; }
-.panel-foot-line { display: flex; align-items: center; gap: 8px; margin: 0; }
-.panel-foot .learn-more { margin: 0; }
-.panel-foot .learn-more-body { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
-.panel-foot .learn-more-body label { color: var(--text); }
-.panel-foot .learn-more-body p { margin: 0 0 6px; }
-.panel-foot .learn-more-body button { margin: 0 0 0 -8px; padding: 4px 8px; border-radius: var(--r-control); }
 
 /*
  * A task page (`views/Dictation.tsx`, `views/Meetings.tsx`): the hero centred in
@@ -466,7 +434,6 @@ p { line-height: 1.5; }
  */
 .task { min-height: 100%; display: flex; flex-direction: column; margin: 0; background: none; }
 .task-hero { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 40px 32px 32px; text-align: center; }
-.task-bar { display: flex; flex-direction: column; align-items: center; padding: 0 32px 32px; }
 .task-health { margin-top: 10px; font-size: 13px; text-align: center; }
 .task-health .muted { margin: 0; }
 /* A screen that failed to render lands in the card bare when its page draws its own split. */
@@ -713,8 +680,8 @@ h3 {
  * Page header and disclosure: the furniture around a screen's `h1`, shared
  * by the screens that have a `PageHeader` so a colleague sees the same shape
  * on Transcription, Providers and everywhere else. Dictation and Meetings
- * have a task hero instead (`.hero-*`, above), whose status says whether the
- * task is ready -- the job the status line under Meetings' header did before.
+ * lead with a status notice instead (`.task-notice`), which says whether the
+ * task is ready.
  *
  * `.page-intro` is the one sentence saying what the screen is for; `.learn-
  * more` is the rest, folded under a `<details>` so a screen for a colleague
@@ -1167,32 +1134,6 @@ button.marked:hover:not(:disabled) {
 .note-editor .milkdown .ProseMirror *::-moz-selection { background: var(--crepe-color-hover); }
 .note-editor .milkdown .ProseMirror .ProseMirror-selectednode, .note-editor .milkdown .ProseMirror li.ProseMirror-selectednode { background: var(--crepe-color-hover); }
 
-/*
- * The note's title is the page's heading, at the canvas' 32px, and it is a
- * field: borderless and unfilled, so it reads as the heading it is until the
- * caret is in it. Weight 400, the design's flat weight, though Geist could draw heavier.
- * `.note-detail` in the selector because the generic text-field rule further
- * down, `input:not([type="checkbox"]):not([type="radio"])`, is as specific as
- * the rest of it and comes later: without it the title took that rule's fill,
- * padding and inherited 15px.
- */
-.note-detail .note-detail-header input[aria-label="Title"] {
-  display: block;
-  width: 100%;
-  min-width: 0;
-  padding: 0;
-  color: var(--text);
-  font: inherit;
-  font-size: 32px;
-  font-weight: 400;
-  line-height: 40px;
-  letter-spacing: -0.4px;
-  /* A title longer than the column ends in an ellipsis while the caret is elsewhere, rather than mid-letter. */
-  text-overflow: ellipsis;
-  background: transparent;
-  border: 0;
-  border-radius: var(--r-control);
-}
 
 /*
  * One line held whether or not there is anything to say, the same reason
@@ -1890,17 +1831,6 @@ label:has(> input[type="checkbox"]) {
 }
 
 /* A visual hint only: native edge hit-testing owns the resize gesture. */
-.notify::after {
-  content: "";
-  position: absolute;
-  right: 5px;
-  bottom: 5px;
-  width: 10px;
-  height: 10px;
-  background: repeating-linear-gradient(135deg, transparent 0 3px, var(--muted) 3px 4px);
-  clip-path: polygon(100% 0, 100% 100%, 0 100%);
-  pointer-events: none;
-}
 
 /* Hidden by the window, not by CSS. This only shows through a stray render. */
 .notify-empty {
@@ -1914,7 +1844,6 @@ label:has(> input[type="checkbox"]) {
 :root[data-window="update"] .notify-body strong, :root[data-window="update"] .notify-detail { color: var(--mint-ink); }
 :root[data-window="update"] .notify button { background: rgb(255 255 255 / 70%); color: #000; }
 :root[data-window="update"] .notify button:hover:not(:disabled) { background: #fff; }
-:root[data-window="update"] .notify::after { display: none; }
 
 /* Display contents keeps the original 392x92 row layout and spacing. */
 .notify-header {
@@ -1981,9 +1910,7 @@ label:has(> input[type="checkbox"]) {
  * stays true the whole time this line is shown -- painting the text does not
  * repaint the dot. The recording reds and `--error` are close reds in both
  * themes, so the two can share a hue without
- * being confused for each other: one is a round mark, this is prose, and
- * `.live-status`'s `--rec` text beside `.rec-dot` already pairs them the same
- * way elsewhere in this file.
+ * being confused for each other: one is a round mark, this is prose.
  */
 .notify-detail.notify-alert {
   color: var(--error);
@@ -2390,14 +2317,6 @@ button.floating-microphone:hover:not(:disabled) { background: transparent; color
 .floating-microphone[aria-disabled="true"] { cursor: progress; }
 .microphone-glyph { position: relative; display: block; width: 20px; height: 20px; background: currentColor; mask: url('./assets/microphone.svg') center / contain no-repeat; opacity: 0; transform: scale(0.8); transition: opacity 120ms ease, transform 160ms ease; pointer-events: none; }
 .floating-microphone:is(:hover, :focus-visible, :active, [data-expanded="true"]) .microphone-glyph { opacity: 1; transform: scale(1); }
-.microphone-glyph.speaking { mask-image: url('./assets/microphone-speaking.svg'); }
-/* The level, a 2px strip under the glyph inside the recording pill (KNEG-371): the glyph's white, unlit at a third. */
-.microphone-level { position: absolute; left: 50%; bottom: 3px; gap: 1px; transform: translateX(-50%); pointer-events: none; }
-.microphone-level .level-segment { width: 3px; height: 2px; background: rgb(255 255 255 / 0.35); }
-.microphone-level .level-segment-lit { background: currentColor; }
-.microphone-spinner { position: relative; display: block; width: 18px; height: 18px; border: 2px solid #8888; border-top-color: currentColor; border-radius: 50%; animation: microphone-spin 1s linear infinite; }
-@keyframes microphone-spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .microphone-spinner { animation: none; } .microphone-controls::before, .microphone-glyph { transition: none; } }
 .microphone-error { display: flex; gap: 6px; align-items: flex-start; padding: 8px; background: var(--bg); color: var(--text, #eee); font-size: 12px; width: 100%; max-height: 72px; overflow: auto; border-radius: var(--r-card); box-shadow: 0 2px 6px #0005; }
 .microphone-error span { flex: 1; overflow-wrap: anywhere; }
 .microphone-error button { display: inline-flex; align-items: center; justify-content: center; margin: 0; padding: 0 4px; min-height: 20px; }
@@ -2432,17 +2351,9 @@ button.microphone-language-toggle:hover:not(:disabled) { background: transparent
 .microphone-controls:is(:hover, .hold-hover) .microphone-glyph { opacity: 1; transform: scale(1); }
 @media (prefers-reduced-motion: reduce) { .microphone-language-toggle { transition: none; } }
 
-.is-vertical .microphone-language-toggle .icon { transform: rotate(90deg); }
 
-/* One animated surface, with separate dictation and language hit targets. */
-.microphone-controls::before { content: ""; position: absolute; left: 48px; top: 48px; width: 32px; height: 6px; border-radius: var(--r-control); background: #858985; --surface-shift: 0px; --surface-angle: 0deg; transform: translate(-50%, -50%) rotate(var(--surface-angle)) translateX(var(--surface-shift)); transition: width 160ms ease, height 160ms ease, transform 160ms ease, background-color 160ms ease; pointer-events: none; }
-.is-vertical .microphone-controls::before { --surface-angle: 90deg; }
-.microphone-controls:has(.floating-microphone[data-expanded="true"])::before { width: 68px; height: 28px; --surface-shift: 8px; border-radius: var(--r-control); background: rgb(20 20 24 / 84%); }
-.microphone-controls:is(:hover, .hold-hover, :has(:focus-visible))::before { width: 68px; height: 28px; --surface-shift: 8px; border-radius: var(--r-control); background: rgb(20 20 24 / 84%); }
-.microphone-controls:has(.floating-microphone.is-recording)::before { background: var(--signal); }
 .microphone-controls:has(:focus-visible) .microphone-language-toggle { opacity: 1; pointer-events: auto; }
 .microphone-controls:has(:focus-visible) .microphone-glyph { opacity: 1; transform: scale(1); }
-@media (prefers-reduced-motion: reduce) { .microphone-controls::before { transition: none; } }
 
 .language-popup { height: 100%; overflow: clip; padding: 6px; }
 .language-popup .microphone-language-menu { width: 100%; max-height: 100%; }
@@ -2827,8 +2738,6 @@ button.note-people-add:hover:not(:disabled), button.note-people-add[aria-expande
  */
 .content .view { display: flex; flex-direction: column; gap: 40px; }
 .content .view section { margin: 0; padding: 0; border-radius: 0; background: none; box-shadow: none; }
-/* A link-like button written before its section's label (Transcription's Manage vocabulary) sits at the label's right, over its rule. */
-.content .view section > button:first-child:not([class]) { float: right; margin: -7px 0 0 12px; }
 .content h2:not([class]), .content .view h2.section-label { margin: 0 0 12px; padding: 0; border: 0; font: 400 14px/1.3 var(--font-mono); letter-spacing: 0; color: var(--band-text); }
 .content h3 { margin: 20px 0 8px; font-size: 15px; }
 .content .view section p, .content .view section li { max-width: 70ch; }
@@ -4054,3 +3963,130 @@ button.language-pill[aria-pressed="true"], button.language-pill[aria-pressed="tr
 @media (prefers-reduced-motion: reduce) { .local-hero-shadow, .local-hero-sphere { animation: none; } .content button.provider-add:hover:not(:disabled) { transform: none; } }
 .provider-text { min-width: 0; }
 .provider-purposes { display: flex; flex-wrap: wrap; column-gap: .25em; max-width: 100%; }
+
+/*
+ * The floating windows. Each is transparent and exactly the size of its card, so
+ * there is no room for the design's frost or outer shadow, and nothing behind the
+ * glass would be blurred if there were: a near-solid fill and a hairline instead.
+ */
+:root { --float-fill: var(--panel); --float-edge: rgb(255 255 255 / 10%); }
+@media (prefers-color-scheme: light) { :root { --float-fill: #fafafa; --float-edge: rgb(0 0 0 / 7%); } }
+@keyframes kw-bounce { 0%, 80%, 100% { transform: translateY(0); opacity: .5; } 40% { transform: translateY(-4px); opacity: 1; } }
+
+/* The dictation overlay. */
+.overlay { justify-content: flex-start; gap: 12px; padding: 0 22px; border-radius: 28px; background: var(--float-fill); box-shadow: inset 0 0 0 1px var(--float-edge); font-size: 17px; line-height: 1; }
+.overlay .indicator { width: 10px; height: 10px; }
+.overlay-idle .indicator { border-radius: 2.5px; background: var(--text); }
+.overlay-recording .indicator-recording { animation: kw-pulse 1.6s steps(24) infinite; }
+.overlay-transcribing { background: var(--iris); background-size: 250% 250%; box-shadow: none; color: #000; }
+.overlay-inserting { background: var(--mint); box-shadow: none; color: #2f5532; }
+.overlay-transcribing .indicator, .overlay-inserting .indicator { background: #fff; }
+.overlay-level { display: inline-flex; gap: 4px; }
+.overlay-level .level-segment { width: 8px; height: 8px; border-radius: 50%; background: color-mix(in srgb, var(--text) 22%, transparent); }
+.overlay-level .level-segment-lit { background: var(--text); }
+.overlay-dots { display: flex; gap: 5px; margin-left: auto; }
+.overlay-dots > span { width: 7px; height: 7px; border-radius: 50%; background: #000; animation: kw-bounce 1s steps(20) infinite; }
+.overlay-dots > span:nth-child(2), .microphone-dots > span:nth-child(2) { animation-delay: .15s; }
+.overlay-dots > span:nth-child(3), .microphone-dots > span:nth-child(3) { animation-delay: .3s; }
+
+/*
+ * The floating microphone: a small bar at rest, a dark pill under the pointer, and
+ * wider while recording. The hit target holds its size as the pill grows.
+ */
+.floating-microphone { width: 68px; height: 32px; min-height: 32px; }
+.floating-microphone::before { content: ""; position: absolute; left: 50%; top: 50%; z-index: 0; width: 32px; height: 6px; border-radius: var(--r-control); background: rgb(0 0 0 / 30%); box-shadow: 0 0 0 1px rgb(255 255 255 / 18%); transform: translate(-50%, -50%); transition: width .25s var(--ease-out), height .25s var(--ease-out), background-color .25s ease; }
+.floating-microphone:is(:hover, :focus-visible, :active, [data-expanded="true"])::before, .microphone-controls:is(:hover, .hold-hover) .floating-microphone::before { width: 68px; height: 28px; background: rgb(20 20 24 / 82%); box-shadow: none; }
+.floating-microphone.is-recording { width: 92px; padding: 0 10px; justify-content: space-between; }
+.floating-microphone.is-recording::before, .microphone-controls:is(:hover, .hold-hover) .floating-microphone.is-recording::before { width: 92px; }
+.floating-microphone.is-busy::before, .microphone-controls:is(:hover, .hold-hover) .floating-microphone.is-busy::before { background: var(--iris); background-size: 250% 250%; }
+.floating-microphone:focus-visible { outline-color: #0e3b8d; outline-offset: 3px; }
+.floating-microphone > * { position: relative; z-index: 1; }
+.microphone-glyph { width: 16px; height: 16px; }
+.microphone-rec-dot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--signal); animation: kw-pulse 1.6s steps(24) infinite; }
+.microphone-level { display: flex; gap: 3px; pointer-events: none; }
+.microphone-level .level-segment { width: 5px; height: 5px; border-radius: 50%; background: rgb(255 255 255 / 35%); }
+.microphone-level .level-segment-lit { background: #fff; }
+.microphone-dots { display: flex; gap: 4px; }
+.microphone-dots > span { width: 5px; height: 5px; border-radius: 50%; background: #000; animation: kw-bounce 1s steps(20) infinite; }
+.microphone-overlay.is-vertical .floating-microphone { width: 32px; height: 68px; min-height: 68px; }
+.microphone-overlay.is-vertical .floating-microphone::before { width: 6px; height: 32px; }
+.microphone-overlay.is-vertical .floating-microphone:is(:hover, :focus-visible, :active, [data-expanded="true"])::before, .microphone-overlay.is-vertical .microphone-controls:is(:hover, .hold-hover) .floating-microphone::before { width: 28px; height: 68px; }
+.microphone-overlay.is-vertical .floating-microphone.is-recording { height: 92px; min-height: 92px; padding: 10px 0; flex-direction: column; }
+.microphone-overlay.is-vertical .floating-microphone.is-recording::before, .microphone-overlay.is-vertical .microphone-controls:is(:hover, .hold-hover) .floating-microphone.is-recording::before { width: 28px; height: 92px; }
+.microphone-overlay.is-vertical .microphone-level { flex-direction: column; }
+/* The language toggle sits against the pill's edge, so the pointer never leaves the group on its way there: 30px square, from 16 by 28. */
+button.microphone-language-toggle { left: 33px; top: 64px; width: 30px; height: 30px; min-height: 30px; border-radius: 50%; }
+.microphone-language-toggle::before { content: ""; position: absolute; inset: 2px; border-radius: 50%; background: rgb(20 20 24 / 82%); }
+.microphone-language-toggle > .icon { position: relative; transform: rotate(90deg); }
+.is-vertical button.microphone-language-toggle { left: 64px; top: 33px; width: 30px; height: 30px; min-height: 30px; border-radius: 50%; }
+.is-vertical .microphone-language-toggle > .icon { transform: none; }
+button.microphone-language-toggle:focus-visible { outline: 2px solid #0e3b8d; outline-offset: 1px; }
+.microphone-error { flex-direction: column; gap: 12px; max-height: 240px; padding: 14px 14px 14px 16px; border-radius: 20px; background: var(--float-fill); box-shadow: inset 0 0 0 1px var(--float-edge); color: var(--text); font-size: 14px; line-height: 1.35; }
+.microphone-error-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.microphone-error-text { display: flex; align-items: flex-start; gap: 9px; min-width: 0; overflow-wrap: anywhere; }
+.microphone-error-text > .status-dot { margin-top: 5px; }
+.microphone-error span { flex: initial; }
+button.microphone-error-close { flex: none; width: 26px; height: 26px; min-height: 26px; margin: 0; padding: 0; border-radius: 50%; background: var(--control); }
+button.microphone-error-retry { align-self: flex-start; min-height: 32px; margin: 0; padding: 0 14px; border-radius: var(--r-control); background: var(--control); font-size: 13px; }
+
+/* Meeting and update cards. */
+.notify { gap: 14px; padding: 14px 14px 14px 18px; border-radius: 24px; background: var(--float-fill); box-shadow: inset 0 0 0 1px var(--float-edge); }
+.notify .indicator { width: 9px; height: 9px; }
+.notify .indicator:not(.indicator-recording) { background: #fff; box-shadow: inset 0 0 0 1px rgb(0 0 0 / 20%); }
+.notify .indicator.indicator-offer { background: var(--signal); box-shadow: none; }
+.notify .indicator-recording { animation: kw-pulse 1.6s steps(24) infinite; }
+.notify-body { gap: 3px; }
+.notify-body strong { font: 400 14px/1.3 var(--font-mono); letter-spacing: 0; overflow-wrap: anywhere; }
+.notify-detail { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; font-size: 12px; line-height: 1.35; white-space: normal; overflow-wrap: anywhere; user-select: text; }
+.notify-detail .meeting-progress { white-space: normal; }
+.notify-actions { display: flex; flex: none; flex-direction: column; align-items: stretch; gap: 6px; }
+.notify button.notify-record, .notify button.notify-record:hover:not(:disabled) { display: inline-flex; align-items: center; justify-content: space-between; gap: 10px; height: 38px; min-height: 38px; margin: 0; padding: 0 4px 0 16px; border-radius: var(--r-control); background: rgb(20 20 24 / 82%); color: #fff; font-size: 13px; letter-spacing: 0; white-space: nowrap; }
+.notify-record-mark { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; border-radius: 50%; background: var(--signal); color: #fff; }
+.notify-record-mark > span { width: 9px; height: 9px; border-radius: 50%; background: #fff; }
+.notify button.notify-dismiss { height: 30px; min-height: 30px; margin: 0; padding: 0 16px; border-radius: var(--r-control); font-size: 13px; letter-spacing: .04em; white-space: nowrap; }
+.notify-busy { flex: none; width: 64px; height: 30px; border-radius: var(--r-control); background: var(--iris); background-size: 250% 250%; }
+:root[data-window="update"] .notify:not(.notify-empty) { box-shadow: none; }
+:root[data-window="update"] .notify .indicator { box-shadow: none; }
+:root[data-window="update"] .notify button { height: 34px; min-height: 34px; padding: 0 16px; border-radius: var(--r-control); font-size: 13px; letter-spacing: .04em; }
+
+/* The recording panel. */
+.notify-panel { gap: 0; padding: 0; border-radius: 32px; }
+.notify-recording { box-shadow: inset 0 0 0 1.5px rgb(255 63 97 / 55%); }
+.notify-panel .notify-header { gap: 12px; padding: 18px 16px 14px 20px; }
+.notify-panel .indicator { width: 10px; height: 10px; }
+.notify-panel .notify-body strong { font-size: 15px; }
+.notify-panel-body { margin: 0 12px; padding: 18px; border-radius: var(--r-card); background: var(--panel); font-size: 15px; line-height: 1.5; }
+.notify-panel .transcript-rows { display: flex; flex-direction: column; gap: 14px; padding: 0; list-style: none; }
+.notify-panel .transcript-rows li { display: grid; grid-template-columns: 40px minmax(0, 1fr); gap: 10px; margin: 0; padding: 0; }
+.notify-panel .transcript-clock { padding-top: 2px; font: 12px/1.3 var(--font-mono); color: var(--muted); }
+.notify-panel .transcript-speaker { font: inherit; color: var(--band-text); }
+.notify-panel .transcript-line { min-width: 0; font-size: 15px; line-height: 1.35; }
+.notify-panel .transcript-row-muted [dir="auto"] { background: var(--dusk-text); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.notify-panel .transcript-row-muted .transcript-line::after { content: ""; display: inline-block; width: 2px; height: 1em; margin-left: 2px; vertical-align: -2px; background: var(--band-text); animation: kw-blink 1.1s steps(1) infinite; }
+.notify-panel .notify-tabs { display: flex; gap: 4px; margin: 12px; padding: 4px; border-radius: var(--r-control); background: var(--wash); }
+.notify-panel .notify-tabs > [role="tab"] { flex: 1; height: 36px; min-height: 0; margin: 0; padding: 0; border-radius: var(--r-control); background: none; color: var(--text); font-size: 13px; letter-spacing: .04em; }
+.notify-panel .notify-tabs > [role="tab"]:hover:not(:disabled) { background: var(--control); color: var(--text); }
+.notify-panel .notify-tabs > [role="tab"][aria-selected="true"], .notify-panel .notify-tabs > [role="tab"][aria-selected="true"]:hover:not(:disabled) { background: var(--band); color: var(--band-ink); }
+
+/* The languages window, and the picker where it opens from Dictation. */
+.language-popup { padding: 0; }
+.language-popup .microphone-language-menu { display: flex; flex-direction: column; gap: 10px; height: 100%; padding: 14px 16px; border-radius: var(--r-card); background: var(--float-fill); box-shadow: inset 0 0 0 1px var(--float-edge); }
+.microphone-language-menu .local-language-picker legend { margin: 0 0 10px; padding: 0; font: 14px/1.3 var(--font-mono); color: var(--band-text); }
+.microphone-language-menu .local-language-options { gap: 5px; }
+.microphone-language-menu button.language-pill { height: 28px; min-height: 28px; padding: 0 11px; background: rgb(0 0 0 / 7%); font-size: 12px; }
+.microphone-language-menu button.language-pill[aria-pressed="true"] { background: var(--band); color: var(--band-ink); }
+.microphone-language-menu .local-language-picker > .muted { margin: 10px 0 0; font-size: 12px; line-height: 1.35; }
+.microphone-language-menu button.language-done { align-self: flex-end; height: 32px; min-height: 32px; margin: auto 0 0; padding: 0 18px; background: var(--iris); background-size: 250% 250%; color: #000; font-size: 13px; }
+.chip-menu button.language-pill { height: 30px; min-height: 30px; padding: 0 12px; font-size: 12px; }
+.chip-menu .local-language-picker > .muted { margin: 10px 0 0; font-size: 12px; line-height: 1.35; }
+
+@media (prefers-reduced-motion: reduce) {
+  .overlay-recording .indicator-recording, .overlay-dots > span, .microphone-rec-dot, .microphone-dots > span, .notify .indicator-recording, .notify-panel .transcript-row-muted .transcript-line::after { animation: none; }
+  .floating-microphone::before, .microphone-glyph { transition: none; }
+}
+
+/* The note in the recording panel starts at the top of its card. */
+.notify-panel .note-editor .milkdown .ProseMirror { padding: 0; font-size: 15px; line-height: 1.5; }
+.language-popup .local-language-picker { flex: 1 1 auto; min-height: 0; overflow: auto; }
+.notify-panel-body > section { margin: 0; padding: 0; border-radius: 0; background: none; box-shadow: none; }
+.notify-panel-body > section > p { margin: 0; }

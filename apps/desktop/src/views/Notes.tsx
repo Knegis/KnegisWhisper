@@ -289,7 +289,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
       const main = mainRef.current;
       if (!main) return null;
       if (focusAfter.target === "undo") return main.querySelector<HTMLElement>(".notes-moved button");
-      if (focusAfter.target === "title") return main.querySelector<HTMLElement>('.note-detail input[aria-label="Title"]:not(:disabled)');
+      if (focusAfter.target === "title") return main.querySelector<HTMLElement>('.note-detail textarea[aria-label="Title"]:not(:disabled)');
       return main.querySelector<HTMLElement>(".trash-choose") ?? main.querySelector<HTMLElement>(".trash-space-line");
     };
     const untouched = () => {

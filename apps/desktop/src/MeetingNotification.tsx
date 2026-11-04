@@ -3,7 +3,7 @@ import { MeetingProgress } from "./components/MeetingProgress";
 /**
  * The meeting notification window's contents.
  *
- * Compact offers and finishing use 392×92; recording opens the 440×560 panel.
+ * Compact offers and finishing use 392×102; recording opens the 440×560 panel.
  * The panel hosts the typed-notes draft and reads it back after a webview reload.
  * Its editor and tabs opt out of Tauri's deep drag region, leaving the header
  * as the drag surface. The transcript tab shows live text only when capture
@@ -226,6 +226,7 @@ export function MeetingNotification() {
           <strong>Finishing meeting</strong>
           <span className="notify-detail"><MeetingProgress progress={finalisation} /></span>
         </span>
+        <span className="notify-busy" aria-hidden="true" />
         </div>
       </div>
     );
@@ -235,13 +236,16 @@ export function MeetingNotification() {
     return (
       <div className="notify" data-tauri-drag-region="deep">
         <div className="notify-header" title="Drag to move">
-        <span className="indicator" aria-hidden="true" />
+        {/* It pulses only on the signal that means a call: a microphone in use may be a test call. */}
+        <span className={offer.signal === "call-process" ? "indicator indicator-recording" : "indicator indicator-offer"} aria-hidden="true" />
         <span className="notify-body">
           <strong>{offer.name} meeting in progress</strong>
           <span className="notify-detail">{problem ?? offerReason(offer)}</span>
         </span>
+        <span className="notify-actions">
         <button
           type="button"
+          className="notify-record"
           onClick={() => {
             setProblem(null);
             void getMeetingProvider()
@@ -255,15 +259,18 @@ export function MeetingNotification() {
           }}
         >
           Record
+          <span className="notify-record-mark" aria-hidden="true"><span /></span>
         </button>
         <button
           type="button"
+          className="notify-dismiss"
           onClick={() => {
             void dismissMeetingOffer();
           }}
         >
           Not now
         </button>
+        </span>
         </div>
       </div>
     );

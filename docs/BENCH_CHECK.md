@@ -173,14 +173,14 @@ read from the running application; nothing has been dragged, resized or shared b
    drag the panel by its text. Expect: it moves; the caret does not leave Notepad; Record/Stop still
    click. This is the `WS_EX_NOACTIVATE` + `start_dragging` question, believed and not measured.
 2. **Resize from every edge and both bottom corners.** Expect the resize cursor at the edges, a
-   floor of 392×92, and above about 140 px of height the caption wrapping under a header row with the
+   floor of 392×102, and above about 140 px of height the caption wrapping under a header row with the
    newest words at the bottom. Check that the last few pixels of the Stop button still click.
 3. **Hide and show, then restart.** Stop the meeting, start another: the panel returns where it was
    left, at the size it was left. Quit and relaunch: same.
 4. **Unplug the monitor it was left on** (or change resolution so it no longer fits): expect the
    bottom-right default, not an off-screen window.
 5. **Reset notification window** on Settings > Meetings, once while the panel is visible and once
-   while it is hidden. Expect bottom-right at 392×92, and `meeting.notificationPlacement` absent in
+   while it is hidden. Expect bottom-right at 392×102, and `meeting.notificationPlacement` absent in
    `settings_keys` afterwards in both cases.
 6. **Share the screen from the client you actually use** (Teams, Zoom, a browser) with the panel
    up, both a window share and a whole-screen share, and look at the receiving side. KNEG-60
