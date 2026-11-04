@@ -14,7 +14,7 @@ maintained in place rather than appended to, because its purpose is to be curren
 
 ## 2026-11-04 — The app rebuilt to the approved design, screen by screen
 
-Branch `design/artifact-parity`, from `dev` at `9a3e660`, not merged or pushed. The owner said the app
+Branch `design/artifact-parity`, from `dev` at `9a3e660`, merged to `dev` and pushed at `43e0af8`. The owner said the app
 didn't entirely look like the canvas they had approved. Reading all 24 boards against the code showed
 why: the colours, fonts, pills and copy matched, and the layouts didn't. `07f1b24` had reskinned the
 old list panels and settings rows rather than building what the boards draw.
@@ -47,7 +47,8 @@ wires and the Diagnostics bars only move while what they stand for is up.
   off, with the whole text in a tooltip.
 - Vocabulary's Add is faded until something is typed, because it stays disabled until then.
 - The floating windows have no frost: each is transparent and the size of its card, so there is nothing
-  to blur and no room for a shadow. The language toggle stays, under the pill, 30px square from 16 by 28.
+  to blur and no room for a shadow. The board draws no language arrow. It stays the pill's far end, as it
+  was before this pass, at the owner's ruling: 24 by 32, from 16 by 28.
 - The update card's address can be selected but isn't a link: nothing in the app opens a URL, and a link
   would navigate that window away.
 
@@ -60,6 +61,18 @@ Start straddles the fold (701-753). At the default 1280x800 everything measured 
 title focused from code from drawing a ring. The Notes commit made the title a textarea while focus after
 creating a note still looked for an `input`.
 
+**A third, which the owner found after the push.** Hovering the floating microphone showed its left side cut
+off. `persistent_overlay.rs` clips that window to a rectangle for painting as well as hit testing, and
+`cfd8995` changed what styles.css draws without changing the rectangle: 8px of the 68px pill were cut on the
+left, the 92px recording pill on both sides, and the language arrow, which I had moved under the pill, was
+outside it altogether, so it could be neither seen nor clicked. The rectangle now covers the pill at its
+widest, and clicks on the transparent space around it still pass through. Seeing the arrow under the pill, the
+owner ruled that it goes back inside, and that the new languages window stays. With nothing clickable below the
+pill, the window's taskbar overlap stays 24 lying flat; upright it goes from 4 to 2, because the recording pill
+reaches 94. The languages window had grown to 272 without moving and would have covered the top 16px of the
+pill, so it now clears the pill above and below. `floating-windows.mjs` now compares what is drawn with that
+rectangle and checks the arrow is inside the pill. Its first version failed against the old rectangle.
+
 **The visual checks had been failing since `07f1b24`,** not because of this branch: nearly all still waited
 for `nav.rail`. They now use the title bar and the sheet, and `shell-title-bar.mjs` replaces
 `shell-rail.mjs`. 22 browser scripts pass against fixtures. `notes-smoke`, `summary-smoke`, `win32` and
@@ -71,7 +84,12 @@ screen at 1000x720 and 720x520 with no sideways overflow and one `h1` each, and 
 legibility only, since no board is dark. With reduced motion nothing endless runs. In the real window on a
 throwaway profile (`target/real-window`): 1280x800; all three faces load; the meeting window 392x102 and the
 update window 392x104, both painting no ground of their own; the floating microphone 96x96 without taking
-focus, opening to its pill and reaching its toggle; the languages window 280x272 with Done inside it.
+focus, opening to its pill; the languages window 280x272 with Done inside it. The arrow was reached over CDP,
+which goes round the window's clip, so that run said nothing about reaching it by mouse, and in fact it couldn't
+be. After the fix, `GetWindowRgn` on the real window reads one rectangle, 2,32 to 94,64, and `WindowFromPoint`
+hits the window across the pill and on the arrow, and passes through at four points around it. That is Windows'
+hit test, not a click: a mouse click on the arrow and the languages window's new position have not been tried,
+and the microphone wasn't at the bottom of the screen, so the 24px overlap was only read in a unit test.
 
 **Idle cost, real window, whole process tree, 30 s, % of one core of 16 logical processors.** Dictation
 focused 6.6, Meetings focused 13.9, the Settings sheet open 24.2, hidden in the tray 1.1. Dictation partway

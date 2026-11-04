@@ -3993,10 +3993,11 @@ button.language-pill[aria-pressed="true"], button.language-pill[aria-pressed="tr
  * The floating microphone: a small bar at rest, a dark pill under the pointer, and
  * wider while recording. The hit target holds its size as the pill grows.
  */
-.floating-microphone { width: 68px; height: 32px; min-height: 32px; }
+.floating-microphone { width: 68px; height: 32px; min-height: 32px; padding: 0 16px 0 0; }
 .floating-microphone::before { content: ""; position: absolute; left: 50%; top: 50%; z-index: 0; width: 32px; height: 6px; border-radius: var(--r-control); background: rgb(0 0 0 / 30%); box-shadow: 0 0 0 1px rgb(255 255 255 / 18%); transform: translate(-50%, -50%); transition: width .25s var(--ease-out), height .25s var(--ease-out), background-color .25s ease; }
 .floating-microphone:is(:hover, :focus-visible, :active, [data-expanded="true"])::before, .microphone-controls:is(:hover, .hold-hover) .floating-microphone::before { width: 68px; height: 28px; background: rgb(20 20 24 / 82%); box-shadow: none; }
-.floating-microphone.is-recording { width: 92px; padding: 0 10px; justify-content: space-between; }
+.floating-microphone.is-recording { width: 92px; padding: 0 24px 0 10px; justify-content: space-between; }
+.floating-microphone.is-busy { padding: 0 4px 0 0; }
 .floating-microphone.is-recording::before, .microphone-controls:is(:hover, .hold-hover) .floating-microphone.is-recording::before { width: 92px; }
 .floating-microphone.is-busy::before, .microphone-controls:is(:hover, .hold-hover) .floating-microphone.is-busy::before { background: var(--iris); background-size: 250% 250%; }
 .floating-microphone:focus-visible { outline-color: #0e3b8d; outline-offset: 3px; }
@@ -4008,18 +4009,25 @@ button.language-pill[aria-pressed="true"], button.language-pill[aria-pressed="tr
 .microphone-level .level-segment-lit { background: #fff; }
 .microphone-dots { display: flex; gap: 4px; }
 .microphone-dots > span { width: 5px; height: 5px; border-radius: 50%; background: #000; animation: kw-bounce 1s steps(20) infinite; }
-.microphone-overlay.is-vertical .floating-microphone { width: 32px; height: 68px; min-height: 68px; }
+.microphone-overlay.is-vertical .floating-microphone { width: 32px; height: 68px; min-height: 68px; padding: 0 0 16px; }
+.microphone-overlay.is-vertical .floating-microphone.is-busy { padding: 0 0 4px; }
 .microphone-overlay.is-vertical .floating-microphone::before { width: 6px; height: 32px; }
 .microphone-overlay.is-vertical .floating-microphone:is(:hover, :focus-visible, :active, [data-expanded="true"])::before, .microphone-overlay.is-vertical .microphone-controls:is(:hover, .hold-hover) .floating-microphone::before { width: 28px; height: 68px; }
-.microphone-overlay.is-vertical .floating-microphone.is-recording { height: 92px; min-height: 92px; padding: 10px 0; flex-direction: column; }
+.microphone-overlay.is-vertical .floating-microphone.is-recording { height: 92px; min-height: 92px; padding: 10px 0 24px; flex-direction: column; }
 .microphone-overlay.is-vertical .floating-microphone.is-recording::before, .microphone-overlay.is-vertical .microphone-controls:is(:hover, .hold-hover) .floating-microphone.is-recording::before { width: 28px; height: 92px; }
 .microphone-overlay.is-vertical .microphone-level { flex-direction: column; }
-/* The language toggle sits against the pill's edge, so the pointer never leaves the group on its way there: 30px square, from 16 by 28. */
-button.microphone-language-toggle { left: 33px; top: 64px; width: 30px; height: 30px; min-height: 30px; border-radius: 50%; }
-.microphone-language-toggle::before { content: ""; position: absolute; inset: 2px; border-radius: 50%; background: rgb(20 20 24 / 82%); }
-.microphone-language-toggle > .icon { position: relative; transform: rotate(90deg); }
-.is-vertical button.microphone-language-toggle { left: 64px; top: 33px; width: 30px; height: 30px; min-height: 30px; border-radius: 50%; }
-.is-vertical .microphone-language-toggle > .icon { transform: none; }
+/* The language arrow is the pill's far end, so the pointer never leaves the pill on its way there: 24 by 32, from 16 by 28. The pill ends at 82, or 94 while recording. */
+button.microphone-language-toggle { left: 58px; top: 32px; width: 24px; height: 32px; min-height: 32px; border-radius: 0 100px 100px 0; }
+.microphone-controls:has(.is-recording) button.microphone-language-toggle { left: 70px; }
+.microphone-language-toggle::before { content: ""; position: absolute; inset: 2px 0; border-radius: inherit; }
+button.microphone-language-toggle:hover:not(:disabled)::before { background: rgb(255 255 255 / 14%); }
+.microphone-language-toggle > .icon { position: relative; }
+.microphone-controls:is(:hover, .hold-hover) .microphone-language-toggle { transition-delay: 80ms; }
+.microphone-controls:has(.is-busy) button.microphone-language-toggle, .microphone-controls:has(.is-busy) button.microphone-language-toggle:hover:not(:disabled) { color: #000; }
+.is-vertical button.microphone-language-toggle { left: 32px; top: 58px; width: 32px; height: 24px; min-height: 24px; border-radius: 0 0 100px 100px; }
+.is-vertical .microphone-controls:has(.is-recording) button.microphone-language-toggle { left: 32px; top: 70px; }
+.is-vertical .microphone-language-toggle::before { inset: 0 2px; }
+.is-vertical .microphone-language-toggle > .icon { transform: rotate(90deg); }
 button.microphone-language-toggle:focus-visible { outline: 2px solid #0e3b8d; outline-offset: 1px; }
 .microphone-error { flex-direction: column; gap: 12px; max-height: 240px; padding: 14px 14px 14px 16px; border-radius: 20px; background: var(--float-fill); box-shadow: inset 0 0 0 1px var(--float-edge); color: var(--text); font-size: 14px; line-height: 1.35; }
 .microphone-error-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }

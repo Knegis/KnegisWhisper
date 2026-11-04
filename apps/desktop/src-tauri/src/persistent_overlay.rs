@@ -16,6 +16,13 @@ const PANEL_WIDTH: f64 = 280.0;
 const PANEL_HEIGHT: f64 = 360.0;
 const PANEL_X: f64 = (PANEL_WIDTH - SIZE) / 2.0;
 const PANEL_Y: f64 = PANEL_HEIGHT - SIZE;
+const POPUP_HEIGHT: f64 = 272.0;
+const POPUP_GAP: f64 = 4.0;
+// What styles.css draws in the 96px window, lying flat, as left, top, right, bottom:
+// the pill at its widest, while recording, with the language arrow inside its end.
+// Windows clips the window to this, so anything drawn outside it is cut off and can't
+// be clicked. tools/visual-check/floating-windows.mjs compares it with what is drawn.
+const PILL_RECT: [f64; 4] = [2.0, 32.0, 94.0, 64.0];
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Preferences {
@@ -110,17 +117,11 @@ fn clamp(window: &WebviewWindow) -> Result<(), String> {
     let width = i32::try_from(size.width).map_err(|e| e.to_string())?;
     let height = i32::try_from(size.height).map_err(|e| e.to_string())?;
     let scale = window.scale_factor().map_err(|e| e.to_string())?;
-    // The compact window includes transparent space below its buttons. Let that
-    // space overlap the taskbar while keeping both clickable parts above it.
+    // The compact window includes transparent space below its pill. Let that
+    // space overlap the taskbar while keeping the pill above it.
     if size == LogicalSize::new(SIZE, SIZE).to_physical::<u32>(scale) {
-        let allowance = if at_side_edge(pos.x, size.width, area, scale) {
-            4.0
-        } else {
-            24.0
-        };
-        area.bottom = area
-            .bottom
-            .saturating_add((allowance * scale).round() as i32);
+        let overlap = taskbar_overlap(at_side_edge(pos.x, size.width, area, scale));
+        area.bottom = area.bottom.saturating_add((overlap * scale).round() as i32);
     }
     let (x, y) = bounded_position(pos.x, pos.y, width, height, area);
     window
@@ -141,20 +142,44 @@ fn update_orientation(app: &AppHandle, window: &WebviewWindow) -> Result<(), Str
     update_input_region(app, window)
 }
 
-// Match the fixed microphone and arrow hit targets in styles.css. Keep the
-// 96px layout/drag anchor, but remove its transparent padding from OS hit tests.
+/// Upright, x and y swap, as they do in styles.css.
+fn pill_rect(vertical: bool) -> [f64; 4] {
+    let [left, top, right, bottom] = PILL_RECT;
+    if vertical {
+        [top, left, bottom, right]
+    } else {
+        PILL_RECT
+    }
+}
+
+fn taskbar_overlap(vertical: bool) -> f64 {
+    if vertical {
+        2.0
+    } else {
+        24.0
+    }
+}
+
+// Keep the 96px layout/drag anchor, but remove its transparent padding from OS hit tests.
 #[cfg(any(windows, test))]
 fn control_region(vertical: bool, scale: f64) -> kw_platform::window::WorkArea {
-    let (left, top, right, bottom) = if vertical {
-        (32.0, 22.0, 64.0, 90.0)
-    } else {
-        (22.0, 32.0, 90.0, 64.0)
-    };
+    let [left, top, right, bottom] = pill_rect(vertical);
     kw_platform::window::WorkArea {
         left: (left * scale).floor() as i32,
         top: (top * scale).floor() as i32,
         right: (right * scale).ceil() as i32,
         bottom: (bottom * scale).ceil() as i32,
+    }
+}
+
+/// Above the pill, or under it when that would leave the work area.
+fn language_popup_top(mic_y: i32, scale: f64, vertical: bool, area_top: i32) -> f64 {
+    let [_, top, _, bottom] = pill_rect(vertical);
+    let above = f64::from(mic_y) + (top - POPUP_GAP - POPUP_HEIGHT) * scale;
+    if above < f64::from(area_top) {
+        f64::from(mic_y) + (bottom + POPUP_GAP) * scale
+    } else {
+        above
     }
 }
 
@@ -465,7 +490,7 @@ pub fn create_language_popup(app: &AppHandle) -> tauri::Result<()> {
         tauri::WebviewUrl::App("index.html#dictation-languages".into()),
     )
     .title("Dictation languages")
-    .inner_size(280.0, 272.0)
+    .inner_size(280.0, POPUP_HEIGHT)
     .resizable(false)
     .decorations(false)
     .transparent(true)
@@ -506,11 +531,14 @@ async fn language_menu(app: &AppHandle, visible: bool) -> Result<(), String> {
     let pos = mic.outer_position().map_err(|e| e.to_string())?;
     let scale = mic.scale_factor().map_err(|e| e.to_string())?;
     // Only move the popup. The microphone's native window never changes bounds.
-    let above = f64::from(pos.y) - 224.0 * scale;
-    let y = match crate::window_placement::resolved_work_area(&mic, "language popup") {
-        Some(area) if above < f64::from(area.top) => f64::from(pos.y) + 74.0 * scale,
-        _ => above,
-    };
+    let area_top = crate::window_placement::resolved_work_area(&mic, "language popup")
+        .map_or(i32::MIN, |area| area.top);
+    let y = language_popup_top(
+        pos.y,
+        scale,
+        state.vertical.load(Ordering::SeqCst),
+        area_top,
+    );
     popup
         .set_position(PhysicalPosition::new(f64::from(pos.x) - 92.0 * scale, y))
         .map_err(|e| e.to_string())?;
@@ -593,27 +621,58 @@ fn position_panel(
 mod tests {
     use super::*;
     #[test]
-    fn native_control_region_excludes_padding_and_retains_both_buttons() {
+    fn native_region_covers_the_pill_and_nothing_around_it() {
         for scale in [1.0, 1.25, 1.5, 2.0] {
             for vertical in [false, true] {
                 let region = control_region(vertical, scale);
+                // Written lying flat; upright swaps x and y, as styles.css does.
                 let contains = |x: f64, y: f64| {
+                    let (x, y) = if vertical { (y, x) } else { (x, y) };
                     x * scale >= f64::from(region.left)
                         && x * scale < f64::from(region.right)
                         && y * scale >= f64::from(region.top)
                         && y * scale < f64::from(region.bottom)
                 };
-                assert!(contains(48.0, 48.0));
-                assert!(if vertical {
-                    contains(48.0, 82.0)
-                } else {
-                    contains(82.0, 48.0)
-                });
-                for (x, y) in [(4.0, 48.0), (48.0, 4.0), (94.0, 48.0), (48.0, 94.0)] {
-                    assert!(!contains(x, y));
+                // The pill at rest and hovered is 68 by 32, recording 92 by 32.
+                for (x, y) in [(14.0, 32.0), (81.9, 63.9), (2.0, 32.0), (93.9, 63.9)] {
+                    assert!(contains(x, y), "({x}, {y}) cut off at scale {scale}");
+                }
+                // Clicks on the transparent space around it reach what is beneath.
+                for (x, y) in [
+                    (1.0, 48.0),
+                    (95.0, 48.0),
+                    (48.0, 30.0),
+                    (48.0, 66.0),
+                    (48.0, 95.0),
+                ] {
+                    assert!(
+                        !contains(x, y),
+                        "({x}, {y}) catches clicks at scale {scale}"
+                    );
                 }
             }
         }
+    }
+    #[test]
+    fn language_popup_clears_the_pill_above_and_below() {
+        for scale in [1.0, 1.25, 1.5, 2.0] {
+            for vertical in [false, true] {
+                let pill = control_region(vertical, scale);
+                let above = language_popup_top(1000, scale, vertical, 0);
+                assert!(above + POPUP_HEIGHT * scale <= f64::from(1000 + pill.top));
+                let below = language_popup_top(100, scale, vertical, 0);
+                assert!(below >= f64::from(100 + pill.bottom));
+            }
+        }
+    }
+    #[test]
+    fn taskbar_overlap_stops_at_the_pill() {
+        for vertical in [false, true] {
+            let pill = control_region(vertical, 1.0);
+            assert!(f64::from(pill.bottom) <= SIZE - taskbar_overlap(vertical));
+        }
+        // Lying flat, a microphone at the bottom of the screen stays where it always sat.
+        assert_eq!(taskbar_overlap(false), 24.0);
     }
     #[test]
     fn preferences_default_to_the_existing_recording_box() {

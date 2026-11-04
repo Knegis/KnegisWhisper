@@ -6,11 +6,13 @@
 //
 // Headless Edge against dev fixtures, so this says nothing about transparency, focus or
 // dragging in the real windows. Capture exclusion is stubbed on to show transcript rows.
+// The real microphone window is also clipped to a rectangle a fixture can't apply, so
+// what is drawn here is compared with that rectangle in persistent_overlay.rs.
 import { launchEdge, killBrowser } from "./browser.mjs";
 import { connectCdp } from "./cdp.mjs";
 import { removeFixtureBanner } from "./snippets.mjs";
 import { join, resolve } from "node:path";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 
 const [url, outArg, scheme = "light"] = process.argv.slice(2);
 const out = resolve(outArg);
@@ -37,6 +39,22 @@ async function shot(name, width, height) {
   await c.screenshot(join(out, `${name}.png`));
   shots.push({ name, width, height });
 }
+const overlayRust = readFileSync(new URL("../../apps/desktop/src-tauri/src/persistent_overlay.rs", import.meta.url), "utf8");
+const nativeRect = (name) => overlayRust.match(new RegExp(`const ${name}: \\[f64; 4\\] = \\[([^\\]]+)\\]`))[1].split(",").map(Number);
+const pillRect = nativeRect("PILL_RECT");
+const inside = ([l, t, r, b], [ol, ot, or, ob]) => l >= ol && t >= ot && r <= or && b <= ob;
+async function checkInsideNativeRegion(state, vertical) {
+  const clip = vertical ? [pillRect[1], pillRect[0], pillRect[3], pillRect[2]] : pillRect;
+  const box = (s) => `(() => { const e = document.querySelector('${s}'); if (!e) return null; const b = e.getBoundingClientRect(); return [b.left, b.top, b.right, b.bottom]; })()`;
+  const pill = await c.evaluate(box(".floating-microphone"));
+  const arrow = await c.evaluate(box(".microphone-language-toggle"));
+  check(`the ${state} microphone is drawn inside the window's clip`, inside(pill, clip), JSON.stringify({ pill, clip }));
+  check(`the ${state} arrow is inside the pill`, inside(arrow, pill), JSON.stringify({ arrow, pill }));
+  for (const content of [".microphone-glyph", ".microphone-level", ".microphone-dots"]) {
+    const b = await c.evaluate(box(content));
+    if (b) check(`the ${state} ${content} clears the arrow`, b[2] <= arrow[0] || b[3] <= arrow[1], JSON.stringify({ content: b, arrow }));
+  }
+}
 const emit = (event, payload) => c.evaluate(`import('/node_modules/@tauri-apps/api/event.js').then(m => m.emit(${JSON.stringify(event)}, ${JSON.stringify(payload)})).then(() => true)`);
 
 try {
@@ -62,20 +80,25 @@ try {
   await shot("mic-rest", 96, 96);
   await c.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: 48, y: 48 });
   await shot("mic-hover", 96, 96);
-  await c.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: 48, y: 72 });
-  const reach = await c.evaluate(`(() => { const t = document.querySelector('.microphone-language-toggle'); const r = t.getBoundingClientRect(); const s = getComputedStyle(t); return { w: r.width, h: r.height, pe: s.pointerEvents, op: s.opacity, under: document.elementFromPoint(48, 72)?.closest('button')?.className ?? null }; })()`);
-  check("the language toggle stays reachable from the pill", reach.pe === "auto" && String(reach.under).includes("microphone-language-toggle"), JSON.stringify(reach));
+  await c.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: 70, y: 48 });
+  const reach = await c.evaluate(`(() => { const t = document.querySelector('.microphone-language-toggle'); const r = t.getBoundingClientRect(); const s = getComputedStyle(t); return { w: r.width, h: r.height, pe: s.pointerEvents, op: s.opacity, under: document.elementFromPoint(70, 48)?.closest('button')?.className ?? null }; })()`);
+  await checkInsideNativeRegion("hovered", false);
+  check("the language toggle stays reachable from the pill, within the page", reach.pe === "auto" && String(reach.under).includes("microphone-language-toggle"), JSON.stringify(reach));
   await c.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: 2, y: 2 });
   await c.evaluate(`kw.dictationState('recording'); kw.levels(); true`);
   await shot("mic-recording", 96, 96);
+  await checkInsideNativeRegion("recording", false);
   await c.evaluate(`kw.dictationState('transcribing'); true`);
   await shot("mic-busy", 96, 96);
+  await checkInsideNativeRegion("busy", false);
   await c.evaluate(`kw.dictationState('idle'); kw.overlayFloating(true, true); true`);
   await c.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: 48, y: 48 });
   await shot("mic-vertical-hover", 96, 96);
+  await checkInsideNativeRegion("upright hovered", true);
   await c.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: 2, y: 2 });
   await c.evaluate(`kw.dictationState('recording'); kw.levels(); true`);
   await shot("mic-vertical-recording", 96, 96);
+  await checkInsideNativeRegion("upright recording", true);
   await open("#overlay", 280, 360);
   await c.evaluate(`kw.dictationState('idle'); kw.overlayFloating(); true`);
   await delay(400);
