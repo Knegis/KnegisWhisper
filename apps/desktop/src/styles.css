@@ -355,7 +355,7 @@ p { line-height: 1.5; }
 .frame { position: fixed; inset: var(--titlebar-height) 0 0; display: flex; background: var(--frame); animation: kw-fade .3s both; }
 
 .nav-pills { display: flex; align-items: center; gap: 10px; margin-left: 6px; flex-shrink: 0; }
-.nav-pill { display: inline-flex; align-items: center; gap: 8px; height: 36px; margin: 0; padding: 0 16px; border: 0; border-radius: var(--r-control); background: var(--control); color: var(--text); font: inherit; font-size: 13px; letter-spacing: .04em; white-space: nowrap; transition: background-color .3s ease, color .3s ease; }
+.nav-pill { display: inline-flex; align-items: center; gap: 8px; height: 36px; margin: 0; padding: 2px 16px 0; border: 0; border-radius: var(--r-control); background: var(--control); color: var(--text); font: inherit; font-size: 13px; letter-spacing: .04em; white-space: nowrap; transition: background-color .3s ease, color .3s ease; }
 .nav-pill:hover:not(:disabled) { background: var(--control-hover); }
 /*
  * The marked state: the pill fills solid and its text inverts, nothing drawn
@@ -2371,7 +2371,7 @@ button.microphone-language-toggle:hover:not(:disabled) { background: transparent
  * shrink. The design's header wraps; this one holds the window controls and
  * stays one line, at the top, while the page scrolls under it.
  */
-.app-titlebar { position: fixed; inset: 0 0 auto; height: var(--titlebar-height); display: grid; grid-template-columns: minmax(max-content, 1fr) auto minmax(0, 1fr); align-items: center; gap: 16px; padding: 20px 24px 0; z-index: 1000; background: var(--frame); color: var(--text); user-select: none; }
+.app-titlebar { position: fixed; inset: 0 0 auto; height: var(--titlebar-height); display: grid; grid-template-columns: minmax(max-content, 1fr) auto minmax(0, 1fr); align-items: center; gap: 16px; padding: 10px 24px; z-index: 1000; background: var(--frame); color: var(--text); user-select: none; }
 .app-titlebar-start, .app-titlebar-end { display: flex; align-items: center; gap: 10px; min-width: 0; height: 100%; }
 .app-titlebar-end { justify-content: flex-end; }
 /* The window buttons are round and a step apart; the last sits on the bar's 24px inset. */

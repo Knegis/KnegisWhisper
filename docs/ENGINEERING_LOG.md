@@ -37,7 +37,9 @@ its calendar tile shows today's date. Off, Local API shows `127.0.0.1` alone, wi
 wires and the Diagnostics bars only move while what they stand for is up.
 
 **Where it differs on purpose.**
-- The title bar stays fixed, and Notes keeps separate scrolling for the note and the transcript.
+- The title bar stays fixed, and Notes keeps separate scrolling for the note and the transcript. It stays
+  56 high, with its controls 10px from its top and bottom rather than the board's 20 from the top and none
+  below, because the owner saw them sitting low once a page scrolled up under the bar.
 - The two measured speaker-label caveats stay in view; the board folds them.
 - One left/right box on the dictation card applies to recording any action's shortcut. Each recorder had
   its own, and the board draws one.
