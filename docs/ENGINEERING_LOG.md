@@ -12,6 +12,18 @@ maintained in place rather than appended to, because its purpose is to be curren
 
 ---
 
+## 2026-11-04 — The owner's frog replaces the dot mark
+
+At the owner's request, the frog in a cowboy hat replaces the sixteen-dot diamond the boards draw, in the title
+bar and on the Settings sheet (KNEG-516). `assets/knegis-frog.png` is made from their `KnegisfrogThinBlack.png`,
+which isn't in the repo: an alpha mask trimmed to its ink, drawn over the text colour so it follows the theme. Its
+lines are thickened by 4 source pixels on each side, because at this size on a 100% display the original came out
+faint. They chose 40px after trying 44. It's taller than the controls, so its slot stays 36 high and it overflows
+evenly: the pills don't move and the bar stays 56 high. The app icon, tray and installer still show the old mark.
+Measured in headless Edge against dev fixtures, not in the real window; the owner approved how it looks.
+
+---
+
 ## 2026-11-04 — Speaker labels chosen from Meetings, and the form that names a speaker
 
 **Speaker labels on Meetings (KNEG-513).** The owner asked to pick them on the Meetings tab, where only

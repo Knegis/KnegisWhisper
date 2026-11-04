@@ -370,9 +370,10 @@ p { line-height: 1.5; }
 .nav-pill[aria-expanded="true"] { background: var(--band); color: var(--band-ink); }
 .nav-pill-dot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--signal); animation: kw-pulse 1.6s ease-in-out infinite; }
 
-.dot-mark { display: block; color: var(--text); }
-.app-titlebar-mark .dot-mark { pointer-events: none; }
-.app-titlebar-mark { display: flex; align-items: center; justify-content: center; }
+.knegis-mark { display: block; background: var(--text); mask: url('./assets/knegis-frog.png') center / contain no-repeat; }
+.app-titlebar-mark .knegis-mark { pointer-events: none; }
+/* As tall as the controls, so the frog overflows evenly and leaves the row, and the pills, where they are. */
+.app-titlebar-mark { display: flex; align-items: center; justify-content: center; height: 36px; }
 
 .card { flex: 1; min-width: 0; display: flex; margin: 0; background: var(--bg); overflow: hidden; }
 

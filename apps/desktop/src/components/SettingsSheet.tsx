@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from
 import { NAV, SETTINGS_PANEL, childrenOf, isGroup, type ViewId } from "../lib/navigation";
 import { PAGES } from "../lib/pages";
 import { Icon } from "./Icon";
-import { DotMark } from "./NavPills";
+import { KnegisMark } from "./NavPills";
 
 type SheetView = (typeof SETTINGS_PANEL)[number]["views"][number];
 
@@ -139,7 +139,7 @@ export function SettingsSheet({ open, view, version, onSelect, onClose }: { open
       <div className="settings-sheet-body" onKeyDown={onGridKey}>
         <div className="settings-sheet-head">
           <span />
-          <DotMark size={34} />
+          <KnegisMark />
           <button type="button" className="sheet-close" aria-label="Close settings" title="Close settings" onClick={onClose}>
             <Icon name="close" size={18} />
           </button>

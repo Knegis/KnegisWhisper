@@ -65,20 +65,10 @@ export function SettingsPill({ view, open, onOpen }: { view: ViewId; open: boole
 }
 
 /**
- * KnegisWhisper's mark: a diamond of sixteen dots, the dot-matrix motif of the
- * design language in the application's own shape. Columns of 1, 2, 3, 4, 3, 2
- * and 1 dots, each centred on the middle row.
+ * KnegisWhisper's mark: the owner's frog in a cowboy hat. Drawn as a mask over the text colour, so it
+ * follows the theme. The file is their drawing as an alpha mask, trimmed to its ink, with its lines
+ * thickened slightly so the eye and the hat still read at 40px on a 100% display.
  */
-const MARK_DOTS = [1, 2, 3, 4, 3, 2, 1].flatMap((count, column) =>
-  Array.from({ length: count }, (_, row) => ({ cx: 3 + column * 4, cy: 15 - (count - 1) * 2 + row * 4 })),
-);
-
-export function DotMark({ size = 30 }: { size?: number }) {
-  return (
-    <svg className="dot-mark" role="img" aria-label="KnegisWhisper" width={size} height={size} viewBox="0 0 30 30">
-      <g fill="currentColor">
-        {MARK_DOTS.map(({ cx, cy }) => <circle key={`${cx}-${cy}`} cx={cx} cy={cy} r={1.7} />)}
-      </g>
-    </svg>
-  );
+export function KnegisMark({ size = 40 }: { size?: number }) {
+  return <span className="knegis-mark" role="img" aria-label="KnegisWhisper" style={{ width: size, height: size }} />;
 }

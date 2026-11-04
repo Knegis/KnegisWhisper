@@ -1,13 +1,13 @@
 import { TitleBarSearch } from "./TitleBarSearch";
 import { Icon } from "./Icon";
-import { DotMark, JobPills, SettingsPill } from "./NavPills";
+import { JobPills, KnegisMark, SettingsPill } from "./NavPills";
 import type { ViewId } from "../lib/navigation";
 import { useEffect, useState } from "react";
 import { getCurrentWindow, type Window as AppWindow } from "@tauri-apps/api/window";
 
 /**
  * The main window's own title bar, which is also its navigation: on the left
- * back, forward and the three job pills; the KnegisWhisper dot mark centred on
+ * back, forward and the three job pills; the KnegisWhisper mark centred on
  * the window; on the right the search field, the Settings pill and the window
  * buttons.
  *
@@ -64,7 +64,7 @@ export function TitleBar({ view, onSelect, sheetOpen, onOpenSheet, onOpenNote, c
         </div>
         <JobPills view={view} onSelect={onSelect} meetingRecording={meetingRecording} />
       </div>
-      <span className="app-titlebar-mark" data-tauri-drag-region><DotMark size={34} /></span>
+      <span className="app-titlebar-mark" data-tauri-drag-region><KnegisMark /></span>
       <div className="app-titlebar-end" data-tauri-drag-region>
         <TitleBarSearch onOpenNote={onOpenNote} />
         <SettingsPill view={view} open={sheetOpen} onOpen={onOpenSheet} />
