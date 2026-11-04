@@ -2,14 +2,14 @@ import { useEffect, useRef, useState } from "react";
 import { startHotkeyCapture, endHotkeyCapture } from "../lib/ipc";
 import { ShortcutCapture } from "../lib/shortcutCapture";
 
-export function ShortcutRecorder({ onCaptured, onError, onBusy, disabled }: {
+export function ShortcutRecorder({ sided, onCaptured, onError, onBusy, disabled }: {
+  sided: boolean;
   onCaptured: (value: string) => void;
   onError: (message: string) => void;
   onBusy: (busy: boolean) => void;
   disabled: boolean;
 }) {
   const [active, setActive] = useState(false);
-  const [sided, setSided] = useState(false);
   const [ready, setReady] = useState(false);
   const [preview, setPreview] = useState("");
   const [hint, setHint] = useState("");
@@ -87,7 +87,6 @@ export function ShortcutRecorder({ onCaptured, onError, onBusy, disabled }: {
 
   return <div className="shortcut-recorder" ref={area} tabIndex={active ? 0 : -1}>
     <button type="button" disabled={disabled && !active} onClick={() => setActive(value => !value)}>{active ? "Cancel" : "Record shortcut"}</button>
-    <label><input type="checkbox" checked={sided} disabled={active || disabled} onChange={event => setSided(event.target.checked)} />Distinguish left/right modifiers</label>
     {active && <p role="status">{ready ? preview || "Press your shortcut…" : "Preparing…"} {ready && (hint || "Release to finish. Escape cancels.")}</p>}
   </div>;
 }

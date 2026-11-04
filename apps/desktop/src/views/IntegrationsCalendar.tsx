@@ -131,7 +131,7 @@ function ProviderSection({
 
   return (
     <section>
-      <h2>{label}</h2>
+      <h2>{label.toLowerCase()}</h2>
       {/* The kind of client is a step, not background: a web client will not
           connect. So it is in view (branch review). */}
       <p className="caveat">
@@ -152,7 +152,7 @@ function ProviderSection({
       {clientDraft.feedback}
       <div className="row">
         <span className="row-label">Client ID</span>
-        <span className="row-value controls">
+        <div className="row-value">
           <input
             type="text"
             aria-label={`${label} client ID`}
@@ -163,45 +163,48 @@ function ProviderSection({
               void clientDraft.run(saveClientId).catch(cause => setError(String(cause)));
             }}
           />
-        </span>
+          {!status.clientIdConfigured ? (
+            <em className="row-detail">
+              No client ID yet, so {label} can't be connected.
+            </em>
+          ) : null}
+        </div>
       </div>
-
-      {!status.clientIdConfigured ? (
-        <p className="caveat">
-          No client ID yet, so {label} can't be connected.
-        </p>
-      ) : null}
 
       {account && token ? (
         <>
           <Row label="Account" value={account.email} />
-          <Row label="Connection" value={token.text} detail={token.detail || undefined} />
-          {token.more ? (
-            <LearnMore summary="Details">
-              <p>{token.more}</p>
-            </LearnMore>
-          ) : null}
+          <Row label="Connection" tone={token.text === "Connected" ? "ok" : "off"} value={token.text} detail={token.detail || undefined}>
+            {token.more ? (
+              <LearnMore summary="Details">
+                <p>{token.more}</p>
+              </LearnMore>
+            ) : null}
+          </Row>
           <Row
             label="Last sync"
             value={lastSync ? lastSync.text : "Never synced"}
-            detail={account.lastSync ? when(account.lastSync.at) : undefined}
-          />
-          {lastSync?.more ? (
-            <LearnMore summary="Details">
-              <p>{lastSync.more}</p>
-            </LearnMore>
-          ) : null}
+            detail={account.lastSync ? <span className="vocabulary-count">{when(account.lastSync.at)}</span> : undefined}
+          >
+            {lastSync?.more ? (
+              <LearnMore summary="Details">
+                <p>{lastSync.more}</p>
+              </LearnMore>
+            ) : null}
+          </Row>
 
           {account.calendars.length === 0 ? (
             <p className="muted">No calendars have been read yet.</p>
           ) : (
-            account.calendars.map((cal) => (
-              <div key={cal.id} className="row">
-                <span className="row-label">
+            <div className="calendar-cards">
+            {account.calendars.map((cal) => (
+              <div key={cal.id} className="calendar-card">
+                <span className="calendar-card-name">
                   {cal.summary}
                   {cal.isPrimary ? " (primary)" : ""}
                 </span>
-                <span className="row-value controls">
+                <span className="calendar-card-count" data-empty={cal.eventCount === 0} aria-hidden="true">{cal.eventCount}</span>
+                <em className="row-detail">{cal.eventCount} event(s) stored</em>
                   <label>
                     <input
                       type="checkbox"
@@ -217,16 +220,15 @@ function ProviderSection({
                     />
                     synced
                   </label>
-                  <em className="row-detail">{cal.eventCount} event(s) stored</em>
-                </span>
               </div>
-            ))
+            ))}
+            </div>
           )}
 
-          <div className="row">
-            <span className="row-value controls">
+          <div className="action-row calendar-actions">
               <button
                 type="button"
+                className="action-iris"
                 disabled={busy}
                 onClick={() => {
                   void run(async () => {
@@ -251,12 +253,10 @@ function ProviderSection({
               >
                 Disconnect
               </button>
-            </span>
           </div>
         </>
       ) : (
-        <div className="row">
-          <span className="row-value controls">
+        <div className="action-row calendar-actions">
             <button
               type="button"
               disabled={busy || !status.clientIdConfigured}
@@ -271,7 +271,6 @@ function ProviderSection({
             >
               Connect
             </button>
-          </span>
         </div>
       )}
 
@@ -316,11 +315,12 @@ export function IntegrationsCalendar() {
       ))}
 
       <section>
-        <h2>Apple Calendar</h2>
-        <Row label="State" value={apple.text} />
-        <LearnMore summary="Why">
-          <p>{apple.detail}</p>
-        </LearnMore>
+        <h2>apple calendar</h2>
+        <Row label="State" value={apple.text}>
+          <LearnMore summary="Why">
+            <p>{apple.detail}</p>
+          </LearnMore>
+        </Row>
       </section>
     </div>
   );

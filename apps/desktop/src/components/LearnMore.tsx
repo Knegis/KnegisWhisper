@@ -19,7 +19,7 @@ export function LearnMore({
   unfold = false,
   children,
 }: {
-  summary?: string;
+  summary?: ReactNode;
   unfold?: boolean;
   children: ReactNode;
 }) {

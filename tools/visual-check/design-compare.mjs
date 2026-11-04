@@ -114,7 +114,7 @@ async function press(client, [selector, text]) {
       const wanted = ${JSON.stringify(text)}.toLowerCase();
       const hit = [...document.querySelectorAll(${JSON.stringify(selector)})]
         .find((item) => item.textContent.trim().toLowerCase() === wanted
-          || item.querySelector?.('.sheet-tile-label')?.textContent.trim().toLowerCase() === wanted);
+          || item.querySelector?.('.sheet-tile-label')?.firstChild?.textContent.trim().toLowerCase() === wanted);
       if (!hit) throw new Error('Could not find ' + wanted);
       hit.click();
     })()`);

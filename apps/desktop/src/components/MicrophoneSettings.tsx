@@ -2,7 +2,7 @@ import { useSettingsDraft } from "./SettingsDrafts";
 import { useEffect, useState } from "react";
 import { FailureLine } from "./FailureLine";
 import { getOverlayPreferences, setOverlayPreferences, resetOverlayPosition, onOverlayPreferences, type OverlayPreferences } from "../lib/ipc";
-export function MicrophoneSettings() {
+export function MicrophoneSettings({ onGoToVocabulary }: { onGoToVocabulary: () => void }) {
   const [prefs, setPrefs] = useState<OverlayPreferences | null>(null);
   // A failure is a sentence, with the error under Details (KNEG-343).
   const [error, setError] = useState<{ text: string; detail: string } | null>(null);
@@ -43,11 +43,14 @@ export function MicrophoneSettings() {
     }
   };
   return <section data-surface="settings.microphone" aria-labelledby="floating-microphone-heading">
-  <h2 id="floating-microphone-heading">Dictation microphone</h2>
-  <label className="microphone-setting"><input type="checkbox" checked={prefs?.enabled ?? false} disabled={!prefs?.supported || busy} onChange={e => { const enabled = e.currentTarget.checked; void change(() => setOverlayPreferences(enabled), "enabled"); }}/> Always show dictation microphone</label>
+  <h2 id="floating-microphone-heading">dictation microphone</h2>
+  <label className="microphone-setting switch-row"><span>Always show dictation microphone</span><input type="checkbox" role="switch" checked={prefs?.enabled ?? false} disabled={!prefs?.supported || busy} onChange={e => { const enabled = e.currentTarget.checked; void change(() => setOverlayPreferences(enabled), "enabled"); }}/></label>
   <p className="muted">Replaces the recording box with a draggable microphone. Click to start dictation, then click again to finish.</p>
   {prefs && !prefs.supported && <p className="muted">Available on Windows.</p>}
-  <button disabled={!prefs?.supported || busy} onClick={() => { void change(resetOverlayPosition, "position"); }}>Reset position</button>
+  <div className="action-row">
+    <button disabled={!prefs?.supported || busy} onClick={() => { void change(resetOverlayPosition, "position"); }}>Reset position</button>
+    <button type="button" onClick={onGoToVocabulary}>Manage vocabulary</button>
+  </div>
   {preferenceDraft.feedback}
   {error && <FailureLine text={error.text} detail={error.detail} />}
  </section>;

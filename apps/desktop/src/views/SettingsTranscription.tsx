@@ -102,10 +102,10 @@ function dispatchLabel(d: Dispatch): Plain {
 }
 
 /** A freshness line and its builds, the same way for both engines. */
-function Freshness({ line, current }: { line: Plain; current: boolean }) {
+function Freshness({ line, stale }: { line: Plain; stale: boolean }) {
   return (
     <>
-      <p className={current ? "muted" : "muted warn"}>{line.text}</p>
+      <p className={stale ? "caveat warn" : "muted"}>{line.text}</p>
       {line.more ? (
         <LearnMore summary="Which version">
           <p>{line.more}</p>
@@ -341,10 +341,9 @@ export function SettingsTranscription({
       {jobs.length > 0 && <section aria-label="Speech model installation progress" role="status">{jobs.map(job => <p key={job.id}>{data.local.models.find(model => model.id === job.id)?.name ?? data.sherpa.models.find(model => model.id === job.id)?.name ?? (job.id === "speech-server" ? "Speech processing tools" : job.id)}: {job.progress ? progressLabel(job.progress, id => data.local.models.find(model => model.id === id)?.name ?? data.sherpa.models.find(model => model.id === id)?.name ?? id) : "Starting…"}</p>)}</section>}
       {error ? <FailureLine text="That didn't work." detail={error} /> : null}
 
-      <MicrophoneSettings />
+      <MicrophoneSettings onGoToVocabulary={onGoToVocabulary} />
       <section data-surface="settings.transcription">
-        <button type="button" onClick={onGoToVocabulary}>Manage vocabulary</button>
-        <h2>Cloud providers</h2>
+        <h2>cloud providers</h2>
         <p className="muted">
           Add keys and test them on the Providers page.
         </p>
@@ -368,10 +367,15 @@ export function SettingsTranscription({
         {/* Under where dictation goes, since the languages apply to that
             route, local Whisper or cloud (KNEG-370). Off under a Parakeet
             model, which uses its own; the last sentence says so either way. */}
-        <LocalLanguagePicker
-          disabled={!languagesApply(engine)}
-          note={`${languageNote(engine, route, languages)} Parakeet models use the languages they were made for.`}
-        />
+        <div className="row">
+          <span className="row-label" aria-hidden="true">Dictation languages</span>
+          <div className="row-value">
+            <LocalLanguagePicker
+              disabled={!languagesApply(engine)}
+              note={`${languageNote(engine, route, languages)} Parakeet models use the languages they were made for.`}
+            />
+          </div>
+        </div>
         <Row
           label="Keys saved"
           value={
@@ -385,13 +389,15 @@ export function SettingsTranscription({
               : undefined
           }
         />
+        <div className="provider-cards">
         {providers.map((p) => {
           const dispatch = dispatchLabel(p.dispatch);
           return (
-          <div key={p.id} className="row">
-            <span className="row-label">{p.name}</span>
-            <span className="row-value">
-              {p.configured ? "Key saved" : "No key saved"}
+          <div key={p.id} className="provider-card">
+              <div className="provider-card-head">
+                <span className="provider-card-name">{p.name}</span>
+                <span className="model-chip" data-tone={p.configured ? "installed" : "plain"}>{p.configured ? "Key saved" : "No key saved"}</span>
+              </div>
               <em className="row-detail">
                 {dispatch.text} · {p.modelCount} model
                 {p.modelCount === 1 ? "" : "s"}
@@ -402,6 +408,22 @@ export function SettingsTranscription({
                   Its key is in the credential slot <code>{p.credentialSlot}</code>.
                 </p>
               </LearnMore>
+              {p.id === "corti" ? (
+                <span className="controls">
+                  <input
+                    aria-label="Corti environment"
+                    placeholder="environment, e.g. eu"
+                    value={cortiEnvironment ?? ""}
+                    onChange={(e) => setCortiEnvironment(e.target.value)}
+                  />
+                  <input
+                    aria-label="Corti tenant"
+                    placeholder="tenant name"
+                    value={cortiTenant ?? ""}
+                    onChange={(e) => setCortiTenant(e.target.value)}
+                  />
+                </span>
+              ) : null}
               {p.dispatch.state !== "needs-client" ? (
                 <span className="controls">
                   <select
@@ -427,26 +449,10 @@ export function SettingsTranscription({
                   </button>
                 </span>
               ) : null}
-              {p.id === "corti" ? (
-                <span className="controls">
-                  <input
-                    aria-label="Corti environment"
-                    placeholder="environment, e.g. eu"
-                    value={cortiEnvironment ?? ""}
-                    onChange={(e) => setCortiEnvironment(e.target.value)}
-                  />
-                  <input
-                    aria-label="Corti tenant"
-                    placeholder="tenant name"
-                    value={cortiTenant ?? ""}
-                    onChange={(e) => setCortiTenant(e.target.value)}
-                  />
-                </span>
-              ) : null}
-            </span>
           </div>
           );
         })}
+        </div>
         {/*
           Always rendered, never conditional, and below every control it reports
           on. The slot holds its height empty, so a press fills it instead of
@@ -454,24 +460,26 @@ export function SettingsTranscription({
           message now sits further from the button that caused it than it did
           when it was inline, and a screen reader should still hear it.
         */}
-        <p className="status-slot row-detail" role="status">
-          {chosen}
-        </p>
-        <button type="button" onClick={onGoToProviders}>
-          Open Providers
-        </button>
+        <div className="provider-foot">
+          <button type="button" onClick={onGoToProviders}>
+            Open Providers
+          </button>
+          <p className="status-slot row-detail" role="status">
+            {chosen}
+          </p>
+        </div>
       </section>
 
       <section data-surface="settings.transcription.local">
-        <h2>Local transcription</h2>
+        <h2>local transcription</h2>
         <p className="muted">
           Speech models that run on this computer. Nothing downloads until you
           press Install.
         </p>
-        <div className="row">
-          <span className="row-label">Show models for</span>
-          <span className="row-value controls">
+        <div className="model-filter">
+          <label htmlFor="show-models-for">Show models for</label>
             <select
+              id="show-models-for"
               aria-label="Show models for"
               value={language ?? ""}
               onChange={(e) => setLanguage(e.target.value === "" ? null : e.target.value)}
@@ -483,18 +491,15 @@ export function SettingsTranscription({
                 </option>
               ))}
             </select>
-          </span>
         </div>
         {/*
           One list, Whisper and Parakeet together (KNEG-330): dictation models
           first, then the meetings models, each smallest first. Which engine a
           model runs on is under its Details; the in-use rules are
-          `lib/localModels.ts`'s. `list`, not `purposes`: these rows carry a
-          button each, and `purposes` is a wrapping row of pills that cannot
-          hold one.
+          `lib/localModels.ts`'s.
         */}
         {shown.length > 0 ? (
-          <ul className="list">
+          <ul className="model-list">
             {shown.map((row) => (
               <LocalModelRow
                 key={row.id}
@@ -526,23 +531,30 @@ export function SettingsTranscription({
             slower for all of them.
           </p>
         ) : null}
+      </section>
 
-        <h3>Engines</h3>
+      <section>
+        <h2>engines</h2>
         {local.availability.state === "not-published" ? (
-          <>
-            <Row label="Speech engine" value="Not available on this computer yet" />
+          <div className="engine-card">
+            <div className="provider-card-head">
+              <span className="provider-card-name">Speech engine</span>
+              <span className="model-chip" data-tone="plain">Not available on this computer yet</span>
+            </div>
             <LearnMore summary="Why">
               <p>{local.availability.reason}</p>
               <p>{local.availability.tracking}</p>
             </LearnMore>
-          </>
+          </div>
         ) : (
-          <>
-            <Row
-              label="Speech engine"
-              value={local.serverInstalled ? "Installed" : "Not installed"}
-              detail={local.port ? "running" : undefined}
-            />
+          <div className="engine-card">
+            <div className="provider-card-head">
+              <span className="provider-card-name">Speech engine</span>
+              <span className="engine-card-chips">
+                <span className="model-chip" data-tone={local.serverInstalled ? "installed" : "plain"}>{local.serverInstalled ? "Installed" : "Not installed"}</span>
+                {local.port ? <span className="model-chip" data-tone="plain">running</span> : null}
+              </span>
+            </div>
             {/*
               Which build is installed, said out loud. "Installed" was the only
               thing this screen ever claimed about the server binary, and it
@@ -553,7 +565,7 @@ export function SettingsTranscription({
               because pressing it is how either one is settled.
             */}
             {serverFreshness ? (
-              <Freshness line={serverFreshness} current={local.serverFreshness.state === "current"} />
+              <Freshness line={serverFreshness} stale={local.serverFreshness.state === "stale"} />
             ) : null}
             {local.serverFreshness.state !== "not-installed" ? (
               <button
@@ -601,27 +613,26 @@ export function SettingsTranscription({
                 </p>
               ) : null}
             </LearnMore>
-          </>
+          </div>
         )}
         {sherpa.availability.state === "not-published" ? (
-          <>
-            <Row label="Parakeet engine" value="Not available on this computer yet" />
+          <div className="engine-card">
+            <div className="provider-card-head">
+              <span className="provider-card-name">Parakeet engine</span>
+              <span className="model-chip" data-tone="plain">Not available on this computer yet</span>
+            </div>
             <LearnMore summary="Why">
               <p>{sherpa.availability.reason}</p>
               <p>{sherpa.availability.tracking}</p>
             </LearnMore>
-          </>
+          </div>
         ) : (
-          <>
-            <Row
-              label="Parakeet engine"
-              value={sherpa.cliInstalled ? "Installed" : "Not installed"}
-              detail={
-                sherpa.cliInstalled
-                  ? undefined
-                  : "installed with the first model"
-              }
-            />
+          <div className="engine-card">
+            <div className="provider-card-head">
+              <span className="provider-card-name">Parakeet engine</span>
+              <span className="model-chip" data-tone={sherpa.cliInstalled ? "installed" : "plain"}>{sherpa.cliInstalled ? "Installed" : "Not installed"}</span>
+            </div>
+            {sherpa.cliInstalled ? null : <em className="row-detail">installed with the first model</em>}
             {/*
               Which build is installed, said out loud — and, unlike the
               speech engine above, with no button beside it. That is a
@@ -639,12 +650,12 @@ export function SettingsTranscription({
               honestly beats a button that is wrong at the worst moment.
             */}
             {sherpaFreshness ? (
-              <Freshness line={sherpaFreshness} current={sherpa.cliFreshness.state === "current"} />
+              <Freshness line={sherpaFreshness} stale={sherpa.cliFreshness.state === "stale"} />
             ) : null}
             {sherpa.cliFreshness.state !== "not-installed" &&
             sherpa.cliFreshness.state !== "current" ? (
               <>
-                <p className="caveat">
+                <p className="muted">
                   This engine can't be updated from here yet. To reinstall
                   it, close the app and delete its folder by hand.
                 </p>
@@ -677,7 +688,7 @@ export function SettingsTranscription({
                 </p>
               </LearnMore>
             )}
-          </>
+          </div>
         )}
         <LearnMore summary="About the two engines">
           <p>

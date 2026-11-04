@@ -37,7 +37,20 @@ export function LocalServerHealth({ plain = false }: { plain?: boolean }) {
     const message = failure !== null
       ? `Could not check local model server: ${failure}`
       : status?.runtimeMessage ?? "Checking local model server...";
-    return <p className="muted" role="status">{message}</p>;
+    // The bars wave and the port shows only while the server is actually up.
+    const port = status?.runtime.state === "ready" ? status.runtime.port : null;
+    return (
+      <div className="server-banner" role="status" data-live={port !== null}>
+        <span className="server-banner-bars" aria-hidden="true">
+          <span />
+          <span />
+          <span />
+          <span />
+        </span>
+        <span className="server-banner-text">{message}</span>
+        {port !== null ? <span className="server-banner-port" aria-hidden="true">{port}</span> : null}
+      </div>
+    );
   }
 
   const line = failure !== null

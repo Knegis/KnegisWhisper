@@ -28,7 +28,7 @@ import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 
 import { Keycaps } from "../components/Keycaps";
 import { LearnMore } from "../components/LearnMore";
-import { Row } from "../components/Row";
+import { Row, StatusDot } from "../components/Row";
 import { ShortcutRecorder } from "../components/ShortcutRecorder";
 import {
   getHotkeys,
@@ -53,6 +53,11 @@ import {
   registrationFor,
 } from "../lib/labels";
 import { useRefresh } from "../lib/useRefresh";
+
+/** The parser quotes what it could not read in backticks: those parts are code. */
+function ticked(text: string) {
+  return text.split("`").map((part, i) => (i % 2 === 1 ? <code key={i}>{part}</code> : part));
+}
 
 export function SettingsShortcuts({
   hook,
@@ -85,6 +90,7 @@ export function SettingsShortcuts({
   const [lastOutcome, setLastOutcome] = useState<string | null>(null);
   const [draftKeys, setDraftKeys] = useState<Record<string, string>>({});
   const [captureBusy, setCaptureBusy] = useState(false);
+  const [sided, setSided] = useState(false);
   /** Per-action outcome of the last Set press, so the control is never silent. */
   const [hotkeyResult, setHotkeyResult] = useState<Record<string, string>>({});
 
@@ -186,7 +192,7 @@ export function SettingsShortcuts({
     <div className="view">{shortcutDraft.feedback}
       {error ? <p className="error">{error}</p> : null}
 
-      <section data-surface="settings.shortcuts" aria-label="Shortcuts">
+      <section data-surface="settings.shortcuts" aria-label="Shortcuts" className="shortcut-page">
         {hotkeys.portalSupported && (
           <div className="field">
             <label>
@@ -211,62 +217,98 @@ export function SettingsShortcuts({
             </p>)}
           </div>
         ))}
-        {hotkeys.bindings.map((b) => (
-          <div key={b.action} className="row">
-            <span className="row-label">{hotkeyActionLabel(b.action)}</span>
-            <span className="row-value">
+        {hotkeys.bindings.map((b) => {
+          const name = hotkeyActionLabel(b.action);
+          const isDictation = b.action === "dictation";
+          // The registration as well as the platform's hook: a hook that
+          // failed to start leaves the platform "available" and the chord dead
+          // (KNEG-353).
+          const labelled = b.accelerators.map((a) => ({
+            a,
+            label: acceleratorLabel(a, hook, registrationFor(hotkeys.registrations, b.action, a)),
+          }));
+          /*
+            Toggle or hold, per action. The shipped default is Toggle for
+            every one of them and deliberately stays that way: holding is
+            one of the answers to the prefix problem the caution below
+            describes (KNEG-115), and making it the default would settle
+            that question by accident. The option exists; the decision does
+            not come from here.
+          */
+          const modeSelect = (
+            <select
+              aria-label={`Mode for ${name}`}
+              disabled={captureBusy}
+              value={b.mode}
+              onChange={(e) => applyMode(b, e.target.value as HotkeyMode)}
+            >
+              {(["toggle", "hold"] as const).map((m) => (
+                <option key={m} value={m}>
+                  {hotkeyModeLabel(m).text}
+                </option>
+              ))}
+            </select>
+          );
+          return (
+            <div key={b.action} className="shortcut-card" data-action={b.action}>
+              <div className="shortcut-head">
+                <h2 className="shortcut-name">{b.action}</h2>
+                <span className="shortcut-keys">
+                  {b.accelerators.length === 0 ? <em className="row-detail">none configured</em> : null}
+                  {/*
+                    Keycaps for an accelerator that parsed, as Dictation draws
+                    it; one that didn't is what was typed, so it stays text
+                    beside the reason (KNEG-331).
+                  */}
+                  {labelled.map(({ a, label }, i) => (
+                    <Fragment key={`${b.action}-${i}`}>
+                      {i > 0 ? (
+                        <span className="shortcut-or"><span className="sr-only">or</span><span aria-hidden="true">·</span></span>
+                      ) : null}
+                      {a.kind === "invalid" ? <code className="shortcut-invalid">{label.text}</code> : <Keycaps accelerators={[label.text]} />}
+                    </Fragment>
+                  ))}
+                </span>
+              </div>
               {/*
-                First, and ahead of the accelerator, because it outranks anything
-                the accelerator could say. Four of these five actions used to
-                register a real system shortcut and then do nothing whatsoever
-                when pressed — and the row showed a tidy `Control+Shift+Space`
-                with no problem beside it, which is the interface agreeing that
-                it worked.
+                First, and ahead of anything an accelerator could say, because it
+                outranks it. Four of these five actions used to register a real
+                system shortcut and then do nothing whatsoever when pressed — and
+                the row showed a tidy `Control+Shift+Space` with no problem beside
+                it, which is the interface agreeing that it worked.
               */}
               {unhandled.has(b.action) ? (
-                <em className="row-detail warn">{unhandled.get(b.action)}</em>
+                <span className="shortcut-problem"><StatusDot tone="bad" />{unhandled.get(b.action)}</span>
               ) : null}
-              {b.accelerators.length === 0 ? (
-                <em className="row-detail">none configured</em>
-              ) : (
-                b.accelerators.map((a, i) => {
-                  // The registration as well as the platform's hook: a hook
-                  // that failed to start leaves the platform "available" and
-                  // the chord dead (KNEG-353).
-                  const label = acceleratorLabel(a, hook, registrationFor(hotkeys.registrations, b.action, a));
-                  // No "works" note for an action nothing handles: its
-                  // accelerators are not offered to the platform at all --
-                  // not registered and not hooked (`register_all`,
-                  // src-tauri/src/shortcuts.rs) -- so the sentence would be
-                  // false, and the red line above already says why.
-                  const note = unhandled.has(b.action) ? null : label.note;
-                  // A fragment, not a wrapping span: each line becomes its
-                  // own item in `.row-value`'s column, so the key and the
-                  // sentence about it get the column's gap between them
-                  // instead of running together ("Control+SuperUses only…").
-                  // Red only for a failure; a binding that works and is worth
-                  // a word says so plainly, with the mechanism folded.
-                  // Keycaps for an accelerator that parsed, as Dictation
-                  // draws it; one that didn't is what was typed, so it stays
-                  // text beside the reason (KNEG-331).
-                  return (
-                    <Fragment key={`${b.action}-${i}`}>
-                      {a.kind === "invalid" ? <code>{label.text}</code> : <span><Keycaps accelerators={[label.text]} /></span>}
-                      {label.problem ? (
-                        <em className="row-detail warn">{label.problem}</em>
-                      ) : null}
-                      {note ? (
-                        <>
-                          <em className="row-detail">{note.text}</em>
-                          <LearnMore>
-                            <p>{note.more}</p>
-                          </LearnMore>
-                        </>
-                      ) : null}
-                    </Fragment>
-                  );
-                })
-              )}
+              {labelled.map(({ label }, i) => {
+                // No "works" note for an action nothing handles: its
+                // accelerators are not offered to the platform at all -- not
+                // registered and not hooked (`register_all`,
+                // src-tauri/src/shortcuts.rs) -- so the sentence would be
+                // false, and the red line above already says why.
+                const note = unhandled.has(b.action) ? null : label.note;
+                // Red only for a failure; a binding that works and is worth a
+                // word says so plainly, with the mechanism folded.
+                return (
+                  <Fragment key={`${b.action}-note-${i}`}>
+                    {label.problem ? (
+                      <span className="shortcut-problem"><StatusDot tone="bad" /><span>{ticked(label.problem)}</span></span>
+                    ) : null}
+                    {note ? (
+                      <LearnMore
+                        summary={
+                          <>
+                            <span className="status-ok shortcut-note"><StatusDot tone="ok" />{note.text}</span>
+                            <span className="learn-more-hint">Learn more</span>
+                          </>
+                        }
+                      >
+                        <p>{note.more}</p>
+                      </LearnMore>
+                    ) : null}
+                  </Fragment>
+                );
+              })}
               {/*
                 Prefilled with what is actually configured, not a placeholder. A
                 placeholder reading `Control+Shift+D` is indistinguishable from a typed
@@ -274,68 +316,63 @@ export function SettingsShortcuts({
                 empty, and pressing it did nothing and said nothing. That cost a real
                 bench check.
               */}
-              {/*
-                The editor on one line -- the keys, Record, Set, and the mode --
-                so a row reads as its current keys, then one strip of controls
-                to change them, rather than four controls stacked as tall as
-                the explanations around them.
-              */}
-              <span className="shortcut-editor">
-              <input
-                aria-label={`Keys for ${hotkeyActionLabel(b.action)}`}
-                disabled={captureBusy}
-                value={draftKeys[b.action] ?? acceleratorText(b)}
-                onChange={(e) => {
-                  setDraftKeys((prev) => ({
-                    ...prev,
-                    [b.action]: e.target.value,
-                  }));
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") applyHotkey(b);
-                }}
-              />
-              <ShortcutRecorder disabled={captureBusy || hotkeys.portalEnabled}
-                onBusy={setCaptureBusy}
-                onCaptured={value => {
-                  setDraftKeys(prev => ({ ...prev, [b.action]: value }));
-                  setHotkeyResult(prev => ({ ...prev, [b.action]: "Shortcut recorded. Press Set to save." }));
-                }}
-                onError={message => setHotkeyResult(prev => ({ ...prev, [b.action]: message }))} />
-              {/* Never disabled: a control that silently does nothing is the defect. */}
-              <button type="button" disabled={captureBusy} onClick={() => applyHotkey(b)}>
-                Set
-              </button>
-              {/*
-                Toggle or hold, per action. The shipped default is Toggle for
-                every one of them and deliberately stays that way: holding is
-                one of the answers to the prefix problem the caution below
-                describes (KNEG-115), and making it the default would settle
-                that question by accident. The option exists; the decision does
-                not come from here.
-              */}
-              <select
-                aria-label={`Mode for ${hotkeyActionLabel(b.action)}`}
-                disabled={captureBusy}
-                value={b.mode}
-                onChange={(e) => applyMode(b, e.target.value as HotkeyMode)}
-              >
-                {(["toggle", "hold"] as const).map((m) => (
-                  <option key={m} value={m}>
-                    {hotkeyModeLabel(m).text}
-                  </option>
-                ))}
-              </select>
-              </span>
-              <em className="row-detail">{hotkeyModeLabel(b.mode).detail}</em>
+              <div className="shortcut-editor">
+                <input
+                  aria-label={`Keys for ${name}`}
+                  disabled={captureBusy}
+                  value={draftKeys[b.action] ?? acceleratorText(b)}
+                  onChange={(e) => {
+                    setDraftKeys((prev) => ({
+                      ...prev,
+                      [b.action]: e.target.value,
+                    }));
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") applyHotkey(b);
+                  }}
+                />
+                <ShortcutRecorder sided={sided} disabled={captureBusy || hotkeys.portalEnabled}
+                  onBusy={setCaptureBusy}
+                  onCaptured={value => {
+                    setDraftKeys(prev => ({ ...prev, [b.action]: value }));
+                    setHotkeyResult(prev => ({ ...prev, [b.action]: "Shortcut recorded. Press Set to save." }));
+                  }}
+                  onError={message => setHotkeyResult(prev => ({ ...prev, [b.action]: message }))} />
+                {/* Never disabled: a control that silently does nothing is the defect. */}
+                <button type="button" disabled={captureBusy} onClick={() => applyHotkey(b)}>
+                  Set
+                </button>
+                {isDictation ? null : modeSelect}
+              </div>
+              {isDictation ? (
+                <div className="shortcut-options">
+                  {/* It applies to recording any action's shortcut on this page. */}
+                  <label className="shortcut-sided">
+                    <input
+                      type="checkbox"
+                      checked={sided}
+                      disabled={captureBusy || hotkeys.portalEnabled}
+                      onChange={(event) => setSided(event.target.checked)}
+                    />
+                    Distinguish left/right modifiers
+                  </label>
+                  <span className="shortcut-mode">
+                    {modeSelect}
+                    <span className="row-detail">{hotkeyModeLabel(b.mode).detail}</span>
+                  </span>
+                </div>
+              ) : b.mode === "hold" ? (
+                <em className="row-detail">{hotkeyModeLabel(b.mode).detail}</em>
+              ) : null}
               {hotkeyResult[b.action] ? (
                 <em className="row-detail">{hotkeyResult[b.action]}</em>
               ) : null}
-            </span>
-          </div>
-        ))}
+            </div>
+          );
+        })}
+        <div className="shortcut-notes">
         {hotkeys.conflicts.length > 0 ? (
-          <p className="caveat">
+          <p className="caveat warn">
             {hotkeys.conflicts
               .map(
                 (c) => `${c.accelerator} is claimed by ${c.actions.join(" and ")}`,
@@ -365,7 +402,7 @@ export function SettingsShortcuts({
           it. The explanation of why stays in the fold.
         */}
         {hook.state === "available" || modifierOnly.length === 0 ? null : (
-          <p className="caveat">
+          <p className="caveat warn">
             {modifierOnly.map((accelerator, index) => (
               <Fragment key={`${index}-${accelerator}`}>{index > 0 ? ", " : null}<Keycaps accelerators={[accelerator]} /></Fragment>
             ))}{" "}
@@ -384,6 +421,7 @@ export function SettingsShortcuts({
         {lastOutcome ? (
           <Row label="Last dictation result" value={lastOutcome} />
         ) : null}
+        </div>
         <LearnMore summary="About these shortcuts">
           {/* The verb follows the count -- "1 of 5 actions has", "2 of 5
               actions have" -- and the sentence after it is worded so that it

@@ -26,7 +26,9 @@ import {
   localModelAction,
   localModelDetail,
   localModelLine,
+  localModelChips,
   localModelRows,
+  modelThumb,
   modelLanguageLabel,
   sherpaLanguages,
   whisperLanguages,
@@ -303,5 +305,66 @@ test("no row's words contain its model id", () => {
     for (const words of [localModelLine(r), localModelDetail(r), localModelAction(r), r.loadedButGoesTo ?? ""]) {
       assert.ok(!words.toLowerCase().includes(r.id.toLowerCase()), `${r.id}: ${words}`);
     }
+  }
+});
+
+const modelRow = (over: Partial<LocalModelRow> = {}): LocalModelRow => ({
+  id: "whisper-small-q5",
+  name: "Whisper Small (Q5)",
+  engine: "whisper",
+  usedFor: "dictation",
+  languages: "many",
+  sizeMb: 488,
+  installed: true,
+  recommended: false,
+  inUse: false,
+  loadedButGoesTo: null,
+  hint: null,
+  verifiedBy: null,
+  ...over,
+});
+
+test("a model's chips run size, languages, recommended, hint, then whether it is installed", () => {
+  assert.deepEqual(
+    localModelChips(modelRow({ recommended: true, hint: "slower; best for imports and meetings" })),
+    [
+      { text: "488 MB", tone: "plain" },
+      { text: "Many languages", tone: "plain" },
+      { text: "recommended", tone: "recommended" },
+      { text: "slower; best for imports and meetings", tone: "plain" },
+      { text: "Installed", tone: "installed" },
+    ],
+  );
+});
+
+test("a sherpa model's chips say what it is for; a Whisper model serves all of it and does not", () => {
+  const purposes = (over: Partial<LocalModelRow>) => localModelChips(modelRow(over)).map((chip) => chip.text);
+  assert.ok(purposes({ engine: "parakeet", usedFor: "dictation" }).includes("For dictation"));
+  assert.ok(purposes({ engine: "parakeet", usedFor: "meetings" }).includes("For meetings, word by word"));
+  assert.deepEqual(purposes({ engine: "whisper" }), ["488 MB", "Many languages", "Installed"]);
+});
+
+test("an uninstalled model says so without the mint, and a model with no known size has no size chip", () => {
+  assert.deepEqual(localModelChips(modelRow({ installed: false, sizeMb: null })), [
+    { text: "Many languages", tone: "plain" },
+    { text: "Not installed", tone: "plain" },
+  ]);
+});
+
+test("a model loaded while dictation goes elsewhere ends on that warning", () => {
+  const chips = localModelChips(modelRow({ loadedButGoesTo: "OpenAI" }));
+  assert.deepEqual(chips.at(-1), { text: "Loaded, but dictation goes to OpenAI", tone: "warn" });
+});
+
+test("a model's thumbnail follows its engine and purpose and does not change between renders", () => {
+  assert.equal(modelThumb(modelRow()).kind, "breath");
+  assert.equal(modelThumb(modelRow({ engine: "parakeet", usedFor: "dictation" })).kind, "dusk");
+  assert.equal(modelThumb(modelRow({ engine: "parakeet", usedFor: "meetings" })).kind, "streak");
+  assert.deepEqual(modelThumb(modelRow({ id: "a" })), modelThumb(modelRow({ id: "a" })));
+  for (const id of ["a", "bb", "whisper-large-v3-turbo-q5", "kb-whisper-large-q5"]) {
+    const breath = modelThumb(modelRow({ id }));
+    assert.ok(breath.variant >= 0 && breath.variant < 5);
+    const dusk = modelThumb(modelRow({ id, engine: "parakeet" }));
+    assert.ok(dusk.variant >= 0 && dusk.variant < 2);
   }
 });

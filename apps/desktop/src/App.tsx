@@ -203,9 +203,9 @@ function renderView(
     case "api":
       return <IntegrationsApi />;
     case "cli":
-      return <IntegrationsCli />;
+      return <IntegrationsCli onGoToApi={() => select("api")} />;
     case "mcp":
-      return <IntegrationsMcp />;
+      return <IntegrationsMcp onGoToApi={() => select("api")} />;
     case "diagnostics":
       return <DiagnosticsView diagnostics={diagnostics} />;
     default: {
@@ -348,13 +348,12 @@ function Shell() {
   // and no `PageHeader`.
   if (ownsPanel) return frame(boundary);
 
-  // Providers draws its own header, with its search and Test connections in it.
   // A settings or developer screen leads with the way back to the sheet.
   const content = (
     <>
       {railOf(view) === "settings" ? <div className="page-back"><BackToSettings onOpen={openSheet} /></div> : null}
       <div className={`content content-${view}`}>
-      {page && view !== "providers" ? <PageHeader page={page} eyebrow={eyebrowOf(view)} /> : null}
+      {page ? <PageHeader page={page} eyebrow={eyebrowOf(view)} /> : null}
       {summarySetup !== null && railOf(view) === "settings" && <div className="controls summary-setup-return"><button type="button" onClick={returnToSummary}>Return to note</button></div>}
       {boundary}
       </div>

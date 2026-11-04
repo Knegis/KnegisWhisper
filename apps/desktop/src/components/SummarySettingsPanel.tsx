@@ -53,7 +53,7 @@ export function SummarySettingsPanel({ focusRequest, onGoToProviders, onGoToLoca
   };
   const draftGuard = useSettingsDraft({ label: "Meeting summaries", dirty: settings !== null && JSON.stringify(settings) !== JSON.stringify(committed.current),
     save: persist, discard: () => { setSettings(committed.current); setSaved(false); setReadiness(null); } });
-  if (!settings) return <section><h2>Meeting summaries</h2>{error ? <FailureLine text={error.text} detail={error.detail} /> : <p>Loading summary settings…</p>}</section>;
+  if (!settings) return <section><h2>meeting summaries</h2>{error ? <FailureLine text={error.text} detail={error.detail} /> : <p>Loading summary settings…</p>}</section>;
   const change = (patch: Partial<SummarySettings>) => { setSettings({ ...settings, ...patch }); setSaved(false); setReadiness(null); };
   const selected = providers.find(p => p.id === settings.provider);
   const local = settings.provider === "local" && !settings.selfHostedUrl;
@@ -71,10 +71,10 @@ export function SummarySettingsPanel({ focusRequest, onGoToProviders, onGoToLoca
       ? "Transcripts are sent to your server."
       : `Transcripts are sent to ${selected?.name ?? "the provider you choose"}, which may charge for it.`;
   return <section ref={sectionRef} data-surface="settings.intelligence.summaries">
-    <h2>Meeting summaries</h2>
-    <p className="muted">Summarise saved meetings and imported recordings: decisions, action items and links back to the transcript. Your own notes stay separate.</p>
-    <div className="row"><span className="row-label">Automatic summaries</span><label className="row-value controls"><input type="checkbox" checked={settings.enabled} onChange={e => change({ enabled: e.target.checked })} />After new recordings and imports</label></div>
-    <div className="row"><label className="row-label" htmlFor="summary-provider">Provider</label><span className="row-value controls"><select id="summary-provider" value={selfHosted ? "self-hosted" : settings.provider} onChange={e => {
+    <h2>meeting summaries</h2>
+    <p>Summarise saved meetings and imported recordings: decisions, action items and links back to the transcript. Your own notes stay separate.</p>
+    <div className="row"><span className="row-label">Automatic summaries</span><div className="row-value"><label className="switch-row"><span className="muted">After new recordings and imports</span><input type="checkbox" role="switch" checked={settings.enabled} onChange={e => change({ enabled: e.target.checked })} /></label></div></div>
+    <div className="row"><label className="row-label" htmlFor="summary-provider">Provider</label><span className="row-value"><select id="summary-provider" value={selfHosted ? "self-hosted" : settings.provider} onChange={e => {
       const provider = e.target.value;
       change({ provider, model: "", selfHostedUrl: provider === "self-hosted" ? "" : null, enterprise: providers.find(p => p.id === provider)?.enterprise ?? false });
     }}><option value="">Choose a provider</option><option value="local">This computer</option><option value="self-hosted">Your own server</option>{providers.filter(p => p.id !== "local").map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></span></div>
@@ -82,7 +82,8 @@ export function SummarySettingsPanel({ focusRequest, onGoToProviders, onGoToLoca
     <div className="row"><label className="row-label" htmlFor="summary-model">Model</label><span className="row-value"><input id="summary-model" list="summary-models" value={settings.model} placeholder={local ? "Choose an installed model" : "Model name, or deployment for Azure"} onChange={e => change({ model: e.target.value })} /><datalist id="summary-models">{models.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}</datalist>{local && <p className="muted">Install a model under Local text models first. A summary never downloads one by itself.</p>}</span></div>
     <div className="row"><label className="row-label" htmlFor="summary-language">Summary language</label><span className="row-value"><select id="summary-language" value={settings.language} onChange={e => change({ language: e.target.value })}><option value="match">Match meeting</option><option value="sv">Swedish</option><option value="en">English</option></select></span></div>
     <div className="row"><label className="row-label" htmlFor="summary-context">How much the model reads at once</label><span className="row-value"><input id="summary-context" type="number" min={4096} max={262144} step={1024} value={settings.contextBudget} onChange={e => change({ contextBudget: Number(e.target.value) })} /><p className="muted">Set this to what your model supports, in tokens. Longer transcripts are summarised in parts.</p><LearnMore><p>A model on this computer reads at most 8,192 tokens at once, whatever this says.</p></LearnMore></span></div>
-    <p className="muted">{goesTo} Dictation cleanup is set separately, below.</p>
+    <p className="caveat">{goesTo} Dictation cleanup is set separately, below.</p>
+    <div className="summary-foot">
     {readiness?.state === "needs-setup" && <div className="summary-setup-help"><p className="muted">{readiness.reason}</p>
       {readiness.target === "providers" && <button type="button" onClick={onGoToProviders}>Open Providers</button>}
       {readiness.target === "local-text-models" && <button type="button" onClick={onGoToLocalModels}>Open Local text models</button>}
@@ -93,7 +94,8 @@ export function SummarySettingsPanel({ focusRequest, onGoToProviders, onGoToLoca
         if (heading) { heading.tabIndex = -1; heading.focus({ preventScroll: true }); }
       }}>Open Company accounts</button>}
     </div>}
-    <div className="controls"><button type="button" onClick={() => { void save(); }} disabled={busy}>{busy ? "Saving…" : "Save summary settings"}</button>{draftGuard.feedback}</div>
+    <div className="controls"><button type="button" className="action-iris" onClick={() => { void save(); }} disabled={busy}>{busy ? "Saving…" : "Save summary settings"}</button>{draftGuard.feedback}</div>
+    </div>
     {readinessError && <div><FailureLine text="Couldn't check summary setup." detail={readinessError} /><button type="button" onClick={() => {
       void getSummaryReadiness().then(ready => { setReadiness(ready); setReadinessError(null); }).catch(cause => setReadinessError(String(cause)));
     }}>Retry setup check</button></div>}

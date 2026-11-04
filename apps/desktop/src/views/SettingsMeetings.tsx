@@ -85,6 +85,12 @@ import { selectProvider } from "../lib/meetingProvider";
 import { onePerLine, useMeetingReview } from "../lib/useMeetingReview";
 import { useRefresh } from "../lib/useRefresh";
 
+/** "2 of 4 used": the count in the pixel face, as the numbers on these screens are. */
+function pixelCount(value: string) {
+  const parts = /^(\d+ of \d+)( .*)$/.exec(value);
+  return parts ? <span><span className="vocabulary-count">{parts[1]}</span>{parts[2]}</span> : value;
+}
+
 export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () => void }) {
   const load = useCallback(async () => {
     const [providers, status, language, keyterms, detect, diarization, provider, deleteRecordings] =
@@ -272,7 +278,7 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
 
         <div className="row">
           <span className="row-label">Provider</span>
-          <span className="row-value controls">
+          <div className="row-value">
             <select
               aria-label="Meeting provider"
               value={selected ?? ""}
@@ -293,7 +299,17 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
               ))}
             </select>
               {providerGuard.feedback}
-          </span>
+              {selectedProvider ? (
+                <p className="caveat">
+                  {/* Some summaries end in a full stop already: Deepgram's read
+                      "no session limit.." */}
+                  {/[.!?]$/.test(selectedProvider.summary) ? selectedProvider.summary : `${selectedProvider.summary}.`}{" "}
+                  {selectedProvider.audioLeavesDevice
+                    ? "Audio is sent to this provider."
+                    : "Audio stays on this computer."}
+                </p>
+              ) : null}
+          </div>
         </div>
 
         {/* The Meetings page holds Start back while this is showing, and its
@@ -342,18 +358,9 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
 
         {selectedProvider ? (
           <>
-            <p className="caveat">
-              {/* Some summaries end in a full stop already: Deepgram's read
-                  "no session limit.." */}
-              {/[.!?]$/.test(selectedProvider.summary) ? selectedProvider.summary : `${selectedProvider.summary}.`}{" "}
-              {selectedProvider.audioLeavesDevice
-                ? "Audio is sent to this provider."
-                : "Audio stays on this computer."}
-            </p>
-
             <div className="row">
               <span className="row-label">Language</span>
-              <span className="row-value controls">
+              <div className="row-value">
                 <input
                   type="text"
                   aria-label="Meeting language"
@@ -367,14 +374,14 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
                   }}
                 />
                 {languageGuard.feedback}
-              </span>
+              </div>
             </div>
             <div className="row">
               <span className="row-label">Vocabulary</span>
-              <span className="row-value controls">
+              <div className="row-value">
                 <button type="button" onClick={onGoToVocabulary}>Manage vocabulary</button>
-                <span className="muted">{data?.keyterms.length ?? 0} saved terms · changes apply to the next meeting</span>
-              </span>
+                <span className="row-detail">{data?.keyterms.length ?? 0} saved terms · changes apply to the next meeting</span>
+              </div>
             </div>
             {/*
              * `validate` computed this, not a re-implementation here — see
@@ -387,7 +394,7 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
             {keytermReview ? (
               <Row
                 label="Vocabulary for next meeting"
-                value={keytermReview.value}
+                value={pixelCount(keytermReview.value)}
                 detail={keytermReview.detail}
               />
             ) : null}
@@ -401,13 +408,15 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
           choice at Start, which the Learn more says, and the next one takes
           what is ticked here. What it costs -- no playback -- is in view. */}
       <section>
-        <h2>Recordings</h2>
+        <h2>recordings</h2>
         <div className="row">
           <span className="row-label">Delete recordings</span>
-          <span className="row-value controls">
-            <label>
+          <div className="row-value">
+            <label className="switch-row">
+              <span>Delete each recording once its transcript is saved</span>
               <input
                 type="checkbox"
+                role="switch"
                 checked={data.deleteRecordings}
                 onChange={(e) => {
                   const enabled = e.target.checked;
@@ -417,15 +426,14 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
                   }, "retention").catch(fail);
                 }}
               />
-              Delete each recording once its transcript is saved
             </label>
-          </span>
+            <em className="row-detail">
+              The note keeps the transcript and your typed notes, but can't be
+              played back. If the transcript may be incomplete, the recording is
+              kept.
+            </em>
+          </div>
         </div>
-        <p className="caveat">
-          The note keeps the transcript and your typed notes, but can't be
-          played back. If the transcript may be incomplete, the recording is
-          kept.
-        </p>
         <LearnMore>
           <p>
             Changing this doesn't affect a meeting that's already recording.
@@ -435,7 +443,7 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
       </section>
 
       <section>
-        <h2>Notification window</h2>
+        <h2>notification window</h2>
         <button type="button" disabled={resettingNotification} onClick={() => { void resetNotification(); }}>Reset notification window</button>
         <LearnMore>
           <p>Drag the notification window to move it or resize it by an edge. Reset returns it to the bottom-right at its default size.</p>
@@ -444,21 +452,23 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
       </section>
 
       <section>
-        <h2>Detection</h2>
+        <h2>detection</h2>
         {/* Visible, not folded: "nothing is ever recorded without you pressing
             a button" is the promise this whole section is built around. The
             matching rules further down are the explanation, and those are. */}
-        <p className="caveat">
+        <p className="muted">
           Meeting applications that are running. Nothing is ever recorded without
           you pressing a button — when a meeting is detectably in progress, a
           small window offers to record it.
         </p>
         <div className="row">
           <span className="row-label">Offer to record</span>
-          <span className="row-value controls">
-            <label>
+          <div className="row-value">
+            <label className="switch-row">
+              <span>Show a window when a meeting starts</span>
               <input
                 type="checkbox"
+                role="switch"
                 checked={status.promptOnDetect}
                 onChange={(e) => {
                   const enabled = e.target.checked;
@@ -468,9 +478,8 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
                   }, "notification").catch(fail);
                 }}
               />
-              Show a window when a meeting starts
             </label>
-          </span>
+          </div>
         </div>
         {/*
           * Reported here, above the applications it is evidence about: where
@@ -482,7 +491,12 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
           */}
         <Row
           label="Microphone activity"
-          value={microphoneValue(status.microphone)}
+          value={
+            <span className="state-tag" data-tone={status.microphone?.state === "available" && status.microphone.endpoints > 0 ? "on" : "open"}>
+              {status.microphone?.state === "available" && status.microphone.endpoints > 0 ? <span className="state-tag-dot" aria-hidden="true" /> : null}
+              {microphoneValue(status.microphone)}
+            </span>
+          }
           detail={microphoneDetail(status.microphone)}
         />
         {status.detected.length === 0 ? (
@@ -492,7 +506,12 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
             <Row
               key={`${d.provider}-${d.evidence}`}
               label={d.name}
-              value={d.inCall ? "In a call" : "Open"}
+              value={
+                <span className="state-tag" data-tone={d.inCall ? "call" : "open"}>
+                  {d.inCall ? <span className="state-tag-dot" aria-hidden="true" /> : null}
+                  {d.inCall ? "In a call" : "Open"}
+                </span>
+              }
               detail={detectedLabel(d)}
             />
           ))
@@ -507,7 +526,7 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
           */}
         <div className="row">
           <span className="row-label">Also count as a meeting</span>
-          <span className="row-value controls">
+          <div className="row-value">
             <textarea
               aria-label="Extra process names that count as a meeting, one per line"
               placeholder="one program name per line, e.g. bluejeans.exe"
@@ -518,11 +537,11 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
                 void guard(persistDetectLists);
               }}
             />
-          </span>
+          </div>
         </div>
         <div className="row">
           <span className="row-label">Never count as a meeting</span>
-          <span className="row-value controls">
+          <div className="row-value">
             <textarea
               aria-label="Program names that never count as a meeting, one per line"
               placeholder="one program name per line"
@@ -534,7 +553,7 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
               }}
             />
                 {listGuard.feedback}
-          </span>
+          </div>
         </div>
         <LearnMore>
           <p>
@@ -557,11 +576,11 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
       </section>
 
       <section>
-        <h2>Speaker labels</h2>
+        <h2>speaker labels</h2>
         {/* What it does stays visible; what a label does and does not mean is
             folded. The two measured caveats are not: they are what switching
             this on costs, and what it gets wrong. */}
-        <p className="caveat">
+        <p className="muted">
           A second pass over the finished recording, grouping the voices in it so
           each passage of the saved note says who was speaking.
         </p>
@@ -587,15 +606,17 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
         </p>
         <Row
           label="Status"
-          value={diarization.ready ? "ready" : "not ready"}
+          value={<span className="state-pixel" data-ready={diarization.ready}>{diarization.ready ? "ready" : "not ready"}</span>}
           detail={diarizationBlocker(diarization) ?? undefined}
         />
         <div className="row">
           <span className="row-label">Label speakers</span>
-          <span className="row-value controls">
-            <label>
+          <div className="row-value">
+            <label className="switch-row">
+              <span>Add speaker labels to saved meeting notes</span>
               <input
                 type="checkbox"
+                role="switch"
                 checked={diarization.enabled}
                 disabled={!diarization.ready && !diarization.enabled}
                 onChange={(e) => {
@@ -606,15 +627,14 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
                   }, "speaker-labels").catch(fail);
                 }}
               />
-              Add speaker labels to saved meeting notes
             </label>
-          </span>
+          </div>
         </div>
-        <ul className="list">
+        <ul className="model-cards">
           {diarization.models.map((m) => (
-            <li key={m.id}>
-              <code>{m.id}</code> {m.name}
-              {m.sizeMb ? ` · ${m.sizeMb} MB` : ""}
+            <li key={m.id} className="model-card">
+              <span className="model-card-id">{m.id.toUpperCase()}</span>
+              <span className="model-card-name">{m.name}{m.sizeMb ? ` · ${m.sizeMb} MB` : ""}</span>
               <em className="row-detail">
                 {diarizationRoleDetail(m.role)} ·{" "}
                 {m.installed ? "installed" : "not installed"}
@@ -659,7 +679,7 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
       </section>
 
       <section>
-        <h2>All meeting providers</h2>
+        <h2>all meeting providers</h2>
         <LearnMore>
           <p>
             Every provider this application knows the wire details for. A provider
@@ -670,19 +690,9 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
           <div key={p.id} className="row">
             <span className="row-label">{p.name}</span>
             <span className="row-value">
-              <code>
-                {p.audioLeavesDevice
-                  ? "audio leaves this computer"
-                  : "audio stays on this computer"}
-              </code>
-              <em className="row-detail">{availabilityLabel(p.availability)}</em>
-              <em className="row-detail">{keytermLabel(p.keyterms)}</em>
-              {p.sessionLimitSeconds !== null ? (
-                <em className="row-detail warn">
-                  sessions end after {Math.round(p.sessionLimitSeconds / 60)}{" "}
-                  minutes, so a longer meeting has to reconnect
-                </em>
-              ) : null}
+              {p.audioLeavesDevice
+                ? "audio leaves this computer"
+                : "audio stays on this computer"}
               {/*
                 `tokenRotation` records what the *provider* documents, and this
                 row used to read "its token has to be refreshed mid-session" --
@@ -692,12 +702,20 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
                 capability is kept because it is true of the provider; the
                 sentence now says what it means here.
               */}
-              {p.tokenRotation ? (
-                <em className="row-detail">
-                  this provider also issues short-lived tokens that need
-                  refreshing; your own key does not, and none is scheduled
-                </em>
-              ) : null}
+              <em className="row-detail">
+                {[
+                  availabilityLabel(p.availability),
+                  keytermLabel(p.keyterms),
+                  p.sessionLimitSeconds !== null
+                    ? `sessions end after ${Math.round(p.sessionLimitSeconds / 60)} minutes, so a longer meeting has to reconnect`
+                    : null,
+                  p.tokenRotation
+                    ? "this provider also issues short-lived tokens that need refreshing; your own key does not, and none is scheduled"
+                    : null,
+                ]
+                  .filter((part) => part !== null)
+                  .join(" · ")}
+              </em>
             </span>
           </div>
         ))}

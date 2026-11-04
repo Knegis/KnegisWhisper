@@ -217,3 +217,62 @@ export function localModelDetail(row: LocalModelRow): string {
 export function localModelAction(row: LocalModelRow): string {
   return row.installed ? useForLabel(row.usedFor, row.inUse) : "Install";
 }
+
+/** One chip on a model's row. */
+export interface ModelChip {
+  text: string;
+  tone: "plain" | "installed" | "recommended" | "warn";
+}
+
+/**
+ * What a person chooses a model by, as chips: size, languages, what a sherpa
+ * model is for, recommended, the KNEG-407 hint, whether it is installed, and
+ * last the warning about a model loaded while dictation goes elsewhere. A
+ * Whisper model serves dictation, meetings and imports alike, so it has no
+ * purpose to name; the section's own sentence says so.
+ */
+export function localModelChips(row: LocalModelRow): ModelChip[] {
+  const chips: ModelChip[] = [];
+  if (row.sizeMb !== null) chips.push({ text: `${row.sizeMb} MB`, tone: "plain" });
+  chips.push({ text: modelLanguageLabel(row.languages), tone: "plain" });
+  if (row.engine !== "whisper") chips.push({ text: useForDetail(row.usedFor), tone: "plain" });
+  if (row.recommended) chips.push({ text: "recommended", tone: "recommended" });
+  if (row.hint !== null) chips.push({ text: row.hint, tone: "plain" });
+  chips.push(row.installed ? { text: "Installed", tone: "installed" } : { text: "Not installed", tone: "plain" });
+  if (row.loadedButGoesTo !== null) chips.push({ text: `Loaded, but dictation goes to ${row.loadedButGoesTo}`, tone: "warn" });
+  return chips;
+}
+
+/** Which small picture a model's row shows, and which of that picture's variants. */
+export interface ModelThumb {
+  kind: "breath" | "dusk" | "streak";
+  variant: number;
+}
+
+const THUMB_VARIANTS: Record<ModelThumb["kind"], number> = { breath: 5, dusk: 2, streak: 2 };
+
+/** The pictures the design gives the models it draws; any other falls to its id. */
+const THUMB_PICKS: ReadonlyArray<readonly [RegExp, number]> = [
+  [/^kb-/, 2],
+  [/turbo|large/, 1],
+  [/medium/, 3],
+  [/base/, 4],
+  [/small/, 0],
+  [/unified/, 0],
+  [/tdt/, 1],
+  [/nemotron-speech/, 0],
+  [/nemotron-3/, 1],
+];
+
+/**
+ * Decoration: it tells models apart and says nothing about them, beyond the
+ * family the picture belongs to. From the id, so a row keeps its picture from
+ * one render and one list order to the next.
+ */
+export function modelThumb(row: Pick<LocalModelRow, "id" | "engine" | "usedFor">): ModelThumb {
+  const kind = row.engine === "whisper" ? "breath" : row.usedFor === "meetings" ? "streak" : "dusk";
+  const picked = THUMB_PICKS.find(([pattern]) => pattern.test(row.id));
+  let hash = picked ? picked[1] : 0;
+  if (!picked) for (const char of row.id) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+  return { kind, variant: hash % THUMB_VARIANTS[kind] };
+}

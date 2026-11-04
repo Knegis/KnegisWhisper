@@ -71,13 +71,14 @@ export function LocalLanguagePicker({
 
   return <fieldset className="local-language-picker" disabled={disabled || selected === null} aria-busy={busy || undefined}>
     <legend>Dictation languages</legend>
-    <button type="button" aria-pressed={selected?.length === 0} className={selected?.length === 0 ? "marked" : undefined} onClick={() => void save([])}>Detect automatically</button>
     <div className="local-language-options">
-      {LANGUAGES.map(([code, label]) => <label key={code}>
-        <input type="checkbox" checked={selected?.includes(code) ?? false}
-          disabled={!selected?.includes(code) && selected?.length === 2}
-          onChange={e => void save(e.target.checked ? [...(wanted.current ?? []), code] : (wanted.current ?? []).filter(value => value !== code))} />{label}
-      </label>)}
+      <button type="button" className="language-pill" aria-pressed={selected?.length === 0} onClick={() => void save([])}>Detect automatically</button>
+      {LANGUAGES.map(([code, label]) => {
+        const on = selected?.includes(code) ?? false;
+        return <button key={code} type="button" className="language-pill" aria-pressed={on}
+          disabled={!on && selected?.length === 2}
+          onClick={() => void save(on ? (wanted.current ?? []).filter(value => value !== code) : [...(wanted.current ?? []), code])}>{label}</button>;
+      })}
     </div>
     <p className="muted">{note}</p>
     {languageDraft.feedback}

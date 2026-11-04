@@ -29,15 +29,15 @@
 
 import { useCallback } from "react";
 
-import { DiscoveryFileRows } from "../components/DiscoveryFileRows";
+import { BinaryRow, DiscoveryFileRows, LocalApiRow } from "../components/DiscoveryFileRows";
 import { FailureLine } from "../components/FailureLine";
 import { LearnMore } from "../components/LearnMore";
 import { Row } from "../components/Row";
 import { getMcpStatus } from "../lib/ipc";
-import { binaryLocationLabel, blockedLine } from "../lib/labels";
+import { blockedLine } from "../lib/labels";
 import { useRefresh } from "../lib/useRefresh";
 
-export function IntegrationsMcp() {
+export function IntegrationsMcp({ onGoToApi }: { onGoToApi: () => void }) {
   const load = useCallback(() => getMcpStatus(), []);
   const { data: status, error } = useRefresh(load);
 
@@ -49,21 +49,33 @@ export function IntegrationsMcp() {
     );
   }
 
-  const location = binaryLocationLabel(status.binaryLocation);
-  const config = JSON.stringify(
-    { command: status.command, args: [] },
-    null,
-    2,
-  );
-
   return (
     <div className="view">
       {error ? <FailureLine text="That didn't work." detail={error} /> : null}
 
       {status.blockedReason ? <FailureLine text={blockedLine(status.blockedReason)} detail={status.blockedReason} /> : null}
 
-      <section data-surface="integrations.mcp">
-        <p className="muted">
+      <section data-surface="integrations.mcp" className="dev-page">
+        {/* The wires only run while the thing they lead to is up. */}
+        <figure className="mcp-figure" data-live={status.localApiRunning}>
+          <div className="mcp-node">
+            <span className="mcp-disc mcp-disc-assistant" aria-hidden="true" />
+            <span>Your assistant</span>
+          </div>
+          <div className="mcp-wire" aria-hidden="true"><span /></div>
+          <div className="mcp-node">
+            <span className="mcp-disc mcp-disc-server" aria-hidden="true" />
+            <span className="mcp-node-code">knegiswhisper-mcp</span>
+            <span className="mcp-node-note">stdio</span>
+          </div>
+          <div className="mcp-wire" aria-hidden="true"><span /></div>
+          <div className="mcp-node">
+            <span className="mcp-disc mcp-disc-api" aria-hidden="true" />
+            <span>Local API</span>
+          </div>
+        </figure>
+
+        <p>
           <code>{status.binaryName}</code> lets an AI assistant that speaks MCP
           work with your notes, transcripts and dictionary. Your assistant runs
           it, and it works only while this app is running with the Local API
@@ -77,39 +89,60 @@ export function IntegrationsMcp() {
           </p>
         </LearnMore>
 
-        <Row label="Binary" value={location.text} detail={location.detail} />
-        <p className="muted">
-          Tools can create and export notes, transcribe files, check or cancel
-          jobs, list models and control meeting recording. What a tool reads goes
-          to your AI assistant, which may send it off this computer. File
-          transcription uses your Transcription setting.
-        </p>
-        <LearnMore summary="What the tools can reach">
-          <p>
-            Uploads read any file the MCP server process can read. Recording
-            tools control the visible meeting recorder, including meetings
-            started here.
-          </p>
-        </LearnMore>
-        <DiscoveryFileRows
-          discoveryPath={status.discoveryPath}
-          permissions={status.discoveryPermissions}
-        />
-        <Row
-          label="Local API"
-          value={status.localApiRunning ? "Running" : "Not running"}
-          detail={
-            status.localApiRunning
-              ? undefined
-              : "every tool call fails until it is on — turn it on under Developer › Local API"
-          }
-        />
+        <div className="row-group">
+          <BinaryRow location={status.binaryLocation} />
+          <Row
+            label="Tools"
+            value={
+              <span className="row-para">
+                Tools can create and export notes, transcribe files, check or cancel
+                jobs, list models and control meeting recording. What a tool reads goes
+                to your AI assistant, which may send it off this computer. File
+                transcription uses your Transcription setting.
+              </span>
+            }
+          >
+            <LearnMore summary="What the tools can reach">
+              <p>
+                Uploads read any file the MCP server process can read. Recording
+                tools control the visible meeting recorder, including meetings
+                started here.
+              </p>
+            </LearnMore>
+          </Row>
+          <DiscoveryFileRows
+            discoveryPath={status.discoveryPath}
+            permissions={status.discoveryPermissions}
+          />
+          <LocalApiRow
+            running={status.localApiRunning}
+            detail="every tool call fails until it is on — turn it on under Developer › Local API"
+            onOpen={onGoToApi}
+          />
+        </div>
 
-        <p className="muted">
-          Add this to your assistant's MCP settings. It needs no arguments: it
-          finds this app by itself, the way the CLI does.
-        </p>
-        <pre className="preview">{config}</pre>
+        <div className="mcp-config">
+          <p>
+            Add this to your assistant's MCP settings. It needs no arguments: it
+            finds this app by itself, the way the CLI does.
+          </p>
+          <pre className="preview code-panel" tabIndex={0} aria-label="MCP settings">
+            <code>
+              <span className="code-punct">{"{"}</span>
+              {"\n  "}
+              <span className="code-key">"command"</span>
+              <span className="code-punct">:</span>{" "}
+              <span className="code-string">{JSON.stringify(status.command)}</span>
+              <span className="code-punct">,</span>
+              {"\n  "}
+              <span className="code-key">"args"</span>
+              <span className="code-punct">:</span>{" "}
+              <span className="code-punct">[]</span>
+              {"\n"}
+              <span className="code-punct">{"}"}</span>
+            </code>
+          </pre>
+        </div>
       </section>
     </div>
   );
