@@ -671,6 +671,7 @@ let meetingStatus: MeetingStatus = {
 };
 
 let meetingLanguage = "en";
+let meetingLocalModel: string | null = null;
 let meetingProvider: string | null = null;
 /** Settings › Meetings' "Delete each recording once its transcript is saved", off as in Rust (KNEG-409). */
 let meetingDeleteRecordings = false;
@@ -2634,6 +2635,15 @@ A fixture summary of "${note.title}", written without a model.
     meetingLanguage = arg<string>(a, "language") ?? meetingLanguage;
     return null;
   },
+  meeting_local_model: () => meetingLocalModel,
+  meeting_set_local_model: (a) => {
+    const model = arg<string | null>(a, "model") ?? null;
+    if (model !== null && !LOCAL_MODELS.models.some((known) => known.id === model)) {
+      throw new Error(`"${model}" is not a model this build knows about`);
+    }
+    meetingLocalModel = model;
+    return null;
+  },
   meeting_provider: () => meetingProvider,
   meeting_set_provider: (a) => {
     meetingProvider = arg<string>(a, "provider") ?? meetingProvider;
@@ -2820,6 +2830,18 @@ const devConsole = {
    * `overlay-preferences` event Rust would, so `#overlay` can be seen in its
    * floating-microphone mode instead of only the label one.
    */
+  /**
+   * The local windowed provider, usable and under the id Rust gives it. The
+   * fixtures otherwise list it greyed, as `meeting:local`, for the screens that
+   * explain a provider that can't be used.
+   */
+  localMeetingProvider() {
+    const at = MEETING_PROVIDERS.findIndex((provider) => provider.id === "meeting:local");
+    const listed = MEETING_PROVIDERS[at];
+    if (listed) {
+      MEETING_PROVIDERS[at] = { ...listed, id: "local", name: "Local windowed model", availability: { state: "available" } };
+    }
+  },
   speakerModels(installed = true) {
     diarization = {
       ...diarization,
@@ -3107,6 +3129,7 @@ export function installDevFixtures(): void {
       "          kw.meetingWindowSilent()",
       "          kw.overlayFloating()",
       "          kw.speakerModels()",
+      "          kw.localMeetingProvider()",
       "          kw.dictationFailed()",
       "          kw.levels()  ·  kw.level(0.75)",
     ].join("\n  "),

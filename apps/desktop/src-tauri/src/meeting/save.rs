@@ -8,6 +8,8 @@ pub(super) struct SaveAs {
     pub(super) title: String,
     pub(super) plan: MeetingPlan,
     pub(super) notes: String,
+    /// The model chosen for this meeting, for its whole-recording pass.
+    pub(super) whole_pass_model: Option<String>,
 }
 
 /// Save a meeting's note in the folder its plan chose: the one place every

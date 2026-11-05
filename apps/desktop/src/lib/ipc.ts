@@ -573,6 +573,19 @@ export async function setMeetingProvider(provider: string): Promise<void> {
   return invoke("meeting_set_provider", { provider });
 }
 
+/**
+ * The Whisper model chosen for meetings on the `local` provider, or `null` for
+ * Automatic. Read by Rust at Start; the screens read it to show and to check it.
+ */
+export async function getMeetingLocalModel(): Promise<string | null> {
+  return invoke<string | null>("meeting_local_model");
+}
+
+/** `null` is Automatic. Rejects a model this build doesn't know. */
+export async function setMeetingLocalModel(model: string | null): Promise<void> {
+  return invoke("meeting_set_local_model", { model });
+}
+
 /** Terms to bias recognition towards. How many survive depends on the provider. */
 export async function getMeetingKeyterms(): Promise<string[]> {
   return invoke<string[]>("meeting_keyterms");

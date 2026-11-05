@@ -12,6 +12,85 @@ maintained in place rather than appended to, because its purpose is to be curren
 
 ---
 
+## 2026-11-05 — The recording window's second edge was Windows' own
+
+The owner saw two edges on the recording window, one very curved and one slightly rounded. The very curved one is the
+card's own 32px corner. The other is a native frame: Tauri leaves `shadow` on unless told otherwise, and its docs say
+that gives an undecorated window a 1px border and, on Windows 11, rounded corners, outlining the whole transparent
+window behind the card. The overlay and the languages window had already turned it off; the meeting and update windows
+never had. Fixtures couldn't show this, because a fixture has no native frame, and `floating-windows.mjs` says as much.
+
+Both windows now build with `.shadow(false)`. Read from the real windows with Win32 calls, before and after: the
+meeting window went from 408x111 around 392x102 of content to exactly 392x102, and the update card from 408x113 to
+392x104. Windows' drop shadow goes with the border, which leaves the card's own hairline as its edge.
+
+Resizing changes with it. With the frame, the sides and bottom were grabbed on an invisible band outside the card and
+only the top inside it. Without it, Tauri's resize child covers a band 4px wide inside all four edges at 100% scale,
+measured from its window region. That's a narrower target than before, and it sits inside the panel's padding, so it
+covers no control. **Not checked by hand:** how the window looks now, since it's excluded from screen capture and
+can't be screenshotted, and whether dragging each edge still resizes it. The region says where the band is, not that a
+drag works.
+
+---
+
+## 2026-11-05 — Content starts just under the title bar
+
+At the owner's request, the space between the title bar and a screen's content is much smaller than the boards draw
+it, which overrules them on this. What a screen leads with starts 6px below the bar, down from 18 (28 on Notes), and
+a title starts 10px below the row above it, down from 34-44. 6 and no less, because a button's focus ring reaches 5
+and the scroller would clip it. Below the bar at 1280x800, titles move from 112 to 70 on Dictation, 108 to 70 on
+Meetings, 101 to 79 on Notes and 130 to 84 on a settings screen. Measured in headless Edge against fixtures, not in
+the real window. The Import page and the live meeting view take the same rules but weren't measured or viewed.
+
+---
+
+## 2026-11-05 — A model chosen for meetings on the local windowed provider
+
+Asked for by the owner: choosing `Local windowed model` under Settings > Meetings should also let them choose
+which model. Until now a meeting took whatever the one whisper server had loaded, otherwise the model last chosen
+for dictation, otherwise the first installed. That is now `Automatic`, and it stays the default, unchanged.
+`meetings.localModel` holds a choice, and never touches `transcription.localModel`.
+
+**One server, so the meeting borrows it.** A second whisper server for meetings was the alternative, rejected for
+now: another process with its own pid record and memory, for a choice that only matters while a meeting runs.
+Instead `MeetingServer` loads the chosen model at Start as an ordinary change, and a `ModelLoan` held until the note
+is saved loads dictation's model again when dropped, on every way a meeting ends, a Start that fails included. Three
+things follow, and the screen says the first:
+
+- While the loan is held, dictation on a local Whisper model is transcribed by the meeting's model. Its history row
+  names that model, so it is at least not hidden.
+- A chosen model that isn't the one loaded is refused at Start while a dictation or an import is using the server, in
+  the usual "Not now" words, rather than stopping the server under them (KNEG-414). An import can hold it for a long
+  time, and the way round is Automatic or another provider. Starting on whatever was loaded instead would be a
+  transcript from a model nobody chose.
+- The give-back asks again every two seconds for up to five minutes, because nothing may wait on the write side of
+  `ServerUsers`. A dictation left waiting past that gets the meeting's model until the next change or relaunch, and
+  the log says so.
+
+**The chosen model makes the note too.** The whole-recording pass normally uses dictation's engine, so a Parakeet
+model selected for dictation would have made the note from a meeting where somebody had just picked a Whisper model.
+With a choice it now uses that model. `Automatic` still follows dictation, and its sentence says so when Parakeet is
+selected. Recovering an interrupted recording stays `Automatic`: the meeting it came from may not have been on this
+provider at all.
+
+Measured: `native_a_meeting_model_replaces_dictations_and_gives_it_back`, an `#[ignore]`d test against the real
+server with the installed `base` and `tiny`, on an isolated pid record and an in-memory database. `tiny` replaces
+`base` and answers a request, a dictation in flight holds the give-back off, and then `base` is back under a new
+process with `transcription.localModel` untouched. It does not read the text it gets back, so it says nothing about
+quality. The row is measured by `tools/visual-check/meeting-local-model.mjs` against fixtures. **Not exercised:** a
+real meeting from the real window with a chosen model, so `start_live`, the live windows and the saved note have only
+been reached through their parts. Nor how long a large model takes to load at Start, which is time the person waits
+before recording begins.
+
+The owner then asked to pick it on the Meetings page too, as Dictation's chip does. The transcription chip's menu now
+lists the installed models under their own heading, with the provider's own row meaning Automatic, and pressing a model
+sets both it and the provider. A second chip was the alternative, rejected: Dictation has one chip for this, and
+Meetings already fills three rows at the smallest window. A cloud provider leaves the model saved, so going to the
+cloud and back keeps it. The chip names the model, including as a statement while a meeting runs. Measured against
+fixtures by the same script, whose fixtures store the settings and start nothing.
+
+---
+
 ## 2026-11-04 — The owner's frog replaces the dot mark
 
 At the owner's request, the frog in a cowboy hat replaces the sixteen-dot diamond the boards draw, in the title

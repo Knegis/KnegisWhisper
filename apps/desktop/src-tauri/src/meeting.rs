@@ -64,6 +64,8 @@
 //! so failed outright whenever a sherpa model was selected -- the documented
 //! one-local-engine state -- and every note silently fell back to the partials
 //! it exists to avoid. Found by a person reading a saved note on 2026-09-01.
+//! The one exception is a Whisper model chosen for meetings, which somebody
+//! picked to make this note ([`whole_pass_engine`]).
 //!
 //! If that pass fails — an hour of audio is a large request — the partials are
 //! saved instead, with the note saying so. A meeting nobody can read because the
@@ -186,6 +188,10 @@ const LANGUAGE_KEY: &str = "meetings.language";
 /// screens and the offer's Record button fall back to their own defaults until
 /// then.
 const PROVIDER_KEY: &str = "meetings.provider";
+/// The Whisper model the `local` provider uses, or empty for Automatic: what's
+/// loaded, otherwise what dictation last chose. See
+/// `local_model::MeetingServer`.
+const MEETING_MODEL_KEY: &str = "meetings.localModel";
 /// Settings key: whether each meeting's recording is deleted once its
 /// transcript is saved (KNEG-409, [`removal`]). Read at Start into the plan.
 const DELETE_RECORDINGS_KEY: &str = "meetings.deleteRecordings";
@@ -508,6 +514,8 @@ pub struct MeetingRuntime {
     /// How Start brings the local model server up for the `local` provider when
     /// it is not running (KNEG-387). See `local_model::meeting_revive_handle`.
     local_revive: Arc<dyn crate::local_model::Revive>,
+    /// How Start loads a model chosen for meetings, and puts dictation's back.
+    meeting_server: crate::local_model::MeetingServer,
     /// Which sherpa model is selected for dictation, if any.
     ///
     /// Read by the whole-recording pass so it uses the same engine dictation
@@ -660,6 +668,10 @@ struct Live {
     /// is finished (or immediately on cancellation) so its loaded model can be
     /// kept warm for five minutes, but never indefinitely.
     stream_lease: Option<crate::sherpa_stream::StreamLease>,
+    /// Present only when a model was chosen for meetings. Lasts past the live
+    /// windows, for the whole-recording pass, and dropping it gives dictation's
+    /// model back.
+    model_loan: Option<crate::local_model::ModelLoan>,
     /// How the recorder thread ended, once it has.
     ///
     /// Written by the thread itself rather than inferred from its audio channel
@@ -699,6 +711,10 @@ struct ProviderBuild {
     /// would go on refusing a model change with a meeting that is no longer
     /// being transcribed.
     server_use: Option<crate::local_model::ServerUse>,
+    /// Present only for the `local` provider with a model chosen for meetings.
+    /// Dropped with this on any failure before the meeting is under way, so a
+    /// Start that fails after loading it still gives dictation's model back.
+    model_loan: Option<crate::local_model::ModelLoan>,
 }
 
 impl ProviderBuild {
@@ -707,7 +723,37 @@ impl ProviderBuild {
             provider,
             stream_lease: None,
             server_use: None,
+            model_loan: None,
         }
+    }
+}
+
+/// The model chosen for meetings, or `None` for Automatic. A setting that can't
+/// be read is Automatic, which is what it was before this setting existed.
+async fn chosen_meeting_model(db: &Db) -> Option<String> {
+    match kw_storage::settings::get::<String>(db.pool(), MEETING_MODEL_KEY).await {
+        Ok(saved) => saved.filter(|id| !id.trim().is_empty()),
+        Err(error) => {
+            tracing::warn!(%error, "could not read the meeting model setting");
+            None
+        }
+    }
+}
+
+/// Which engine makes the note from a whole recording. A model chosen for
+/// meetings makes it even with Parakeet selected for dictation: somebody picked
+/// that model for this. Otherwise the engine dictation would use.
+fn whole_pass_engine(
+    model_chosen: bool,
+    sherpa: &crate::local_asr::Selection,
+    whisper: Option<kw_transcription_core::local::WhisperServer>,
+) -> Result<Option<Box<dyn kw_transcription_core::local::LocalTranscriber>>, String> {
+    if model_chosen {
+        Ok(whisper.map(|server| {
+            Box::new(server) as Box<dyn kw_transcription_core::local::LocalTranscriber>
+        }))
+    } else {
+        crate::dictation::local_engine(sherpa, whisper)
     }
 }
 
@@ -742,6 +788,7 @@ impl MeetingRuntime {
         credentials: Arc<dyn kw_security::CredentialStore>,
         local: crate::local_model::SharedLocal,
         local_revive: Arc<dyn crate::local_model::Revive>,
+        meeting_server: crate::local_model::MeetingServer,
         sherpa: crate::local_asr::Selection,
         stream: Arc<crate::sherpa_stream::SherpaStream>,
         notes: Arc<draft::NotesDraft>,
@@ -756,6 +803,7 @@ impl MeetingRuntime {
             finalisation: Mutex::new(Tracker::default()),
             local,
             local_revive,
+            meeting_server,
             sherpa,
             stream,
             watch: Mutex::new(WatchState::default()),
@@ -904,12 +952,20 @@ impl MeetingRuntime {
             Client::LocalWindow => {
                 // Before the port is read: a model change that is running is
                 // waited for, so the windows go to the new model's server, and
-                // none can begin while they go to it (KNEG-414).
-                let using = self
-                    .local
-                    .users
-                    .begin(crate::local_model::ServerUser::Meeting)
-                    .await;
+                // none can begin while they go to it (KNEG-414). With a model
+                // chosen for meetings, that model is loaded first.
+                let model_loan = chosen_meeting_model(&self.db)
+                    .await
+                    .map(|model| self.meeting_server.loan(model));
+                let using = match &model_loan {
+                    Some(loan) => self.meeting_server.begin_on(loan.model_id()).await?,
+                    None => {
+                        self.local
+                            .users
+                            .begin(crate::local_model::ServerUser::Meeting)
+                            .await
+                    }
+                };
                 let recorded =
                     *self.local.port.read().map_err(|_| {
                         "the local model server's state could not be read".to_owned()
@@ -940,6 +996,7 @@ impl MeetingRuntime {
                 );
                 Ok(ProviderBuild {
                     server_use: Some(using),
+                    model_loan,
                     ..ProviderBuild::without_stream_lease(Box::new(local_window_provider(
                         server,
                         events,
@@ -979,6 +1036,7 @@ impl MeetingRuntime {
                     ),
                     stream_lease: Some(stream_lease),
                     server_use: None,
+                    model_loan: None,
                 })
             }
             Client::OpenAiRealtime => Ok(ProviderBuild::without_stream_lease(Box::new(
@@ -1143,15 +1201,17 @@ impl MeetingRuntime {
                 sidecar.display()
             )
         })?;
-        let (segments, speaker_note, transcription_error) = match self.transcribe_whole(&path).await
-        {
-            Ok(Some(pass)) => {
-                let (segments, speaker_note) = self.with_speakers(pass, &path).await;
-                (segments, speaker_note, None)
-            }
-            Ok(None) => (Vec::new(), None, None),
-            Err(error) => (Vec::new(), None, Some(error)),
-        };
+        // Automatic, whatever was chosen since: the meeting it came from may
+        // not have been on the `local` provider at all.
+        let (segments, speaker_note, transcription_error) =
+            match self.transcribe_whole(&path, None).await {
+                Ok(Some(pass)) => {
+                    let (segments, speaker_note) = self.with_speakers(pass, &path).await;
+                    (segments, speaker_note, None)
+                }
+                Ok(None) => (Vec::new(), None, None),
+                Err(error) => (Vec::new(), None, Some(error)),
+            };
         if segments.is_empty() && notes.trim().is_empty() {
             return Err(format!(
                 "No note was saved from {}: {}. The recording remains available for another attempt.",
@@ -1207,6 +1267,7 @@ impl MeetingRuntime {
             mut provider,
             stream_lease,
             server_use,
+            model_loan,
         } = self.provider(client, events_tx).await?;
 
         let caps = provider.capabilities();
@@ -1366,6 +1427,7 @@ impl MeetingRuntime {
             plan,
             started_at,
             stream_lease,
+            model_loan,
             transcript_failure,
         });
 
@@ -1409,6 +1471,7 @@ impl MeetingRuntime {
             pump,
             recording_path,
             stream_lease,
+            model_loan,
             plan,
             started_at,
             ..
@@ -1417,6 +1480,7 @@ impl MeetingRuntime {
             title: note_title(plan.title.as_deref(), started_at),
             plan,
             notes,
+            whole_pass_model: model_loan.as_ref().map(|loan| loan.model_id().to_owned()),
         };
 
         crate::meeting_window::remember_panel_placement(&self.app).await;
@@ -1432,6 +1496,8 @@ impl MeetingRuntime {
                 &save,
             )
             .await;
+        // The note is saved, so nothing needs the meeting's model any more.
+        drop(model_loan);
 
         self.end_progress(generation).await;
         if self.lifecycle.lock().await.finished(generation) {
@@ -1747,7 +1813,10 @@ impl MeetingRuntime {
             finished.mic_delivered == Delivered::Audio
                 || finished.system_delivered == Delivered::Audio,
             async {
-                match self.transcribe_whole(&finished.path).await? {
+                match self
+                    .transcribe_whole(&finished.path, save.whole_pass_model.as_deref())
+                    .await?
+                {
                     Some(pass) => Ok(self.with_speakers(pass, &finished.path).await),
                     None => Ok((Vec::new(), None)),
                 }
@@ -1938,8 +2007,13 @@ impl MeetingRuntime {
         }
     }
 
-    /// Transcribe the finished recording in one request.
-    async fn transcribe_whole(&self, path: &std::path::Path) -> Result<Option<WholePass>, String> {
+    /// Transcribe the finished recording in one request, on `chosen_model` when
+    /// one was chosen for this meeting.
+    async fn transcribe_whole(
+        &self,
+        path: &std::path::Path,
+        chosen_model: Option<&str>,
+    ) -> Result<Option<WholePass>, String> {
         self.progress_stage(FinalisationStage::TranscribingRecording)
             .await;
         use kw_transcription_core::local::Inference;
@@ -1949,16 +2023,18 @@ impl MeetingRuntime {
         // (KNEG-414). Taken before the port is read, so a change that is
         // running is waited for. Not when a Parakeet model is selected: that
         // wins below and uses no server, and holding one would refuse a change
-        // for nothing.
-        let _using = if crate::local_asr::resolve(&self.sherpa).is_none() {
-            Some(
+        // for nothing. A chosen model is loaded again if somebody changed the
+        // model in the moment since the live windows ended, and a refusal then
+        // keeps the partials, as any failure of this pass does.
+        let _using = match chosen_model {
+            Some(model) => Some(self.meeting_server.begin_on(model).await?),
+            None if crate::local_asr::resolve(&self.sherpa).is_none() => Some(
                 self.local
                     .users
                     .begin(crate::local_model::ServerUser::Meeting)
                     .await,
-            )
-        } else {
-            None
+            ),
+            None => None,
         };
 
         // The same engine dictation would use, through the same function, and
@@ -1993,10 +2069,11 @@ impl MeetingRuntime {
             })
         };
 
-        let engine = crate::dictation::local_engine(&self.sherpa, whisper)?.ok_or_else(|| {
-            "no local engine is available: start a model under Settings > Transcription > Local"
-                .to_owned()
-        })?;
+        let engine =
+            whole_pass_engine(chosen_model.is_some(), &self.sherpa, whisper)?.ok_or_else(|| {
+                "no local engine is available: start a model under Settings > Transcription > Local"
+                    .to_owned()
+            })?;
 
         let wav = std::fs::read(path).map_err(|e| format!("could not read the recording: {e}"))?;
 
@@ -2549,6 +2626,42 @@ pub async fn meeting_set_provider(
     kw_storage::settings::set(state.db().pool(), PROVIDER_KEY, &provider)
         .await
         .map_err(|e| format!("could not save the provider setting: {e}"))
+}
+
+/// The Whisper model chosen for meetings on the `local` provider, or `None` for
+/// Automatic.
+#[tauri::command]
+pub async fn meeting_local_model(
+    state: State<'_, crate::state::AppState>,
+) -> Result<Option<String>, String> {
+    let saved: Option<String> = kw_storage::settings::get(state.db().pool(), MEETING_MODEL_KEY)
+        .await
+        .map_err(|e| format!("could not read the meeting model setting: {e}"))?;
+    Ok(saved.filter(|id| !id.trim().is_empty()))
+}
+
+/// Remember `model` for meetings on the `local` provider, or Automatic for
+/// `None`. Takes effect at the next Start.
+///
+/// Refuses a model this build doesn't know, so the setting can't hold one that
+/// could never start. One that isn't installed is accepted, as an unusable
+/// provider is: that's a state of the machine, and the Meetings page says so
+/// before Start.
+#[tauri::command]
+pub async fn meeting_set_local_model(
+    state: State<'_, crate::state::AppState>,
+    model: Option<String>,
+) -> Result<(), String> {
+    let model = model.unwrap_or_default();
+    if !model.is_empty() {
+        let registry = kw_provider_registry::registry().map_err(|e| e.to_string())?;
+        if !registry.local_asr.whisper.iter().any(|m| m.id == model) {
+            return Err(format!("{model:?} is not a model this build knows about"));
+        }
+    }
+    kw_storage::settings::set(state.db().pool(), MEETING_MODEL_KEY, &model)
+        .await
+        .map_err(|e| format!("could not save the meeting model setting: {e}"))
 }
 
 /// Whether each meeting's recording is deleted once its transcript is saved
@@ -3553,6 +3666,7 @@ mod tests {
             title: "Board review".into(),
             plan: told(delete_recording),
             notes: notes.into(),
+            whole_pass_model: None,
         }
     }
 
@@ -4028,6 +4142,8 @@ mod provider_setting_tests {
             .invoke_handler(tauri::generate_handler![
                 meeting_provider,
                 meeting_set_provider,
+                meeting_local_model,
+                meeting_set_local_model,
                 meeting_delete_recordings,
                 meeting_set_delete_recordings
             ])
@@ -4069,6 +4185,66 @@ mod provider_setting_tests {
             invoke(&main, "meeting_provider", json!({})).unwrap(),
             json!("local")
         );
+    }
+
+    // As Settings > Meetings sees it: Automatic until a model is chosen,
+    // Automatic again when it's cleared, and never a model this build can't name.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_meeting_model_is_automatic_until_chosen_and_refuses_an_unknown_one() {
+        let (_app, main) = settings_window().await;
+        let read = || invoke(&main, "meeting_local_model", json!({})).unwrap();
+
+        assert_eq!(read(), Value::Null);
+
+        invoke(&main, "meeting_set_local_model", json!({"model": "base"})).unwrap();
+        assert_eq!(read(), json!("base"));
+
+        let err = invoke(
+            &main,
+            "meeting_set_local_model",
+            json!({"model": "no-such-model"}),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("no-such-model"), "{err}");
+        assert_eq!(read(), json!("base"), "the refused one isn't saved");
+
+        invoke(&main, "meeting_set_local_model", json!({"model": null})).unwrap();
+        assert_eq!(read(), Value::Null);
+    }
+
+    #[test]
+    fn a_model_chosen_for_meetings_makes_the_note_whatever_dictation_has_selected() {
+        let policy = NetworkPolicy::new().unwrap();
+        let server =
+            || kw_transcription_core::local::WhisperServer::new(policy.clone(), 8178, None);
+        // A selected sherpa model that can't be built: its answer, an error, is
+        // what tells the two routes apart here.
+        let parakeet: crate::local_asr::Selection = Arc::new(std::sync::RwLock::new(Some(
+            "no-such-sherpa-model".to_owned(),
+        )));
+
+        assert!(whole_pass_engine(false, &parakeet, Some(server())).is_err());
+        assert!(whole_pass_engine(true, &parakeet, Some(server()))
+            .unwrap()
+            .is_some());
+        // Nothing to send it to is still said, not guessed around.
+        assert!(whole_pass_engine(true, &parakeet, None).unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn a_blank_or_absent_meeting_model_is_automatic() {
+        let db = Db::open_in_memory().await.unwrap();
+        assert_eq!(chosen_meeting_model(&db).await, None);
+        for blank in ["", "  "] {
+            kw_storage::settings::set(db.pool(), MEETING_MODEL_KEY, &blank)
+                .await
+                .unwrap();
+            assert_eq!(chosen_meeting_model(&db).await, None, "{blank:?}");
+        }
+        kw_storage::settings::set(db.pool(), MEETING_MODEL_KEY, &"base")
+            .await
+            .unwrap();
+        assert_eq!(chosen_meeting_model(&db).await.as_deref(), Some("base"));
     }
 
     // KNEG-409, as Settings > Meetings sees it: off until it is turned on,

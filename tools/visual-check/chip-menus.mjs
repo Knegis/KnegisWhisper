@@ -96,14 +96,21 @@ async function closeMenu(cdp) {
   await waitFor(cdp, "!document.querySelector('.chip-menu')", "the menu to close");
 }
 
-/** Whether the menu's box is inside the window, and above its chip. */
-const placedAboveChip = (menu) => menu.open
-  && menu.box.left >= 0 && menu.box.top >= 0
-  && menu.box.right <= menu.viewport.width && menu.box.bottom <= menu.viewport.height
-  && menu.box.bottom <= menu.chip.top + 1 && menu.side === "above";
 const placedInside = (menu) => menu.open
   && menu.box.left >= 0 && menu.box.top >= 0
   && menu.box.right <= menu.viewport.width && menu.box.bottom <= menu.viewport.height;
+/**
+ * Whether the menu is inside the window and where `placeMenu` puts it: above its
+ * chip, or below it when it doesn't fit above. 32 is more than the gap and the
+ * window margin together, so a menu with clear room above that opened below still
+ * fails, without restating those two numbers here.
+ */
+const placedByChip = (menu) => {
+  if (!placedInside(menu)) return false;
+  if (menu.side === "above") return menu.box.bottom <= menu.chip.top + 1;
+  const height = menu.box.bottom - menu.box.top;
+  return menu.box.top >= menu.chip.bottom - 1 && height + 32 > menu.chip.top;
+};
 
 /** Waits for the shell, then removes the fixture banner. */
 async function shellReady(cdp) {
@@ -141,7 +148,7 @@ async function enterPage(cdp, page) {
 
 const lastState = (cdp) => cdp.evaluate(snippets.taskPageState());
 
-/** 1. Each menu opens inside the window and above the bar. */
+/** 1. Each menu opens inside the window, above its chip unless it doesn't fit there. */
 async function checkPlacement(cdp, out, report) {
   const measured = {};
   await freshPage(cdp, "Dictation");
@@ -165,18 +172,18 @@ async function checkPlacement(cdp, out, report) {
 
   const summary = Object.fromEntries(Object.entries(measured).map(([name, menu]) => [name, {
     kind: menu.kind, name: menu.name, side: menu.side, box: menu.box, chipTop: menu.chip?.top,
-    viewport: menu.viewport, ok: placedAboveChip(menu),
+    viewport: menu.viewport, ok: placedByChip(menu),
   }]));
   addCheck(report, {
     id: "1",
-    claim: "At 1000x720 each menu opens fully inside the window and above its chip.",
+    claim: "At 1000x720 each menu opens fully inside the window, above its chip unless it does not fit there.",
     measured: summary,
     expectation: [
       "for the microphone, route, Dictation language, Meetings provider and Meetings language menus:",
-      "an open menu with side above, box.bottom <= the chip's top (1px), left/top >= 0, right/bottom inside the window;",
+      "an open menu with left/top >= 0 and right/bottom inside the window; side above with box.bottom <= the chip's top (1px), or side below, past the chip, when it is too tall for the room above;",
       "the language panel is a dialog named Language, the others listboxes",
     ].join(" "),
-    matches: Object.values(measured).every(placedAboveChip)
+    matches: Object.values(measured).every(placedByChip)
       && measured.language.kind === "dialog" && measured.language.name === "Language"
       && ["microphone", "route", "provider", "meetingLanguage"].every((name) => measured[name].kind === "listbox"),
     screenshots: [shot],
@@ -659,7 +666,7 @@ async function checkThemes(cdp, out, report) {
     for (const scheme of ["light", "dark"]) {
       await theme(cdp, scheme);
       const menu = await openMenu(cdp, prefix);
-      measured[`${what}-${scheme}`] = { ...(await cdp.evaluate(snippets.themeState())), inside: placedAboveChip(menu), rows: menu.options.length };
+      measured[`${what}-${scheme}`] = { ...(await cdp.evaluate(snippets.themeState())), inside: placedByChip(menu), rows: menu.options.length };
       screenshots.push(await screenshot(cdp, out, shotName("09", what, scheme)));
       await closeMenu(cdp);
     }
@@ -670,7 +677,7 @@ async function checkThemes(cdp, out, report) {
     id: "9",
     claim: "An open menu on each page is drawn in light and in dark.",
     measured,
-    expectation: "prefers-color-scheme honoured (dark false then true) and the menu's background differs between the two schemes, on both pages, the menu open above the bar inside the window",
+    expectation: "prefers-color-scheme honoured (dark false then true) and the menu's background differs between the two schemes, on both pages, the menu placed by its chip inside the window",
     matches: pairs.every((what) => measured[`${what}-light`].dark === false && measured[`${what}-dark`].dark === true
       && measured[`${what}-light`].menuBackground !== measured[`${what}-dark`].menuBackground
       && measured[`${what}-light`].inside && measured[`${what}-dark`].inside),

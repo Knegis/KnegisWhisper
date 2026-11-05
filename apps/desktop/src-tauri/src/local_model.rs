@@ -79,7 +79,9 @@ pub struct LocalTranscription {
 /// refusing a dictation while the remembered model loads at startup would be
 /// a regression. Nor does `local_server_refresh`: it brings back the model
 /// that was running, and holding it would refuse every route for the length
-/// of a download.
+/// of a download. Nor does a meeting loading its own model ([`MeetingServer`]):
+/// nobody chose a route, and a dictation that stops meanwhile waits and is
+/// transcribed by that model.
 ///
 /// A count rather than a flag, so two commands that overlap -- the second is
 /// refused by [`ServerUsers`] a moment later -- cannot clear it for each
@@ -224,7 +226,19 @@ impl Drop for Counted {
 #[must_use = "the change ends when this is dropped"]
 #[derive(Debug)]
 pub struct ServerChange {
-    _write: tokio::sync::OwnedRwLockWriteGuard<()>,
+    write: tokio::sync::OwnedRwLockWriteGuard<()>,
+}
+
+impl ServerChange {
+    /// Become a use of what this change started, with no moment between the
+    /// two for another change to take the server.
+    fn into_use(self, users: &ServerUsers, user: ServerUser) -> ServerUse {
+        let counted = users.counted(user);
+        ServerUse {
+            _read: self.write.downgrade(),
+            _counted: counted,
+        }
+    }
 }
 
 /// What [`LocalTranscription::begin_change`] holds for a command.
@@ -244,13 +258,7 @@ pub enum ChangeGuard {
 impl ServerUsers {
     /// Start one use, waiting while a change runs.
     pub async fn begin(&self, user: ServerUser) -> ServerUse {
-        if let Some(count) = self.counts.get(user.index()) {
-            count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        }
-        let counted = Counted {
-            counts: Arc::clone(&self.counts),
-            user,
-        };
+        let counted = self.counted(user);
         let read = Arc::clone(&self.lock).read_owned().await;
         ServerUse {
             _read: read,
@@ -258,11 +266,21 @@ impl ServerUsers {
         }
     }
 
+    fn counted(&self, user: ServerUser) -> Counted {
+        if let Some(count) = self.counts.get(user.index()) {
+            count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        Counted {
+            counts: Arc::clone(&self.counts),
+            user,
+        }
+    }
+
     /// Start a change, or say in a sentence why not. Never waits.
     pub fn try_change(&self) -> Result<ServerChange, String> {
         Arc::clone(&self.lock)
             .try_write_owned()
-            .map(|write| ServerChange { _write: write })
+            .map(|write| ServerChange { write })
             .map_err(|_| self.refusal().to_owned())
     }
 
@@ -1405,8 +1423,9 @@ impl Revive for ReviveForMeeting {
     }
 }
 
-/// Which model a meeting starts: the remembered one while it is still
-/// installed, otherwise the first installed, in the registry's order.
+/// Which model a meeting starts when none is chosen for meetings: the
+/// remembered one while it is still installed, otherwise the first installed,
+/// in the registry's order. A chosen one is [`MeetingServer`]'s.
 ///
 /// The same rule the Meetings page's readiness assumes (`lib/readiness.ts`
 /// `localProviderProblem`): any installed model means Start can begin.
@@ -1416,6 +1435,152 @@ fn meeting_model(remembered: Option<&str>, installed: &[String]) -> Option<Strin
         .filter(|id| installed.iter().any(|model| model == id))
         .map(str::to_owned)
         .or_else(|| installed.first().cloned())
+}
+
+/// How long a meeting's model waits for the server to come free before it
+/// gives the server back, and how often it asks. A whole recording's request
+/// can hold the server for minutes, and nothing may wait on the write side
+/// ([`ServerUsers`]), so this asks again rather than queueing.
+const GIVE_BACK_RETRY: std::time::Duration = std::time::Duration::from_secs(2);
+const GIVE_BACK_ATTEMPTS: u32 = 150;
+
+/// The server, for a meeting whose model was chosen for meetings
+/// (`meetings.localModel`).
+///
+/// There is one whisper server, shared by dictation, meetings and imports, so
+/// a meeting's own model is a change of what everything else gets: while the
+/// meeting holds it, a dictation on a local Whisper model is transcribed by
+/// that model, and says so in its history row. What must not happen is for that
+/// to outlast the meeting, because "choosing one for dictation must not silently
+/// change what a meeting records with" holds the other way round too. So what
+/// [`loan`](Self::loan) returns gives the server back when it is dropped.
+#[derive(Clone)]
+pub struct MeetingServer {
+    local: Arc<LocalTranscription>,
+    db: kw_storage::Db,
+}
+
+impl std::fmt::Debug for MeetingServer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MeetingServer").finish_non_exhaustive()
+    }
+}
+
+/// A meeting's hold on the model chosen for it, from Start until its note is
+/// saved or it is discarded. Dropping it, however the meeting ended, loads
+/// dictation's model again.
+///
+/// Apart from [`ServerUse`], which ends with the live windows so a model change
+/// isn't refused by a meeting no longer being transcribed. The whole-recording
+/// pass comes after that and needs this model, so this lasts longer.
+#[must_use = "dictation's model comes back when this is dropped"]
+#[derive(Debug)]
+pub struct ModelLoan {
+    model_id: String,
+    server: MeetingServer,
+}
+
+impl ModelLoan {
+    #[must_use]
+    pub fn model_id(&self) -> &str {
+        &self.model_id
+    }
+}
+
+impl Drop for ModelLoan {
+    fn drop(&mut self) {
+        self.server.give_back();
+    }
+}
+
+impl MeetingServer {
+    #[must_use]
+    pub fn new(local: &Arc<LocalTranscription>, db: &kw_storage::Db) -> Self {
+        Self {
+            local: Arc::clone(local),
+            db: db.clone(),
+        }
+    }
+
+    pub fn loan(&self, model_id: String) -> ModelLoan {
+        ModelLoan {
+            model_id,
+            server: self.clone(),
+        }
+    }
+
+    /// Start one use of the server with `model_id` loaded.
+    ///
+    /// When another model is loaded this is a change, so it is refused in the
+    /// usual words while a dictation or an import is using the server, rather
+    /// than stopping it under them (KNEG-414). The meeting doesn't start: going
+    /// ahead on whatever was loaded would be a transcript from a model nobody
+    /// chose, and pressing Start again is cheap.
+    pub async fn begin_on(&self, model_id: &str) -> Result<ServerUse, String> {
+        let users = &self.local.users;
+        let using = users.begin(ServerUser::Meeting).await;
+        let running = self.local.model.read().ok().and_then(|held| held.clone());
+        if running.as_deref() == Some(model_id) {
+            // Nothing is stopped while it answers, and one that has gone is
+            // started again, as a revive does under a use.
+            self.start_model(model_id).await?;
+            return Ok(using);
+        }
+        drop(using);
+        let change = users.try_change()?;
+        self.start_model(model_id).await?;
+        Ok(change.into_use(users, ServerUser::Meeting))
+    }
+
+    async fn start_model(&self, model_id: &str) -> Result<u16, String> {
+        self.local
+            .start_model(model_id)
+            .await
+            .map_err(|err| format!("the local model server could not be started: {err}"))
+    }
+
+    /// Load dictation's model again, once nothing is using the server.
+    ///
+    /// Spawned, so a saved note isn't held back by a model loading. It is the
+    /// same model a relaunch would resume, and nothing when dictation isn't
+    /// routed to local Whisper: the meeting's model then stays loaded for the
+    /// next meeting, as a server started by a meeting always has.
+    fn give_back(&self) {
+        let local = Arc::clone(&self.local);
+        let db = self.db.clone();
+        tauri::async_runtime::spawn(async move {
+            for _ in 0..GIVE_BACK_ATTEMPTS {
+                let running = local.model.read().ok().and_then(|held| held.clone());
+                let Some(model_id) =
+                    model_to_give_back(model_to_resume(&db).await, running.as_deref())
+                else {
+                    return;
+                };
+                if let Ok(_change) = local.users.try_change() {
+                    match local.start_model(&model_id).await {
+                        Ok(port) => {
+                            tracing::info!(port, model = %model_id, "loaded dictation's model again after a meeting")
+                        }
+                        Err(err) => {
+                            tracing::warn!(model = %model_id, error = %err, "could not load dictation's model again after a meeting")
+                        }
+                    }
+                    return;
+                }
+                tokio::time::sleep(GIVE_BACK_RETRY).await;
+            }
+            tracing::warn!("the local model server stayed in use, so dictation's model was not loaded again after a meeting");
+        });
+    }
+}
+
+/// What a finished meeting has to load: dictation's model, unless it is the one
+/// running or dictation has no local Whisper model to go back to.
+fn model_to_give_back(resume: Resume, running: Option<&str>) -> Option<String> {
+    match resume {
+        Resume::Model(model_id) if running != Some(model_id.as_str()) => Some(model_id),
+        Resume::Model(_) | Resume::NotRouted | Resume::NoneRemembered => None,
+    }
 }
 
 /// A [`Revive`] that never does, for tests about something else.
@@ -2305,6 +2470,243 @@ mod tests {
             local.begin_change(None).is_err(),
             "update and stop are refused"
         );
+    }
+
+    /* --------------------------------- a model chosen for meetings */
+
+    /// Answers every request 200, as the server's health path does.
+    async fn answering_server() -> u16 {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let mut request = [0_u8; 1024];
+                    let _ = stream.read(&mut request).await;
+                    let _ = stream
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                        )
+                        .await;
+                });
+            }
+        });
+        port
+    }
+
+    async fn meeting_server() -> (Arc<LocalTranscription>, MeetingServer) {
+        let local = Arc::new(local());
+        let server = MeetingServer::new(&local, &db().await);
+        (local, server)
+    }
+
+    /// The one moment that matters: after the change and before the use, a
+    /// user's choice of another model would otherwise leave the meeting's
+    /// windows going to a port that no longer answers.
+    #[tokio::test]
+    async fn a_change_becomes_a_use_with_no_moment_between() {
+        let users = ServerUsers::default();
+        let change = users.try_change().unwrap();
+        let using = change.into_use(&users, ServerUser::Meeting);
+        assert_eq!(counted(&users, ServerUser::Meeting), 1);
+        let refused = users.try_change().unwrap_err();
+        assert!(
+            refused.contains("a meeting is being transcribed"),
+            "{refused}"
+        );
+        // A use like any other: others may read alongside it.
+        let dictating = users.begin(ServerUser::Dictation).await;
+        drop(dictating);
+        drop(using);
+        assert_eq!(counted(&users, ServerUser::Meeting), 0);
+        assert!(users.try_change().is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_meeting_on_the_model_loaded_stops_nothing_and_needs_no_change() {
+        let (local, server) = meeting_server().await;
+        let port = answering_server().await;
+        set_running(&local, "model-a", port);
+        // Not refused by a dictation in flight: nothing changes under it.
+        let dictating = local.users.begin(ServerUser::Dictation).await;
+
+        let using = server.begin_on("model-a").await.unwrap();
+
+        assert_eq!(*local.port.read().unwrap(), Some(port));
+        assert_eq!(local.model.read().unwrap().as_deref(), Some("model-a"));
+        assert_eq!(counted(&local.users, ServerUser::Meeting), 1);
+        drop(dictating);
+        assert!(local.users.try_change().is_err(), "the meeting holds it");
+        drop(using);
+        assert!(local.users.try_change().is_ok());
+    }
+
+    /// The defect KNEG-414 closed, which a meeting's own model must not reopen:
+    /// the server stopped under a request in flight.
+    #[tokio::test]
+    async fn a_meeting_on_another_model_is_refused_while_something_uses_the_server() {
+        for (user, said) in [
+            (ServerUser::Dictation, "a dictation is being transcribed"),
+            (ServerUser::Import, "a recording is being imported"),
+        ] {
+            let (local, server) = meeting_server().await;
+            set_running(&local, "model-a", 8178);
+            let _using = local.users.begin(user).await;
+
+            let refused = server.begin_on("model-b").await.unwrap_err();
+
+            assert!(refused.starts_with(NOT_NOW), "{refused}");
+            assert!(refused.contains(said), "{refused}");
+            assert_eq!(*local.port.read().unwrap(), Some(8178), "still running");
+            assert_eq!(local.model.read().unwrap().as_deref(), Some("model-a"));
+            assert_eq!(counted(&local.users, ServerUser::Meeting), 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_meeting_model_that_will_not_start_leaves_nothing_held() {
+        let (local, server) = meeting_server().await;
+        let failed = server.begin_on("no-such-model").await.unwrap_err();
+        assert!(
+            failed.starts_with("the local model server could not be started: "),
+            "{failed}"
+        );
+        assert_eq!(counted(&local.users, ServerUser::Meeting), 0);
+        assert!(local.users.try_change().is_ok());
+    }
+
+    #[test]
+    fn a_finished_meeting_loads_dictations_model_only_when_it_has_to() {
+        for (resume, running, expected) in [
+            // Dictation's model was displaced, or nothing is running.
+            (Resume::Model("a".into()), Some("b"), Some("a")),
+            (Resume::Model("a".into()), None, Some("a")),
+            // The meeting's model is dictation's own.
+            (Resume::Model("a".into()), Some("a"), None),
+            // Dictation goes elsewhere, so nothing is owed to it.
+            (Resume::NotRouted, Some("b"), None),
+            (Resume::NoneRemembered, Some("b"), None),
+        ] {
+            assert_eq!(
+                model_to_give_back(resume.clone(), running).as_deref(),
+                expected,
+                "{resume:?} with {running:?} running"
+            );
+        }
+    }
+
+    /// The whole of it against the real server: the meeting's model replaces
+    /// dictation's, answers, and holds off a give-back while something uses it;
+    /// then dictation's comes back, with what is remembered untouched. Nothing
+    /// here reads the text it gets back.
+    #[cfg(windows)]
+    #[tokio::test]
+    #[ignore = "starts the installed Whisper base and tiny models with isolated PID records and fixture audio"]
+    async fn native_a_meeting_model_replaces_dictations_and_gives_it_back() {
+        use kw_transcription_core::local::LocalTranscriber as _;
+
+        async fn loaded_within(runtime: &LocalTranscription, model: &str, seconds: u64) -> bool {
+            let end = std::time::Instant::now() + std::time::Duration::from_secs(seconds);
+            while std::time::Instant::now() < end {
+                let up = runtime.port.read().unwrap().is_some();
+                if up && runtime.model.read().unwrap().as_deref() == Some(model) {
+                    return true;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            }
+            false
+        }
+
+        let directory = tempfile::tempdir().unwrap();
+        let mut runtime = local();
+        runtime.pids = PidStore::new(directory.path());
+        let runtime = Arc::new(runtime);
+        let db = db().await;
+        kw_storage::settings::set(
+            db.pool(),
+            crate::dictation::ROUTE_SETTINGS_KEY,
+            &kw_transcription_core::RouteSettings {
+                use_local_whisper: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        kw_storage::settings::set(db.pool(), LOCAL_MODEL_KEY, &"base")
+            .await
+            .unwrap();
+
+        let worker = Arc::clone(&runtime);
+        let settings = db.clone();
+        let outcome = tokio::spawn(async move {
+            worker.start_model("base").await.unwrap();
+            let dictations_pid = worker.pids.read(SIDECAR).unwrap().unwrap().pid;
+            let server = MeetingServer::new(&worker, &settings);
+
+            let loan = server.loan("tiny".to_owned());
+            let using = server.begin_on(loan.model_id()).await.unwrap();
+            assert_eq!(worker.model.read().unwrap().as_deref(), Some("tiny"));
+            let meeting_port = worker.port.read().unwrap().unwrap();
+            // By process: the port it freed may well be the one allocated next.
+            let meetings_pid = worker.pids.read(SIDECAR).unwrap().unwrap().pid;
+            assert_ne!(meetings_pid, dictations_pid, "base's server has gone");
+            assert!(worker.users.try_change().is_err(), "the meeting holds it");
+
+            let wav = include_bytes!(
+                "../../../../crates/transcription-core/tests/fixtures/speech-16k-mono.wav"
+            )
+            .to_vec();
+            let answer = kw_transcription_core::local::WhisperServer::new(
+                worker.policy.clone(),
+                meeting_port,
+                Some("tiny".to_owned()),
+            )
+            .transcribe(wav, None, None)
+            .await
+            .unwrap();
+            assert!(!matches!(
+                answer,
+                kw_transcription_core::local::Inference::Rejected { .. }
+            ));
+
+            // A dictation in flight when the meeting ends isn't stopped under.
+            let dictating = worker.users.begin(ServerUser::Dictation).await;
+            drop(using);
+            drop(loan);
+            tokio::time::sleep(GIVE_BACK_RETRY + std::time::Duration::from_secs(1)).await;
+            assert_eq!(
+                worker.model.read().unwrap().as_deref(),
+                Some("tiny"),
+                "still in use, so nothing was given back yet"
+            );
+            drop(dictating);
+
+            assert!(
+                loaded_within(&worker, "base", 60).await,
+                "dictation's model came back"
+            );
+            let remembered: Option<String> =
+                kw_storage::settings::get(settings.pool(), LOCAL_MODEL_KEY)
+                    .await
+                    .unwrap();
+            assert_eq!(remembered.as_deref(), Some("base"));
+            // Nothing is left held, and a new server answers as dictation's.
+            assert_ne!(
+                worker.pids.read(SIDECAR).unwrap().unwrap().pid,
+                meetings_pid
+            );
+            assert!(worker.users.try_change().is_ok());
+            let port = worker.port.read().unwrap().unwrap();
+            assert!(
+                HttpHealth::new(worker.policy.clone(), local::HEALTH_PATH)
+                    .is_ready(port)
+                    .await
+            );
+        })
+        .await;
+        runtime.stop().await;
+        outcome.unwrap();
     }
 
     #[test]

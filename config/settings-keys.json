@@ -236,6 +236,14 @@
       "ui": "Settings > Meetings",
       "reachable": true
     },
+    "meetings.localModel": {
+      "what": "The Whisper model the `local` meeting provider uses, or empty for Automatic: the model already loaded, otherwise the one last chosen for dictation, otherwise the first installed. Separate from transcription.localModel, which it never writes: read once by MeetingRuntime::provider at Start, which loads it on the one shared server and holds it through the whole-recording pass, then loads dictation's model again. Meanwhile a dictation on a local Whisper model is transcribed by it. Also chosen in the Meetings page's transcription chip, which writes it and meetings.provider together.",
+      "writtenBy": [
+        "meeting_set_local_model"
+      ],
+      "ui": "Settings > Meetings",
+      "reachable": true
+    },
     "meetings.deleteRecordings": {
       "what": "Whether each meeting's recording is deleted once its note is saved with a whole transcript (KNEG-409). Off by default. Read once, by MeetingRuntime::start, into the meeting's plan, which the session holds and which is written beside the recording, so Stop and a later recovery act on the choice the meeting started with; a recovered recording with no plan beside it follows the setting as it is then. Discard ignores it: Discard always deletes the recording. A note saved from typed notes alone, or from the running transcript because the whole-recording pass failed, keeps its recording, and both the outcome and the note's recording details say so; so does a deletion that fails.",
       "writtenBy": [
