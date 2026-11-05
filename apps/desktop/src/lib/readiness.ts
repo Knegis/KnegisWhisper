@@ -155,7 +155,8 @@ export type LocalProblem = { problem: string; detail: string; fix?: "provider-me
  * - `local` (windowed Whisper): its server running, or the engine and at least
  *   one Whisper model installed. Start loads the remembered model, or the first
  *   installed one, when the server is not running (`local_model.rs`
- *   `meeting_revive_handle`).
+ *   `meeting_revive_handle`). A model chosen for meetings has to be installed
+ *   itself, because Start loads that one and no other (`MeetingServer`).
  * - `local-streaming`: a streaming model chosen and downloaded, and the
  *   sherpa-onnx runtime that serves it (`sherpa_stream.rs` `start`) -- a
  *   streaming server that can be kept to this computer, which `start` checks
@@ -167,7 +168,7 @@ export type LocalProblem = { problem: string; detail: string; fix?: "provider-me
 export function localProviderProblem(
   selected: string | null,
   whisper:
-    | { port: number | null; serverInstalled: boolean; models: readonly { installed: boolean }[] }
+    | { port: number | null; serverInstalled: boolean; models: readonly { id: string; installed: boolean }[] }
     | null,
   sherpa:
     | {
@@ -178,8 +179,16 @@ export function localProviderProblem(
         streamBindsLoopback: boolean | null;
       }
     | null,
+  /** `meetings.localModel`: the model chosen for meetings, or `null` for Automatic. */
+  meetingModel: string | null = null,
 ): LocalProblem | null {
   if (selected === "local" && whisper !== null) {
+    if (meetingModel !== null && !whisper.models.some((model) => model.id === meetingModel && model.installed)) {
+      return {
+        problem: "The model chosen for meetings isn't installed.",
+        detail: "Install it under Settings > Transcription > Local, or choose another model.",
+      };
+    }
     const startable = whisper.serverInstalled && whisper.models.some((model) => model.installed);
     if (whisper.port !== null || startable) return null;
     return {

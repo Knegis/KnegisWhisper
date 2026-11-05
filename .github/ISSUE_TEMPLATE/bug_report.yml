@@ -1,0 +1,42 @@
+name: Bug report
+description: Report a problem you can reproduce.
+title: "bug: "
+body:
+  - type: markdown
+    attributes:
+      value: Search existing issues first. Redact credentials and private content. Audio and transcripts are never required. Report vulnerabilities privately through SECURITY.md.
+  - type: input
+    id: version
+    attributes:
+      label: App version or source commit
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Operating system and architecture
+      placeholder: Windows 11 x64
+    validations:
+      required: true
+  - type: input
+    id: route
+    attributes:
+      label: Provider, model and audio device, if relevant
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Shortest reproduction
+      description: Include exact steps and how consistently it occurs.
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Redacted diagnostics or screenshots
+      description: Optional. Remove tokens, account details and private recording/transcript content.

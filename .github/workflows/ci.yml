@@ -48,6 +48,12 @@ jobs:
         with:
           node-version: "22"
 
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Release-tool tests
+        run: python -m unittest discover -s tools/release -p "test_*.py"
+
       - name: CI selection and entry-point tests
         run: node --test tools/ci/changes.test.mjs tools/ci/entry.test.mjs
 
