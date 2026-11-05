@@ -186,7 +186,7 @@ export function localProviderProblem(
     if (meetingModel !== null && !whisper.models.some((model) => model.id === meetingModel && model.installed)) {
       return {
         problem: "The model chosen for meetings isn't installed.",
-        detail: "Install it under Settings > Transcription > Local, or choose another under Settings > Meetings.",
+        detail: "Install it under Settings > Transcription > Local, or choose another model.",
       };
     }
     const startable = whisper.serverInstalled && whisper.models.some((model) => model.installed);

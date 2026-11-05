@@ -599,7 +599,10 @@ Model row on Settings > Meetings (`kw.localMeetingProvider()` makes the local
 provider usable in the fixtures): there only for that provider, Automatic and
 what's installed, one write on a change, a failed write in view, a chosen model
 that isn't installed named greyed there and holding Start on Meetings, disabled
-while a meeting runs, and no sideways scroll at 720x520. Which model actually
+while a meeting runs, and no sideways scroll at 720x520. Then the same choice in
+the Meetings page's transcription chip: the models under their own heading, what
+each row writes, what the chip says while a meeting runs, a failed write in view,
+and the menu inside the window at 720x520. Which model actually
 loads, and dictation's coming back, is pinned by `cargo test` (`local_model.rs`,
 `meeting.rs`), including one `#[ignore]`d test against the real server.
 

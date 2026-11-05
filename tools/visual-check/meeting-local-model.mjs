@@ -4,7 +4,10 @@
  * only for the `local` provider, listing Automatic and what's installed, saved
  * on change, a refused write in view, a chosen model that has gone named both
  * there and on Meetings before Start, held while a meeting runs, and no sideways
- * scroll at 720x520.
+ * scroll at 720x520. Then the same choice in the Meetings page's transcription
+ * chip: the models listed under their own heading, what each row writes, what the
+ * chip says, including while a meeting runs, a failed write in view, and the
+ * menu and the chips fitting at 720x520.
  *
  * `kw.localMeetingProvider()` makes that provider usable in the fixtures, which
  * keep it only until a reload, so each check calls it after its fresh load. They
@@ -105,6 +108,42 @@ const choose = async (cdp, label, value) => {
 };
 
 const saved = (cdp) => cdp.evaluate(snippets.invoke("meeting_local_model"));
+const savedProvider = (cdp) => cdp.evaluate(snippets.invoke("meeting_provider"));
+
+const CHIP = 'button.chip[aria-label^="Meeting transcription"]';
+const AUTOMATIC_ROW = "Local windowed model";
+const SMALL_ROW = "Whisper Small (Q5) · 488 MB";
+const SMALL_NAME = "Whisper Small (Q5)";
+const MODELS_HEADING = "Local windowed models";
+const CLOUD_ROW = "Deepgram";
+
+async function openMeetings(cdp) {
+  await cdp.evaluate(snippets.clickText(NAV_PILL, "Meetings"));
+  await waitFor(cdp, `Boolean(document.querySelector(${JSON.stringify(CHIP)}))`, "the transcription chip");
+  await delay(400);
+}
+
+const chipText = (cdp) => cdp.evaluate(`document.querySelector(${JSON.stringify(CHIP)})?.querySelector('.chip-label')?.textContent ?? null`);
+
+async function openChip(cdp) {
+  await cdp.evaluate(`document.querySelector(${JSON.stringify(CHIP)}).click()`);
+  await waitFor(cdp, snippets.menuVisible(), "the menu");
+  return cdp.evaluate(snippets.menuState());
+}
+
+/** Opens the chip's menu and presses the row with this name. */
+async function chooseRow(cdp, name) {
+  await openChip(cdp);
+  await cdp.evaluate(`(() => {
+    const row = [...document.querySelectorAll('.chip-menu [role="option"]')]
+      .find((item) => document.getElementById(item.getAttribute('aria-labelledby'))?.textContent === ${JSON.stringify(name)});
+    if (!row) throw new Error('The open menu has no row named ' + ${JSON.stringify(name)});
+    row.click();
+  })()`);
+  await delay(350);
+}
+
+const closeMenu = (cdp) => cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
 
 const SETUP_NOTE = "Each check starts from a fresh load on the fixtures, at 1000x720 unless it says otherwise.";
 
@@ -293,6 +332,128 @@ export async function runMeetingLocalModel(options) {
         measured,
         matches: measured.left >= 0 && measured.right <= measured.innerWidth
           && measured.pageScroll <= measured.pageClient && measured.mainScroll <= measured.mainClient,
+        screenshots: [shot],
+      };
+    });
+
+    await check({
+      id: "7",
+      claim: "The transcription chip lists the models under their own heading, and choosing one saves it and the provider that uses it.",
+      expectation: `from a cloud provider: a "${MODELS_HEADING}" heading with the installed models; pressing "${SMALL_ROW}" writes the model and the provider once each, the chip says "${SMALL_NAME}", and that row is ticked alone`,
+    }, async () => {
+      await freshShell(cdp, { before: [["meeting_set_provider", { provider: "meeting:deepgram" }]] });
+      await openMeetings(cdp);
+      const before = await openChip(cdp);
+      const shot = "07-menu-1000x720.png";
+      await cdp.screenshot(resolve(out, shot));
+      await closeMenu(cdp);
+      await delay(150);
+      await cdp.evaluate(snippets.clearStubCalls());
+      await chooseRow(cdp, SMALL_ROW);
+      const writes = {
+        model: await cdp.evaluate(snippets.stubCalls("meeting_set_local_model")),
+        provider: await cdp.evaluate(snippets.stubCalls("meeting_set_provider")),
+      };
+      const after = { chip: await chipText(cdp), model: await saved(cdp), provider: await savedProvider(cdp) };
+      const reopened = await openChip(cdp);
+      const ticked = reopened.options.filter((option) => option.selected).map((option) => option.name);
+      const chosenShot = "07-chosen-1000x720.png";
+      await cdp.screenshot(resolve(out, chosenShot));
+      await closeMenu(cdp);
+      return {
+        measured: { groups: before.groups, rows: before.options.map((option) => option.name), writes, after, ticked },
+        matches: before.groups.includes(MODELS_HEADING) && before.options.some((option) => option.name === SMALL_ROW)
+          && writes.model.length === 1 && writes.model[0].model === INSTALLED
+          && writes.provider.length === 1 && writes.provider[0].provider === "local"
+          && after.chip === SMALL_NAME && after.model === INSTALLED && after.provider === "local"
+          && ticked.length === 1 && ticked[0] === SMALL_ROW,
+        screenshots: [shot, chosenShot],
+      };
+    });
+
+    await check({
+      id: "8",
+      claim: "The provider's own row is Automatic, another provider leaves the model alone, and pressing what's chosen writes nothing.",
+      expectation: `pressing the chosen row again: no writes; "${CLOUD_ROW}": the provider changes and the model stays; "${AUTOMATIC_ROW}": the provider returns, the model clears and the chip names the provider`,
+    }, async () => {
+      await freshShell(cdp, { before: [["meeting_set_provider", { provider: "local" }], ["meeting_set_local_model", { model: INSTALLED }]] });
+      await openMeetings(cdp);
+      await chooseRow(cdp, SMALL_ROW);
+      const again = {
+        model: await cdp.evaluate(snippets.stubCalls("meeting_set_local_model")),
+        provider: await cdp.evaluate(snippets.stubCalls("meeting_set_provider")),
+      };
+      await chooseRow(cdp, CLOUD_ROW);
+      const cloud = { chip: await chipText(cdp), model: await saved(cdp), provider: await savedProvider(cdp) };
+      await chooseRow(cdp, AUTOMATIC_ROW);
+      const automatic = { chip: await chipText(cdp), model: await saved(cdp), provider: await savedProvider(cdp) };
+      return {
+        measured: { again, cloud, automatic },
+        matches: again.model.length === 0 && again.provider.length === 0
+          && cloud.chip === CLOUD_ROW && cloud.model === INSTALLED && cloud.provider === "meeting:deepgram"
+          && automatic.chip === AUTOMATIC_ROW && automatic.model === null && automatic.provider === "local",
+      };
+    });
+
+    await check({
+      id: "9",
+      claim: "A write that fails is in view, and the chip doesn't claim the choice.",
+      expectation: `with the model's write refused, the failure's words on the page and the chip still "${CLOUD_ROW}"`,
+    }, async () => {
+      const failure = "the meeting model could not be saved here";
+      await freshShell(cdp, { before: [["meeting_set_provider", { provider: "meeting:deepgram" }]] });
+      await openMeetings(cdp);
+      await cdp.evaluate(snippets.stubInvoke({ reject: { meeting_set_local_model: failure } }));
+      await chooseRow(cdp, SMALL_ROW);
+      const shown = await cdp.evaluate(`document.body.textContent.includes(${JSON.stringify(failure)})`);
+      const chip = await chipText(cdp);
+      await cdp.evaluate(snippets.stubInvoke({ reject: { meeting_set_local_model: null } }));
+      const provider = await savedProvider(cdp);
+      return { measured: { shown, chip, provider }, matches: shown && chip === CLOUD_ROW && provider === "meeting:deepgram" };
+    });
+
+    await check({
+      id: "10",
+      claim: "While a meeting runs, the chip says which model it's using, as a statement.",
+      expectation: `a chip reading "${SMALL_NAME}" in the live view that opens no menu`,
+    }, async () => {
+      await freshShell(cdp, { before: [["meeting_set_provider", { provider: "local" }], ["meeting_set_local_model", { model: INSTALLED }]] });
+      await openMeetings(cdp);
+      await waitFor(cdp, START_ENABLED, "Start recording to be enabled");
+      await cdp.evaluate(snippets.clickText(".control-start", "Start recording"));
+      await waitFor(cdp, LIVE, "the live meeting view");
+      await delay(300);
+      const measured = await cdp.evaluate(`(() => {
+        const chip = [...document.querySelectorAll('.meeting-live .chip, .chip')].find((item) => item.textContent.trim() === ${JSON.stringify(SMALL_NAME)});
+        return chip ? { tag: chip.tagName.toLowerCase(), popup: chip.getAttribute('aria-haspopup') } : null;
+      })()`);
+      const shot = "10-recording-1000x720.png";
+      await cdp.screenshot(resolve(out, shot));
+      return { measured, matches: measured?.tag === "span" && measured.popup === null, screenshots: [shot] };
+    });
+
+    await check({
+      id: "11",
+      claim: "At the smallest window the menu stays inside it, and the chips scroll nothing sideways.",
+      expectation: "at 720x520 the open menu's box is inside the window, and .split-main scrollWidth is no more than its clientWidth",
+    }, async () => {
+      await freshShell(cdp, { size: SMALL, before: [["meeting_set_provider", { provider: "local" }], ["meeting_set_local_model", { model: INSTALLED }]] });
+      await openMeetings(cdp);
+      // It's below the fold at this size, and a person scrolls to it first. A
+      // scroll closes an open menu, so this comes before the press.
+      await cdp.evaluate(`document.querySelector(${JSON.stringify(CHIP)}).scrollIntoView({ block: 'center' })`);
+      await delay(250);
+      const menu = await openChip(cdp);
+      await delay(400);
+      const shot = "11-menu-720x520.png";
+      await cdp.screenshot(resolve(out, shot));
+      await closeMenu(cdp);
+      const main = await cdp.evaluate("(() => { const m = document.querySelector('.split-main'); return { scrollWidth: m.scrollWidth, clientWidth: m.clientWidth }; })()");
+      const box = menu.box;
+      return {
+        measured: { box, viewport: menu.viewport, main },
+        matches: box.left >= 0 && box.top >= 0 && box.right <= menu.viewport.width && box.bottom <= menu.viewport.height
+          && main.scrollWidth <= main.clientWidth,
         screenshots: [shot],
       };
     });

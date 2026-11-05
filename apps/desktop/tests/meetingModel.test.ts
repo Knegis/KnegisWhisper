@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 
-import { AUTOMATIC_MODEL, meetingModelDetail, meetingModelOptions } from "../src/lib/meetingModel.js";
+import { AUTOMATIC_MODEL, meetingModelDetail, meetingModelOptions, transcriberLabel } from "../src/lib/meetingModel.js";
 
 const MODELS = [
   { id: "large", name: "Large", sizeMb: 3000, installed: true },
@@ -29,6 +29,16 @@ test("a chosen model that has gone stays listed and greyed, so the select shows 
   assert.deepEqual(unknown, { id: "retired", label: "retired · not installed", disabled: true });
   // An installed choice isn't listed twice.
   assert.equal(meetingModelOptions(MODELS, "tiny").filter((option) => option.id === "tiny").length, 1);
+});
+
+test("the chip names the chosen model only for the provider that uses it", () => {
+  const LOCAL = { id: "local", name: "Local windowed model" };
+  assert.equal(transcriberLabel(LOCAL, MODELS, "tiny"), "Tiny");
+  assert.equal(transcriberLabel(LOCAL, MODELS, null), "Local windowed model");
+  // One this version no longer knows has only its id to go by.
+  assert.equal(transcriberLabel(LOCAL, MODELS, "retired"), "retired");
+  assert.equal(transcriberLabel({ id: "deepgram-realtime", name: "Deepgram" }, MODELS, "tiny"), "Deepgram");
+  assert.equal(transcriberLabel(null, MODELS, "tiny"), "Not set up");
 });
 
 test("a chosen model says it is loaded at Start and that local dictation shares it meanwhile", () => {

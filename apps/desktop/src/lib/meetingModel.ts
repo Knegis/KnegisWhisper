@@ -7,6 +7,10 @@
  * the first one installed. A chosen model is loaded at Start and makes both the
  * live transcript and the saved note (`local_model.rs` `MeetingServer`).
  *
+ * Chosen in two places, which write the same setting: the select on Settings >
+ * Meetings, and the transcription chip's menu on the Meetings page, as Dictation's
+ * chip lists its models (`providerMenu`).
+ *
  * Pure, so the wording is tested (`tests/meetingModel.test.ts`). What can
  * actually be started is Rust's to say at Start; `localProviderProblem` says so
  * before it for a chosen model that isn't installed.
@@ -29,30 +33,64 @@ export interface MeetingModelOption {
   disabled: boolean;
 }
 
+export interface MeetingModelChoice {
+  id: string;
+  /** The name and size for an installed model, the name alone for one that has gone. */
+  label: string;
+  installed: boolean;
+}
+
 /**
- * Automatic, then what's installed, smallest first as on Settings >
+ * What can be listed: what's installed, smallest first as on Settings >
  * Transcription. Models that aren't installed are left out, with one
- * exception: a chosen model that has gone stays listed, greyed, so the select
- * still shows what is saved rather than quietly showing something else.
+ * exception: a chosen model that has gone stays listed, so the control still
+ * shows what is saved rather than quietly showing something else.
  */
+export function meetingModelChoices(
+  models: readonly WhisperModel[],
+  chosen: string | null,
+): MeetingModelChoice[] {
+  const installed = models.filter((model) => model.installed).sort(bySize);
+  const choices: MeetingModelChoice[] = installed.map((model) => ({
+    id: model.id,
+    label: model.sizeMb !== null ? `${model.name} · ${model.sizeMb} MB` : model.name,
+    installed: true,
+  }));
+  if (chosen !== null && !installed.some((model) => model.id === chosen)) {
+    const name = models.find((model) => model.id === chosen)?.name ?? chosen;
+    choices.push({ id: chosen, label: name, installed: false });
+  }
+  return choices;
+}
+
+/** The select on Settings > Meetings: Automatic, then the choices, one that has gone greyed. */
 export function meetingModelOptions(
   models: readonly WhisperModel[],
   chosen: string | null,
 ): MeetingModelOption[] {
-  const installed = models.filter((model) => model.installed).sort(bySize);
-  const options: MeetingModelOption[] = [
+  return [
     { id: AUTOMATIC_MODEL, label: "Automatic", disabled: false },
-    ...installed.map((model) => ({
-      id: model.id,
-      label: model.sizeMb !== null ? `${model.name} · ${model.sizeMb} MB` : model.name,
-      disabled: false,
+    ...meetingModelChoices(models, chosen).map((choice) => ({
+      id: choice.id,
+      label: choice.installed ? choice.label : `${choice.label} · not installed`,
+      disabled: !choice.installed,
     })),
   ];
-  if (chosen !== null && !installed.some((model) => model.id === chosen)) {
-    const name = models.find((model) => model.id === chosen)?.name ?? chosen;
-    options.push({ id: chosen, label: `${name} · not installed`, disabled: true });
-  }
-  return options;
+}
+
+/**
+ * What the transcription chip says: the model, when one is chosen for the
+ * provider that uses it, since that is the choice its menu just made. The
+ * provider's own name otherwise, Automatic included.
+ */
+export function transcriberLabel(
+  provider: { id: string; name: string } | null,
+  models: readonly WhisperModel[],
+  chosen: string | null,
+): string {
+  if (provider === null) return "Not set up";
+  if (provider.id !== "local" || chosen === null) return provider.name;
+  return models.find((model) => model.id === chosen)?.name ?? chosen;
 }
 
 /** The sentence under the select: what the choice showing will actually do. */

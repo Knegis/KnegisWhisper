@@ -384,7 +384,7 @@ test("the local provider with no model installed, or no engine, says so before S
 test("a model chosen for meetings has to be installed itself, because Start loads that one", () => {
   const notInstalled = {
     problem: "The model chosen for meetings isn't installed.",
-    detail: "Install it under Settings > Transcription > Local, or choose another under Settings > Meetings.",
+    detail: "Install it under Settings > Transcription > Local, or choose another model.",
   };
   // Another model being installed, or running, doesn't help: Start wouldn't use it.
   assert.deepEqual(localProviderProblem("local", whisper(), null, "model-0"), notInstalled);

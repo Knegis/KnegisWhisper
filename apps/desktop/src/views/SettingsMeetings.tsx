@@ -331,7 +331,8 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
         </div>
 
         {/* Only for the provider it means anything to. The streaming provider's
-            model is chosen under Settings > Transcription > Local. */}
+            model is chosen under Settings > Transcription > Local. Meetings'
+            transcription chip writes the same setting. */}
         {selected === "local" && models.error ? <p className="error">{models.error}</p> : null}
         {selected === "local" && models.data ? (
           <div className="row">

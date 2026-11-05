@@ -61,6 +61,13 @@ real meeting from the real window with a chosen model, so `start_live`, the live
 been reached through their parts. Nor how long a large model takes to load at Start, which is time the person waits
 before recording begins.
 
+The owner then asked to pick it on the Meetings page too, as Dictation's chip does. The transcription chip's menu now
+lists the installed models under their own heading, with the provider's own row meaning Automatic, and pressing a model
+sets both it and the provider. A second chip was the alternative, rejected: Dictation has one chip for this, and
+Meetings already fills three rows at the smallest window. A cloud provider leaves the model saved, so going to the
+cloud and back keeps it. The chip names the model, including as a statement while a meeting runs. Measured against
+fixtures by the same script, whose fixtures store the settings and start nothing.
+
 ---
 
 ## 2026-11-04 — The owner's frog replaces the dot mark

@@ -237,7 +237,7 @@
       "reachable": true
     },
     "meetings.localModel": {
-      "what": "The Whisper model the `local` meeting provider uses, or empty for Automatic: the model already loaded, otherwise the one last chosen for dictation, otherwise the first installed. Separate from transcription.localModel, which it never writes: read once by MeetingRuntime::provider at Start, which loads it on the one shared server and holds it through the whole-recording pass, then loads dictation's model again. Meanwhile a dictation on a local Whisper model is transcribed by it.",
+      "what": "The Whisper model the `local` meeting provider uses, or empty for Automatic: the model already loaded, otherwise the one last chosen for dictation, otherwise the first installed. Separate from transcription.localModel, which it never writes: read once by MeetingRuntime::provider at Start, which loads it on the one shared server and holds it through the whole-recording pass, then loads dictation's model again. Meanwhile a dictation on a local Whisper model is transcribed by it. Also chosen in the Meetings page's transcription chip, which writes it and meetings.provider together.",
       "writtenBy": [
         "meeting_set_local_model"
       ],

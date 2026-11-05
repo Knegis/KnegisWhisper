@@ -16,7 +16,8 @@ import { askConfirm } from "../components/ConfirmDialog";
  *     chosen in its chip's menu and shared with dictation, whose footer runs a
  *     five-second "Test microphone" (KNEG-364) -- whether the other participants
  *     are captured, a choice kept on this page only, who transcribes in what
- *     language, each chosen in its chip's menu (`ChipMenu`), whether a summary is
+ *     language, each chosen in its chip's menu (`ChipMenu`), with the local
+ *     windowed provider's models listed in the first of those, whether a summary is
  *     made, a toggle that is a link to Cleanup & summaries until a provider and
  *     model are chosen there, whether speakers are labelled, a toggle that is a
  *     link to Settings > Meetings until that is set up, and the folder the note
@@ -122,6 +123,7 @@ import {
   getDiarizationStatus,
   setDiarizationEnabled,
   setMeetingLanguage,
+  setMeetingLocalModel,
   setMeetingProvider,
   onMeetingOutcome,
   onMeetingState,
@@ -148,7 +150,8 @@ import {
 } from "../lib/labels";
 import { emptyLiveTranscript, foldTranscriptEvent, liveRows, type LiveRow } from "../lib/liveTranscript";
 import { meetingStatus } from "../lib/meetingNotice";
-import { providerMenu, selectProvider } from "../lib/meetingProvider";
+import { transcriberLabel } from "../lib/meetingModel";
+import { providerChoice, providerMenu, selectProvider } from "../lib/meetingProvider";
 import {
   activeCall,
   discardQuestion,
@@ -244,7 +247,8 @@ export function Meetings({
     const [whisper, sherpa, meetingModel] = await Promise.all([getLocalStatus(), getSherpaStatus(), getMeetingLocalModel()]);
     return { whisper, sherpa, meetingModel };
   }, []);
-  const engines = useRefresh(loadEngines).data ?? null;
+  const enginesRead = useRefresh(loadEngines);
+  const engines = enginesRead.data ?? null;
   // The microphone meetings and dictation both record (KNEG-341), chosen in
   // the chip's menu here as on Dictation (KNEG-364), read on its own: a
   // failed read leaves the chip saying the default, which is what a meeting
@@ -595,7 +599,13 @@ export function Meetings({
   // follow the saved value. Choosing what is already saved writes nothing --
   // except the fallback shown when the saved provider cannot be used: that one
   // is not what is saved, so choosing it is the write that replaces it.
-  const providerOptions = providerMenu(providers, data.provider, selected);
+  const providerOptions = providerMenu(
+    providers,
+    data.provider,
+    selected,
+    engines ? { models: engines.whisper.models, chosen: engines.meetingModel } : null,
+  );
+  const transcriberName = transcriberLabel(transcriber, engines?.whisper.models ?? [], engines?.meetingModel ?? null);
   const languageOptions = meetingLanguageMenu(data.language, selectedProvider);
   // Its `folderId` is the folder Start sends: the one the chip names, so a
   // folder deleted in Notes since it was chosen here is no folder.
@@ -919,10 +929,21 @@ export function Meetings({
                   ref={providerMenuRef}
                   icon="computer"
                   name="Meeting transcription"
-                  label={transcriber ? transcriber.name : "Not set up"}
+                  label={transcriberName}
                   options={providerOptions}
                   onChoose={(id) => {
-                    if (id !== data.provider) choose(() => setMeetingProvider(id));
+                    const write = providerChoice(id, data.provider, engines ? engines.meetingModel : undefined);
+                    if (write === null) return;
+                    // The model first: a provider that fails to save then leaves
+                    // the page on what it was, with only the model moved, which
+                    // a meeting on another provider doesn't read.
+                    choose(async () => {
+                      if (write.model !== undefined) {
+                        await setMeetingLocalModel(write.model);
+                        await enginesRead.reload();
+                      }
+                      if (write.provider !== undefined) await setMeetingProvider(write.provider);
+                    });
                   }}
                   footer={{ label: "More in Settings…", onClick: () => onGoTo("meeting-settings") }}
                 />
@@ -1137,7 +1158,7 @@ export function Meetings({
                       <div className="live-chips" role="group" aria-label="In effect for this meeting">
                         <Chip icon="microphone" label={openedMicrophone.label} title={openedMicrophone.title} srText={openedMicrophone.title} />
                         {liveSources?.systemAudio ? <Chip icon="others" label="Other participants" /> : null}
-                        <Chip icon="computer" label={transcriber ? transcriber.name : "Not set up"} />
+                        <Chip icon="computer" label={transcriberName} />
                         <Chip icon="language" label={language} />
                         {speakerLabels?.kind === "toggle" && speakerLabels.pressed ? <Chip icon="speakers" label="Speaker labels" /> : null}
                       </div>
