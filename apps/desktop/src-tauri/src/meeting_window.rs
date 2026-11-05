@@ -123,6 +123,10 @@ pub fn create(app: &AppHandle) -> tauri::Result<WebviewWindow> {
             .maximizable(false)
             .decorations(false)
             .transparent(true)
+            // Left on, Windows 11 draws its own slightly rounded border around the
+            // whole transparent window, outside the card's far rounder corners.
+            // Off, Tauri's resize band runs inside all four edges instead.
+            .shadow(false)
             .always_on_top(true)
             .skip_taskbar(true)
             // tao regenerates GWL_EXSTYLE from FOCUSABLE on every show/hide;

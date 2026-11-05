@@ -12,6 +12,27 @@ maintained in place rather than appended to, because its purpose is to be curren
 
 ---
 
+## 2026-11-05 — The recording window's second edge was Windows' own
+
+The owner saw two edges on the recording window, one very curved and one slightly rounded. The very curved one is the
+card's own 32px corner. The other is a native frame: Tauri leaves `shadow` on unless told otherwise, and its docs say
+that gives an undecorated window a 1px border and, on Windows 11, rounded corners, outlining the whole transparent
+window behind the card. The overlay and the languages window had already turned it off; the meeting and update windows
+never had. Fixtures couldn't show this, because a fixture has no native frame, and `floating-windows.mjs` says as much.
+
+Both windows now build with `.shadow(false)`. Read from the real windows with Win32 calls, before and after: the
+meeting window went from 408x111 around 392x102 of content to exactly 392x102, and the update card from 408x113 to
+392x104. Windows' drop shadow goes with the border, which leaves the card's own hairline as its edge.
+
+Resizing changes with it. With the frame, the sides and bottom were grabbed on an invisible band outside the card and
+only the top inside it. Without it, Tauri's resize child covers a band 4px wide inside all four edges at 100% scale,
+measured from its window region. That's a narrower target than before, and it sits inside the panel's padding, so it
+covers no control. **Not checked by hand:** how the window looks now, since it's excluded from screen capture and
+can't be screenshotted, and whether dragging each edge still resizes it. The region says where the band is, not that a
+drag works.
+
+---
+
 ## 2026-11-05 — Content starts just under the title bar
 
 At the owner's request, the space between the title bar and a screen's content is much smaller than the boards draw

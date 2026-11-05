@@ -56,6 +56,9 @@ pub fn create(app: &AppHandle) -> tauri::Result<WebviewWindow> {
         .resizable(false)
         .decorations(false)
         .transparent(true)
+        // As the meeting window: left on, Windows 11 draws a second, slightly
+        // rounded border outside the card.
+        .shadow(false)
         .always_on_top(true)
         .skip_taskbar(true)
         // Declarative half of not taking focus; `apply_treatments` adds the
