@@ -354,7 +354,7 @@ test("everything fine is ready with no caution", () => {
 const whisper = (over: { port?: number | null; serverInstalled?: boolean; installed?: boolean[] } = {}) => ({
   port: over.port ?? null,
   serverInstalled: over.serverInstalled ?? true,
-  models: (over.installed ?? [false, true]).map((installed) => ({ installed })),
+  models: (over.installed ?? [false, true]).map((installed, index) => ({ id: `model-${index}`, installed })),
 });
 
 const sherpa = (over: { cliInstalled?: boolean; selectedStream?: string | null; installed?: boolean; streamBindsLoopback?: boolean | null } = {}) => ({
@@ -379,6 +379,21 @@ test("the local provider with no model installed, or no engine, says so before S
       detail: "Install one under Settings > Transcription > Local. Start then loads it.",
     });
   }
+});
+
+test("a model chosen for meetings has to be installed itself, because Start loads that one", () => {
+  const notInstalled = {
+    problem: "The model chosen for meetings isn't installed.",
+    detail: "Install it under Settings > Transcription > Local, or choose another under Settings > Meetings.",
+  };
+  // Another model being installed, or running, doesn't help: Start wouldn't use it.
+  assert.deepEqual(localProviderProblem("local", whisper(), null, "model-0"), notInstalled);
+  assert.deepEqual(localProviderProblem("local", whisper({ port: 8178 }), null, "model-0"), notInstalled);
+  assert.deepEqual(localProviderProblem("local", whisper(), null, "retired"), notInstalled);
+  assert.equal(localProviderProblem("local", whisper(), null, "model-1"), null);
+  // Automatic, and a provider it isn't for, ask nothing of it.
+  assert.equal(localProviderProblem("local", whisper(), null, null), null);
+  assert.equal(localProviderProblem("local-streaming", whisper(), sherpa(), "retired"), null);
 });
 
 test("local streaming needs a streaming model chosen, downloaded, and its runtime installed", () => {

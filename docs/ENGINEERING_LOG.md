@@ -12,6 +12,46 @@ maintained in place rather than appended to, because its purpose is to be curren
 
 ---
 
+## 2026-11-05 — A model chosen for meetings on the local windowed provider
+
+Asked for by the owner: choosing `Local windowed model` under Settings > Meetings should also let them choose
+which model. Until now a meeting took whatever the one whisper server had loaded, otherwise the model last chosen
+for dictation, otherwise the first installed. That is now `Automatic`, and it stays the default, unchanged.
+`meetings.localModel` holds a choice, and never touches `transcription.localModel`.
+
+**One server, so the meeting borrows it.** A second whisper server for meetings was the alternative, rejected for
+now: another process with its own pid record and memory, for a choice that only matters while a meeting runs.
+Instead `MeetingServer` loads the chosen model at Start as an ordinary change, and a `ModelLoan` held until the note
+is saved loads dictation's model again when dropped, on every way a meeting ends, a Start that fails included. Three
+things follow, and the screen says the first:
+
+- While the loan is held, dictation on a local Whisper model is transcribed by the meeting's model. Its history row
+  names that model, so it is at least not hidden.
+- A chosen model that isn't the one loaded is refused at Start while a dictation or an import is using the server, in
+  the usual "Not now" words, rather than stopping the server under them (KNEG-414). An import can hold it for a long
+  time, and the way round is Automatic or another provider. Starting on whatever was loaded instead would be a
+  transcript from a model nobody chose.
+- The give-back asks again every two seconds for up to five minutes, because nothing may wait on the write side of
+  `ServerUsers`. A dictation left waiting past that gets the meeting's model until the next change or relaunch, and
+  the log says so.
+
+**The chosen model makes the note too.** The whole-recording pass normally uses dictation's engine, so a Parakeet
+model selected for dictation would have made the note from a meeting where somebody had just picked a Whisper model.
+With a choice it now uses that model. `Automatic` still follows dictation, and its sentence says so when Parakeet is
+selected. Recovering an interrupted recording stays `Automatic`: the meeting it came from may not have been on this
+provider at all.
+
+Measured: `native_a_meeting_model_replaces_dictations_and_gives_it_back`, an `#[ignore]`d test against the real
+server with the installed `base` and `tiny`, on an isolated pid record and an in-memory database. `tiny` replaces
+`base` and answers a request, a dictation in flight holds the give-back off, and then `base` is back under a new
+process with `transcription.localModel` untouched. It does not read the text it gets back, so it says nothing about
+quality. The row is measured by `tools/visual-check/meeting-local-model.mjs` against fixtures. **Not exercised:** a
+real meeting from the real window with a chosen model, so `start_live`, the live windows and the saved note have only
+been reached through their parts. Nor how long a large model takes to load at Start, which is time the person waits
+before recording begins.
+
+---
+
 ## 2026-11-04 — The owner's frog replaces the dot mark
 
 At the owner's request, the frog in a cowboy hat replaces the sixteen-dot diamond the boards draw, in the title

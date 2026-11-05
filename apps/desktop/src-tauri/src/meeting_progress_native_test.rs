@@ -117,6 +117,7 @@ fn native_meeting_progress_and_settings_ipc() {
                 state.credentials_arc(),
                 local.shared(),
                 crate::local_model::meeting_revive_handle(&local, state.db()),
+                crate::local_model::MeetingServer::new(&local, state.db()),
                 Arc::new(std::sync::RwLock::new(None)),
                 Arc::new(crate::sherpa_stream::SherpaStream::new().unwrap()),
                 Arc::new(crate::meeting::draft::NotesDraft::default()),

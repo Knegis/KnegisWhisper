@@ -588,6 +588,21 @@ a toggle that writes the setting and says what it costs, a refused write in view
 a statement while a meeting runs, and no sideways scroll at 720x520. What the
 setting does to a saved note is pinned by `cargo test`, not here.
 
+## Meeting local model
+
+```powershell
+node tools/visual-check/meeting-local-model.mjs --url http://127.0.0.1:5191/
+```
+
+Same options as the chip menus (the banner is always removed). It measures the
+Model row on Settings > Meetings (`kw.localMeetingProvider()` makes the local
+provider usable in the fixtures): there only for that provider, Automatic and
+what's installed, one write on a change, a failed write in view, a chosen model
+that isn't installed named greyed there and holding Start on Meetings, disabled
+while a meeting runs, and no sideways scroll at 720x520. Which model actually
+loads, and dictation's coming back, is pinned by `cargo test` (`local_model.rs`,
+`meeting.rs`), including one `#[ignore]`d test against the real server.
+
 ## Note meta
 
 ```powershell

@@ -113,6 +113,7 @@ import {
   getInputDevice,
   getInputDevices,
   getLocalStatus,
+  getMeetingLocalModel,
   getMeetingStatus,
   getNoteSummaries,
   getRecoverableRecordings,
@@ -240,8 +241,8 @@ export function Meetings({
   // their own for the same reason: a failure leaves both unknown, which holds
   // nothing back, and Start still says what went wrong.
   const loadEngines = useCallback(async () => {
-    const [whisper, sherpa] = await Promise.all([getLocalStatus(), getSherpaStatus()]);
-    return { whisper, sherpa };
+    const [whisper, sherpa, meetingModel] = await Promise.all([getLocalStatus(), getSherpaStatus(), getMeetingLocalModel()]);
+    return { whisper, sherpa, meetingModel };
   }, []);
   const engines = useRefresh(loadEngines).data ?? null;
   // The microphone meetings and dictation both record (KNEG-341), chosen in
@@ -535,7 +536,7 @@ export function Meetings({
         }
       : null,
     languageWarning,
-    localProblem: localProviderProblem(selected, engines?.whisper ?? null, engines?.sherpa ?? null),
+    localProblem: localProviderProblem(selected, engines?.whisper ?? null, engines?.sherpa ?? null, engines?.meetingModel ?? null),
     systemAudio: status.systemAudio,
   });
   // Where readiness holds Start back, the hero's fix is the one thing to do

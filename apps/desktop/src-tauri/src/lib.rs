@@ -358,6 +358,9 @@ pub fn run() -> anyhow::Result<()> {
                 // So Start can bring the server up for the `local` provider,
                 // whatever dictation is routed to (KNEG-387).
                 local_model::meeting_revive_handle(&local, &db),
+                // So a model chosen for meetings is loaded, and dictation's put
+                // back afterwards.
+                local_model::MeetingServer::new(&local, &db),
                 // So the whole-recording pass uses the engine dictation uses.
                 asr.selection(),
                 std::sync::Arc::clone(&stream),
@@ -592,6 +595,8 @@ pub fn run() -> anyhow::Result<()> {
             meeting::meeting_set_language,
             meeting::meeting_provider,
             meeting::meeting_set_provider,
+            meeting::meeting_local_model,
+            meeting::meeting_set_local_model,
             meeting::meeting_delete_recordings,
             meeting::meeting_set_delete_recordings,
             vocabulary::vocabulary_list,

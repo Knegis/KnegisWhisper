@@ -112,7 +112,7 @@ export function filterByLanguage(rows: readonly LocalModelRow[], code: string | 
 }
 
 /** Smaller first, an unknown size last, then by name. */
-function bySize(a: LocalModelRow, b: LocalModelRow): number {
+export function bySize(a: Pick<LocalModelRow, "name" | "sizeMb">, b: Pick<LocalModelRow, "name" | "sizeMb">): number {
   if (a.sizeMb !== b.sizeMb) {
     if (a.sizeMb === null) return 1;
     if (b.sizeMb === null) return -1;

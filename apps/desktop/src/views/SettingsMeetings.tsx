@@ -42,6 +42,11 @@ import { useSettingsDraft } from "../components/SettingsDrafts";
  * It does not say "streaming" about the local provider. It is repeated short
  * passes over a local model, about three seconds behind the room, and the name it
  * is given here is the name Rust gives it.
+ *
+ * That provider also takes a model, saved on change like the provider and read
+ * by Rust at Start (`meetings.localModel`). It is read on its own, as the
+ * Meetings page reads the same statuses, so a failure costs that row and not
+ * the screen.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -50,13 +55,16 @@ import { LearnMore } from "../components/LearnMore";
 import { Row } from "../components/Row";
 import {
   getDiarizationStatus,
+  getLocalStatus,
   getMeetingDeleteRecordings,
   getMeetingDetectLists,
   getMeetingKeyterms,
   getMeetingLanguage,
+  getMeetingLocalModel,
   getMeetingProvider,
   getMeetingProviders,
   getMeetingStatus,
+  getSherpaStatus,
   installDiarizationModel,
   onMeetingState,
   resetMeetingNotificationPlacement,
@@ -64,6 +72,7 @@ import {
   setMeetingDeleteRecordings,
   setMeetingDetectLists,
   setMeetingLanguage,
+  setMeetingLocalModel,
   setMeetingPrompt,
   setMeetingProvider,
   type MeetingState,
@@ -81,6 +90,7 @@ import {
   microphoneDetail,
   microphoneValue,
 } from "../lib/labels";
+import { AUTOMATIC_MODEL, meetingModelDetail, meetingModelOptions } from "../lib/meetingModel";
 import { selectProvider } from "../lib/meetingProvider";
 import { onePerLine, useMeetingReview } from "../lib/useMeetingReview";
 import { useRefresh } from "../lib/useRefresh";
@@ -108,6 +118,13 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
   }, []);
 
   const { data, error, reload, guard, fail } = useRefresh(load);
+  const loadModels = useCallback(async () => {
+    const [local, sherpa, chosen] = await Promise.all([getLocalStatus(), getSherpaStatus(), getMeetingLocalModel()]);
+    return { local, sherpa, chosen };
+  }, []);
+  const models = useRefresh(loadModels);
+  /** The model being saved, shown until the read after it; `null` otherwise. */
+  const [modelChoice, setModelChoice] = useState<string | null>(null);
 
   /** Live meeting state, which arrives by event between reads. */
   const [state, setState] = useState<MeetingState | null>(null);
@@ -207,6 +224,7 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
     await reload();
   };
   const preferencesGuard = useSettingsDraft({ label: "Meeting preferences", order: 3, dirty: false, save: async () => {}, discard: () => {} });
+  const modelGuard = useSettingsDraft({ label: "Meeting model", order: 4, dirty: false, save: async () => {}, discard: () => {} });
   const languageGuard = useSettingsDraft({ label: "Meeting language", order: 1, dirty: languageDraft !== null && languageDraft.trim() !== (languageSaved.current ?? data?.language ?? ""), save: persistLanguage, discard: () => setLanguageDraft(languageSaved.current ?? data?.language ?? null) });
   const providerGuard = useSettingsDraft({ label: "Meeting provider", dirty: chosen !== null && chosen !== (providerSaved.current?.value ?? data?.provider ?? null), save: persistProvider, discard: () => setChosen(providerSaved.current?.value ?? data?.provider ?? null) });
   const listGuard = useSettingsDraft({ label: "Meeting detection lists", order: 2, dirty: (allowDraft !== null || blockDraft !== null) && JSON.stringify({ allow: onePerLine(allowDraft ?? data?.detect.allow.join("\n") ?? ""), block: onePerLine(blockDraft ?? data?.detect.block.join("\n") ?? "") }) !== JSON.stringify(listsSaved.current ?? data?.detect), save: persistLists, discard: () => { setAllowDraft(listsSaved.current?.allow.join("\n") ?? null); setBlockDraft(listsSaved.current?.block.join("\n") ?? null); } });
@@ -270,8 +288,8 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
             does nothing. */}
         {recording ? (
           <p className="caveat">
-            A meeting is being recorded, so the provider and the language
-            can't be changed until it ends.
+            A meeting is being recorded, so the provider, its model and the
+            language can't be changed until it ends.
             {languageDraft !== null && languageDraft.trim() !== (languageSaved.current ?? data.language) && " Your unsaved language is kept for after the meeting; it does not change the meeting being recorded."}
           </p>
         ) : null}
@@ -311,6 +329,51 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
               ) : null}
           </div>
         </div>
+
+        {/* Only for the provider it means anything to. The streaming provider's
+            model is chosen under Settings > Transcription > Local. */}
+        {selected === "local" && models.error ? <p className="error">{models.error}</p> : null}
+        {selected === "local" && models.data ? (
+          <div className="row">
+            <span className="row-label">Model</span>
+            <div className="row-value">
+              <select
+                aria-label="Meeting model"
+                value={modelChoice ?? models.data.chosen ?? AUTOMATIC_MODEL}
+                disabled={recording}
+                onChange={(e) => {
+                  const id = e.target.value;
+                  setModelChoice(id);
+                  void modelGuard
+                    .run(async () => {
+                      await setMeetingLocalModel(id === AUTOMATIC_MODEL ? null : id);
+                      await models.reload();
+                    })
+                    .catch(fail)
+                    .finally(() => setModelChoice(null));
+                }}
+              >
+                {meetingModelOptions(models.data.local.models, models.data.chosen).map((option) => (
+                  <option key={option.id} value={option.id} disabled={option.disabled}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+              {modelGuard.feedback}
+              <em className="row-detail">
+                {meetingModelDetail({
+                  models: models.data.local.models,
+                  chosen: models.data.chosen,
+                  runningModel: models.data.local.runningModel,
+                  parakeet:
+                    models.data.sherpa.selected === null
+                      ? null
+                      : (models.data.sherpa.models.find((m) => m.id === models.data?.sherpa.selected)?.name ?? models.data.sherpa.selected),
+                })}
+              </em>
+            </div>
+          </div>
+        ) : null}
 
         {/* The Meetings page holds Start back while this is showing, and its
             "Choose a provider" comes here. The select above cannot answer it
