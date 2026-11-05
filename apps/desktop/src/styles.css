@@ -697,12 +697,13 @@ h3 {
  * A screen's head, centred: the part of the application it belongs to, its title
  * in Iris across the whole gradient, and the sentence saying what it is for.
  */
-.page-header { display: flex; flex-direction: column; align-items: center; gap: 14px; margin: 0; padding: 44px 0 48px; text-align: center; }
+.page-header { display: flex; flex-direction: column; align-items: center; gap: 14px; margin: 0; padding: 10px 0 48px; text-align: center; }
 .page-header h1 { width: fit-content; font-size: 52px; line-height: 1.06; letter-spacing: .04em; background-image: var(--iris-text); -webkit-background-clip: text; background-clip: text; color: transparent; }
 .page-intro { margin: 0; font-size: 17px; line-height: 1.3; color: var(--muted); }
 
 /* The way back to the Settings sheet, above a settings screen's title. */
-.page-back { padding: 18px 24px 0; }
+/* 6 under the title bar, as `.task-notice` and `.split` are: a focus ring reaches 5, and the scroller would clip more. */
+.page-back { padding: 6px 24px 0; }
 button.back-to-settings { display: inline-flex; align-items: center; gap: 8px; height: 36px; margin: 0; padding: 0 16px 0 12px; border-radius: var(--r-control); background: var(--control); font-size: 13px; letter-spacing: .04em; transition: background-color .3s ease; }
 button.back-to-settings:hover:not(:disabled) { background: var(--control-hover); }
 
@@ -1560,7 +1561,7 @@ button.follow-chip[aria-pressed="true"]:hover:not(:disabled) { background: var(-
  * overrides, which it matches at equal specificity.
  */
 @container main (width < 554.5px) {
-  .content { padding: 32px 24px 40px; }
+  .content { padding: 0 24px 40px; }
   .row { grid-template-columns: minmax(0, 1fr); row-gap: 4px; }
   .row > .row-value:only-child { grid-column: auto; }
   .row > .row-value > .controls { margin-left: 0; width: 100%; }
@@ -3048,11 +3049,11 @@ button.tile-cta[data-busy="true"] { opacity: 1; animation: kw-drift 3s linear in
  * in one column that scrolls in its `.split-main`.
  */
 .task-page { display: flex; flex-direction: column; min-height: 100%; animation: kw-rise .35s var(--ease-out) both; }
-.task-notice { min-height: 52px; padding: 18px 24px 0; box-sizing: content-box; }
+.task-notice { min-height: 52px; padding: 6px 24px 0; box-sizing: content-box; }
 .task-page .task { display: block; min-height: 0; }
 /* The design's 1100 and 1180 are widths of content; these boxes include their padding. */
-.task-page .task-hero { flex: none; gap: 22px; max-width: 1148px; margin: 0 auto; padding: 40px 24px 56px; }
-.task-meetings .task-hero { padding: 36px 24px 40px; }
+.task-page .task-hero { flex: none; gap: 22px; max-width: 1148px; margin: 0 auto; padding: 10px 24px 56px; }
+.task-meetings .task-hero { padding: 10px 24px 40px; }
 .task-page .hero-note { margin: 0; font-size: 14px; line-height: 1.4; color: var(--muted); }
 .task-page .task-hero > .learn-more { width: min(560px, 100%); margin: 0; }
 .task-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr)); gap: 20px; max-width: 1228px; margin: 0 auto; padding: 0 24px; }
@@ -3173,7 +3174,7 @@ button.glass-action-wide { width: 100%; }
 /* The meeting's own page: its state over a Dusk tile beside the live transcript. */
 .meeting-live { display: block; margin: 0; background: none; }
 .notice-wide { max-width: 420px; }
-.live-head { display: flex; flex-direction: column; gap: 10px; max-width: 1228px; margin: 0 auto; padding: 34px 24px 0; }
+.live-head { display: flex; flex-direction: column; gap: 10px; max-width: 1228px; margin: 0 auto; padding: 10px 24px 0; }
 .live-stage { font-size: 13px; }
 .page-title.live-title { width: fit-content; font-size: clamp(40px, 4.4vw, 56px); overflow-wrap: anywhere; }
 .live-sub { margin: 0; font-size: 15px; line-height: 1.3; color: var(--muted); overflow-wrap: anywhere; }
@@ -3268,7 +3269,7 @@ div.recent-pill-interrupted { padding: 0 6px 0 18px; background: none; box-shado
  * follows the playing line and a player has to stay in reach, which a canvas never
  * has to show.
  */
-.split { position: relative; gap: 20px; min-height: 0; padding: 28px 24px 24px; }
+.split { position: relative; gap: 20px; min-height: 0; padding: 6px 24px 24px; }
 .split > .split-main { overflow: hidden; scrollbar-gutter: auto; }
 /* 290 of content, as the design draws it, with a thin scrollbar's room beside it that the gap to the note takes back. */
 .list-panel { flex: 0 1 300px; width: 300px; min-width: 0; gap: 18px; margin: 0 -10px 0 0; padding: 0; border-radius: 0; background: none; box-shadow: none; scrollbar-width: thin; scrollbar-gutter: stable; }

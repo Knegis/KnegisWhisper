@@ -12,6 +12,17 @@ maintained in place rather than appended to, because its purpose is to be curren
 
 ---
 
+## 2026-11-05 — Content starts just under the title bar
+
+At the owner's request, the space between the title bar and a screen's content is much smaller than the boards draw
+it, which overrules them on this. What a screen leads with starts 6px below the bar, down from 18 (28 on Notes), and
+a title starts 10px below the row above it, down from 34-44. 6 and no less, because a button's focus ring reaches 5
+and the scroller would clip it. Below the bar at 1280x800, titles move from 112 to 70 on Dictation, 108 to 70 on
+Meetings, 101 to 79 on Notes and 130 to 84 on a settings screen. Measured in headless Edge against fixtures, not in
+the real window. The Import page and the live meeting view take the same rules but weren't measured or viewed.
+
+---
+
 ## 2026-11-05 — A model chosen for meetings on the local windowed provider
 
 Asked for by the owner: choosing `Local windowed model` under Settings > Meetings should also let them choose
