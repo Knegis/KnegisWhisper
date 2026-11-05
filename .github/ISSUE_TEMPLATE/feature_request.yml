@@ -1,0 +1,24 @@
+name: Feature request
+description: Explain a workflow that KnegisWhisper could improve.
+title: "idea: "
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: Describe the workflow, who needs it and what gets in the way.
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: What would a useful result look like?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Current workaround or alternatives
+  - type: markdown
+    attributes:
+      value: Please discuss substantial changes before implementing them. A request does not guarantee acceptance or a release date.

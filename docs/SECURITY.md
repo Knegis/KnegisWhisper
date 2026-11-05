@@ -2,8 +2,9 @@
 
 ## Reporting
 
-Open a private security advisory on the GitHub repository. Please do not file a public issue for
-an unfixed vulnerability.
+Follow the [root reporting policy](../SECURITY.md). The repository is currently private and
+GitHub private vulnerability reporting is unavailable. Contact a maintainer through an existing
+private channel; do not file a public issue for an unfixed vulnerability.
 
 ## Threat model
 

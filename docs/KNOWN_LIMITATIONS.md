@@ -1,0 +1,42 @@
+# Known limitations
+
+KnegisWhisper is in early development. Read the notes attached to the exact release
+you install; source builds can contain changes that are not released yet.
+
+## Windows preview
+
+The initial installer target is Windows 11 x64. It is unsigned and may display an
+unknown-publisher or Windows reputation warning. Verify the published SHA-256
+checksum before running it. The current installer requires administrator rights.
+Transcription binaries and models are downloaded separately through the app.
+Installation and upgrade acceptance must be recorded before a preview is published.
+
+There is no automatic update installation. Update checking is not securely
+configured while the embedded updater public key is empty. Download a subsequent
+preview from the repository's Releases page.
+
+## Audio and models
+
+- Long Parakeet imports have crashed the native runtime. Use Whisper for long
+  recordings; see [the measured findings](PARAKEET_BENCHMARK.md).
+- Replay seeks use available segment timings. Recordings without those timings
+  can have only a whole-recording playback cue.
+- Cloud providers, calendar account flows, speaker identification and meeting
+  detection have different validation coverage. See [platform support](PLATFORM_SUPPORT.md)
+  and [the engineering status reference](ENGINEERING_STATUS.md).
+- Local audio/video import is supported. URL import is disabled.
+
+## Platforms and privacy
+
+Windows is the primary hands-on validation platform. macOS and Linux source builds
+are available for development, with capability-specific limits; they are not part
+of the first downloadable preview.
+
+Local transcription does not imply local cleanup or summaries: selecting a cloud
+provider for either sends the relevant text to that provider. Model downloads and
+opt-in integrations also use the network. See [network purposes](NETWORK_BOUNDARY.md).
+
+Semantic search, translation, standalone chat/voice agents and Apple Calendar are
+not available. Do not infer support from another project's feature list.
+
+Release readiness is tracked in [KNEG-43](https://linear.app/axelalbertkarlsson/issue/KNEG-43).

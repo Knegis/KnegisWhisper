@@ -36,7 +36,7 @@ edition = "2021"
 rust-version = "1.90"
 license = "MIT"
 authors = ["Axel Karlsson"]
-repository = "https://github.com/axelalbertkarlsson/KnegisWhisper"
+repository = "https://github.com/Knegis/KnegisWhisper"
 
 # Package names carry a `kw-` prefix so cargo output is unambiguous, while
 # directory names stay as documented in docs/ARCHITECTURE.md.

@@ -47,3 +47,6 @@ secure-keys/
 .DS_Store
 Thumbs.db
 *.swp
+
+# Python release tooling
+__pycache__/
