@@ -21,7 +21,7 @@ Run speech models locally or connect your own provider.
 ## Speak. Capture. Keep.
 
 - **Dictate into your apps.** Use a configurable shortcut to turn speech into text where your cursor is.
-- **Capture meetings.** Keep a recording, follow its transcript and revisit what was said.
+- **Capture meetings.** Each meeting is saved with its recording and transcript, ready to replay and search later.
 - **Make notes your own.** Edit Markdown, organize folders, search transcripts and export what you need.
 - **Choose your processing.** Use local Whisper/Parakeet models or your own cloud-provider credentials.
 
@@ -52,9 +52,18 @@ The installer targets Windows 11 x64 and is unsigned. Models are downloaded sepa
 
 ## From a conversation to a useful note
 
-Record a meeting or import a local audio/video file. Review its transcript, write your
-own notes and replay the recording. Search brings you back to the relevant conversation;
-exports let you take the result elsewhere.
+Record a meeting or import a local audio/video file. It becomes a note that keeps the
+recording, so you can replay it whenever you come back: press any line of the transcript to
+hear it from there, or play only the lines you select. Write your own notes beside it, and
+export the result when you need it elsewhere.
+
+Turn on speaker labels in **Settings > Meetings** and the transcript shows who is speaking.
+Name a speaker once and the name stays with that note. Add the people who were there, and
+the **People** list in Notes shows every note each of them is on. Search covers every
+transcript, so it brings you back to what was said in any earlier conversation.
+
+In this version, search finds words, not who said them. Recognising the same voice across
+meetings (Known voices) is built but can't be switched on yet.
 
 <img src="docs/assets/meetings.png" width="100%" alt="The Meetings screen in the native Windows app" />
 
