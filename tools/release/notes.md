@@ -8,6 +8,15 @@ Local-first dictation, meeting transcription and searchable notes.
 - Meeting recording, transcripts, editable notes and recording playback.
 - Local audio/video import and transcript/notes export.
 
+## In this version
+
+- Parakeet TDT 0.6B installs from its current upstream download, which was rebuilt
+  on 2026-11-07. The unpublished `v0.1.0` build expected the old file and refused it.
+- Scrollbars are a slim rounded handle with no arrows, and stay inside the rounded
+  note and Settings sheets.
+- The note editor's add and drag icons are centred in their highlight and stay
+  visible when pointed at.
+
 ## Install
 
 Windows 11 x64. Download the `.exe` and `SHA256SUMS.txt`, compare the installer
