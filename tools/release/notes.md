@@ -16,6 +16,12 @@ Local-first dictation, meeting transcription and searchable notes.
   note and Settings sheets.
 - The note editor's add and drag icons are centred in their highlight and stay
   visible when pointed at.
+- Settings > Meetings has a Known voices section, for recognising remembered
+  participants after a meeting. It is Windows-only and can't be switched on in this
+  version: its matching hasn't been validated on labelled recordings yet.
+- Upgrading deletes the per-meeting voice samples an OpenWhispr import copied in,
+  and the import no longer copies them. Voice profiles and names saved in notes are
+  kept.
 
 ## Install
 
