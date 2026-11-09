@@ -2151,7 +2151,7 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
     const id = arg<number>(a, "id");
     return typeof id === "number" ? noteTranscriptRows.get(id) ?? [] : [];
   },
-  known_voices_status: () => ({ enabled: false, ready: false, reason: "Known voices is awaiting validation on labeled recordings from separate days.", voices: [] }),
+  known_voices_status: () => ({ enrollmentReason: null, enabled: false, ready: false, reason: "Known voices is awaiting validation on labeled recordings from separate days.", voices: [] }),
   known_voices_set_enabled: () => { throw new Error("Known voices has not passed validation"); },
   note_speaker_rename: (a) => {
     const id = arg<number>(a, "id");

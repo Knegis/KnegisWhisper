@@ -15,10 +15,10 @@ fn pinned_archive_installs_the_voice_runtime_within_its_measured_budget() {
     extract_with_limit(
         &path,
         ArchiveKind::TarBz2,
-        "sherpa-onnx-v1.13.4-win-x64-shared-MT-Release/bin",
+        "sherpa-onnx-v1.13.4-win-x64-shared-MT-Release/lib",
         "",
         dir.path(),
-        65825792,
+        22013440,
     )
     .unwrap();
     for file in [
@@ -26,10 +26,22 @@ fn pinned_archive_installs_the_voice_runtime_within_its_measured_budget() {
         "onnxruntime.dll",
         "onnxruntime_providers_shared.dll",
     ] {
-        assert!(dir.path().join("voice-runtime").join(file).is_file());
+        assert!(dir.path().join(file).is_file());
     }
-    assert!(dir
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 3);
+    let cli = tempfile::tempdir().unwrap();
+    extract_with_limit(
+        &path,
+        ArchiveKind::TarBz2,
+        "sherpa-onnx-v1.13.4-win-x64-shared-MT-Release/bin",
+        "",
+        cli.path(),
+        55574528,
+    )
+    .unwrap();
+    assert!(cli
         .path()
         .join("sherpa-onnx-offline-speaker-diarization.exe")
         .is_file());
+    assert!(!cli.path().join("voice-runtime").exists());
 }

@@ -160,7 +160,7 @@ pub async fn create_with_voices(
     pool: &SqlitePool,
     note: &NewNote,
     recording: Option<(&str, f64)>,
-    samples: &[crate::known_voices::Sample],
+    samples: &crate::known_voices::Analysis,
 ) -> Result<i64, StorageError> {
     create_with_voices_policy(
         pool,
@@ -176,7 +176,7 @@ async fn create_with_voices_policy(
     pool: &SqlitePool,
     note: &NewNote,
     recording: Option<(&str, f64)>,
-    samples: &[crate::known_voices::Sample],
+    samples: &crate::known_voices::Analysis,
     policy: Option<crate::known_voices::Policy>,
 ) -> Result<i64, StorageError> {
     let mut tx = pool.begin().await?;
@@ -1613,7 +1613,7 @@ mod voice_save_tests {
         kw_storage::settings::set(db.pool(), voices::ENABLED_KEY, &true)
             .await
             .unwrap();
-        sqlx::query("CREATE TRIGGER fail_voice BEFORE INSERT ON note_speaker_embeddings BEGIN SELECT RAISE(ABORT, 'fixture failure'); END").execute(db.pool()).await.unwrap();
+        sqlx::query("CREATE TRIGGER fail_voice BEFORE INSERT ON note_voice_sources BEGIN SELECT RAISE(ABORT, 'fixture failure'); END").execute(db.pool()).await.unwrap();
         let mut vector = vec![0.0; voices::DIM];
         if let Some(first) = vector.first_mut() {
             *first = 1.0;
@@ -1632,7 +1632,18 @@ mod voice_save_tests {
             db.pool(),
             &note,
             None,
-            &[sample],
+            &voices::Analysis {
+                samples: vec![sample],
+                generation: voices::generation(db.pool()).await.unwrap(),
+                source: Some(voices::Source {
+                    storage_key: "meeting.wav".into(),
+                    sha256: "a".repeat(64),
+                    pipeline: voices::MODEL_ID.into(),
+                    duration: 5.0,
+                    turns: vec![],
+                }),
+                warning: None,
+            },
             Some(Policy {
                 threshold: 0.9,
                 margin: 0.1,

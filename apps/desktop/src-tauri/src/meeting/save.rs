@@ -31,7 +31,14 @@ pub(super) async fn create_meeting_note(
     plan: &MeetingPlan,
     recording: Option<(&str, f64)>,
 ) -> Result<(i64, bool), kw_storage::StorageError> {
-    create_meeting_note_with_voices(db, note, plan, recording, &[]).await
+    create_meeting_note_with_voices(
+        db,
+        note,
+        plan,
+        recording,
+        &kw_notes_core::known_voices::Analysis::default(),
+    )
+    .await
 }
 
 pub(super) async fn create_meeting_note_with_voices(
@@ -39,7 +46,7 @@ pub(super) async fn create_meeting_note_with_voices(
     mut note: kw_notes_core::notes::NewNote,
     plan: &MeetingPlan,
     recording: Option<(&str, f64)>,
-    samples: &[kw_notes_core::known_voices::Sample],
+    samples: &kw_notes_core::known_voices::Analysis,
 ) -> Result<(i64, bool), kw_storage::StorageError> {
     note.folder_id = match kw_notes_core::notes::existing_folder(db.pool(), plan.folder_id).await {
         Ok(found) => found,
@@ -176,7 +183,16 @@ pub(super) async fn save_stopped(
     duration_seconds: f64,
     removal: Option<RecordingRemoval>,
 ) -> Result<Stopped, kw_storage::StorageError> {
-    save_stopped_with_voices(db, note, plan, recording, duration_seconds, removal, &[]).await
+    save_stopped_with_voices(
+        db,
+        note,
+        plan,
+        recording,
+        duration_seconds,
+        removal,
+        &kw_notes_core::known_voices::Analysis::default(),
+    )
+    .await
 }
 
 pub(super) async fn save_stopped_with_voices(
@@ -186,7 +202,7 @@ pub(super) async fn save_stopped_with_voices(
     recording: &std::path::Path,
     duration_seconds: f64,
     removal: Option<RecordingRemoval>,
-    samples: &[kw_notes_core::known_voices::Sample],
+    samples: &kw_notes_core::known_voices::Analysis,
 ) -> Result<Stopped, kw_storage::StorageError> {
     let (note_id, folder_missing) =
         create_meeting_note_with_voices(db, note, plan, None, samples).await?;
@@ -273,7 +289,7 @@ pub(super) async fn save_recovered(
         segments,
         details,
         duration,
-        &[],
+        &kw_notes_core::known_voices::Analysis::default(),
     )
     .await
 }
@@ -288,7 +304,7 @@ pub(super) async fn save_recovered_with_voices(
     segments: &[kw_notes_core::transcript::Segment],
     details: &str,
     duration: f64,
-    samples: &[kw_notes_core::known_voices::Sample],
+    samples: &kw_notes_core::known_voices::Analysis,
 ) -> Result<MeetingOutcome, String> {
     let plan = match draft::read_plan(recording) {
         Some(plan) => plan,

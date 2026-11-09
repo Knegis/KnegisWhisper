@@ -24,6 +24,40 @@ pub struct Sample {
     pub seconds: f64,
 }
 
+/// Timing/provenance only, never a voice embedding.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct VoiceTurn {
+    pub start_seconds: f64,
+    pub end_seconds: f64,
+    pub speaker: u32,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Source {
+    pub storage_key: String,
+    pub sha256: String,
+    pub pipeline: String,
+    pub turns: Vec<VoiceTurn>,
+    pub duration: f64,
+}
+#[derive(Debug, Clone, Default)]
+pub struct Analysis {
+    pub samples: Vec<Sample>,
+    pub source: Option<Source>,
+    pub generation: i64,
+    pub warning: Option<String>,
+}
+pub async fn generation(pool: &SqlitePool) -> Result<i64, StorageError> {
+    Ok(
+        sqlx::query_scalar("SELECT generation FROM known_voice_state WHERE singleton=1")
+            .fetch_one(pool)
+            .await?,
+    )
+}
+pub async fn source(pool: &SqlitePool, note_id: i64) -> Result<Source, StorageError> {
+    let raw: Option<String> = sqlx::query_scalar("SELECT s.source_json FROM note_voice_sources s JOIN notes n ON n.id=s.note_id WHERE s.note_id=? AND n.trashed_at IS NULL").bind(note_id).fetch_optional(pool).await?;
+    serde_json::from_str(&raw.ok_or_else(|| invalid("This note has no trustworthy voice turn metadata. Record a new meeting to remember this voice."))?).map_err(|_| invalid("Invalid voice turn metadata"))
+}
+
 #[derive(Debug, Clone, Serialize, ts_rs::TS, sqlx::FromRow)]
 #[serde(rename_all = "camelCase")]
 pub struct KnownVoice {
@@ -119,15 +153,23 @@ pub async fn list(pool: &SqlitePool) -> Result<Vec<KnownVoice>, StorageError> {
 pub async fn persist(
     conn: &mut SqliteConnection,
     note_id: i64,
-    samples: &[Sample],
+    analysis: &Analysis,
     policy: Policy,
 ) -> Result<(), StorageError> {
     let opted: Option<String> = sqlx::query_scalar("SELECT value FROM settings WHERE key = ?")
         .bind(ENABLED_KEY)
         .fetch_optional(&mut *conn)
         .await?;
-    if opted.as_deref() != Some("true") {
+    let generation: i64 =
+        sqlx::query_scalar("SELECT generation FROM known_voice_state WHERE singleton=1")
+            .fetch_one(&mut *conn)
+            .await?;
+    if opted.as_deref() != Some("true") || generation != analysis.generation {
         return Ok(());
+    }
+    if let Some(source) = &analysis.source {
+        sqlx::query("INSERT INTO note_voice_sources(note_id,source_json) VALUES(?,?) ON CONFLICT(note_id) DO NOTHING")
+            .bind(note_id).bind(serde_json::to_string(source).map_err(|_| invalid("Invalid voice source"))?).execute(&mut *conn).await?;
     }
     if !policy.min_seconds.is_finite() || policy.min_seconds <= 0.0 {
         return Err(invalid("Invalid voice policy"));
@@ -138,15 +180,10 @@ pub async fn persist(
         .iter()
         .filter_map(|r| decode(r.get("embedding")).map(|v| (r.get::<i64, _>("id"), v)))
         .collect();
-    for sample in samples {
+    for sample in &analysis.samples {
         if !sample.seconds.is_finite() || sample.seconds < policy.min_seconds {
             continue;
         }
-        let Some(bytes) = encode(&sample.embedding) else {
-            continue;
-        };
-        sqlx::query("INSERT INTO note_speaker_embeddings(note_id,speaker_id,embedding,model_id,embedding_format,speech_seconds) VALUES(?,?,?,?,?,?) ON CONFLICT(note_id,speaker_id) DO NOTHING")
-            .bind(note_id).bind(&sample.speaker_id).bind(bytes).bind(MODEL_ID).bind(FORMAT).bind(sample.seconds).execute(&mut *conn).await?;
         if let Some(id) = choose(&sample.embedding, &profiles, policy) {
             let name: String = rows
                 .iter()
@@ -160,6 +197,7 @@ pub async fn persist(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn enroll(
     pool: &SqlitePool,
     note_id: i64,
@@ -167,6 +205,9 @@ pub async fn enroll(
     name: &str,
     replace_id: Option<i64>,
     policy: Policy,
+    sample: &Sample,
+    source: &Source,
+    expected_generation: i64,
 ) -> Result<i64, StorageError> {
     let name = name.split_whitespace().collect::<Vec<_>>().join(" ");
     if name.is_empty() {
@@ -174,8 +215,7 @@ pub async fn enroll(
     }
     let mut tx = pool.begin().await?;
     // Serialize enrollment with settings/profile writes before taking a snapshot.
-    sqlx::query("UPDATE settings SET value=value WHERE key=?")
-        .bind(ENABLED_KEY)
+    sqlx::query("UPDATE known_voice_state SET generation=generation WHERE singleton=1")
         .execute(&mut *tx)
         .await?;
     let opted: Option<String> = sqlx::query_scalar("SELECT value FROM settings WHERE key=?")
@@ -185,14 +225,45 @@ pub async fn enroll(
     if opted.as_deref() != Some("true") {
         return Err(invalid("Enable Known voices first"));
     }
-    let row = sqlx::query("SELECT e.embedding,e.speech_seconds,e.enrolled_profile_id FROM note_speaker_embeddings e JOIN notes n ON n.id=e.note_id WHERE e.note_id=? AND e.speaker_id=? AND n.trashed_at IS NULL AND e.model_id=? AND e.embedding_format=?")
-        .bind(note_id).bind(speaker).bind(MODEL_ID).bind(FORMAT).fetch_optional(&mut *tx).await?.ok_or_else(|| invalid("No usable voice sample. Record a meeting with Known voices enabled first."))?;
-    let bytes: Vec<u8> = row.get("embedding");
-    let seconds: f64 = row.get("speech_seconds");
-    if decode(&bytes).is_none() || !seconds.is_finite() || seconds < policy.min_seconds {
+    let current: i64 =
+        sqlx::query_scalar("SELECT generation FROM known_voice_state WHERE singleton=1")
+            .fetch_one(&mut *tx)
+            .await?;
+    if current != expected_generation {
+        return Err(invalid(
+            "Voice settings changed during extraction. Please try again.",
+        ));
+    }
+    let raw: Option<String> = sqlx::query_scalar("SELECT s.source_json FROM note_voice_sources s JOIN notes n ON n.id=s.note_id JOIN note_recordings r ON r.note_id=n.id WHERE n.id=? AND n.trashed_at IS NULL AND r.storage_key=?")
+        .bind(note_id).bind(&source.storage_key).fetch_optional(&mut *tx).await?;
+    if raw
+        .as_deref()
+        .and_then(|r| serde_json::from_str::<Source>(r).ok())
+        .as_ref()
+        != Some(source)
+        || sample.speaker_id != speaker
+    {
+        return Err(invalid(
+            "The recording or speaker metadata changed. Please reload this note.",
+        ));
+    }
+    let bytes = encode(&sample.embedding).ok_or_else(|| invalid("Invalid voice sample"))?;
+    let seconds = sample.seconds;
+    if !policy.min_seconds.is_finite()
+        || policy.min_seconds <= 0.0
+        || !seconds.is_finite()
+        || seconds < policy.min_seconds
+    {
         return Err(invalid("Not enough usable speech to remember this voice"));
     }
-    let existing: Option<i64> = row.get("enrolled_profile_id");
+    let existing: Option<i64> = sqlx::query_scalar(
+        "SELECT profile_id FROM known_voice_enrollments WHERE note_id=? AND speaker_id=?",
+    )
+    .bind(note_id)
+    .bind(speaker)
+    .fetch_optional(&mut *tx)
+    .await?
+    .flatten();
     if replace_id.is_none() {
         if let Some(id) = existing {
             let previous: String =
@@ -216,14 +287,8 @@ pub async fn enroll(
         sqlx::query("INSERT INTO speaker_profiles(display_name,embedding,model_id,embedding_format,speech_seconds) VALUES(?,?,?,?,?)")
             .bind(&name).bind(&bytes).bind(MODEL_ID).bind(FORMAT).bind(seconds).execute(&mut *tx).await?.last_insert_rowid()
     };
-    sqlx::query(
-        "UPDATE note_speaker_embeddings SET enrolled_profile_id=? WHERE note_id=? AND speaker_id=?",
-    )
-    .bind(id)
-    .bind(note_id)
-    .bind(speaker)
-    .execute(&mut *tx)
-    .await?;
+    sqlx::query("INSERT INTO known_voice_enrollments(note_id,speaker_id,profile_id) VALUES(?,?,?) ON CONFLICT(note_id,speaker_id) DO UPDATE SET profile_id=excluded.profile_id")
+        .bind(note_id).bind(speaker).bind(id).execute(&mut *tx).await?;
     sqlx::query("INSERT INTO speaker_mappings(note_id,speaker_id,profile_id,display_name,origin) VALUES(?,?,?,?,'manual') ON CONFLICT(note_id,speaker_id) DO UPDATE SET profile_id=excluded.profile_id,display_name=excluded.display_name,origin='manual'")
         .bind(note_id).bind(speaker).bind(id).bind(name).execute(&mut *tx).await?;
     sqlx::query("INSERT OR IGNORE INTO speaker_manual_overrides VALUES(?,?)")
@@ -250,10 +315,6 @@ pub async fn rename(pool: &SqlitePool, id: i64, name: &str) -> Result<(), Storag
 }
 pub async fn delete(pool: &SqlitePool, id: i64) -> Result<(), StorageError> {
     let mut tx = pool.begin().await?;
-    sqlx::query("DELETE FROM note_speaker_embeddings WHERE enrolled_profile_id=?")
-        .bind(id)
-        .execute(&mut *tx)
-        .await?;
     sqlx::query("DELETE FROM speaker_profiles WHERE id=?")
         .bind(id)
         .execute(&mut *tx)

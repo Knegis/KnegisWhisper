@@ -161,10 +161,6 @@ const COPY_PLAN: &[(&str, &[&str])] = &[
         &["note_id", "speaker_id", "profile_id", "display_name"],
     ),
     (
-        "note_speaker_embeddings",
-        &["note_id", "speaker_id", "embedding"],
-    ),
-    (
         "google_calendars",
         &[
             "id",
@@ -230,8 +226,8 @@ const COPY_PLAN: &[(&str, &[&str])] = &[
 /// table whose ids SQLite hands out — every one declared
 /// `INTEGER PRIMARY KEY AUTOINCREMENT` — and no others. A table with a natural
 /// or composite key has no surrogate id to collide and is deliberately absent:
-/// `contacts` is keyed by `email`, `speaker_mappings` and
-/// `note_speaker_embeddings` by `(note_id, speaker_id)`, and the four calendar
+/// `contacts` is keyed by `email`, `speaker_mappings` by `(note_id, speaker_id)`,
+/// and the four calendar
 /// tables by a provider-supplied `TEXT` id. The two token tables are here and
 /// not in `COPY_PLAN` because [`relocate_calendar_tokens`] handles them
 /// separately; they are autoincrement all the same.
@@ -849,6 +845,7 @@ mod tests {
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
             );
+            CREATE TABLE note_speaker_embeddings(note_id INTEGER, speaker_id TEXT, embedding BLOB);
             CREATE TABLE speaker_mappings (
                 note_id INTEGER NOT NULL,
                 speaker_id TEXT NOT NULL,
@@ -889,6 +886,7 @@ mod tests {
             INSERT INTO transcriptions (id, text, provider, model) VALUES (1, 'hello there', 'openai', 'whisper-1');
             INSERT INTO transcriptions (id, text, deleted_at) VALUES (2, 'deleted dictation', '2026-03-03');
             INSERT INTO speaker_profiles (id, display_name, embedding) VALUES (1, 'Ada', X'00FF10');
+            INSERT INTO note_speaker_embeddings VALUES(1, 'S1', X'00FF10');
             INSERT INTO speaker_mappings (note_id, speaker_id, profile_id, display_name)
                 VALUES (1, 'S1', 1, 'Ada');
             INSERT INTO speaker_mappings (note_id, speaker_id, display_name)
@@ -1201,6 +1199,14 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(embedding, vec![0x00, 0xFF, 0x10]);
+        let cached: i64 = sqlx::query_scalar("SELECT count(*) FROM note_speaker_embeddings")
+            .fetch_one(target.pool())
+            .await
+            .unwrap();
+        assert_eq!(
+            cached, 0,
+            "Import must never restore per-meeting voice caches"
+        );
     }
 
     #[tokio::test]

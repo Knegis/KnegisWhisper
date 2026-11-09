@@ -230,7 +230,7 @@ pub async fn diarization_install_model(
     // The same archive `local_asr` installs. Guarded rather than unconditional
     // for the reason KNEG-113 records: an unconditional call can only ever
     // succeed on the first install.
-    if installed_cli().is_none() || (cfg!(windows) && !voice_runtime_ready()) {
+    if installed_cli().is_none() {
         let (spec, asset) = asr
             .catalog
             .resolve(SIDECAR)
@@ -300,6 +300,18 @@ pub async fn diarization_set_enabled(
         .map_err(|err| err.to_string())
 }
 
+pub(crate) fn voice_model() -> Result<PathBuf, String> {
+    diarization_models::installed(&models_root(), shipped()?)
+        .map(|m| m.embedding)
+        .ok_or_else(|| "Install the speaker label models first".into())
+}
+pub(crate) fn voice_library() -> PathBuf {
+    crate::voice_runtime::directory().join("sherpa-onnx-c-api.dll")
+}
+pub(crate) fn voice_runtime_ready() -> bool {
+    crate::voice_runtime::ready()
+}
+
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
@@ -328,29 +340,4 @@ mod tests {
         let root = models_root();
         assert!(root.ends_with("diarization"), "{root:?}");
     }
-}
-
-pub(crate) fn voice_model() -> Result<PathBuf, String> {
-    diarization_models::installed(&models_root(), shipped()?)
-        .map(|m| m.embedding)
-        .ok_or_else(|| "Install the speaker label models first".into())
-}
-pub(crate) fn voice_library() -> PathBuf {
-    cli_root()
-        .join(SIDECAR)
-        .join("voice-runtime")
-        .join("sherpa-onnx-c-api.dll")
-}
-
-pub(crate) fn voice_runtime_ready() -> bool {
-    let library = voice_library();
-    library.parent().is_some_and(|root| {
-        [
-            "sherpa-onnx-c-api.dll",
-            "onnxruntime.dll",
-            "onnxruntime_providers_shared.dll",
-        ]
-        .iter()
-        .all(|file| root.join(file).is_file())
-    })
 }

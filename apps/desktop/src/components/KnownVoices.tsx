@@ -14,12 +14,12 @@ export function KnownVoices({ refreshKey }: { refreshKey: string }) {
   };
   return <section>
     <h2>Known voices</h2>
-    <p>Recognize remembered participants after a meeting. Voice samples stay on this computer. Choose “Remember this voice” when naming a speaker.</p>
+    <p>Recognize remembered participants after a meeting. Only voices you explicitly remember are saved on this computer. Keep the meeting recording, then choose Remember this voice when naming a speaker.</p>
     {error ? <p className="error" role="alert">{error}</p> : null}
     {!data ? <p>Loading known voices…</p> : <>
       <label className="switch-row"><span>Recognize returning participants</span><input type="checkbox" role="switch" checked={data.enabled} disabled={busy || (!data.ready && !data.enabled)} onChange={e => { void run(() => setKnownVoicesEnabled(e.target.checked)); }} /></label>
       {data.reason ? <p>{data.reason}</p> : null}
-      {data.reason?.startsWith("Repair") ? <button disabled={busy} onClick={() => { void run(repairKnownVoices); }}>Repair speaker runtime</button> : null}
+      {data.ready || data.reason?.startsWith("Install") ? <button disabled={busy} onClick={() => { void run(repairKnownVoices); }}>{data.ready ? "Repair Known voices runtime" : "Install Known voices runtime"}</button> : null}
       {data.voices.map(voice => <form key={`${voice.id}:${voice.displayName}`} onSubmit={e => {
         e.preventDefault(); const name = String(new FormData(e.currentTarget).get("name") ?? "");
         void run(() => renameKnownVoice(voice.id, name));

@@ -568,7 +568,7 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
   const disposition = dispositionLine && <div className="recording-disposition" role="status"><p>{dispositionLine}</p>{recordingState?.error && <p>{recordingState.error}</p>}{recordingState?.canRetry && <button type="button" disabled={blocked !== null || retryingDeletion} onClick={() => { void retryDeletion(); }}>{retryingDeletion ? "Retrying deletion…" : "Retry deletion"}</button>}</div>;
   const recordingDetails = note.recordingDetails && <details className="recording-details" open><summary>Recording details</summary><p>{note.recordingDetails}</p></details>;
   const transcriptBody = transcriptError ? <p className="error" role="alert">{transcriptError} <button type="button" onClick={() => { void loadTranscript(); }}>Retry</button></p> : !transcript ? <p role="status">Loading transcript and recording…</p> : transcript.rows.length ?
-    <TranscriptPanel readOnly={blocked !== null} sourceRequest={sourceRequest} onSourceShown={clearSource} rows={transcript.rows} sections={sections}
+    <TranscriptPanel noteId={note.id} readOnly={blocked !== null} sourceRequest={sourceRequest} onSourceShown={clearSource} rows={transcript.rows} sections={sections}
       recording={transcript.recording} currentTime={currentTime} playing={playing} visible={wide || tab === "transcript"} wide={wide} playFrom={playFrom}
       time={playerTime} selection={selection} onSelectionChange={setSelection}
       suggestions={transcript.suggestions} onRename={renameSpeaker}

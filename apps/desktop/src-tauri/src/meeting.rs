@@ -1203,12 +1203,13 @@ impl MeetingRuntime {
         })?;
         // Automatic, whatever was chosen since: the meeting it came from may
         // not have been on the `local` provider at all.
-        let mut voice_samples = Vec::new();
+        let mut voice_samples = kw_notes_core::known_voices::Analysis::default();
         let (segments, speaker_note, transcription_error) =
             match self.transcribe_whole(&path, None).await {
                 Ok(Some(pass)) => {
-                    let (segments, speaker_note) =
-                        self.with_speakers(pass, &path, &mut voice_samples).await;
+                    let (segments, speaker_note) = self
+                        .with_speakers(pass, &path, &mut voice_samples, false)
+                        .await;
                     (segments, speaker_note, None)
                 }
                 Ok(None) => (Vec::new(), None, None),
@@ -1809,7 +1810,7 @@ impl MeetingRuntime {
             );
         }
 
-        let mut voice_samples = Vec::new();
+        let mut voice_samples = kw_notes_core::known_voices::Analysis::default();
         let saved = select_transcript(
             provider_id,
             &transcript,
@@ -1822,7 +1823,7 @@ impl MeetingRuntime {
                     .await?
                 {
                     Some(pass) => Ok(self
-                        .with_speakers(pass, &finished.path, &mut voice_samples)
+                        .with_speakers(pass, &finished.path, &mut voice_samples, true)
                         .await),
                     None => Ok((Vec::new(), None)),
                 }
@@ -1931,7 +1932,7 @@ impl MeetingRuntime {
         &self,
         mut segments: Vec<kw_notes_core::transcript::Segment>,
         finished: &Finished,
-        voice_samples: &mut Vec<kw_notes_core::known_voices::Sample>,
+        voice_samples: &mut kw_notes_core::known_voices::Analysis,
     ) -> (Vec<kw_notes_core::transcript::Segment>, Option<String>) {
         if segments.is_empty()
             || segments.iter().any(|s| s.speaker.is_some())
@@ -1964,7 +1965,7 @@ impl MeetingRuntime {
                 .collect(),
         };
         let (labelled, note) = self
-            .with_speakers(pass, &finished.path, voice_samples)
+            .with_speakers(pass, &finished.path, voice_samples, true)
             .await;
         for (saved, labelled) in segments.iter_mut().zip(labelled) {
             saved.end_timestamp = labelled.end_timestamp;
@@ -1986,7 +1987,8 @@ impl MeetingRuntime {
         &self,
         pass: WholePass,
         recording: &std::path::Path,
-        voice_samples: &mut Vec<kw_notes_core::known_voices::Sample>,
+        voice_samples: &mut kw_notes_core::known_voices::Analysis,
+        recognize: bool,
     ) -> (Vec<kw_notes_core::transcript::Segment>, Option<String>) {
         let wanted = crate::diarization::is_enabled(&self.db).await;
         if !wanted {
@@ -1997,8 +1999,13 @@ impl MeetingRuntime {
         match crate::diarization::turns(recording).await {
             Ok(Some(turns)) => {
                 let (segments, mut note) = labelled(&pass, Some(&turns), true);
-                match crate::known_voices::extract(&self.db, recording, &turns).await {
-                    Ok(samples) => *voice_samples = samples,
+                match crate::known_voices::extract(&self.db, recording, &turns, recognize).await {
+                    Ok(samples) => {
+                        if samples.warning.is_some() {
+                            note = samples.warning.clone();
+                        }
+                        *voice_samples = samples;
+                    }
                     Err(error) => {
                         note = Some(format!(
                             "Known voices could not run: {error}. Speaker labels were preserved."

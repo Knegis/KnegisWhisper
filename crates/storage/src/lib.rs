@@ -295,8 +295,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            applied, 13,
-            "initial, note recordings, automation, desktop origin, summary, note workspace, search tokenizer, transcript row, folder sharing, transcribed-by, note trash, recording disposition, and known voices migrations recorded exactly once"
+            applied, 14,
+            "initial, note recordings, automation, desktop origin, summary, note workspace, search tokenizer, transcript row, folder sharing, transcribed-by, note trash, recording disposition, known voices, and voice retention migrations recorded exactly once"
         );
         second.close().await;
     }
@@ -937,5 +937,51 @@ mod tests {
             index.contains("WHERE trashed_at IS NOT NULL"),
             "only notes in Trash are indexed: {index}"
         );
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod voice_retention_tests {
+    #[tokio::test]
+    async fn upgrade_removes_every_meeting_embedding_but_preserves_explicit_profiles_and_names() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        for migration in sqlx::migrate!("./migrations")
+            .iter()
+            .filter(|m| m.version < 14)
+        {
+            sqlx::raw_sql(&migration.sql).execute(&pool).await.unwrap();
+        }
+        sqlx::raw_sql("INSERT INTO notes(id,title) VALUES(1,'one'),(2,'two'); INSERT INTO speaker_profiles(id,display_name,embedding) VALUES(1,'Ada',X'010203'); INSERT INTO speaker_mappings VALUES(1,'speaker_0',1,'Ada','manual'); INSERT INTO note_speaker_embeddings(note_id,speaker_id,embedding,enrolled_profile_id) VALUES(1,'speaker_0',X'040506',1),(2,'speaker_4',X'070809',NULL);").execute(&pool).await.unwrap();
+        sqlx::raw_sql(include_str!("../migrations/0014_voice_retention.sql"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM note_speaker_embeddings")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, Vec<u8>>("SELECT embedding FROM speaker_profiles")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            vec![1, 2, 3]
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, String>("SELECT display_name FROM speaker_mappings")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            "Ada"
+        );
+        assert!(sqlx::query("INSERT INTO note_speaker_embeddings(note_id,speaker_id,embedding) VALUES(1,'speaker_1',X'01')").execute(&pool).await.is_err());
     }
 }

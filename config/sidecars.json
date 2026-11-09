@@ -264,7 +264,7 @@
           "sha256": "c312b30e55258d291067537ce4a6f90e155f1c16b6a10381a5729924e98b7879",
           "sizeBytes": 24378225,
           "executableInArchive": "sherpa-onnx-v1.13.4-win-x64-shared-MT-Release/bin/sherpa-onnx-offline.exe",
-          "maxExtractedSizeBytes": 65825792
+          "maxExtractedSizeBytes": 55574528
         },
         "linux-x86_64": {
           "availability": "published",

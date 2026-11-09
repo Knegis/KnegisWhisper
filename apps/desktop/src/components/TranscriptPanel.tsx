@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
 
+import { getKnownVoicesStatus } from "../lib/ipc";
 import type { NoteRecording, TranscriptRow } from "../lib/ipc";
 import { extendSelection, lineAt, lineStop, navigableLines, NO_SELECTION, stepLine, type LineSelection, type TranscriptSection } from "../lib/transcriptLayout";
 import { useFollow } from "../lib/useFollow";
@@ -28,6 +29,7 @@ export function TranscriptHeading({ children, labelled = true }: { children?: Re
 }
 
 type TranscriptPanelProps = {
+  noteId?: number;
   readOnly?: boolean;
   /**
    * A row to show: scrolled to, once. The owner has already selected it
@@ -96,7 +98,7 @@ type TranscriptPanelProps = {
  * line, Follow's, the last, wins.
  */
 export function TranscriptPanel({
-  readOnly = false, sourceRequest, onSourceShown, rows, sections, recording, currentTime, playing, visible, wide = false, playFrom, time,
+  noteId, readOnly = false, sourceRequest, onSourceShown, rows, sections, recording, currentTime, playing, visible, wide = false, playFrom, time,
   selection, onSelectionChange, suggestions, onRename, follow, onReleaseFollow, takeRecentre, currentIndex,
 }: TranscriptPanelProps) {
   const idPrefix = useId();
@@ -147,7 +149,7 @@ export function TranscriptPanel({
   // What the lines' handlers read, so the handlers -- and the one `actions` object holding them --
   // stay the same from render to render and never redraw a memoised line by themselves.
   const canPlay = recording !== null;
-  const latest = useLatest({ readOnly, rows, sections, lines, collapsed, places, stopIndex, activeIndex, selection, canPlay, playFrom, onSelectionChange, onRename, follow, onReleaseFollow });
+  const latest = useLatest({ noteId, readOnly, rows, sections, lines, collapsed, places, stopIndex, activeIndex, selection, canPlay, playFrom, onSelectionChange, onRename, follow, onReleaseFollow });
 
   const openRename = useCallback((target: RenameTarget, origin?: number) => {
     if (latest.current.readOnly) return;
@@ -174,6 +176,7 @@ export function TranscriptPanel({
   }, [renaming, reveal, rowRefs, lines]);
 
   const actions = useMemo<TranscriptActions>(() => ({
+    knownVoices: speakerId => getKnownVoicesStatus(latest.current.noteId, speakerId),
     register: (index, element) => {
       if (element === null) rowRefs.current.delete(index);
       else rowRefs.current.set(index, element);

@@ -64,6 +64,7 @@ tauri-build.workspace = true
 
 [dependencies]
 libloading = "0.8"
+sha2.workspace = true
 tempfile.workspace = true
 # `macos-private-api` is what makes `WebviewWindowBuilder::transparent` exist on
 # macOS at all -- it is `#[cfg(any(not(target_os = "macos"), feature =
@@ -130,3 +131,10 @@ sqlx.workspace = true
 # `kw-network-policy` is the one crate that does -- but that crate hands back a
 # `reqwest::RequestBuilder`, and building a HEAD request means naming the method.
 reqwest.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading"] }
+
+[[test]]
+name = "voice_worker_protocol"
+harness = false

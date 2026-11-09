@@ -1764,7 +1764,7 @@ enabled: boolean,
  */
 ready: boolean, modelsDir: string, };
 
-export type KnownVoicesStatus = { enabled: boolean, ready: boolean, reason: string | null, voices: Array<KnownVoice>, };
+export type KnownVoicesStatus = { enabled: boolean, ready: boolean, reason: string | null, voices: Array<KnownVoice>, enrollmentReason: string | null, };
 
 export type KnownVoice = { id: number, displayName: string, compatible: boolean, };
 

@@ -24,6 +24,9 @@ mod integrations;
 mod known_voices;
 mod known_voices_native;
 mod vocabulary;
+mod voice_runtime;
+#[doc(hidden)]
+pub mod voice_worker;
 // Test-only: it renders `apps/desktop/src/generated/ipc-types.ts` and asserts
 // the committed copy still matches the Rust types. Nothing at runtime calls it.
 mod capture_interlock;
