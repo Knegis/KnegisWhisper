@@ -31,6 +31,24 @@ Parakeet packages this month and another swap is likely (KNEG-531).
 
 ---
 
+## 2026-11-05 — The editor's add and drag icons disappeared when pointed at
+
+The owner saw the note editor's add and drag icons almost vanish on hover, with the highlight off to one side of them.
+Both came from our own styling. `4efc92a` narrowed each box to 20px to fit the sheet's 44px margin but left Crepe's 24px
+icons, so they sat 4px right of the box's centre. The icons read `--faint` and the hover `--control`, which on the white
+sheet is `#e4e4e4` on `#e5e5e5`, 1.01:1.
+
+Each icon is now centred, and is the text colour at 50% on a `--wash` hover: 4:1 at rest and 3.87:1 on the hover in
+light, 4.73:1 and 4.32:1 in dark. The icons still run 2px past each side of their boxes, so they leave the pointer to the
+box; otherwise the highlight shows with the pointer outside it. A darker icon would have been grey on grey on the pressed
+Add's `--band` fill, so that state takes `--band-ink`. The two variables change on the handle only, because Crepe's
+toolbar, link tooltip, table and image icons read them too.
+
+Measured by `tools/visual-check/editor-handles.mjs`, against fixtures in headless Edge and **not the real window**. With
+the old rules injected, the same measurements read a 4px offset and 1.01:1. Dragging a block wasn't exercised.
+
+---
+
 ## 2026-11-05 — One slim scrollbar, with no arrows
 
 The owner pointed out the note sheet's scrollbar looking outside the sheet. It wasn't, strictly: the sheet is the

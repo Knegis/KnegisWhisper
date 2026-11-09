@@ -3385,8 +3385,24 @@ button.start-from-transcript:hover:not(:disabled) { background: var(--control-ho
 .note-editor .milkdown .ProseMirror strong { font-weight: 500; }
 .note-editor .milkdown .milkdown-list-item-block li .label-wrapper { color: var(--text); }
 .note-editor .milkdown .milkdown-list-item-block li .label-wrapper svg { fill: var(--text); }
-/* Two 20px controls, within the sheet's 44px margin; the note's scroller clips anything past it. */
-.note-editor .milkdown .milkdown-block-handle .operation-item { width: 20px; height: 28px; padding: 2px; }
+/*
+ * Two 20px controls, within the sheet's 44px margin; the note's scroller clips anything past it.
+ * Crepe's 24px icons are wider than that, so they're centred and run 2px past each side, where
+ * neither icon draws anything, and they leave the pointer to the box, so its highlight only ever
+ * shows with the pointer inside it. Left at the box's padding edge, they sat 4px right of its centre.
+ *
+ * The colours are set here and not on the tokens because the rest of Crepe uses those too. The
+ * icon was `--faint` and its hover `--control`, about 1:1 against each other. This is 3:1 or better
+ * on the sheet and on the hover, in both themes. The pressed Add stays on `--band`, so it takes
+ * that fill's ink.
+ */
+.note-editor .milkdown .milkdown-block-handle {
+  --crepe-color-outline: color-mix(in srgb, var(--text) 50%, transparent);
+  --crepe-color-hover: var(--wash);
+}
+.note-editor .milkdown .milkdown-block-handle .operation-item { display: flex; align-items: center; justify-content: center; width: 20px; height: 28px; padding: 0; }
+.note-editor .milkdown .milkdown-block-handle .operation-item .milkdown-icon { flex: none; pointer-events: none; }
+.note-editor .milkdown .milkdown-block-handle .operation-item.active svg { fill: var(--band-ink); }
 
 /* The AI summary. */
 .summary-pane { display: flex; flex-direction: column; gap: 6px; }

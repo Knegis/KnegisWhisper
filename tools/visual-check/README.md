@@ -600,6 +600,17 @@ wide, 5px inside the note sheet's edge and clear of its corners, no arrows, hidd
 rest, shown while scrolling or pointed at, draggable, moving no content, on the other
 scrollers too, in dark, and left to the system in forced colors.
 
+## Editor handles
+
+```powershell
+node tools/visual-check/editor-handles.mjs --url http://127.0.0.1:5191/
+```
+
+Same options as the chip menus (the banner is always removed). Each icon centred in
+its box, at least 3:1 at rest, pointed at and pressed in both themes, a box lighting
+up only with the pointer inside it, Add still opening the block menu, and the colours
+changed on the handles only. Dragging a block isn't exercised.
+
 ## Meeting local model
 
 ```powershell
