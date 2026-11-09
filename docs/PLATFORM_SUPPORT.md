@@ -1085,6 +1085,13 @@ Both Parakeet archives were re-measured the same way and the same day —
 unchanged. Before this, only their lengths had been checked, against
 `content-length`.
 
+**`parakeet-tdt-0.6b-v3` has since been swapped, as the next paragraph says it
+could be.** On 2026-11-07 k2-fsa re-uploaded it under the same name, rebuilt with
+new int8 weights, and the weekly check failed on 2026-11-09. It is re-pinned to
+the new upload, 487,211,443 bytes, from that run's hash and GitHub's stated
+digest, which agree. Those bytes have not been downloaded here (KNEG-531;
+KNEG-532 is the alternative of a commit-pinned Hugging Face mirror).
+
 **What this proves and what it does not.** Every one of these eight digests
 matches the bytes the host serves today. That is the check, run once, and it says
 nothing about who built those bytes.

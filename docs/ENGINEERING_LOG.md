@@ -12,6 +12,25 @@ maintained in place rather than appended to, because its purpose is to be curren
 
 ---
 
+## 2026-11-09 — k2-fsa replaced the Parakeet TDT archive, and it's re-pinned to the new upload
+
+The weekly pin check failed on 2026-11-09 after passing on 2026-11-02. `parakeet-tdt-0.6b-v3` hashed to `1495e91b…`
+against a committed `5793d0fd…`, and was 487,211,443 bytes against 487,170,055. The other 16 models matched.
+sherpa-onnx's maintainer re-uploaded the archive under the same name on 2026-11-07 at 05:50 UTC, minutes after merging a
+pull request that adds model cards to the Parakeet packages (#4167). The package was rebuilt, not just given a README:
+its Hugging Face mirror changed in the same minute, with a 98 KB larger int8 encoder and different decoder and joiner
+bytes. Until the re-pin, every new install of the model failed at the integrity check. That is the failure KNEG-112
+accepted on 2026-08-31, and the check caught it within two days, as designed.
+
+It's re-pinned to the new upload rather than left failing, because the old bytes aren't served anywhere this app can
+download as one archive. The new digest is the weekly `--verify`'s own hash, from GitHub's runner, and matches GitHub's
+stated digest; the size is GitHub's stated size. Those bytes haven't been through this machine and the new weights
+haven't transcribed anything here, though `BENCH_CHECK.md` says the old ones never did either. The alternative KNEG-112
+turned down, pinning the publisher's Hugging Face mirror at a commit, is now KNEG-532, because upstream is re-exporting
+Parakeet packages this month and another swap is likely (KNEG-531).
+
+---
+
 ## 2026-11-05 — The recording window's second edge was Windows' own
 
 The owner saw two edges on the recording window, one very curved and one slightly rounded. The very curved one is the

@@ -1139,7 +1139,7 @@ for (const repo of Object.keys(HF_REVISIONS)) {
  * archives end to end -- 464.6 MiB and 478.1 MiB -- hashing as the bytes passed
  * through and taking the length from `stat` afterwards rather than from
  * `content-length`, and both digests and both byte counts came back identical to
- * what is committed below. `parakeet-unified`'s size also matches the figure
+ * what was committed then. `parakeet-unified`'s size also matches the figure
  * `docs/PLATFORM_SUPPORT.md` recorded from a real install.
  *
  * Read that for exactly what it is: **the committed digest matches the bytes the
@@ -1149,6 +1149,18 @@ for (const repo of Object.keys(HF_REVISIONS)) {
  * replaced under the same name -- so this is the check that would *notice* a
  * swap, run once, not a guarantee there will never be one. Never hand-write
  * either number: re-measure with `node tools/model-pin/pin.mjs --verify`.
+ *
+ * **`parakeet-tdt-0.6b-v3` was swapped on 2026-11-07, as this warned, and is
+ * re-pinned to the new upload** (KNEG-531). sherpa-onnx's maintainer rebuilt the
+ * package when sherpa-onnx PR #4167 added model cards, and re-uploaded it under
+ * the same name: a README added, and the int8 encoder, decoder and joiner
+ * re-exported. The digest below is the weekly `pin.mjs --verify`'s own hash of
+ * the download, on GitHub's runner (run 42618182337, 2026-11-09), and GitHub's
+ * release API states the same digest and the size below. Unlike the 2026-08-31
+ * figures, these bytes have **not** been through this machine, and the new
+ * weights have not transcribed anything here. KNEG-532 is the option of pinning
+ * the publisher's Hugging Face mirror at a commit instead, so that a rebuild
+ * can't break installs.
  *
  * **`maxExtractedSizeBytes` is a judgement.** It is a decompression-bomb
  * ceiling, not a measurement -- the real extracted footprint of
@@ -1182,8 +1194,8 @@ for (const repo of Object.keys(HF_REVISIONS)) {
  */
 const SHERPA_PINS = {
   "parakeet-tdt-0.6b-v3": {
-    sha256: "5793d0fd397c5778d2cf2126994d58e9d56b1be7c04d13c7a15bb1b4eafb16bf",
-    expectedSizeBytes: 487_170_055,
+    sha256: "1495e91b59d7fc53ddca91f3431758ec99f8fa253fdb0e1e851be0f72b14b0f9",
+    expectedSizeBytes: 487_211_443,
     maxExtractedSizeBytes: 800 * 1024 * 1024,
   },
   "parakeet-unified-en-0.6b": {
