@@ -292,6 +292,15 @@
       "ui": "Settings > Meetings",
       "reachable": true
     },
+    "meetings.knownVoices": {
+      "what": "Whether a saved meeting's speakers are matched against the voices the user chose to remember, and whether Remember this voice can save one (KNEG-319). Off by default. Turning it off keeps remembered voices.",
+      "writtenBy": [
+        "known_voices_set_enabled"
+      ],
+      "ui": "Settings > Meetings",
+      "reachable": false,
+      "note": "Nothing can turn it on in this build. known_voices_set_enabled refuses true while kw_notes_core::known_voices::RELEASE_POLICY is None, which it stays until the match threshold is validated on labelled recordings from separate days (KNEG-319, docs/KNOWN_VOICES.md), and settings_set refuses this key outright. The switch is drawn on Settings > Meetings by components/KnownVoices.tsx. When the policy is set this becomes reachable: true, and KnownVoices.tsx then needs its own config/ui-surfaces.json entry: this gate looks for the writer's IPC wrapper in the surface's own component, and SettingsMeetings.tsx only renders KnownVoices."
+    },
     "audio.inputDevice": {
       "what": "The microphone dictation and meetings record from, by device name; absent for the system default (KNEG-341). One choice for both tasks, the owner's call on 2026-10-06: read at startup into dictation's recorder and by MeetingRuntime::start when a meeting begins. Until then the choice lived only in memory and was gone after every restart, and meetings always opened the default. Chosen in the microphone menu on Dictation or on Meetings (KNEG-364), both through dictation_set_device, and read by the Meetings microphone check (microphone_check) as a meeting reads it. A device that is not connected when recording starts falls back to the system default (kw_audio_core::Capture::start); both microphone menus say so beforehand. A meeting already running keeps the microphone it opened, and its live view names that one.",
       "writtenBy": [

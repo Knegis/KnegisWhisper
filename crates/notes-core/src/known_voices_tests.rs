@@ -81,7 +81,7 @@ async fn save(db: &Db, id: i64, samples: &[Sample]) {
 }
 async fn enabled_db() -> Db {
     let db = Db::open_in_memory().await.unwrap();
-    kw_storage::settings::set(db.pool(), ENABLED_KEY, &true)
+    kw_storage::settings::set(db.pool(), KNOWN_VOICES_ENABLED_KEY, &true)
         .await
         .unwrap();
     db
@@ -177,7 +177,7 @@ async fn disabled_short_and_legacy_samples_are_not_used() {
     let a = note(&db).await;
     save(&db, a, &[sample("speaker_0", 0)]).await;
     assert!(remember(&db, a, "Ada", None, 5.0).await.is_err());
-    kw_storage::settings::set(db.pool(), ENABLED_KEY, &true)
+    kw_storage::settings::set(db.pool(), KNOWN_VOICES_ENABLED_KEY, &true)
         .await
         .unwrap();
     let mut short = sample("speaker_0", 0);
@@ -193,7 +193,7 @@ async fn disabled_short_and_legacy_samples_are_not_used() {
     assert!(speakers::mappings(db.pool(), a).await.unwrap().is_empty());
     assert!(!list(db.pool()).await.unwrap()[0].compatible);
     let id = remember(&db, a, "Ada", None, 5.0).await.unwrap();
-    kw_storage::settings::set(db.pool(), ENABLED_KEY, &false)
+    kw_storage::settings::set(db.pool(), KNOWN_VOICES_ENABLED_KEY, &false)
         .await
         .unwrap();
     let b = note(&db).await;
@@ -207,7 +207,7 @@ async fn enrolled_identity_survives_database_reopen() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("voices.sqlite");
     let db = Db::open(&path).await.unwrap();
-    kw_storage::settings::set(db.pool(), ENABLED_KEY, &true)
+    kw_storage::settings::set(db.pool(), KNOWN_VOICES_ENABLED_KEY, &true)
         .await
         .unwrap();
     let a = note(&db).await;
@@ -258,10 +258,10 @@ async fn stale_jobs_cannot_restore_forgotten_or_disabled_voices() {
     tx.commit().await.unwrap();
     assert!(source(db.pool(), b).await.is_err());
     let before = generation(db.pool()).await.unwrap();
-    kw_storage::settings::set(db.pool(), ENABLED_KEY, &false)
+    kw_storage::settings::set(db.pool(), KNOWN_VOICES_ENABLED_KEY, &false)
         .await
         .unwrap();
-    kw_storage::settings::set(db.pool(), ENABLED_KEY, &true)
+    kw_storage::settings::set(db.pool(), KNOWN_VOICES_ENABLED_KEY, &true)
         .await
         .unwrap();
     assert!(enroll(

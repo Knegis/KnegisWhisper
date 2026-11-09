@@ -1610,7 +1610,7 @@ mod voice_save_tests {
     #[tokio::test]
     async fn voice_write_failure_rolls_back_only_analysis_and_keeps_the_note() {
         let db = kw_storage::Db::open_in_memory().await.unwrap();
-        kw_storage::settings::set(db.pool(), voices::ENABLED_KEY, &true)
+        kw_storage::settings::set(db.pool(), voices::KNOWN_VOICES_ENABLED_KEY, &true)
             .await
             .unwrap();
         sqlx::query("CREATE TRIGGER fail_voice BEFORE INSERT ON note_voice_sources BEGIN SELECT RAISE(ABORT, 'fixture failure'); END").execute(db.pool()).await.unwrap();

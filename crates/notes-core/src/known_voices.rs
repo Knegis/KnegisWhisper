@@ -3,7 +3,7 @@ use kw_storage::StorageError;
 use serde::{Deserialize, Serialize};
 use sqlx::{Row, SqliteConnection, SqlitePool};
 
-pub const ENABLED_KEY: &str = "meetings.knownVoices";
+pub const KNOWN_VOICES_ENABLED_KEY: &str = "meetings.knownVoices";
 pub const FORMAT: &str = "f32-le-normalized-512-v1";
 pub const DIM: usize = 512;
 pub const MODEL_ID: &str = "sherpa-1.13.4/campplus-357a834f702b80161e5b981182c038e18553c1f2ca752ed6cec2052365d4129b/turn-centroid-v1";
@@ -100,11 +100,13 @@ fn decode(bytes: &[u8]) -> Option<Vec<f32>> {
     if bytes.len() != DIM * 4 {
         return None;
     }
+    let (words, _) = bytes.as_chunks::<4>();
     normalize(
-        &bytes
-            .chunks_exact(4)
-            .map(|c| <[u8; 4]>::try_from(c).ok().map(f32::from_le_bytes))
-            .collect::<Option<Vec<_>>>()?,
+        &words
+            .iter()
+            .copied()
+            .map(f32::from_le_bytes)
+            .collect::<Vec<_>>(),
     )
 }
 pub fn choose(sample: &[f32], profiles: &[(i64, Vec<f32>)], policy: Policy) -> Option<i64> {
@@ -139,7 +141,7 @@ pub fn choose(sample: &[f32], profiles: &[(i64, Vec<f32>)], policy: Policy) -> O
 }
 
 pub async fn enabled(pool: &SqlitePool) -> bool {
-    kw_storage::settings::get_or(pool, ENABLED_KEY, false)
+    kw_storage::settings::get_or(pool, KNOWN_VOICES_ENABLED_KEY, false)
         .await
         .unwrap_or(false)
 }
@@ -157,7 +159,7 @@ pub async fn persist(
     policy: Policy,
 ) -> Result<(), StorageError> {
     let opted: Option<String> = sqlx::query_scalar("SELECT value FROM settings WHERE key = ?")
-        .bind(ENABLED_KEY)
+        .bind(KNOWN_VOICES_ENABLED_KEY)
         .fetch_optional(&mut *conn)
         .await?;
     let generation: i64 =
@@ -219,7 +221,7 @@ pub async fn enroll(
         .execute(&mut *tx)
         .await?;
     let opted: Option<String> = sqlx::query_scalar("SELECT value FROM settings WHERE key=?")
-        .bind(ENABLED_KEY)
+        .bind(KNOWN_VOICES_ENABLED_KEY)
         .fetch_optional(&mut *tx)
         .await?;
     if opted.as_deref() != Some("true") {

@@ -2,6 +2,11 @@ use crate::state::AppState;
 use kw_notes_core::known_voices as voices;
 use tauri::State;
 
+/// The setting `kw_notes_core::known_voices` reads. It is written out here as well
+/// because tools/settings-audit/scan.mjs reads constants from this crate's source
+/// only; `key_matches_notes_core` keeps the two equal.
+pub const KNOWN_VOICES_ENABLED_KEY: &str = "meetings.knownVoices";
+
 #[derive(Debug, serde::Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 pub struct KnownVoicesStatus {
@@ -96,7 +101,7 @@ pub async fn known_voices_set_enabled(
             return Err("Enable Speaker labels first".into());
         }
     }
-    kw_storage::settings::set(state.db().pool(), voices::ENABLED_KEY, &enabled)
+    kw_storage::settings::set(state.db().pool(), KNOWN_VOICES_ENABLED_KEY, &enabled)
         .await
         .map_err(|e| e.to_string())
 }
@@ -269,10 +274,18 @@ async fn extract_with_policy(
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
+    #[test]
+    fn key_matches_notes_core() {
+        assert_eq!(
+            super::KNOWN_VOICES_ENABLED_KEY,
+            super::voices::KNOWN_VOICES_ENABLED_KEY
+        );
+    }
+
     #[tokio::test]
     async fn recovery_saves_provenance_without_loading_native_libraries() {
         let db = kw_storage::Db::open_in_memory().await.unwrap();
-        kw_storage::settings::set(db.pool(), super::voices::ENABLED_KEY, &true)
+        kw_storage::settings::set(db.pool(), super::KNOWN_VOICES_ENABLED_KEY, &true)
             .await
             .unwrap();
         let dir = tempfile::tempdir().unwrap();
@@ -305,7 +318,7 @@ mod tests {
         assert!(recovered.warning.is_none());
         assert_eq!(recovered.source.unwrap().storage_key, "recovery.wav");
         // Off and release-gated paths must not even attempt to open a WAV.
-        kw_storage::settings::set(db.pool(), super::voices::ENABLED_KEY, &false)
+        kw_storage::settings::set(db.pool(), super::KNOWN_VOICES_ENABLED_KEY, &false)
             .await
             .unwrap();
         assert!(super::extract_with_policy(
@@ -319,7 +332,7 @@ mod tests {
         .unwrap()
         .source
         .is_none());
-        kw_storage::settings::set(db.pool(), super::voices::ENABLED_KEY, &true)
+        kw_storage::settings::set(db.pool(), super::KNOWN_VOICES_ENABLED_KEY, &true)
             .await
             .unwrap();
         assert!(
