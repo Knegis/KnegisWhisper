@@ -172,7 +172,11 @@ And one that is this project's own, recorded 2026-09-08 (KNEG-221):
 | Microphone | `cpal` | `cpal` | `cpal` |
 | System audio | WASAPI process loopback | CoreAudio process taps | PipeWire via xdg-desktop-portal |
 | System audio floor | — | **macOS 14.4+** for `cidre` process taps; 14.2+ for the helper-based tap | PipeWire, or PulseAudio via `pipewire-pulse` |
-| Acoustic echo cancellation | WebRTC APM sidecar | same | same |
+| Acoustic echo cancellation | None | None | None |
+
+There is no echo cancellation. The WebRTC APM helper is deferred (`platform:aec` in
+`config/integration-manifest.json`). On speakers, the other participants' voices can be transcribed
+twice; with headphones there is nothing to cancel.
 
 The macOS version floor matters. Pluely declares `minimumSystemVersion: "10.13"` while using an
 API that needs 14.4 — a hard runtime failure rather than graceful degradation. We gate on the

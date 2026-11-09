@@ -1,5 +1,5 @@
 /**
- * GENERATED FILE â€” DO NOT EDIT.
+ * GENERATED FILE — DO NOT EDIT.
  *
  * Source:    the Rust types themselves, via `#[derive(ts_rs::TS)]`
  * Generator: apps/desktop/src-tauri/src/ipc_types.rs

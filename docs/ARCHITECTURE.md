@@ -12,7 +12,7 @@ apps/desktop/
   src-tauri/               thin shell: window creation, command registration, capabilities
 crates/
   app-core/                lifecycle, settings, orchestration, calendar
-  audio-core/              cpal mic, per-OS system audio, VAD, AEC, ring buffers
+  audio-core/              cpal mic, per-OS system audio, VAD, levels, mixing, WAV
   transcription-core/      route resolution + executors (local, http-batch, streaming)
   reasoning-core/          BYOK, enterprise, and local llama.cpp dispatch
   meeting-core/            MeetingTranscriptionProvider trait + implementations
@@ -29,7 +29,6 @@ tools/
   knegiswhisper/           CLI
   knegiswhisper-mcp/       stdio MCP server
   integration-audit/       baseline generator + parity gate
-sidecars/                  whisper, sherpa, llama, ffmpeg, qdrant, yt-dlp, meeting-aec
 config/                    the machine-readable contracts
 docs/                      this directory
 ```
@@ -235,9 +234,20 @@ neither of those is real. See `kw_storage::paths` and `PLATFORM_SUPPORT.md`.
 
 ## Sidecars
 
-Five long-lived loopback servers (whisper, llama, sherpa, Qdrant, the local API) plus seventeen
-one-shot or streaming children. Each is explicitly allowlisted; the frontend cannot spawn
-anything.
+Six sidecars are pinned in `config/sidecars.json` and downloaded when the user installs them;
+none is kept in this repository.
+
+- Three are long-lived loopback servers: `whisper` (whisper.cpp's server), `llama` (llama.cpp's
+  server) and `sherpa-stream` (sherpa-onnx's streaming WebSocket server, for local streaming
+  meetings).
+- Two run once per job over stdio: `ffmpeg`, which converts imported media to WAV, and
+  `sherpa`, sherpa-onnx's command-line tools for file transcription and speaker labels.
+- `yt-dlp` is pinned for URL import, which is withdrawn, so nothing installs or starts it.
+
+The local API is a fourth loopback server, but it runs inside the application rather than as a
+child. Known voices extracts voice samples in a second copy of the application, started with
+`--known-voices-worker`, so a native crash there cannot close the app. Each child is started by
+Rust; the frontend cannot spawn anything.
 
 Two upstream mechanisms are ported rather than reinvented: a **multi-candidate binary path probe**
 that requires the executable bit and returns `None` for graceful fallback, and a **PID-file reaper

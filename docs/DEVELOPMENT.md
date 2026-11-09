@@ -1,6 +1,6 @@
 # Development
 
-[Contributing](../CONTRIBUTING.md) Â· [Documentation](README.md)
+[Contributing](../CONTRIBUTING.md) · [Documentation](README.md)
 
 ## Development
 
