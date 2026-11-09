@@ -9,11 +9,11 @@
 Dictate into your apps, transcribe meetings, and turn recordings into searchable notes.
 Run speech models locally or connect your own provider.
 
-[**Get started**](docs/GETTING_STARTED.md) · [Documentation](docs/README.md) · [Contribute](CONTRIBUTING.md) · [Report a bug](https://github.com/Knegis/KnegisWhisper/issues/new/choose)
+[**Get started**](https://github.com/Knegis/KnegisWhisper/releases/tag/v0.1.1) · [Documentation](docs/README.md) · [Contribute](CONTRIBUTING.md) · [Report a bug](https://github.com/Knegis/KnegisWhisper/issues/new/choose)
 
 </div>
 
-![KnegisWhisper product introduction: dictation, meetings and notes](docs/assets/intro-preview.gif)
+[![KnegisWhisper product introduction: dictation, meetings and notes](docs/assets/intro-preview.gif)](https://github.com/Knegis/KnegisWhisper/releases/download/v0.1.1/knegiswhisper-intro.mp4)
 
 *Native Windows development build, with fictional example content.
 [Intro video and production notes](docs/INTRO_VIDEO.md).*
@@ -29,8 +29,9 @@ Run speech models locally or connect your own provider.
 
 ## Get started
 
-**Early development. The first Windows preview installer is being prepared.**
-Until its installation checks are complete and it is published, [run from source](docs/DEVELOPMENT.md#development).
+**Early development.** The first Windows release, [v0.1.1](https://github.com/Knegis/KnegisWhisper/releases/tag/v0.1.1),
+is unsigned. It has not yet been through the installation checks on a clean machine.
+You can also [run from source](docs/DEVELOPMENT.md#development).
 
 For your first dictation:
 
@@ -42,12 +43,12 @@ For your first dictation:
 
 | Platform | Availability |
 | --- | --- |
-| Windows x64 | Primary development platform; preview installer in preparation |
+| Windows x64 | Primary development platform; unsigned [installer](https://github.com/Knegis/KnegisWhisper/releases/tag/v0.1.1) |
 | macOS | Source builds; capability-specific limitations |
 | Linux | Source builds; capability-specific limitations |
 
 See [platform support](docs/PLATFORM_SUPPORT.md) and [known limitations](docs/KNOWN_LIMITATIONS.md).
-The first preview targets Windows 11 x64 and will be unsigned. Models are downloaded separately.
+The installer targets Windows 11 x64 and is unsigned. Models are downloaded separately.
 
 ## From a conversation to a useful note
 

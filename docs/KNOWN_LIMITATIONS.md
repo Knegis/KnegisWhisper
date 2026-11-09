@@ -3,17 +3,18 @@
 KnegisWhisper is in early development. Read the notes attached to the exact release
 you install; source builds can contain changes that are not released yet.
 
-## Windows preview
+## Windows installer
 
-The initial installer target is Windows 11 x64. It is unsigned and may display an
+The installer targets Windows 11 x64. It is unsigned and may display an
 unknown-publisher or Windows reputation warning. Verify the published SHA-256
 checksum before running it. The current installer requires administrator rights.
 Transcription binaries and models are downloaded separately through the app.
-Installation and upgrade acceptance must be recorded before a preview is published.
+v0.1.1 was published before its installation and upgrade checks on a clean machine
+were run, so those checks are still to come.
 
 There is no automatic update installation. Update checking is not securely
-configured while the embedded updater public key is empty. Download a subsequent
-preview from the repository's Releases page.
+configured while the embedded updater public key is empty. Download a later
+version from the repository's Releases page.
 
 ## Audio and models
 
@@ -30,7 +31,7 @@ preview from the repository's Releases page.
 
 Windows is the primary hands-on validation platform. macOS and Linux source builds
 are available for development, with capability-specific limits; they are not part
-of the first downloadable preview.
+of the first downloadable release.
 
 Local transcription does not imply local cleanup or summaries: selecting a cloud
 provider for either sends the relevant text to that provider. Model downloads and

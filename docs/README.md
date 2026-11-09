@@ -3,7 +3,7 @@
 ## Use KnegisWhisper
 
 - [Getting started](GETTING_STARTED.md): installation and your first dictation.
-- [Known limitations](KNOWN_LIMITATIONS.md): preview scope and important constraints.
+- [Known limitations](KNOWN_LIMITATIONS.md): release scope and important constraints.
 - [Platform support](PLATFORM_SUPPORT.md): capabilities and validation by operating system.
 - [Notes workspace](NOTES_WORKSPACE.md): notes, transcripts and recording playback.
 - [CLI and MCP setup](CLI_MCP_SETUP.md) and [workflows](CLI_MCP_WORKFLOWS.md).
