@@ -1203,10 +1203,12 @@ impl MeetingRuntime {
         })?;
         // Automatic, whatever was chosen since: the meeting it came from may
         // not have been on the `local` provider at all.
+        let mut voice_samples = Vec::new();
         let (segments, speaker_note, transcription_error) =
             match self.transcribe_whole(&path, None).await {
                 Ok(Some(pass)) => {
-                    let (segments, speaker_note) = self.with_speakers(pass, &path).await;
+                    let (segments, speaker_note) =
+                        self.with_speakers(pass, &path, &mut voice_samples).await;
                     (segments, speaker_note, None)
                 }
                 Ok(None) => (Vec::new(), None, None),
@@ -1231,7 +1233,7 @@ impl MeetingRuntime {
             details.push_str(&format!(" {speaker_note}"));
         }
         self.progress_stage(FinalisationStage::SavingNote).await;
-        save_recovered(
+        save_recovered_with_voices(
             &self.db,
             &path,
             storage_key,
@@ -1239,6 +1241,7 @@ impl MeetingRuntime {
             &segments,
             &details,
             duration,
+            &voice_samples,
         )
         .await
     }
@@ -1806,6 +1809,7 @@ impl MeetingRuntime {
             );
         }
 
+        let mut voice_samples = Vec::new();
         let saved = select_transcript(
             provider_id,
             &transcript,
@@ -1817,7 +1821,9 @@ impl MeetingRuntime {
                     .transcribe_whole(&finished.path, save.whole_pass_model.as_deref())
                     .await?
                 {
-                    Some(pass) => Ok(self.with_speakers(pass, &finished.path).await),
+                    Some(pass) => Ok(self
+                        .with_speakers(pass, &finished.path, &mut voice_samples)
+                        .await),
                     None => Ok((Vec::new(), None)),
                 }
             },
@@ -1827,7 +1833,7 @@ impl MeetingRuntime {
         let made_by = transcribed_by(provider_id, &saved);
         let saved = if saved.used_streaming {
             let (segments, speaker_note) = self
-                .with_streaming_speakers(saved.segments, &finished)
+                .with_streaming_speakers(saved.segments, &finished, &mut voice_samples)
                 .await;
             SavedTranscript {
                 segments,
@@ -1877,13 +1883,14 @@ impl MeetingRuntime {
             };
         };
         self.progress_stage(FinalisationStage::SavingNote).await;
-        match save_stopped(
+        match save_stopped_with_voices(
             &self.db,
             note,
             &save.plan,
             &finished.path,
             finished.duration_seconds,
             removal,
+            &voice_samples,
         )
         .await
         {
@@ -1924,6 +1931,7 @@ impl MeetingRuntime {
         &self,
         mut segments: Vec<kw_notes_core::transcript::Segment>,
         finished: &Finished,
+        voice_samples: &mut Vec<kw_notes_core::known_voices::Sample>,
     ) -> (Vec<kw_notes_core::transcript::Segment>, Option<String>) {
         if segments.is_empty()
             || segments.iter().any(|s| s.speaker.is_some())
@@ -1955,7 +1963,9 @@ impl MeetingRuntime {
                 })
                 .collect(),
         };
-        let (labelled, note) = self.with_speakers(pass, &finished.path).await;
+        let (labelled, note) = self
+            .with_speakers(pass, &finished.path, voice_samples)
+            .await;
         for (saved, labelled) in segments.iter_mut().zip(labelled) {
             saved.end_timestamp = labelled.end_timestamp;
             saved.speaker = labelled.speaker;
@@ -1976,6 +1986,7 @@ impl MeetingRuntime {
         &self,
         pass: WholePass,
         recording: &std::path::Path,
+        voice_samples: &mut Vec<kw_notes_core::known_voices::Sample>,
     ) -> (Vec<kw_notes_core::transcript::Segment>, Option<String>) {
         let wanted = crate::diarization::is_enabled(&self.db).await;
         if !wanted {
@@ -1984,7 +1995,18 @@ impl MeetingRuntime {
         self.progress_stage(FinalisationStage::AnalysingSpeakers)
             .await;
         match crate::diarization::turns(recording).await {
-            Ok(Some(turns)) => labelled(&pass, Some(&turns), true),
+            Ok(Some(turns)) => {
+                let (segments, mut note) = labelled(&pass, Some(&turns), true);
+                match crate::known_voices::extract(&self.db, recording, &turns).await {
+                    Ok(samples) => *voice_samples = samples,
+                    Err(error) => {
+                        note = Some(format!(
+                            "Known voices could not run: {error}. Speaker labels were preserved."
+                        ))
+                    }
+                }
+                (segments, note)
+            }
             Ok(None) => {
                 let (segments, _) = labelled(&pass, None, false);
                 (

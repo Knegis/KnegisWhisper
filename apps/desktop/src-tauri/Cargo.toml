@@ -63,6 +63,7 @@ workspace = true
 tauri-build.workspace = true
 
 [dependencies]
+libloading = "0.8"
 tempfile.workspace = true
 # `macos-private-api` is what makes `WebviewWindowBuilder::transparent` exist on
 # macOS at all -- it is `#[cfg(any(not(target_os = "macos"), feature =

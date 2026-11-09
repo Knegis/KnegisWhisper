@@ -186,6 +186,9 @@ pub async fn settings_set(
     key: String,
     value: serde_json::Value,
 ) -> CmdResult<()> {
+    if key == kw_notes_core::known_voices::ENABLED_KEY {
+        return Err("Use the Known voices control to change this setting".into());
+    }
     settings::set(state.db().pool(), &key, &value)
         .await
         .map_err(|e| fail("could not save the setting", e))

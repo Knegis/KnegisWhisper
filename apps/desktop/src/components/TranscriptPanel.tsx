@@ -62,7 +62,7 @@ type TranscriptPanelProps = {
   selection: LineSelection;
   onSelectionChange: Dispatch<SetStateAction<LineSelection>>;
   suggestions: readonly string[];
-  onRename: (speakerId: string, name: string) => Promise<void>;
+  onRename: (speakerId: string, name: string, remember?: boolean, replaceId?: number | null) => Promise<void>;
   /**
    * Follow (KNEG-448), held by `NoteWorkspace`, whose player card has its chip: while it is on, the
    * line that starts playing is centred in view whenever it is not already, opening its section
@@ -227,7 +227,7 @@ export function TranscriptPanel({
       returnRenameFocus.current = true;
       setRenaming(null);
     },
-    rename: (speakerId, name) => latest.current.onRename(speakerId, name),
+    rename: (speakerId, name, remember, replaceId) => latest.current.onRename(speakerId, name, remember, replaceId),
   }), [latest, reveal, rowRefs, openRename]);
   const toggleSection = useCallback((key: string) => {
     // Browser scroll anchoring after this app layout change belongs to the section operation.

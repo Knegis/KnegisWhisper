@@ -1,3 +1,5 @@
+import { getKnownVoicesStatus } from "../lib/ipc";
+import type { KnownVoicesStatus } from "../generated/ipc-types";
 import { Fragment, memo, useEffect, useId, useRef, useState, type FormEvent, type RefObject } from "react";
 
 import { scrollBehavior } from "../lib/followScroll";
@@ -65,7 +67,7 @@ export type TranscriptActions = {
   openRename: (target: RenameTarget) => void;
   renameLine: (index: number) => void;
   closeRename: (speakerId: string) => void;
-  rename: (speakerId: string, name: string) => Promise<void>;
+  rename: (speakerId: string, name: string, remember?: boolean, replaceId?: number | null) => Promise<void>;
 };
 
 export function RenameForm({ target, suggestions, onRename, onClose }: {
@@ -74,6 +76,10 @@ export function RenameForm({ target, suggestions, onRename, onClose }: {
   onRename: TranscriptActions["rename"];
   onClose: (speakerId: string) => void;
 }) {
+  const [known, setKnown] = useState<KnownVoicesStatus | null>(null);
+  const [remember, setRemember] = useState(false);
+  const [replaceId, setReplaceId] = useState<number | null>(null);
+  useEffect(() => { let active = true; void getKnownVoicesStatus().then(v => { if(active) setKnown(v); }).catch(() => {}); return () => { active = false; }; }, []);
   const named = speakerIsNamed(target.current, target.speakerId);
   // A name is there to edit. "Speaker 1" isn't one: it would only have to be cleared first.
   const [value, setValue] = useState(named ? target.current : "");
@@ -97,7 +103,7 @@ export function RenameForm({ target, suggestions, onRename, onClose }: {
     setSaving(true);
     setError(null);
     try {
-      await onRename(target.speakerId, name);
+      await onRename(target.speakerId, name, remember && !!name.trim(), replaceId);
       onClose(target.speakerId);
     } catch (cause) {
       setError(message(cause));
@@ -123,10 +129,17 @@ export function RenameForm({ target, suggestions, onRename, onClose }: {
       {shown.map(name => <button key={name} type="button" className="language-pill" title={name} disabled={saving}
         aria-pressed={name.toLocaleLowerCase() === typed} onClick={() => { setValue(name); fieldRef.current?.focus(); }}>{name}</button>)}
     </div> : null}
+    {known?.enabled && known.ready ? <div>
+      <label><input type="checkbox" checked={remember} disabled={saving} onChange={e => setRemember(e.target.checked)} />Remember this voice on this computer</label>
+      {remember ? <label>Voice profile <select disabled={saving} value={replaceId ?? "new"} onChange={e => setReplaceId(e.target.value === "new" ? null : Number(e.target.value))}>
+        <option value="new">Create a new voice</option>
+        {known.voices.map(v => <option key={v.id} value={v.id}>Replace sample for {v.displayName} (#{v.id})</option>)}
+      </select></label> : null}
+    </div> : null}
     <div className="transcript-rename-actions">
       {named ? <button type="button" disabled={saving} onClick={() => { void submitName(""); }}>Remove name</button> : null}
       <button type="button" disabled={saving} onClick={() => onClose(target.speakerId)}>Cancel</button>
-      <button type="submit" className="primary" disabled={saving || !canSaveSpeakerName(value, target)}>Save</button>
+      <button type="submit" className="primary" disabled={saving || (!canSaveSpeakerName(value, target) && !(remember && value.trim()))}>Save</button>
     </div>
     {error && <p className="error" role="alert">{error}</p>}
   </form>;

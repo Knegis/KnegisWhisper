@@ -2716,6 +2716,7 @@ dependencies = [
  "kw-sidecar",
  "kw-storage",
  "kw-transcription-core",
+ "libloading 0.8.9",
  "reqwest 0.12.28",
  "semver",
  "serde",

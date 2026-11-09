@@ -852,6 +852,31 @@ mod xz_stream {
         /// and only the producer *finishing* fails it. A slow machine cannot
         /// cause a failure; an unbounded channel finishes in milliseconds.
         #[test]
+        fn pinned_sherpa_c_api_is_flattened_but_other_library_paths_are_ignored() {
+            let dir = "sherpa-onnx-v1.13.4-win-x64-shared-MT-Release/bin";
+            assert_eq!(
+                crate::install::payload_relative(
+                    "sherpa-onnx-v1.13.4-win-x64-shared-MT-Release/lib/sherpa-onnx-c-api.dll",
+                    dir
+                )
+                .unwrap(),
+                Some(std::path::PathBuf::from("voice-runtime").join("sherpa-onnx-c-api.dll"))
+            );
+            assert_eq!(
+                crate::install::payload_relative("other/lib/sherpa-onnx-c-api.dll", dir).unwrap(),
+                None
+            );
+            assert_eq!(
+                crate::install::payload_relative(
+                    "sherpa-onnx-v1.13.4-win-x64-shared-MT-Release/lib/../bad.dll",
+                    dir
+                )
+                .unwrap(),
+                None
+            );
+        }
+
+        #[test]
         fn nothing_reading_means_the_producer_stops_at_the_bound() {
             let (tx, rx) = mpsc::sync_channel::<io::Result<Vec<u8>>>(CAPACITY);
             let (done_tx, done_rx) = mpsc::channel::<usize>();
@@ -1191,6 +1216,21 @@ fn extract_bare(
 /// This is where archive names stop being strings and become paths, so it is
 /// where they get checked.
 fn payload_relative(name: &str, payload_dir: &str) -> Result<Option<PathBuf>, InstallError> {
+    // The C API and its matching ONNX runtime are a separate payload from
+    // bin/. Load its runtime explicitly to avoid resolving an older system DLL.
+    if payload_dir == "sherpa-onnx-v1.13.4-win-x64-shared-MT-Release/bin" {
+        let normalized = name.replace('\\', "/");
+        if let Some(file) =
+            normalized.strip_prefix("sherpa-onnx-v1.13.4-win-x64-shared-MT-Release/lib/")
+        {
+            if matches!(
+                file,
+                "sherpa-onnx-c-api.dll" | "onnxruntime.dll" | "onnxruntime_providers_shared.dll"
+            ) {
+                return Ok(Some(PathBuf::from("voice-runtime").join(file)));
+            }
+        }
+    }
     let normalised = name.replace('\\', "/");
 
     let stripped = if payload_dir.is_empty() {

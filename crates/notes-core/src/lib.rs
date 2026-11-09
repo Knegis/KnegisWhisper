@@ -31,3 +31,5 @@ pub use recordings::NoteRecording;
 pub use transcript::{export, Format, NoteMeta, Segment, SpeakerLabels, TranscriptRow, Word};
 
 pub mod summary;
+
+pub mod known_voices;

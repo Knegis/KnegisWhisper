@@ -27,9 +27,19 @@ pub(super) struct SaveAs {
 /// note is saved instead, so a failed attachment never costs the note.
 pub(super) async fn create_meeting_note(
     db: &Db,
+    note: kw_notes_core::notes::NewNote,
+    plan: &MeetingPlan,
+    recording: Option<(&str, f64)>,
+) -> Result<(i64, bool), kw_storage::StorageError> {
+    create_meeting_note_with_voices(db, note, plan, recording, &[]).await
+}
+
+pub(super) async fn create_meeting_note_with_voices(
+    db: &Db,
     mut note: kw_notes_core::notes::NewNote,
     plan: &MeetingPlan,
     recording: Option<(&str, f64)>,
+    samples: &[kw_notes_core::known_voices::Sample],
 ) -> Result<(i64, bool), kw_storage::StorageError> {
     note.folder_id = match kw_notes_core::notes::existing_folder(db.pool(), plan.folder_id).await {
         Ok(found) => found,
@@ -39,30 +49,17 @@ pub(super) async fn create_meeting_note(
             plan.folder_id
         }
     };
-    let id = match insert_meeting_note(db, &note, recording).await {
+    let id = match kw_notes_core::notes::create_with_voices(db.pool(), &note, recording, samples)
+        .await
+    {
         Err(error) if note.folder_id.is_some() && error.is_foreign_key_violation() => {
             tracing::warn!(%error, "the meeting's folder was deleted as its note was saved");
             note.folder_id = None;
-            insert_meeting_note(db, &note, recording).await?
+            kw_notes_core::notes::create_with_voices(db.pool(), &note, recording, samples).await?
         }
         result => result?,
     };
     Ok((id, plan.folder_id.is_some() && note.folder_id.is_none()))
-}
-
-pub(super) async fn insert_meeting_note(
-    db: &Db,
-    note: &kw_notes_core::notes::NewNote,
-    recording: Option<(&str, f64)>,
-) -> Result<i64, kw_storage::StorageError> {
-    match recording {
-        Some((key, duration)) => {
-            kw_notes_core::notes::create_meeting_with_recording(db.pool(), note, key, duration)
-                .await
-                .map(|(id, _)| id)
-        }
-        None => kw_notes_core::notes::create(db.pool(), note).await,
-    }
 }
 
 /// A stopped meeting's note, and what is to become of its recording: what
@@ -170,6 +167,7 @@ pub(super) struct Stopped {
 /// recovered from it. Deletion (`removal`) comes last, after the attachment,
 /// so a crash before it leaves a recording a note owns rather than one
 /// offered for recovery a second time.
+#[cfg(test)]
 pub(super) async fn save_stopped(
     db: &Db,
     note: kw_notes_core::notes::NewNote,
@@ -178,7 +176,20 @@ pub(super) async fn save_stopped(
     duration_seconds: f64,
     removal: Option<RecordingRemoval>,
 ) -> Result<Stopped, kw_storage::StorageError> {
-    let (note_id, folder_missing) = create_meeting_note(db, note, plan, None).await?;
+    save_stopped_with_voices(db, note, plan, recording, duration_seconds, removal, &[]).await
+}
+
+pub(super) async fn save_stopped_with_voices(
+    db: &Db,
+    note: kw_notes_core::notes::NewNote,
+    plan: &MeetingPlan,
+    recording: &std::path::Path,
+    duration_seconds: f64,
+    removal: Option<RecordingRemoval>,
+    samples: &[kw_notes_core::known_voices::Sample],
+) -> Result<Stopped, kw_storage::StorageError> {
+    let (note_id, folder_missing) =
+        create_meeting_note_with_voices(db, note, plan, None, samples).await?;
     let recording_attached =
         attach_meeting_recording(db, note_id, recording, duration_seconds).await;
     let (recording_removal, recording_removal_error) = if recording_attached {
@@ -244,6 +255,7 @@ pub(super) async fn save_discarded(
 /// recording is kept or deleted by today's setting. Its title falls back to
 /// when the recording started, read from its name, and to now when the name
 /// says nothing.
+#[cfg(test)]
 pub(super) async fn save_recovered(
     db: &Db,
     recording: &std::path::Path,
@@ -252,6 +264,31 @@ pub(super) async fn save_recovered(
     segments: &[kw_notes_core::transcript::Segment],
     details: &str,
     duration: f64,
+) -> Result<MeetingOutcome, String> {
+    save_recovered_with_voices(
+        db,
+        recording,
+        storage_key,
+        notes,
+        segments,
+        details,
+        duration,
+        &[],
+    )
+    .await
+}
+
+// Keeps the existing recovery inputs together with its optional analysis result.
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn save_recovered_with_voices(
+    db: &Db,
+    recording: &std::path::Path,
+    storage_key: &str,
+    notes: &str,
+    segments: &[kw_notes_core::transcript::Segment],
+    details: &str,
+    duration: f64,
+    samples: &[kw_notes_core::known_voices::Sample],
 ) -> Result<MeetingOutcome, String> {
     let plan = match draft::read_plan(recording) {
         Some(plan) => plan,
@@ -277,7 +314,7 @@ pub(super) async fn save_recovered(
     )
     .ok_or("The recovered meeting had no content")?;
     let (note_id, folder_missing) =
-        create_meeting_note(db, note, &plan, Some((storage_key, duration)))
+        create_meeting_note_with_voices(db, note, &plan, Some((storage_key, duration)), samples)
             .await
             .map_err(|error| {
                 format!(

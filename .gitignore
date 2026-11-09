@@ -50,3 +50,6 @@ Thumbs.db
 
 # Python release tooling
 __pycache__/
+
+# Local implementation validation artifacts
+/.validation/

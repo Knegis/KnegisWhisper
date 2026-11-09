@@ -259,6 +259,8 @@ fn render() -> String {
             kw_provider_registry::DiarizationRole,
             crate::diarization::DiarizationModelStatus,
             crate::diarization::DiarizationStatus,
+            crate::known_voices::KnownVoicesStatus,
+            kw_notes_core::known_voices::KnownVoice,
         ],
         "local text generation" => [
             crate::gguf_check::GgufIntegrity,

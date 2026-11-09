@@ -1,3 +1,4 @@
+import { enrollKnownVoice } from "../lib/ipc";
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -431,8 +432,9 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
     }
   }, [note.id]);
   useEffect(() => { void loadTranscript(); }, [loadTranscript]);
-  const renameSpeaker = useCallback(async (speakerId: string, name: string) => {
-    await renameNoteSpeaker(note.id, speakerId, name);
+  const renameSpeaker = useCallback(async (speakerId: string, name: string, remember = false, replaceId: number | null = null) => {
+    if (remember && name.trim()) await enrollKnownVoice(note.id, speakerId, name, replaceId);
+    else await renameNoteSpeaker(note.id, speakerId, name);
     // Rust resolves display names for both rows and export; reload those rows after each edit.
     await loadTranscript(true);
   }, [note.id, loadTranscript]);

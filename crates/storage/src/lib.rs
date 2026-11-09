@@ -295,8 +295,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            applied, 12,
-            "initial, note recordings, automation, desktop origin, summary, note workspace, search tokenizer, transcript row, folder sharing, transcribed-by, note trash, and recording disposition migrations recorded exactly once"
+            applied, 13,
+            "initial, note recordings, automation, desktop origin, summary, note workspace, search tokenizer, transcript row, folder sharing, transcribed-by, note trash, recording disposition, and known voices migrations recorded exactly once"
         );
         second.close().await;
     }

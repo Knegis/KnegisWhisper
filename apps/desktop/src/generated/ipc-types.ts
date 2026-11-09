@@ -1764,6 +1764,10 @@ enabled: boolean,
  */
 ready: boolean, modelsDir: string, };
 
+export type KnownVoicesStatus = { enabled: boolean, ready: boolean, reason: string | null, voices: Array<KnownVoice>, };
+
+export type KnownVoice = { id: number, displayName: string, compatible: boolean, };
+
 /* -------------------------------------------------- local text generation */
 /**
  * What the Intelligence > Local screen may say about one GGUF.

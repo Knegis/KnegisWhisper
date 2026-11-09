@@ -1601,3 +1601,10 @@ export function onSpeechInstallations(handler: (jobs: SpeechInstallSnapshot) => 
 export async function onMeetingProgress(handler: (update: FinalisationUpdate) => void): Promise<UnlistenFn> {
   return listen<FinalisationUpdate>("meeting-progress", event => handler(event.payload));
 }
+
+export async function getKnownVoicesStatus(): Promise<import("../generated/ipc-types.js").KnownVoicesStatus> { return invoke("known_voices_status"); }
+export async function setKnownVoicesEnabled(enabled: boolean): Promise<void> { return invoke("known_voices_set_enabled", { enabled }); }
+export async function enrollKnownVoice(noteId: number, speakerId: string, name: string, replaceId: number | null): Promise<number> { return invoke("known_voice_enroll", { noteId, speakerId, name, replaceId }); }
+export async function renameKnownVoice(id: number, name: string): Promise<void> { return invoke("known_voice_rename", { id, name }); }
+export async function deleteKnownVoice(id: number): Promise<void> { return invoke("known_voice_delete", { id }); }
+export async function repairKnownVoices(): Promise<void> { return invoke("known_voices_repair"); }

@@ -49,6 +49,11 @@ pub async fn rename(
     if !exists {
         return Ok(false);
     }
+    sqlx::query("INSERT OR IGNORE INTO speaker_manual_overrides VALUES(?,?)")
+        .bind(note_id)
+        .bind(speaker_id)
+        .execute(&mut *tx)
+        .await?;
     let name = name.split_whitespace().collect::<Vec<_>>().join(" ");
     if name.is_empty() {
         sqlx::query("DELETE FROM speaker_mappings WHERE note_id = ? AND speaker_id = ?")
@@ -60,7 +65,7 @@ pub async fn rename(
         // Bound values keep free-form names and labels out of SQL text.
         sqlx::query(
             "INSERT INTO speaker_mappings (note_id, speaker_id, display_name) VALUES (?, ?, ?) \
-             ON CONFLICT(note_id, speaker_id) DO UPDATE SET display_name = excluded.display_name",
+             ON CONFLICT(note_id, speaker_id) DO UPDATE SET display_name = excluded.display_name, profile_id = NULL, origin = 'manual'",
         )
         .bind(note_id)
         .bind(speaker_id)
