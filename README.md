@@ -11,8 +11,6 @@ Run speech models locally or connect your own provider.
 
 [**Get started**](docs/GETTING_STARTED.md) · [Documentation](docs/README.md) · [Contribute](CONTRIBUTING.md) · [Report a bug](https://github.com/Knegis/KnegisWhisper/issues/new/choose)
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-242424.svg)](LICENSE)
-
 </div>
 
 ![KnegisWhisper product introduction: dictation, meetings and notes](docs/assets/intro-preview.gif)
