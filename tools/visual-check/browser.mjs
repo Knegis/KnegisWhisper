@@ -55,6 +55,7 @@ export async function launchEdge({
   width = 1000,
   height = 720,
   extraArgs = [],
+  hideScrollbars = true,
 }) {
   await mkdir(out, { recursive: true });
   const executable = findEdge(edge);
@@ -67,7 +68,7 @@ export async function launchEdge({
       "--no-first-run",
       "--no-default-browser-check",
       "--disable-extensions",
-      "--hide-scrollbars",
+      ...(hideScrollbars ? ["--hide-scrollbars"] : []),
       `--window-size=${width},${height}`,
       ...extraArgs,
       url,

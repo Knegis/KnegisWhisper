@@ -31,6 +31,28 @@ Parakeet packages this month and another swap is likely (KNEG-531).
 
 ---
 
+## 2026-11-05 — One slim scrollbar, with no arrows
+
+The owner pointed out the note sheet's scrollbar looking outside the sheet. It wasn't, strictly: the sheet is the
+scroller, so Windows drew its bar in the last 15px, hard against the edge, with its arrows out past the curve of the
+40px corners. Every scroller in the app now draws a 6px rounded handle, 5px inside the edge, with no arrows, and the
+note sheet's and the Settings sheet's stop 32px short of their corners. The note and the transcript still scroll
+separately; moving the scrolling to an inner element was the alternative, rejected because it keeps the arrows and
+touches code the follow-along scrolling may rely on. Hiding the bar altogether would lose dragging and any sense of the
+note's length.
+
+It's `::-webkit-scrollbar` and not the standard properties, because setting `scrollbar-color` or `scrollbar-width`
+makes Chromium ignore those pseudo-elements, so both are gone. Forced colors still get the system's own bar. The notes
+list keeps a 10px track, since its 290 of content has only that much gutter beside it. Each track is 16px against
+Windows' 15px, so pages lose 1px per gutter.
+
+Measured by `tools/visual-check/scrollbars.mjs`, the one check that runs without `--hide-scrollbars`, finding the handle
+in the screenshot's pixels, against fixtures in headless Edge. That's the same engine as WebView2, but **not the real
+window**. These pseudo-elements are also supported by WebKit, which the macOS and Linux builds use, and that hasn't been
+looked at.
+
+---
+
 ## 2026-11-05 — The recording window's second edge was Windows' own
 
 The owner saw two edges on the recording window, one very curved and one slightly rounded. The very curved one is the
