@@ -77,22 +77,33 @@ their weight axis. Each retains its license, which sits beside the file.
 Bundled third-party components
 ================================================================================
 
-The application downloads the following at build or run time rather than
-vendoring them. Each is pinned by version and verified by digest; each retains
-its own license.
+The application downloads the following when the user installs them, from
+Settings or the import screen, rather than vendoring them. Each is pinned by
+version in config/sidecars.json and verified by digest; each retains its own
+license.
 
     whisper.cpp                 MIT           ggml-org/whisper.cpp
     llama.cpp                   MIT           ggml-org/llama.cpp
     sherpa-onnx                 Apache-2.0    k2-fsa/sherpa-onnx
     ONNX Runtime                MIT           microsoft/onnxruntime
-    FFmpeg                      LGPL-2.1+     ffmpeg.org
-    yt-dlp                      Unlicense     yt-dlp/yt-dlp
-    Qdrant                      Apache-2.0    qdrant/qdrant
-    WebRTC (audio processing)   BSD-3-Clause  webrtc.googlesource.com
+                                              (inside the sherpa-onnx archive)
+    FFmpeg                      LGPL-2.1+     ffmpeg.org, via BtbN/FFmpeg-Builds
+                                              (the lgpl variant)
+
+config/sidecars.json also pins yt-dlp (Unlicense, yt-dlp/yt-dlp) for URL import,
+which is withdrawn; no screen installs it.
+
+The installer bundles one third-party file:
+
+    Silero VAD v5.1.2 (ggml)    MIT           snakers4/silero-vad, converted by
+                                              ggml-org/whisper-vad
+                                              apps/desktop/src-tauri/resources/
+                                              ggml-silero-v5.1.2.bin
 
 Model weights are downloaded at the user's request and are covered by their own
-licenses, which the user accepts at download time. The registry records each
-model's source repository.
+licenses. config/provider-registry.json records each model's source repository.
 
-Rust and npm dependency licenses are enumerated by `cargo about` and
-`npm license` output in CI.
+The Rust crates and npm packages compiled into the application retain their own
+licenses, recorded in Cargo.lock and apps/desktop/package-lock.json. No combined
+third-party license list is generated or shipped with the installer yet
+(KNEG-533).

@@ -35,12 +35,6 @@ Update user documentation when behavior changes; add a concise Unreleased change
 entry when the change matters to users. Maintainers promote reviewed work to `main`
 and prepare releases there.
 
-## AI-assisted work
-
-AI assistance is welcome. You remain responsible for understanding the change,
-checking its assumptions and explaining what the verification proves. Do not submit
-generated audits or broad cleanup without establishing a useful, focused problem.
-
 ## Verification and privacy
 
 Frontend fixtures contain invented data and do not exercise native capture, model

@@ -21,7 +21,12 @@ mod diarization;
 mod dictation;
 mod gguf_check;
 mod integrations;
+mod known_voices;
+mod known_voices_native;
 mod vocabulary;
+mod voice_runtime;
+#[doc(hidden)]
+pub mod voice_worker;
 // Test-only: it renders `apps/desktop/src/generated/ipc-types.ts` and asserts
 // the committed copy still matches the Rust types. Nothing at runtime calls it.
 mod capture_interlock;
@@ -516,6 +521,13 @@ pub fn run() -> anyhow::Result<()> {
             commands::note_recording_attach_from_dialog,
             commands::note_transcript_rows,
             commands::note_speaker_rename,
+            known_voices::known_voices_status,
+            known_voices::known_voices_set_enabled,
+            known_voices::known_voice_enroll,
+            known_voices::known_voice_rename,
+            known_voices::known_voice_delete,
+            known_voices::known_voices_repair,
+
             commands::note_speaker_suggestions,
             commands::folders_list,
             commands::folder_create,

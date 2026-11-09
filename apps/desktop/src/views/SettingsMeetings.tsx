@@ -1,3 +1,4 @@
+import { KnownVoices } from "../components/KnownVoices";
 import { useSettingsDraft } from "../components/SettingsDrafts";
 /**
  * Settings > Meetings: how meetings are transcribed, detected and labelled.
@@ -742,6 +743,8 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
           </p>
         </LearnMore>
       </section>
+
+      <KnownVoices refreshKey={`${diarization.enabled}:${diarization.ready}`} />
 
       <section>
         <h2>all meeting providers</h2>

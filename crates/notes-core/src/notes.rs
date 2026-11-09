@@ -155,6 +155,55 @@ pub async fn create(pool: &SqlitePool, note: &NewNote) -> Result<i64, StorageErr
     Ok(id)
 }
 
+/// Save a meeting, its optional recording, and recognition results atomically.
+pub async fn create_with_voices(
+    pool: &SqlitePool,
+    note: &NewNote,
+    recording: Option<(&str, f64)>,
+    samples: &crate::known_voices::Analysis,
+) -> Result<i64, StorageError> {
+    create_with_voices_policy(
+        pool,
+        note,
+        recording,
+        samples,
+        crate::known_voices::RELEASE_POLICY,
+    )
+    .await
+}
+
+async fn create_with_voices_policy(
+    pool: &SqlitePool,
+    note: &NewNote,
+    recording: Option<(&str, f64)>,
+    samples: &crate::known_voices::Analysis,
+    policy: Option<crate::known_voices::Policy>,
+) -> Result<i64, StorageError> {
+    let mut tx = pool.begin().await?;
+    let id = create_on(&mut *tx, note).await?;
+    crate::summary::enqueue_automatic(&mut tx, id).await?;
+    if let Some((key, duration)) = recording {
+        crate::recordings::attach_on(&mut *tx, id, key, Some(duration), None).await?;
+    }
+    if let Some(policy) = policy {
+        sqlx::query("SAVEPOINT voice_results")
+            .execute(&mut *tx)
+            .await?;
+        if let Err(error) = crate::known_voices::persist(&mut tx, id, samples, policy).await {
+            sqlx::query("ROLLBACK TO voice_results")
+                .execute(&mut *tx)
+                .await?;
+            tracing::warn!(%error, "voice results could not be saved");
+            sqlx::query("UPDATE notes SET recording_details=COALESCE(recording_details,'') || ' Known voices could not be saved; speaker labels were preserved.' WHERE id=?").bind(id).execute(&mut *tx).await?;
+        }
+        sqlx::query("RELEASE voice_results")
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await?;
+    Ok(id)
+}
+
 async fn create_on<'e, E: sqlx::Executor<'e, Database = sqlx::Sqlite>>(
     pool: E,
     note: &NewNote,
@@ -1550,5 +1599,69 @@ mod tests {
                 start_seconds: None
             })
         );
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod voice_save_tests {
+    use super::*;
+    use crate::known_voices::{self as voices, Policy, Sample};
+    #[tokio::test]
+    async fn voice_write_failure_rolls_back_only_analysis_and_keeps_the_note() {
+        let db = kw_storage::Db::open_in_memory().await.unwrap();
+        kw_storage::settings::set(db.pool(), voices::KNOWN_VOICES_ENABLED_KEY, &true)
+            .await
+            .unwrap();
+        sqlx::query("CREATE TRIGGER fail_voice BEFORE INSERT ON note_voice_sources BEGIN SELECT RAISE(ABORT, 'fixture failure'); END").execute(db.pool()).await.unwrap();
+        let mut vector = vec![0.0; voices::DIM];
+        if let Some(first) = vector.first_mut() {
+            *first = 1.0;
+        }
+        let sample = Sample {
+            speaker_id: "speaker_0".into(),
+            embedding: vector,
+            seconds: 5.0,
+        };
+        let note = NewNote {
+            title: "meeting".into(),
+            transcript: Some(r#"[{"text":"hello","speaker":"speaker_0"}]"#.into()),
+            ..Default::default()
+        };
+        let id = create_with_voices_policy(
+            db.pool(),
+            &note,
+            None,
+            &voices::Analysis {
+                samples: vec![sample],
+                generation: voices::generation(db.pool()).await.unwrap(),
+                source: Some(voices::Source {
+                    storage_key: "meeting.wav".into(),
+                    sha256: "a".repeat(64),
+                    pipeline: voices::MODEL_ID.into(),
+                    duration: 5.0,
+                    turns: vec![],
+                }),
+                warning: None,
+            },
+            Some(Policy {
+                threshold: 0.9,
+                margin: 0.1,
+                min_seconds: 3.0,
+            }),
+        )
+        .await
+        .unwrap();
+        let saved = get(db.pool(), id).await.unwrap().unwrap();
+        assert_eq!(saved.transcript, note.transcript);
+        assert!(saved
+            .recording_details
+            .unwrap()
+            .contains("Known voices could not be saved"));
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM note_speaker_embeddings")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
     }
 }

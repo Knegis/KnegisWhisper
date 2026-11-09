@@ -1,5 +1,5 @@
 /**
- * GENERATED FILE â€” DO NOT EDIT.
+ * GENERATED FILE — DO NOT EDIT.
  *
  * Source:    the Rust types themselves, via `#[derive(ts_rs::TS)]`
  * Generator: apps/desktop/src-tauri/src/ipc_types.rs
@@ -1763,6 +1763,10 @@ enabled: boolean,
  * which of the two is missing rather than showing one green tick.
  */
 ready: boolean, modelsDir: string, };
+
+export type KnownVoicesStatus = { enabled: boolean, ready: boolean, reason: string | null, voices: Array<KnownVoice>, enrollmentReason: string | null, };
+
+export type KnownVoice = { id: number, displayName: string, compatible: boolean, };
 
 /* -------------------------------------------------- local text generation */
 /**

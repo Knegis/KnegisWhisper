@@ -244,7 +244,7 @@
     },
     {
       "name": "sherpa",
-      "description": "sherpa-onnx's offline speech-to-text CLI: reads a WAV file and one model's encoder/decoder/tokens files, and prints a transcript. Runs entirely on this machine; no audio leaves the device. Pinned so the four Parakeet and Nemotron local ASR models in the provider registry can route through it once a caller is written; nothing invokes it yet. The streaming WebSocket server is a separate binary and is not pinned here.",
+      "description": "sherpa-onnx's command-line tools, all from this one archive. sherpa-onnx-offline reads a WAV file and one model's encoder/decoder/tokens files, and prints a transcript: it transcribes dictation, media imports and a meeting's whole-recording pass whenever a Parakeet model is chosen in Settings > Transcription. sherpa-onnx-offline-speaker-diarization gives saved meetings their speaker labels. The same archive carries the streaming WebSocket server, which the 'sherpa-stream' entry describes, and on Windows the three shared libraries that Known voices copies into its own known-voices-1.13.4 folder when its runtime is installed. Runs entirely on this machine; no audio leaves the device.",
       "source": {
         "repo": "k2-fsa/sherpa-onnx",
         "release": "v1.13.4",

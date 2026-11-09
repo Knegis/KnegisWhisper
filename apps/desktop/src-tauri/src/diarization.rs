@@ -300,6 +300,18 @@ pub async fn diarization_set_enabled(
         .map_err(|err| err.to_string())
 }
 
+pub(crate) fn voice_model() -> Result<PathBuf, String> {
+    diarization_models::installed(&models_root(), shipped()?)
+        .map(|m| m.embedding)
+        .ok_or_else(|| "Install the speaker label models first".into())
+}
+pub(crate) fn voice_library() -> PathBuf {
+    crate::voice_runtime::directory().join("sherpa-onnx-c-api.dll")
+}
+pub(crate) fn voice_runtime_ready() -> bool {
+    crate::voice_runtime::ready()
+}
+
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,

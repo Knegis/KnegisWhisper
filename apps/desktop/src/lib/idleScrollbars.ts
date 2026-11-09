@@ -1,9 +1,12 @@
+/** The width of the track `styles.css` draws, where pointing at it shows the handle. */
+const TRACK = 16;
+
 // The same list as the `:is(...)` rules in `styles.css`: the list panel, Notes' scroller, the
 // note and its transcript column, which scroll on their own in a wide window, a page, and the
 // Settings sheet.
 const surfaces = ".list-panel, .notes-main, .note-body, .note-side-body, .split-main, dialog.settings-sheet";
 
-/** Reveal native scrollbars during scrolling or while pointing at their track. */
+/** Reveal scrollbars during scrolling or while pointing at their track. */
 export function installIdleScrollbars(): () => void {
   const timers = new Map<HTMLElement, ReturnType<typeof setTimeout>>();
   let hovered: HTMLElement | null = null;
@@ -26,8 +29,8 @@ export function installIdleScrollbars(): () => void {
         if (rect.width === 0 || rect.height === 0) continue;
         const inside = event.clientX >= rect.left && event.clientX < rect.right
           && event.clientY >= rect.top && event.clientY < rect.bottom;
-        if (inside && ((element.scrollHeight > element.clientHeight && event.clientX >= rect.right - 14)
-          || (element.scrollWidth > element.clientWidth && event.clientY >= rect.bottom - 14))) next = element;
+        if (inside && ((element.scrollHeight > element.clientHeight && event.clientX >= rect.right - TRACK)
+          || (element.scrollWidth > element.clientWidth && event.clientY >= rect.bottom - TRACK))) next = element;
       }
     }
     const previous = hovered;

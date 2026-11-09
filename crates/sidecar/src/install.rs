@@ -1191,6 +1191,22 @@ fn extract_bare(
 /// This is where archive names stop being strings and become paths, so it is
 /// where they get checked.
 fn payload_relative(name: &str, payload_dir: &str) -> Result<Option<PathBuf>, InstallError> {
+    // The separately requested Known voices payload has a strict DLL allowlist.
+    if payload_dir == "sherpa-onnx-v1.13.4-win-x64-shared-MT-Release/lib" {
+        let normalized = name.replace('\\', "/");
+        let prefix = format!("{payload_dir}/");
+        let file = normalized.strip_prefix(&prefix);
+        return Ok(file
+            .filter(|file| {
+                matches!(
+                    *file,
+                    "sherpa-onnx-c-api.dll"
+                        | "onnxruntime.dll"
+                        | "onnxruntime_providers_shared.dll"
+                )
+            })
+            .map(PathBuf::from));
+    }
     let normalised = name.replace('\\', "/");
 
     let stripped = if payload_dir.is_empty() {
@@ -2330,5 +2346,35 @@ mod tests {
         // The first install on a new machine.
         let dir = tempfile::tempdir().unwrap();
         replace_dir(&dir.path().join("whisper"), "whisper").unwrap();
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod voice_payload_tests {
+    #[test]
+    fn voice_dll_allowlist_is_separate_from_the_existing_cli_payload() {
+        let lib = "sherpa-onnx-v1.13.4-win-x64-shared-MT-Release/lib";
+        let bin = "sherpa-onnx-v1.13.4-win-x64-shared-MT-Release/bin";
+        for name in [
+            "sherpa-onnx-c-api.dll",
+            "onnxruntime.dll",
+            "onnxruntime_providers_shared.dll",
+        ] {
+            let path = format!("{lib}/{name}");
+            assert_eq!(
+                super::payload_relative(&path, lib).unwrap(),
+                Some(std::path::PathBuf::from(name))
+            );
+            assert!(super::payload_relative(&path, bin).unwrap().is_none());
+        }
+        for path in [
+            format!("{lib}/unknown.dll"),
+            format!("{lib}/../bad.dll"),
+            format!("{lib}/sub/onnxruntime.dll"),
+            "other/lib/onnxruntime.dll".into(),
+        ] {
+            assert!(super::payload_relative(&path, lib).unwrap().is_none());
+        }
     }
 }

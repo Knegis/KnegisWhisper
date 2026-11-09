@@ -9,7 +9,7 @@ Published previews will appear on the [Releases page](https://github.com/Knegis/
 Choose the Windows x64 installer and its `SHA256SUMS.txt`. In PowerShell:
 
 ```powershell
-Get-FileHash .\KnegisWhisper_0.1.0_windows_x64_setup.exe -Algorithm SHA256
+Get-FileHash .\KnegisWhisper_0.1.1_windows_x64_setup.exe -Algorithm SHA256
 ```
 
 Compare the hash with the checksum file from the same release. The initial preview

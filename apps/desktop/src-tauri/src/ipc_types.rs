@@ -10,7 +10,7 @@
 //! So the declarations are no longer written by hand. Every type that crosses
 //! the IPC boundary derives [`ts_rs::TS`], and this module renders all of them
 //! into a single generated file that `src/lib/ipc.ts` re-exports. The `invoke()`
-//! wrappers stay hand-written â€” the defect was never in the wrappers.
+//! wrappers stay hand-written — the defect was never in the wrappers.
 //!
 //! # Why one writer rather than `#[ts(export)]`
 //!
@@ -42,7 +42,7 @@ const OUT: &str = "../src/generated/ipc-types.ts";
 ///
 /// Every 64-bit integer that crosses this boundary is a SQLite rowid, a byte
 /// count, or a millisecond duration. None approaches 2^53, `serde_json` sends
-/// them as JSON numbers, and Tauri's `invoke` parses them with `JSON.parse` â€”
+/// them as JSON numbers, and Tauri's `invoke` parses them with `JSON.parse` —
 /// so a `bigint` declaration would describe a value the frontend never receives.
 fn config() -> Config {
     Config::new().with_large_int("number")
@@ -75,7 +75,7 @@ fn declare<T: TS + 'static + ?Sized>(out: &mut String, cfg: &Config, seen: &mut 
 ///
 /// Grouped to match `src/lib/ipc.ts`, so a reader moving between the two files
 /// is looking at the same sequence. A type reachable only as another type's
-/// field still belongs here â€” `ts-rs` refers to it by name rather than inlining
+/// field still belongs here — `ts-rs` refers to it by name rather than inlining
 /// it, so an omission is a TypeScript compile error rather than a silent gap.
 macro_rules! declared {
     ($out:ident, $cfg:ident, $seen:ident, $($section:literal => [$($ty:ty),* $(,)?]),* $(,)?) => {
@@ -102,7 +102,7 @@ fn render() -> String {
 
     out.push_str(
         "/**\n\
-         \x20* GENERATED FILE â€” DO NOT EDIT.\n\
+         \x20* GENERATED FILE — DO NOT EDIT.\n\
          \x20*\n\
          \x20* Source:    the Rust types themselves, via `#[derive(ts_rs::TS)]`\n\
          \x20* Generator: apps/desktop/src-tauri/src/ipc_types.rs\n\
@@ -259,6 +259,8 @@ fn render() -> String {
             kw_provider_registry::DiarizationRole,
             crate::diarization::DiarizationModelStatus,
             crate::diarization::DiarizationStatus,
+            crate::known_voices::KnownVoicesStatus,
+            kw_notes_core::known_voices::KnownVoice,
         ],
         "local text generation" => [
             crate::gguf_check::GgufIntegrity,
@@ -330,7 +332,7 @@ mod tests {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(OUT)
     }
 
-    /// The check, and â€” with `KW_WRITE_IPC_TYPES=1` â€” the generator.
+    /// The check, and — with `KW_WRITE_IPC_TYPES=1` — the generator.
     ///
     /// Deliberately a test rather than a CI step. A separate step is a thing
     /// somebody has to remember to add; `cargo test --workspace` already runs

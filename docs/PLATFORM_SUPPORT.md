@@ -172,7 +172,11 @@ And one that is this project's own, recorded 2026-09-08 (KNEG-221):
 | Microphone | `cpal` | `cpal` | `cpal` |
 | System audio | WASAPI process loopback | CoreAudio process taps | PipeWire via xdg-desktop-portal |
 | System audio floor | — | **macOS 14.4+** for `cidre` process taps; 14.2+ for the helper-based tap | PipeWire, or PulseAudio via `pipewire-pulse` |
-| Acoustic echo cancellation | WebRTC APM sidecar | same | same |
+| Acoustic echo cancellation | None | None | None |
+
+There is no echo cancellation. The WebRTC APM helper is deferred (`platform:aec` in
+`config/integration-manifest.json`). On speakers, the other participants' voices can be transcribed
+twice; with headphones there is nothing to cancel.
 
 The macOS version floor matters. Pluely declares `minimumSystemVersion: "10.13"` while using an
 API that needs 14.4 — a hard runtime failure rather than graceful degradation. We gate on the
@@ -1084,6 +1088,13 @@ Both Parakeet archives were re-measured the same way and the same day —
 487,170,055 bytes (464.6 MiB) and 501,350,460 bytes (478.1 MiB), digests
 unchanged. Before this, only their lengths had been checked, against
 `content-length`.
+
+**`parakeet-tdt-0.6b-v3` has since been swapped, as the next paragraph says it
+could be.** On 2026-11-07 k2-fsa re-uploaded it under the same name, rebuilt with
+new int8 weights, and the weekly check failed on 2026-11-09. It is re-pinned to
+the new upload, 487,211,443 bytes, from that run's hash and GitHub's stated
+digest, which agree. Those bytes have not been downloaded here (KNEG-531;
+KNEG-532 is the alternative of a commit-pinned Hugging Face mirror).
 
 **What this proves and what it does not.** Every one of these eight digests
 matches the bytes the host serves today. That is the check, run once, and it says

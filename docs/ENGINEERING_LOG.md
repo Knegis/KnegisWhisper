@@ -12,6 +12,65 @@ maintained in place rather than appended to, because its purpose is to be curren
 
 ---
 
+## 2026-11-09 — k2-fsa replaced the Parakeet TDT archive, and it's re-pinned to the new upload
+
+The weekly pin check failed on 2026-11-09 after passing on 2026-11-02. `parakeet-tdt-0.6b-v3` hashed to `1495e91b…`
+against a committed `5793d0fd…`, and was 487,211,443 bytes against 487,170,055. The other 16 models matched.
+sherpa-onnx's maintainer re-uploaded the archive under the same name on 2026-11-07 at 05:50 UTC, minutes after merging a
+pull request that adds model cards to the Parakeet packages (#4167). The package was rebuilt, not just given a README:
+its Hugging Face mirror changed in the same minute, with a 98 KB larger int8 encoder and different decoder and joiner
+bytes. Until the re-pin, every new install of the model failed at the integrity check. That is the failure KNEG-112
+accepted on 2026-08-31, and the check caught it within two days, as designed.
+
+It's re-pinned to the new upload rather than left failing, because the old bytes aren't served anywhere this app can
+download as one archive. The new digest is the weekly `--verify`'s own hash, from GitHub's runner, and matches GitHub's
+stated digest; the size is GitHub's stated size. Those bytes haven't been through this machine and the new weights
+haven't transcribed anything here, though `BENCH_CHECK.md` says the old ones never did either. The alternative KNEG-112
+turned down, pinning the publisher's Hugging Face mirror at a commit, is now KNEG-532, because upstream is re-exporting
+Parakeet packages this month and another swap is likely (KNEG-531).
+
+---
+
+## 2026-11-05 — The editor's add and drag icons disappeared when pointed at
+
+The owner saw the note editor's add and drag icons almost vanish on hover, with the highlight off to one side of them.
+Both came from our own styling. `4efc92a` narrowed each box to 20px to fit the sheet's 44px margin but left Crepe's 24px
+icons, so they sat 4px right of the box's centre. The icons read `--faint` and the hover `--control`, which on the white
+sheet is `#e4e4e4` on `#e5e5e5`, 1.01:1.
+
+Each icon is now centred, and is the text colour at 50% on a `--wash` hover: 4:1 at rest and 3.87:1 on the hover in
+light, 4.73:1 and 4.32:1 in dark. The icons still run 2px past each side of their boxes, so they leave the pointer to the
+box; otherwise the highlight shows with the pointer outside it. A darker icon would have been grey on grey on the pressed
+Add's `--band` fill, so that state takes `--band-ink`. The two variables change on the handle only, because Crepe's
+toolbar, link tooltip, table and image icons read them too.
+
+Measured by `tools/visual-check/editor-handles.mjs`, against fixtures in headless Edge and **not the real window**. With
+the old rules injected, the same measurements read a 4px offset and 1.01:1. Dragging a block wasn't exercised.
+
+---
+
+## 2026-11-05 — One slim scrollbar, with no arrows
+
+The owner pointed out the note sheet's scrollbar looking outside the sheet. It wasn't, strictly: the sheet is the
+scroller, so Windows drew its bar in the last 15px, hard against the edge, with its arrows out past the curve of the
+40px corners. Every scroller in the app now draws a 6px rounded handle, 5px inside the edge, with no arrows, and the
+note sheet's and the Settings sheet's stop 32px short of their corners. The note and the transcript still scroll
+separately; moving the scrolling to an inner element was the alternative, rejected because it keeps the arrows and
+touches code the follow-along scrolling may rely on. Hiding the bar altogether would lose dragging and any sense of the
+note's length.
+
+It's `::-webkit-scrollbar` and not the standard properties, because setting `scrollbar-color` or `scrollbar-width`
+makes Chromium ignore those pseudo-elements, so both are gone. Forced colors still get the system's own bar. The notes
+list keeps a 10px track, since its 290 of content has only that much gutter beside it. Each track is 16px against
+Windows' 15px, so pages lose 1px per gutter.
+
+Measured by `tools/visual-check/scrollbars.mjs`, the one check that runs without `--hide-scrollbars`, finding the handle
+in the screenshot's pixels, against fixtures in headless Edge. That's the same engine as WebView2, but **not the real
+window**. These pseudo-elements are also supported by WebKit, which the macOS and Linux builds use, and that hasn't been
+looked at.
+
+---
+
 ## 2026-11-05 — The recording window's second edge was Windows' own
 
 The owner saw two edges on the recording window, one very curved and one slightly rounded. The very curved one is the

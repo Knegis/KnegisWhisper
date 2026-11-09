@@ -9,9 +9,7 @@
 Dictate into your apps, transcribe meetings, and turn recordings into searchable notes.
 Run speech models locally or connect your own provider.
 
-[**Get started**](docs/GETTING_STARTED.md) Â· [Documentation](docs/README.md) Â· [Contribute](CONTRIBUTING.md) Â· [Report a bug](https://github.com/Knegis/KnegisWhisper/issues/new/choose)
-
-[![License: MIT](https://img.shields.io/badge/License-MIT-242424.svg)](LICENSE)
+[**Get started**](docs/GETTING_STARTED.md) · [Documentation](docs/README.md) · [Contribute](CONTRIBUTING.md) · [Report a bug](https://github.com/Knegis/KnegisWhisper/issues/new/choose)
 
 </div>
 
@@ -84,13 +82,30 @@ notes, recordings and transcription jobs.
 Reproducible bug reports, focused fixes, documentation and product feedback are welcome.
 Discuss substantial features and design changes before starting implementation.
 
-[Contributing guide](CONTRIBUTING.md) Â· [Development setup](docs/DEVELOPMENT.md) Â· [Changelog](CHANGELOG.md) Â· [Security](SECURITY.md)
+[Contributing guide](CONTRIBUTING.md) · [Development setup](docs/DEVELOPMENT.md) · [Changelog](CHANGELOG.md) · [Security](SECURITY.md)
 
 ## Acknowledgments and license
 
-KnegisWhisper ports product functionality from [OpenWhispr](https://github.com/OpenWhispr/openwhispr)
-(MIT) and uses [Pluely](https://github.com/iamsrikanthnani/pluely) as a native-shell
-architecture reference (GPL-3.0; no code copied). It is not affiliated with either
-project or dependent on their services.
+KnegisWhisper is built on open-source work. Thanks in particular to:
 
-Licensed under [MIT](LICENSE). See [NOTICE](NOTICE) for attribution.
+- [Tauri](https://tauri.app) for the desktop app, with [React](https://react.dev) and
+  [Vite](https://vite.dev) for its interface.
+- [Milkdown](https://milkdown.dev) for the note editor.
+- [whisper.cpp](https://github.com/ggml-org/whisper.cpp) for local Whisper transcription,
+  and [llama.cpp](https://github.com/ggml-org/llama.cpp) for local text models.
+- [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) and [ONNX Runtime](https://onnxruntime.ai)
+  for Parakeet transcription and speaker labels.
+- [FFmpeg](https://ffmpeg.org) for audio and video import.
+- [SQLite](https://sqlite.org) through [SQLx](https://github.com/launchbadge/sqlx) for
+  local storage, and [cpal](https://github.com/RustAudio/cpal) for audio capture.
+- [OpenWhispr](https://github.com/OpenWhispr/openwhispr) (MIT), which parts of
+  KnegisWhisper are ported from.
+
+[Silero VAD](https://github.com/snakers4/silero-vad) ships with the app to find speech
+in long recordings. The models you download in Settings come from their authors:
+OpenAI Whisper, KBLab's KB-Whisper, NVIDIA Parakeet and Nemotron, pyannote and
+3D-Speaker for speaker labels, and the local text models listed there. Each keeps its
+own license. The interface uses the Geist, Tiny5 and Doto fonts (SIL OFL 1.1).
+
+KnegisWhisper is not affiliated with any of these projects. Licensed under [MIT](LICENSE).
+See [NOTICE](NOTICE) for attribution and licenses.
