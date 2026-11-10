@@ -28,3 +28,6 @@ config/upstream-integration-baseline.json linguist-generated=true
 *.dll binary
 *.dylib binary
 *.so binary
+
+# Preserve upstream license text, including its trailing spaces.
+apps/desktop/src-tauri/resources/THIRD_PARTY_NOTICES.txt linguist-generated=true whitespace=-blank-at-eol

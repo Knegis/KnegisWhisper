@@ -283,3 +283,27 @@ jobs:
     needs: contracts
     if: github.event_name == 'workflow_dispatch'
     uses: ./.github/workflows/whisper-macos.yml
+
+
+  notices:
+    name: Bundled dependency notices
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: Swatinem/rust-cache@v2
+      - run: npm ci
+        working-directory: apps/desktop
+      - run: npm run build
+        working-directory: apps/desktop
+      - run: cargo fetch --locked
+      - run: cargo install cargo-about --version 0.8.4 --locked
+      - run: node --test tools/licenses/frontend.test.mjs
+      - run: python -m unittest discover -s tools/licenses -p "test_*.py"
+      - run: python tools/licenses/generate.py --check

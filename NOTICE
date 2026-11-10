@@ -104,6 +104,6 @@ Model weights are downloaded at the user's request and are covered by their own
 licenses. config/provider-registry.json records each model's source repository.
 
 The Rust crates and npm packages compiled into the application retain their own
-licenses, recorded in Cargo.lock and apps/desktop/package-lock.json. No combined
-third-party license list is generated or shipped with the installer yet
-(KNEG-533).
+licenses, recorded in Cargo.lock and apps/desktop/package-lock.json. The installer includes THIRD_PARTY_NOTICES.txt, generated from the target Rust dependency
+graph, production interface bundle, bundled fonts and Silero VAD attribution.
+Regeneration and CI verification are documented in tools/licenses/README.md.

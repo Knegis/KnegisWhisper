@@ -2,6 +2,8 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+// @ts-expect-error Build-only JavaScript plugin.
+import { dependencyNotices } from "../../tools/licenses/frontend.mjs";
 
 // Tauri drives this dev server, so the port is fixed and failing loudly is
 // better than silently moving to another port the Rust side is not watching.
@@ -11,7 +13,7 @@ const DEV_PORT = 5183;
 const isDebugBuild = Boolean(process.env["TAURI_ENV_DEBUG"]);
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), dependencyNotices()],
 
   // Vue's esm-bundler build (Milkdown's component runtime) reads these at
   // build time and warns in dev when they are absent. Options API stays on
