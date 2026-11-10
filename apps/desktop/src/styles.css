@@ -4144,3 +4144,6 @@ button.microphone-error-retry { align-self: flex-start; min-height: 32px; margin
  * sits at the window's left edge takes the left gutter back out of its 24px.
  */
 .page-back, .task-notice { padding-left: calc(24px + (100cqw - 100vw) / 2); }
+
+/* KNEG-515: leave the floating library toggle its own space in the inline transcript. */
+.split[data-list-collapsed="true"] .note-transcript-inline .transcript-head { padding-left: 44px; }
