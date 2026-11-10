@@ -16,6 +16,14 @@ There is no automatic update installation. Update checking is not securely
 configured while the embedded updater public key is empty. Download a later
 version from the repository's Releases page.
 
+The published v0.1.1 uninstaller's **Delete app data** checkbox misses the main
+notes/recordings folder and saved credentials. Source builds now implement separate
+personal and shared cleanup options, but their disposable-machine acceptance
+matrix is pending ([KNEG-545](https://linear.app/axelalbertkarlsson/issue/KNEG-545)). Read
+[what is retained and how to remove it](GETTING_STARTED.md#uninstall-on-windows)
+before uninstalling. Published-installer verification remains pending under KNEG-534;
+fixture tests and a new installer build do not establish that result.
+
 ## Audio and models
 
 - Long Parakeet imports have crashed the native runtime. Use Whisper for long
