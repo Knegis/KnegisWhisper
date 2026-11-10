@@ -48,7 +48,10 @@ def verify(directory):
         raise ValueError("Helper needs Common Controls v6")
     script = (directory / "nsis/x64/installer.nsi").read_text(encoding="utf-8")
     for required in ['"/oname=knegiswhisper-uninstall.exe"', '"NSISUninstallString"',
-                     '"QuietUninstallString"', ' --quiet"', 'uninstall_running_abort:']:
+                     '"QuietUninstallString"', ' --quiet"', 'uninstall_running_abort:',
+                     'WriteRegDWORD SHCTX "${UNINSTKEY}" "NoElevateOnModify" 1',
+                     'uninstall_entry_points_rollback:',
+                     'Rename "$R8" "$INSTDIR\\uninstall.exe"']:
         if required not in script:
             raise ValueError("Missing built installer contract: " + required)
     uninstall = script.split("Section Uninstall", 1)[1]

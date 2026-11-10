@@ -26,6 +26,22 @@ class TemplateContracts(unittest.TestCase):
         self.assertEqual(text.count('ReadRegStr $R1 SHCTX "${UNINSTKEY}" "NSISUninstallString"'), 2)
         self.assertIn('StrCpy $R1 "$R1 /UPDATE"', text)
         self.assertIn('${AndIf} $0 <> 3010', text)
+        self.assertIn('WriteRegDWORD SHCTX "${UNINSTKEY}" "NoElevateOnModify" 1', text)
+
+    def test_entry_points_remain_recoverable_until_both_moves_succeed(self):
+        text = generate.generate()
+        uninstall = text.split("Section Uninstall", 1)[1]
+        start = uninstall.index("; Begin recoverable uninstall entry-point removal")
+        before, removal = uninstall[:start], uninstall[start:]
+        self.assertNotIn('Rename "$INSTDIR\\\\{{this}}"', before)
+        self.assertNotIn('Delete /REBOOTOK', before)
+        first = removal.index('Rename "$INSTDIR\\uninstall.exe" "$R8"')
+        second = removal.index('Rename "$INSTDIR\\knegiswhisper-uninstall.exe" "$R9"')
+        self.assertLess(first, second)
+        self.assertLess(second, removal.index('Delete /REBOOTOK "$R8"'))
+        rollback = removal.split('uninstall_entry_points_rollback:', 1)[1]
+        self.assertIn('Rename "$R8" "$INSTDIR\\uninstall.exe"', rollback)
+        self.assertIn('IfErrors uninstall_entry_points_restore_failed', rollback)
 
     def test_cli_upgrade_requires_review(self):
         with tempfile.TemporaryDirectory() as temp:

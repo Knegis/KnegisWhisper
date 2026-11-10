@@ -107,7 +107,8 @@ Include a non-ASCII Windows test account to exercise the real fallback paths.
 
 | Case | Required result for the new helper |
 | --- | --- |
-| Windows Installed apps, both options unchecked | Choices appear before UAC. App/resources and ordinary shortcuts removed; all personal/shared fixtures and credentials retained. |
+| Windows Installed apps, both options unchecked | Fresh and upgraded registrations contain `NoElevateOnModify=1`. Choices appear before UAC under the initiating unelevated account. App/resources and ordinary shortcuts removed; all personal/shared fixtures and credentials retained. |
+| Control Panel > Programs and Features, both options unchecked | Same pre-UAC choices and retention as Installed apps. Direct executable startup is not a substitute for either UI entry path. |
 | Personal checked, shared unchecked; split-token administrator | Original account's app root, both bundle-ID folders, discovery file, exact app credentials and startup registry values removed. Shared cache and all external/other-user sentinels retained. |
 | Personal checked; standard user supplies a different administrator at UAC | Same original-user cleanup. Administrator's personal files, credentials and startup values must remain unchanged. |
 | Personal unchecked, shared checked | Only shared cache and application removed. Personal data/credentials of every account retained. |
@@ -118,6 +119,7 @@ Include a non-ASCII Windows test account to exercise the real fallback paths.
 | Upgrade from v0.1.1 and helper-based build, including `/UPDATE` | No helper choices or personal/shared deletion. Notes/settings/recordings/credentials survive. Check reinstall UI and updater-style arguments separately. |
 | Helper `--quiet`, direct NSIS `/S`, `/P`, ordinary direct NSIS | All personal/shared data retained. Direct UI explains retention and has no delete-data checkbox. |
 | Active app/recording, model server, locked file, read-only file, denied ACL | Stop/retry or explicit failure; no false success or forced termination. Unlocking then retrying completes cleanup. Cancel may leave partial deletion and says so. |
+| Lock `uninstall.exe` without delete-sharing; repeat with the helper locked | Failure preserves both registered entry-point files and registration. After releasing the lock, retry from Installed apps/Programs and Features completes. Record original and restored file hashes. |
 | Junction at app root, child or ancestor; redirected folder and non-ASCII account | Reparse points rejected without touching target sentinel. Ordinary non-ASCII paths work. Shared fallback follows only the separate choice. |
 | Broker exits/crashes, pipe spoof, connection timeout, app relaunch during uninstall | Explicit failure, never a success message for unfinished cleanup. Authenticate exact peer process and retain unrelated sentinels. |
 | Installer/helper file removal requires reboot | Explicit restart-required result (3010); no automatic restart. Record leftovers before/after reboot and uninstall registration/shortcuts. |

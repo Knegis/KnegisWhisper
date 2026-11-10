@@ -23,3 +23,16 @@ cargo test -p knegiswhisper --bin knegiswhisper-uninstall --features tauri-test,
 
 The tests delete only disposable fixture directories. None invokes the complete
 uninstall or personal/shared cleanup entry points against the developer's profile.
+
+`python tools/uninstall/test_windows.py -v` compiles the generated NSIS entry-point
+removal fragment and executes it against disposable files. It covers a locked
+uninstaller, a locked helper requiring rollback, and successful removal. Each
+failure must leave both images intact and the helper launchable; retry must work
+after unlocking. It uses Tauri's cached NSIS compiler, or `NSIS_MAKENSIS` when set.
+The release workflow runs it after building the installer. It changes no registry
+entries or personal data and does not test ARP/UAC or restart-delayed deletion.
+
+Both the PE `asInvoker` manifest and the per-machine registration's
+`NoElevateOnModify=1` are required. Programs and Features can otherwise elevate
+the caller before starting the helper. Verify both Windows uninstall interfaces
+in the disposable-machine release matrix, including an upgraded registration.

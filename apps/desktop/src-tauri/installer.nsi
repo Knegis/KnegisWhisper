@@ -675,7 +675,9 @@ Section Install
   WriteRegStr SHCTX "${UNINSTKEY}" "DisplayVersion" "${VERSION}"
   WriteRegStr SHCTX "${UNINSTKEY}" "Publisher" "${MANUFACTURER}"
   WriteRegStr SHCTX "${UNINSTKEY}" "InstallLocation" "$\"$INSTDIR$\""
-  ; The asInvoker helper obtains consent before asking for elevation.
+  ; ARP must not elevate this per-machine command before the asInvoker
+  ; helper obtains consent. The helper elevates its own broker afterwards.
+  WriteRegDWORD SHCTX "${UNINSTKEY}" "NoElevateOnModify" 1
   WriteRegStr SHCTX "${UNINSTKEY}" "UninstallString" "$\"$INSTDIR\knegiswhisper-uninstall.exe$\""
   WriteRegStr SHCTX "${UNINSTKEY}" "QuietUninstallString" "$\"$INSTDIR\knegiswhisper-uninstall.exe$\" --quiet"
   WriteRegStr SHCTX "${UNINSTKEY}" "NSISUninstallString" "$\"$INSTDIR\uninstall.exe$\""
@@ -783,16 +785,7 @@ Section Uninstall
 
   ; Delete external binaries
   {{#each binaries}}
-    ${If} "{{this}}" == "knegiswhisper-uninstall.exe"
-      GetTempFileName $R8 "$INSTDIR"
-      Delete "$R8"
-      Rename "$INSTDIR\\{{this}}" "$R8"
-      ${If} ${FileExists} "$INSTDIR\\{{this}}"
-        SetErrorLevel 2
-        Quit
-      ${EndIf}
-      Delete /REBOOTOK "$R8"
-    ${Else}
+    ${If} "{{this}}" != "knegiswhisper-uninstall.exe"
       Delete "$INSTDIR\\{{this}}"
     ${EndIf}
   {{/each}}
@@ -814,14 +807,51 @@ Section Uninstall
 
 
   ; Delete uninstaller
+  ; Begin recoverable uninstall entry-point removal
+  ClearErrors
   GetTempFileName $R8 "$INSTDIR"
+  IfErrors uninstall_entry_points_failed
+  GetTempFileName $R9 "$INSTDIR"
+  IfErrors uninstall_entry_points_release_first_slot
   Delete "$R8"
+  Delete "$R9"
+  IfErrors uninstall_entry_points_failed
+  ClearErrors
   Rename "$INSTDIR\uninstall.exe" "$R8"
-  ${If} ${FileExists} "$INSTDIR\uninstall.exe"
+  IfErrors uninstall_entry_points_failed
+  ${If} ${FileExists} "$INSTDIR\knegiswhisper-uninstall.exe"
+    ClearErrors
+    Rename "$INSTDIR\knegiswhisper-uninstall.exe" "$R9"
+    IfErrors uninstall_entry_points_rollback
+  ${EndIf}
+
+  ; No fallible move remains. Unique names keep a reinstall before reboot safe.
+  Delete /REBOOTOK "$R8"
+  Delete /REBOOTOK "$R9"
+  Goto uninstall_entry_points_done
+
+  uninstall_entry_points_rollback:
+    ClearErrors
+    Rename "$R8" "$INSTDIR\uninstall.exe"
+    IfErrors uninstall_entry_points_restore_failed
+    Goto uninstall_entry_points_failed
+
+  uninstall_entry_points_release_first_slot:
+    Delete "$R8"
+  uninstall_entry_points_failed:
     SetErrorLevel 2
     Quit
-  ${EndIf}
-  Delete /REBOOTOK "$R8"
+
+  uninstall_entry_points_restore_failed:
+    ; A separate obstruction prevented rollback. Never report this as a
+    ; retryable lock or success: keep the image and name its recovery location.
+    IfSilent uninstall_entry_points_restore_failed_exit
+    MessageBox MB_OK|MB_ICONSTOP "Uninstall could not restore its entry point. The uninstaller is preserved at $R8. Repair the installation before retrying."
+    uninstall_entry_points_restore_failed_exit:
+    SetErrorLevel 3
+    Quit
+  uninstall_entry_points_done:
+  ; End recoverable uninstall entry-point removal
 
   {{#each resources_ancestors}}
   RMDir /REBOOTOK "$INSTDIR\\{{this}}"

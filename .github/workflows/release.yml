@@ -106,6 +106,8 @@ jobs:
         run: npm run tauri:build -- --target x86_64-pc-windows-msvc --bundles nsis --config ../../tools/release/unsigned.json
       - name: Verify built uninstall entry point
         run: python tools/uninstall/verify_build.py target/x86_64-pc-windows-msvc/release
+      - name: Native uninstall entry-point recovery
+        run: python tools/uninstall/test_windows.py -v
       - name: Prepare installer, checksums and notes
         env:
           RELEASE_TAG: ${{ inputs.tag }}

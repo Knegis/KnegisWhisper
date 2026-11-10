@@ -59,7 +59,9 @@ def generate():
     text = text[:start] + text[end:]
     old = r'  WriteRegStr SHCTX "${UNINSTKEY}" "UninstallString" "$\"$INSTDIR\uninstall.exe$\""'
     assert text.count(old) == 1
-    text = text.replace(old, r'''  ; The asInvoker helper obtains consent before asking for elevation.
+    text = text.replace(old, r'''  ; ARP must not elevate this per-machine command before the asInvoker
+  ; helper obtains consent. The helper elevates its own broker afterwards.
+  WriteRegDWORD SHCTX "${UNINSTKEY}" "NoElevateOnModify" 1
   WriteRegStr SHCTX "${UNINSTKEY}" "UninstallString" "$\"$INSTDIR\knegiswhisper-uninstall.exe$\""
   WriteRegStr SHCTX "${UNINSTKEY}" "QuietUninstallString" "$\"$INSTDIR\knegiswhisper-uninstall.exe$\" --quiet"
   WriteRegStr SHCTX "${UNINSTKEY}" "NSISUninstallString" "$\"$INSTDIR\uninstall.exe$\""''')
@@ -69,33 +71,61 @@ def generate():
   ${If} $R1 == ""
     ReadRegStr $R1 SHCTX "${UNINSTKEY}" "UninstallString"
   ${EndIf}''')
-    # Running helper/uninstaller images cannot be deleted on Windows. Rename
-    # to unique tombstones before scheduling deletion, so a reinstall before
-    # reboot cannot have its NEW helper removed by the pending operation.
+    # Keep the registered helper available until the uninstaller can move.
+    # Only schedule removal after BOTH moves succeed; rollback needs the first
+    # image intact when a lock prevents the second move.
     old = r'    Delete "$INSTDIR\\{{this}}"'
     assert text.count(old) == 1
-    text = text.replace(old, r'''    ${If} "{{this}}" == "knegiswhisper-uninstall.exe"
-      GetTempFileName $R8 "$INSTDIR"
-      Delete "$R8"
-      Rename "$INSTDIR\\{{this}}" "$R8"
-      ${If} ${FileExists} "$INSTDIR\\{{this}}"
-        SetErrorLevel 2
-        Quit
-      ${EndIf}
-      Delete /REBOOTOK "$R8"
-    ${Else}
+    text = text.replace(old, r'''    ${If} "{{this}}" != "knegiswhisper-uninstall.exe"
       Delete "$INSTDIR\\{{this}}"
     ${EndIf}''')
     old = r'  Delete "$INSTDIR\uninstall.exe"'
     assert text.count(old) == 1
-    text = text.replace(old, r'''  GetTempFileName $R8 "$INSTDIR"
+    text = text.replace(old, r'''  ; Begin recoverable uninstall entry-point removal
+  ClearErrors
+  GetTempFileName $R8 "$INSTDIR"
+  IfErrors uninstall_entry_points_failed
+  GetTempFileName $R9 "$INSTDIR"
+  IfErrors uninstall_entry_points_release_first_slot
   Delete "$R8"
+  Delete "$R9"
+  IfErrors uninstall_entry_points_failed
+  ClearErrors
   Rename "$INSTDIR\uninstall.exe" "$R8"
-  ${If} ${FileExists} "$INSTDIR\uninstall.exe"
+  IfErrors uninstall_entry_points_failed
+  ${If} ${FileExists} "$INSTDIR\knegiswhisper-uninstall.exe"
+    ClearErrors
+    Rename "$INSTDIR\knegiswhisper-uninstall.exe" "$R9"
+    IfErrors uninstall_entry_points_rollback
+  ${EndIf}
+
+  ; No fallible move remains. Unique names keep a reinstall before reboot safe.
+  Delete /REBOOTOK "$R8"
+  Delete /REBOOTOK "$R9"
+  Goto uninstall_entry_points_done
+
+  uninstall_entry_points_rollback:
+    ClearErrors
+    Rename "$R8" "$INSTDIR\uninstall.exe"
+    IfErrors uninstall_entry_points_restore_failed
+    Goto uninstall_entry_points_failed
+
+  uninstall_entry_points_release_first_slot:
+    Delete "$R8"
+  uninstall_entry_points_failed:
     SetErrorLevel 2
     Quit
-  ${EndIf}
-  Delete /REBOOTOK "$R8"''')
+
+  uninstall_entry_points_restore_failed:
+    ; A separate obstruction prevented rollback. Never report this as a
+    ; retryable lock or success: keep the image and name its recovery location.
+    IfSilent uninstall_entry_points_restore_failed_exit
+    MessageBox MB_OK|MB_ICONSTOP "Uninstall could not restore its entry point. The uninstaller is preserved at $R8. Repair the installation before retrying."
+    uninstall_entry_points_restore_failed_exit:
+    SetErrorLevel 3
+    Quit
+  uninstall_entry_points_done:
+  ; End recoverable uninstall entry-point removal''')
     text = text.replace('  RMDir "$INSTDIR"', '  RMDir /REBOOTOK "$INSTDIR"')
     # A previous coordinator may have left a running image awaiting reboot.
     # Treat Windows' success-with-reboot code as success during reinstall too.
