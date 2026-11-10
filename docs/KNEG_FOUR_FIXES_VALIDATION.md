@@ -3,6 +3,10 @@
 Validated 2026-11-10 in an isolated worktree from dev at f4d5bde.
 No merge, push, publication, or changes to the user's installed profile.
 
+**Status:** reviewed and merged into dev on 2026-11-10, with the review follow-up
+in 26220ba. All four issues were closed in Linear the same day. The remaining CAM++
+embedding mirror gap is KNEG-546.
+
 Implementation commits: ec420d6 (checksums), 24eec8a (layout),
 2102334 (notices), 83e7252 (model downloads).
 
@@ -25,7 +29,7 @@ Implementation commits: ec420d6 (checksums), 24eec8a (layout),
 
 The English CAM++ embedding download is still on its existing verified GitHub URL.
 No byte-equivalent publisher mirror was established; no model was substituted.
-This is the remaining KNEG-532 item.
+KNEG-532 closed without it; it is now KNEG-546.
 
 ## Initial implementation checks
 
@@ -100,9 +104,8 @@ needs attention; those jobs were not run locally.
   account for both Nemotrons and Parakeet Unified: three of the five repositories.
   Module-level installer explanations, notice-regeneration guidance in DEVELOPMENT,
   and NOTICE wrapping are restored/corrected.
-- All four Linear descriptions now render the full branch name as code. Statuses
-  remain three In Review and KNEG-532 In Progress for the embedding mirror gap.
-  Follow-up commits include explanatory bodies; prior reviewed commits are retained.
+- All four Linear descriptions now render the full branch name as code. All four
+  issues are closed since the merge; see Status at the top. Follow-up commits include explanatory bodies; prior reviewed commits are retained.
 
 Fresh checks on Rust 1.99.0: meeting-core 261, transcription-core 221 and
 provider-registry 17 unit tests passed (499 total). Clippy for those crates with

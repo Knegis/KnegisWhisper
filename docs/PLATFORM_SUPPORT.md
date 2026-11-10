@@ -1120,7 +1120,7 @@ needed. Checked 2026-11-10.
 
 The English CAM++ embedding model still uses its original size/digest-pinned
 GitHub URL. No byte-equivalent publisher mirror has been verified for it.
-This is the remaining KNEG-532 limitation, not a reason to replace its weights.
+KNEG-546 tracks it. It is not a reason to replace its weights.
 
 **What this proves and what it does not.** A matching digest proves equality to
 our pinned bytes, not who trained a model or its recognition quality. The six
@@ -1165,33 +1165,37 @@ and records why.
 
 `apps/desktop/src-tauri/src/updater.rs` checks this project's own GitHub
 releases, opt-in and only when a person presses "Check for updates" on
-Settings > Diagnostics -- never at startup, never on a timer. It has never
-been exercised end to end, for one specific reason rather than a general
-disclaimer: **no release has ever been published.**
-`.github/workflows/release.yml` is `workflow_dispatch`-only and nobody has
-run it, so `GET /repos/{owner}/{repo}/releases/latest` has only ever had one
-possible answer, 404, on every platform.
+Settings > Diagnostics -- never at startup, never on a timer. It has still
+never been exercised end to end, and publishing a release did not change
+that. v0.1.1 was published on 9 November 2026 as a full release, and it is
+the repository's latest release, but the app never asks for it.
+`plugins.updater.pubkey` in `tauri.conf.json` is empty, so `check_now`
+returns `NoPublicKeyConfigured` ("Update checking is not securely
+configured") before sending any request. No signing key exists yet; see
+`docs/SECURITY.md`.
 
-Everything downstream of that fact is unverified in the ordinary sense of the
-word -- believed rather than observed -- and each piece is marked at its
-point of use rather than only here:
+A key alone would not be enough yet. The repository is private, and the
+app's request to `GET /repos/{owner}/{repo}/releases/latest` carries no
+credentials. Checked 2026-11-10: without credentials that URL returns 404,
+and with the owner's credentials it returns v0.1.1.
 
-- **The response shape `updater.rs` parses** (`tag_name`, `html_url`) is
-  GitHub's documented shape for that endpoint, not one this code has seen.
-- **Whether `tauri build` tolerates `bundle.createUpdaterArtifacts: true`
-  with no `TAURI_SIGNING_PRIVATE_KEY` present**, rather than refusing to run
-  at all, has never been checked on any of the three CI runners. The
-  workflow defends against the worse of the two possibilities by overriding
-  the setting back off when the secret is absent, but which possibility is
-  actually true is unconfirmed either way.
-- **Whether a real GitHub release actually carries the `.sig` files the
-  bundler would produce**, once a signing key exists, in a shape
-  `actions/upload-artifact`'s glob and `softprops/action-gh-release`'s
-  `files: bundles/**/*` both pick up -- untested, because no signing key and
-  no release exist yet.
-- **The version comparison itself** (`semver::Version`, with a published tag's
+What is and isn't known about the rest:
+
+- **The response shape `updater.rs` parses** (`tag_name`, `html_url`) matches
+  this project's own release. The authenticated request above returned
+  `tag_name` `v0.1.1` and the release page as `html_url`. The app itself has
+  never sent the request.
+- **The version comparison** (`semver::Version`, with a published tag's
   leading `v` stripped) is exercised by unit tests against invented tags, not
-  against a tag this project has actually cut.
+  against a tag this project has cut. Even with a key and a public
+  repository, a v0.1.1 install could only report that it is up to date.
+  Seeing a newer version needs a later release.
+- **No release carries updater signatures.** The Release workflow always builds
+  with `tools/release/unsigned.json`, which turns
+  `bundle.createUpdaterArtifacts` off. It uploads only the installer and
+  `SHA256SUMS.txt`. Whether `tauri build` would run with
+  `createUpdaterArtifacts: true` and no `TAURI_SIGNING_PRIVATE_KEY` has still
+  not been checked. Release builds avoid the question rather than answer it.
 
 None of this bears on whether the application works without an update check;
 it bears only on whether that specific, opt-in feature would behave as
