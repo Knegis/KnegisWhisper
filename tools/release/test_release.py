@@ -72,7 +72,7 @@ class ReleaseTests(unittest.TestCase):
         target = prepare(self.root, "v0.1.0", self.root / "bundle", out)
         self.assertEqual(target.name, "KnegisWhisper_0.1.0_windows_x64_setup.exe")
         digest = hashlib.sha256(target.read_bytes()).hexdigest()
-        self.assertEqual((out / "SHA256SUMS.txt").read_text(), f"{digest}  {target.name}\n")
+        self.assertEqual((out / "SHA256SUMS.txt").read_bytes(), f"{digest}  {target.name}\n".encode("utf-8"))
         self.assertIn(self.git("rev-parse", "HEAD"), (out / "RELEASE_NOTES.md").read_text())
         with self.assertRaises(ValueError):
             prepare(self.root, "v0.1.0", self.root / "bundle", out)

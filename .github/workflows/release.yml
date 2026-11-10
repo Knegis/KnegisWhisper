@@ -118,6 +118,9 @@ jobs:
         with:
           name: windows-preview
           path: release-assets
+      - name: Verify downloaded installer checksum
+        working-directory: release-assets
+        run: sha256sum -c SHA256SUMS.txt
       - name: Refuse published release replacement
         uses: actions/github-script@v7
         env:

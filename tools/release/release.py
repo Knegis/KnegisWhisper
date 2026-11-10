@@ -57,7 +57,7 @@ def prepare(root, tag, bundle_root, out):
     shutil.copyfile(installers[0], target)
     with target.open("rb") as source:
         digest = hashlib.file_digest(source, "sha256").hexdigest()
-    (out / "SHA256SUMS.txt").write_text(f"{digest}  {name}\n", encoding="utf-8")
+    (out / "SHA256SUMS.txt").write_text(f"{digest}  {name}\n", encoding="utf-8", newline="\n")
     template = (root / "tools/release/notes.md").read_text(encoding="utf-8")
     sha = git(root, "rev-parse", "HEAD")
     (out / "RELEASE_NOTES.md").write_text(template.replace("{{TAG}}", tag).replace("{{SHA}}", sha), encoding="utf-8")
