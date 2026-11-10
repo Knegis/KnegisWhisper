@@ -12,6 +12,17 @@ maintained in place rather than appended to, because its purpose is to be curren
 
 ---
 
+
+## 2026-11-10 - Checksums, transcript header, notices and immutable model files
+
+KNEG-536, KNEG-515 and KNEG-533 are implemented and locally validated; KNEG-532
+switches the four speech models and segmentation to verified publisher commits.
+The embedding model keeps its original verified URL because a matching publisher
+mirror has not been established. See [the validation record](KNEG_FOUR_FIXES_VALIDATION.md)
+for automated checks, real download/inference evidence, installer resource evidence,
+and remaining platform/release limits.
+
+
 ## 2026-11-09 — k2-fsa replaced the Parakeet TDT archive, and it's re-pinned to the new upload
 
 The weekly pin check failed on 2026-11-09 after passing on 2026-11-02. `parakeet-tdt-0.6b-v3` hashed to `1495e91b…`

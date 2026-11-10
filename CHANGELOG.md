@@ -5,7 +5,13 @@ version, supported platforms, installation requirements and known limitations.
 
 ## Unreleased
 
-Nothing yet. No installer release is claimed by this entry. See
+- Write release checksums with portable LF line endings (KNEG-536).
+- Keep the library toggle clear of the narrow transcript header (KNEG-515).
+- Bundle generated dependency notices and verify their freshness in CI (KNEG-533).
+- Install speech and segmentation models from verified fixed-commit mirrors,
+  preserving existing model weights and installed layouts (KNEG-532).
+
+No installer release is claimed by this entry. See
 [Releases](https://github.com/Knegis/KnegisWhisper/releases) for published builds.
 
 ## 0.1.1 — 2026-11-09
