@@ -103,6 +103,7 @@ import { carriesNote, draggedNoteId, folderChange, NOTE_DRAG_TYPE } from "../lib
 import { useNotesLibrary } from "../lib/useNotesLibrary";
 import type { SummarySetupTarget } from "../lib/ipc";
 import { acknowledgeNote, noteHasPerson } from "../lib/noteList";
+import { fromOpenList } from "../lib/openList";
 
 function noteDate(value: string | null) {
   if (!value) return "Date unavailable";
@@ -152,7 +153,8 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
       if (menu.contains(target) || (context.fromButton && context.anchor.contains(target))) return;
       setContext(null);
     };
-    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") { event.preventDefault(); setContext(null); context.anchor.focus(); } };
+    // Escape in an open Export format or Move to folder list closes only that list.
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape" && !fromOpenList(event.target)) { event.preventDefault(); setContext(null); context.anchor.focus(); } };
     const close = () => setContext(null);
     document.addEventListener("pointerdown", outside);
     document.addEventListener("keydown", escape);
@@ -759,7 +761,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
               <div id="notes-library-tool-panel" ref={toolRef} onKeyDown={event => { if (event.key === "Escape") { setLibraryTool(null); newFolderButton.current?.focus(); } }}>
                 {libraryTool === "new-folder" && <form className="notes-tool-panel" onSubmit={event => { event.preventDefault(); if (!folderName.trim()) return; void guard(async () => { await createFolder(folderName.trim()); setFolderName(""); setLibraryTool(null); }); }}>
                   <input aria-label="Folder name" placeholder="Folder name" value={folderName} onChange={event => setFolderName(event.target.value)} />
-                  <button type="submit" disabled={!folderName.trim()}>Create folder</button>
+                  <button type="submit" className="pill" disabled={!folderName.trim()}>Create folder</button>
                 </form>}
               </div>
               {notes.length === 0 && folders.length === 0 ? (

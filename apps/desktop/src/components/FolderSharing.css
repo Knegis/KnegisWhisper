@@ -1,18 +1,37 @@
-.folder-sharing { box-sizing: border-box; width: min(620px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow: hidden; padding: 24px; border: 1px solid var(--rule); background: var(--bg); color: var(--text); }
-.folder-sharing[open] { display: flex; flex-direction: column; }
+/* The confirm dialog's card (`dialog.confirm-dialog` in styles.css): white, rounded, no edge, the card shadow. */
+.folder-sharing { box-sizing: border-box; width: min(600px, calc(100vw - 32px)); max-height: calc(100vh - 32px); margin: auto; overflow: hidden; padding: 26px 26px 22px; border: 0; border-radius: var(--r-card); background: var(--panel); color: var(--text); box-shadow: var(--card-shadow); }
+.folder-sharing[open] { display: flex; flex-direction: column; animation: kw-rise .3s var(--ease-out) both; }
 .folder-sharing-body { min-height: 0; overflow: auto; }
-.folder-sharing::backdrop { background: rgb(0 0 0 / 35%); }
-.folder-sharing h2 { margin-top: 0; flex: 0 0 auto; }
-.folder-sharing fieldset { display: flex; flex-wrap: wrap; gap: 12px; margin-block: 16px; }
-.folder-sharing label { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.folder-sharing input[type="checkbox"] { flex: 0 0 auto; }
-.folder-sharing-selection, .folder-sharing-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-block: 16px; }
-.folder-sharing-actions { flex: 0 0 auto; padding-top: 12px; margin-bottom: 0; background: var(--bg); border-top: 1px solid var(--rule); }
-.folder-sharing-notes { max-height: 240px; overflow: auto; border-block: 1px solid var(--rule); }
-.folder-sharing-notes > label, .folder-sharing-notes > p { margin: 0; padding: 8px 0; overflow-wrap: anywhere; }
+.folder-sharing::backdrop { background: rgb(0 0 0 / 28%); }
+.folder-sharing h2 { flex: 0 0 auto; margin: 0 0 12px; font: 500 19px/26px var(--font-sans); letter-spacing: 0; color: var(--text); }
+.folder-sharing h3 { margin: 18px 0 4px; font-size: 16px; font-weight: 500; }
+.folder-sharing p { margin: 0 0 10px; font-size: 14.5px; line-height: 21px; }
+/* The content choices: a section label, then the boxes in a row. No frame: the label already groups them. */
+.folder-sharing fieldset { display: flex; flex-wrap: wrap; gap: 10px 20px; min-width: 0; margin: 18px 0 14px; padding: 0; border: 0; }
+.folder-sharing legend { margin: 0 0 10px; padding: 0; font: 400 14px/1.3 var(--font-mono); letter-spacing: 0; color: var(--band-text); }
+/* Two classes deep to outrank `label:has(> input[type="checkbox"])`, which makes a label inline and kept each note's size beside its title instead of at the row's end. */
+.folder-sharing .folder-sharing-body label { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 14.5px; }
+/* As a settings page draws one: the platform's box, sized, in the band colour. */
+.folder-sharing input[type="checkbox"] { flex: 0 0 auto; width: 16px; height: 16px; margin: 0; accent-color: var(--band); }
+.folder-sharing-selection, .folder-sharing-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.folder-sharing-selection { margin: 0 0 12px; }
+.folder-sharing-selection button { height: 32px; margin: 0; padding: 0 14px; background: var(--control); font-size: 13px; letter-spacing: .04em; }
+.folder-sharing-selection button:hover:not(:disabled) { background: var(--control-hover); }
+/* The confirm dialog's row of pills: the next step in Iris, every other one filled. */
+.folder-sharing-actions { flex: 0 0 auto; justify-content: flex-end; margin: 0; padding-top: 16px; background: var(--panel); border-top: 1px solid var(--rule); }
+.folder-sharing-actions button { margin: 0; min-height: 38px; padding: 0 18px; }
+.folder-sharing-actions button:not(.primary) { background: var(--control); }
+.folder-sharing-actions button:not(.primary):hover:not(:disabled) { background: var(--control-hover); }
+.folder-sharing-notes { max-height: 240px; margin: 0 0 14px; overflow: auto; border-block: 1px solid var(--rule); }
+.folder-sharing-notes > label, .folder-sharing-notes > p { margin: 0; padding: 10px 0; overflow-wrap: anywhere; }
+.folder-sharing-notes > label + label, .folder-sharing-notes > p + p { border-top: 1px solid var(--rule); }
 .folder-sharing-notes > label > span:first-of-type { flex: 1; }
-.folder-sharing-notes small { display: block; }
-.folder-sharing-name { flex-direction: column; align-items: stretch !important; }
+.folder-sharing-notes > label > span:last-of-type { color: var(--muted); font-variant-numeric: tabular-nums; }
+.folder-sharing-notes small { display: block; color: var(--muted); }
+/* The import side's name: a caption over the 36px field. */
+.folder-sharing .folder-sharing-body label.folder-sharing-name { flex-direction: column; align-items: stretch; gap: 6px; margin: 12px 0 14px; color: var(--muted); font-size: 13px; }
+/* Three classes deep so it outranks the unscoped field rule's `font: inherit` whichever stylesheet loads first. */
+.folder-sharing .folder-sharing-name > input:not([type="checkbox"]) { color: var(--text); font-size: 14.5px; }
 .folder-sharing-path { overflow-wrap: anywhere; }
 .notes-folder-actions { display: flex; align-items: center; }
 .notes-folder-actions > .notes-folder-toggle { flex: 1; min-width: 0; }

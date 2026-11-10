@@ -13,6 +13,34 @@ maintained in place rather than appended to, because its purpose is to be curren
 ---
 
 
+## 2026-11-10 — Fields, dropdown lists and dialogs outside the settings column, in the new style
+
+The owner said some input fields didn't match the new design. A field-by-field sweep of every screen and pop-up found the
+mismatched ones all sat outside the settings column. The pill style was attached to `.content`, and the Notes screen and
+its dialogs aren't under it, so New folder, Add person and the sharing dialog's name fell back to the old square box.
+The default text field is now the pill itself, at the old rule's specificity, so a field either has its own rule or is
+the pill. Scoping more selectors under `.content` was the alternative, rejected because the next field outside it would
+be square again. The note menu's dropdowns, the Share folder dialog and the Known voices rows were redrawn to match
+(KNEG-549).
+
+Every open dropdown list in the app was Windows' own, not only the settings ones. Chromium draws the list in the page only
+when `appearance: base-select` is on the `::picker(select)` as well as the select, and the stylesheet set only the
+select. The settings dropdowns also turned it off to paint their chevron as a background. With both fixed, lists are
+the app's menu card. Two behaviours follow. A dropdown is now as wide as its current choice, not its longest option.
+And an open list's Escape reaches the page, so the note menu and the speaker form, which closed on any Escape, now ask
+`lib/openList.ts` first and leave themselves open.
+
+The title bar's "Search notes and meetings" was clipped in the g by the search field's clear button, which keeps its
+20px while hidden; it's now out of the layout while the field is empty. The Settings sheet's scrollbar is in the entry of
+2026-11-05.
+
+Checked in the real window on a throwaway profile (the open list, the search text, the sheet's scrollbar, and the same
+field measurements as the browser), and against fixtures in headless Edge: every field before and after, a real pick
+through the note menu's list, and Escape. Dark, 720×520 and the import side of sharing with a real file weren't looked
+at. The inconsistencies the sweep found between fields that were already pills are KNEG-550.
+
+---
+
 ## 2026-11-10 - Checksums, transcript header, notices and immutable model files
 
 KNEG-536, KNEG-515 and KNEG-533 are implemented and locally validated; KNEG-532
@@ -71,7 +99,9 @@ touches code the follow-along scrolling may rely on. Hiding the bar altogether w
 note's length.
 
 It's `::-webkit-scrollbar` and not the standard properties, because setting `scrollbar-color` or `scrollbar-width`
-makes Chromium ignore those pseudo-elements, so both are gone. Forced colors still get the system's own bar. The notes
+makes Chromium ignore those pseudo-elements, so both are gone. One survived until 2026-11-10: `scrollbar-width: thin`
+on the Settings sheet's own rule, so the sheet kept Windows' bar, arrows and all, until the owner saw it in the real
+window. It was removed then and checked there (KNEG-520). Forced colors still get the system's own bar. The notes
 list keeps a 10px track, since its 290 of content has only that much gutter beside it. Each track is 16px against
 Windows' 15px, so pages lose 1px per gutter.
 

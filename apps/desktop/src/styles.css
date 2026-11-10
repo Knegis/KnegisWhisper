@@ -1943,9 +1943,10 @@ label:has(> input[type="checkbox"]) {
  * inconsistency read as a rendering glitch rather than as a missing selector.
  * Naming what is *not* a text field cannot go stale the same way.
  *
- * A settings page's fields and selects are 36px pills with a 1px edge
- * instead, a field on `--panel` (`# Settings pages`, near the end); these
- * rules still hold everywhere else.
+ * A text field anywhere is the design's 36px pill (below). A settings page
+ * repeats it under `.content` and adds a lighter fill on focus; the selects
+ * that sit outside one -- a note's menu, the speaker form -- share that page's
+ * filled pill (`# The approved design's pieces`, near the end).
  */
 input:not([type="checkbox"]):not([type="radio"]),
 select {
@@ -1981,9 +1982,20 @@ select:hover {
  * no fill and no border is nothing at all until you find it by guessing. The
  * placeholder covers the empty case and not the filled one -- a stored Corti
  * tenant would render as bare text indistinguishable from the label beside it.
+ *
+ * The fill is the design's pill: 36px, `--field`, no edge, the focus ring
+ * following its curve. Before 2026-11-10 this was a square `--control` box,
+ * and only fields under `.content` were redrawn, so every field outside a
+ * settings page -- New folder, Add person, the sharing dialog -- stayed square.
+ * A field drawn differently (the title bar's search, the library filter, the
+ * meeting name) has its own rule. Ranges and file pickers are not text fields;
+ * the second `:not()` keeps the selector exactly as specific as the one above.
  */
-input:not([type="checkbox"]):not([type="radio"]) {
-  background: var(--control);
+input:not([type="checkbox"], [type="radio"]):not([type="range"], [type="file"]) {
+  height: 36px;
+  padding: 0 14px;
+  border-radius: var(--r-control);
+  background: var(--field);
 }
 
 /* Firefox ships a placeholder at less than full opacity, which lands under
@@ -2077,18 +2089,28 @@ option:checked:hover {
     gap: 8px;
   }
 
+  /*
+   * The list is the app's menu card, as the chip menus draw it: white, rounded,
+   * the card shadow, rows rounded inside it. Until 2026-11-10 it was a square
+   * slab with the selected row in solid grey, the one menu in the app that
+   * still looked like the platform's.
+   */
   select::picker(select) {
-    border: 0;
-    border-radius: 0;
-    padding: 0.25rem 0;
-    background: var(--bg);
     /*
-     * A shadow, not a border, and not decoration either: with no edge of any
-     * kind a white list over a white page is not visibly a separate surface.
-     * This is the one place in the interface that genuinely floats above
-     * something else, so it is the one place that says so.
+     * On the list as well as the button: Chromium draws the list in the page only when both
+     * opt in. With the button alone -- every select here until 2026-11-10 -- the list was still
+     * the platform's popup, and none of these rules reached it.
      */
-    box-shadow: 0 8px 28px rgb(0 0 0 / 22%);
+    appearance: base-select;
+    margin-block: 6px;
+    border: 0;
+    border-radius: var(--r-card);
+    padding: 8px;
+    background: var(--panel);
+    color: var(--text);
+    box-shadow: var(--card-shadow);
+    font-size: 14px;
+    line-height: 20px;
   }
 
   /*
@@ -2123,15 +2145,28 @@ option:checked:hover {
   }
 
   option {
-    padding: 0.4rem 0.75rem;
-    background: var(--bg);
+    padding: 7px 12px;
+    border: 0;
+    border-radius: var(--r-row);
+    background: transparent;
     color: var(--text);
-    /*
-     * Bordered in the page colour rather than not bordered at all. It draws
-     * nothing, and it means the rows are already the right shape if a visible
-     * edge is ever wanted -- changing one value rather than adding a box.
-     */
-    border: 1px solid var(--bg);
+  }
+
+  /* As a chip menu's rows: a tint under the pointer, `--selected` for the current choice. */
+  option:hover {
+    background-color: var(--panel-hover);
+  }
+
+  option:checked,
+  option:checked:hover {
+    background-color: var(--selected);
+    color: var(--text);
+  }
+
+  /* Inside the row, since the card clips anything outside it. */
+  option:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
   }
 
   /* The fill already says which one is selected; the tick would say it twice
@@ -2393,6 +2428,10 @@ button.microphone-language-toggle:hover:not(:disabled) { background: transparent
   mask: url('./assets/window/xmark.svg') center / contain no-repeat;
   cursor: pointer;
 }
+/* Hidden, the clear button still kept its 16px and gap, which left the placeholder 152px for
+ * its 164: "Search notes and meetings" stopped in the middle of the g. Out of the layout until
+ * there is something to clear. */
+.titlebar-search input:placeholder-shown::-webkit-search-cancel-button { display: none; }
 .titlebar-search-popup { position: absolute; top: calc(100% + 8px); left: 0; right: 0; max-height: min(420px, calc(100vh - 80px)); overflow-y: auto; padding: 8px; border-radius: var(--r-card); background: var(--panel); color: var(--text); box-shadow: var(--card-shadow); animation: kw-rise .4s var(--ease) both; }
 .titlebar-search-status { padding: 6px 10px; font-size: 12px; color: var(--muted); }
 .titlebar-search-popup button { display: flex; flex-direction: column; gap: 3px; width: 100%; margin: 0; padding: 9px 12px; text-align: left; border: 0; border-radius: var(--r-row); background: transparent; color: var(--text); font-size: 13px; }
@@ -2529,6 +2568,8 @@ button:is(.notes-person, .notes-trash)[aria-pressed="true"], button:is(.notes-pe
 .notes-context-menu > button { display: block; width: 100%; margin: 0; padding: 0.5rem 0.65rem; text-align: left; border-radius: var(--r-control); }
 .notes-context-menu .row { display: flex; flex-direction: column; gap: 0.35rem; padding: 0.5rem 0.65rem; }
 .notes-context-menu select { width: 100%; min-width: 0; }
+/* The menu's own items are its buttons; a select's label is a caption above its pill, not another item. */
+.notes-context-menu .row-label { font-size: 13px; color: var(--muted); }
 
 /*
  * Vocabulary: a compact add row, and a ruled list of the words themselves --
@@ -2636,10 +2677,14 @@ button.note-person-remove:hover:not(:disabled) { color: var(--text); }
 button.note-people-add { display: inline-flex; align-items: center; gap: 4px; height: 24px; margin: 0; padding: 0 6px; color: var(--muted); font-size: 13px; }
 button.note-people-add:hover:not(:disabled), button.note-people-add[aria-expanded="true"] { color: var(--text); }
 .note-people-form { flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; }
-.note-people-form label { display: flex; flex-direction: column; gap: 2px; flex: 1 1 12rem; min-width: 0; max-width: 18rem; font-size: 12.5px; }
-.note-people-form input { width: 100%; min-width: 0; height: 32px; }
-.note-people-form-actions { display: flex; gap: 4px; }
-.note-people-form button { height: 32px; margin: 0; padding: 0 12px; }
+/* The speaker form's pieces: a caption over each 36px field, a filled Cancel and an Iris Add. */
+.note-people-form label { display: flex; flex-direction: column; gap: 6px; flex: 1 1 12rem; min-width: 0; max-width: 18rem; font-size: 13px; color: var(--muted); }
+/* `:not()` to outrank the unscoped field rule's `font: inherit`, which would hand the field the caption's size. */
+.note-people-form input:not([type="checkbox"]) { width: 100%; min-width: 0; color: var(--text); font-size: 14px; }
+.note-people-form-actions { display: flex; gap: 6px; }
+.note-people-form button { height: 36px; margin: 0; padding: 0 16px; font-size: 13px; letter-spacing: .04em; white-space: nowrap; }
+.note-people-form button:not(.primary) { background: var(--control); }
+.note-people-form button:not(.primary):hover:not(:disabled) { background: var(--control-hover); }
 .note-people-error { flex-basis: 100%; margin: 0; overflow-wrap: anywhere; }
 /*
  * The note's tabs: the open one underlined in `--band` over a rule the width
@@ -2768,7 +2813,7 @@ button.note-people-add:hover:not(:disabled), button.note-people-add[aria-expande
 .content button.primary, .content button.secondary, .content button.marked { padding: 0 16px; min-height: 36px; font-size: 13px; letter-spacing: .04em; }
 
 .content input:not([type="checkbox"], [type="radio"], [type="range"]),
-.content select {
+:is(.content, .notes-context-menu, .transcript-rename) select {
   height: 36px;
   padding: 0 14px;
   border: 0;
@@ -2777,7 +2822,7 @@ button.note-people-add:hover:not(:disabled), button.note-people-add[aria-expande
 }
 .content input:not([type="checkbox"], [type="radio"], [type="range"]) { transition: background-color .3s ease, box-shadow .3s ease; }
 .content input:not([type="checkbox"], [type="radio"], [type="range"]):focus { background: var(--panel); box-shadow: 0 1px 8px rgb(0 0 0 / 6%); }
-.content select:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+:is(.content, .notes-context-menu, .transcript-rename) select:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .content textarea { padding: 10px 14px; border: 0; border-radius: var(--r-row); background: var(--field); color: var(--text); }
 /* `flex: none`: beside a label long enough to wrap, a flex item's box shrank to 14px wide. */
 .content input[type="checkbox"] { flex: none; width: 16px; height: 16px; margin: 0; accent-color: var(--band); }
@@ -2878,7 +2923,7 @@ button.provider-link:hover:not(:disabled) { background: none; color: var(--band-
  * the corner. No photographs.
  */
 /* A frosted sheet with a 20px margin, over the ground and three slow patches of colour. */
-dialog.settings-sheet { position: fixed; inset: 20px; width: auto; height: auto; max-width: none; max-height: none; margin: 0; padding: 0; overflow-y: auto; border: 0; border-radius: var(--r-sheet); background: color-mix(in srgb, var(--bg) 66%, transparent); color: var(--text); box-shadow: inset 0 0 8px rgb(255 255 255 / 30%), 0 1px 8px rgb(0 0 0 / 5%); -webkit-backdrop-filter: blur(64px); backdrop-filter: blur(64px); scrollbar-width: thin; }
+dialog.settings-sheet { position: fixed; inset: 20px; width: auto; height: auto; max-width: none; max-height: none; margin: 0; padding: 0; overflow-y: auto; border: 0; border-radius: var(--r-sheet); background: color-mix(in srgb, var(--bg) 66%, transparent); color: var(--text); box-shadow: inset 0 0 8px rgb(255 255 255 / 30%), 0 1px 8px rgb(0 0 0 / 5%); -webkit-backdrop-filter: blur(64px); backdrop-filter: blur(64px); }
 dialog.settings-sheet[open] { display: flex; animation: kw-fade .35s var(--ease-out) both; }
 dialog.settings-sheet::backdrop { background: radial-gradient(ellipse 60% 62% at 21% 100%, #9fcdb4 0 45%, rgb(159 205 180 / 0) 100%), radial-gradient(ellipse 44% 46% at 88% 102%, #cfe0c8 0 45%, rgb(207 224 200 / 0) 100%), radial-gradient(ellipse 36% 34% at 74% 3%, #e9ddf6 0 45%, rgb(233 221 246 / 0) 100%), var(--bg); }
 .settings-sheet-body { display: flex; flex-direction: column; flex: 1; min-height: min-content; padding: 8px 20px 40px; }
@@ -3673,9 +3718,18 @@ pre.code-panel { margin: 0; max-height: none; padding: 26px 30px; border-radius:
 
 @keyframes kw-spin { 0% { transform: rotate(0); } 100% { transform: rotate(360deg); } }
 
-/* A select on a settings screen: a filled pill with its own chevron. */
-.content select { appearance: none; -webkit-appearance: none; height: 36px; padding: 0 38px 0 16px; background-color: var(--field); background-image: linear-gradient(45deg, transparent 50%, currentcolor 50%, currentcolor 62%, transparent 62%), linear-gradient(-45deg, transparent 50%, currentcolor 50%, currentcolor 62%, transparent 62%); background-position: calc(100% - 20px) 50%, calc(100% - 15px) 50%; background-size: 5px 5px; background-repeat: no-repeat; font-size: 13px; cursor: pointer; }
-.content select:hover:not(:disabled), .content select:focus { background-color: var(--control); }
+/* A select on a settings screen, in a note's menu or in the speaker form: a filled pill with its own chevron. */
+:is(.content, .notes-context-menu, .transcript-rename) select { appearance: none; -webkit-appearance: none; height: 36px; padding: 0 38px 0 16px; background-color: var(--field); background-image: linear-gradient(45deg, transparent 50%, currentcolor 50%, currentcolor 62%, transparent 62%), linear-gradient(-45deg, transparent 50%, currentcolor 50%, currentcolor 62%, transparent 62%); background-position: calc(100% - 20px) 50%, calc(100% - 15px) 50%; background-size: 5px 5px; background-repeat: no-repeat; font-size: 13px; cursor: pointer; }
+:is(.content, .notes-context-menu, .transcript-rename) select:hover:not(:disabled), :is(.content, .notes-context-menu, .transcript-rename) select:focus { background-color: var(--control); }
+/*
+ * `appearance: none` above is what lets these draw their chevron as a background, and it also
+ * handed their list back to Windows: a grey slab with square corners. Where the styled list is
+ * available they take it back, with the platform's arrow off since the background draws one.
+ */
+@supports (appearance: base-select) {
+  :is(.content, .notes-context-menu, .transcript-rename) select { appearance: base-select; }
+  :is(.content, .notes-context-menu, .transcript-rename) select::picker-icon { display: none; }
+}
 
 /* A sentence a screen sets apart keeps the column's full width. */
 .content .view section p.caveat { max-width: none; }
@@ -3747,6 +3801,12 @@ pre.code-panel { margin: 0; max-height: none; padding: 26px 30px; border-radius:
 .vocabulary-card { display: flex; flex-direction: column; gap: 12px; padding: 24px 26px; border-radius: 32px; background: var(--panel); }
 .vocabulary-card > label.section-label { color: var(--band-text); }
 .content .vocabulary-card > select { align-self: flex-start; height: 40px; margin: 0; padding: 0 38px 0 18px; font-size: 15px; }
+/* Known voices: one row per remembered voice -- the name as a field, then its two pills -- and its note on the line under it. */
+.content .known-voice { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 10px; }
+.content .known-voice-name { display: flex; flex: 1 1 240px; min-width: 0; }
+.content .known-voice-name > input:not([type="checkbox"]) { width: 100%; min-width: 0; }
+.content .known-voice > button { margin: 0; }
+.content .view section p.known-voice-note { flex-basis: 100%; margin: 0; padding-left: 14px; color: var(--muted); font-size: 13px; }
 .content .vocabulary-usage .learn-more { border: 0; }
 .content .view section .vocabulary-card p { max-width: none; margin: 0; font-size: 15px; line-height: 1.3; }
 .content .view section .vocabulary-card p.muted { font-size: 13px; line-height: 1.45; }

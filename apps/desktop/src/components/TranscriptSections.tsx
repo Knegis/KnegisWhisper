@@ -3,6 +3,7 @@ import type { KnownVoicesStatus } from "../generated/ipc-types";
 import { Fragment, memo, useEffect, useId, useRef, useState, type FormEvent, type RefObject } from "react";
 
 import { scrollBehavior } from "../lib/followScroll";
+import { fromOpenList } from "../lib/openList";
 import type { TranscriptRow } from "../lib/ipc";
 import { canSaveSpeakerName, matchingSuggestions, normaliseSpeakerName, renameHeading, speakerIsNamed } from "../lib/speakerNames";
 import { sameMatchesOver, textParts, type FindMatch } from "../lib/transcriptFind";
@@ -121,7 +122,8 @@ export function RenameForm({ target, suggestions, onRename, onClose, loadStatus 
 
   // Escape on the form, not the field: it closes from a suggestion or a button too.
   return <form ref={formRef} className="transcript-rename" aria-label={heading} onSubmit={onSubmit} onKeyDown={event => {
-    if (event.key === "Escape") { event.preventDefault(); onClose(target.speakerId); }
+    // Except in the open Voice profile list, whose Escape closes only the list.
+    if (event.key === "Escape" && !fromOpenList(event.target)) { event.preventDefault(); onClose(target.speakerId); }
   }}>
     <label className="section-label" htmlFor={fieldId}>name this speaker</label>
     <input id={fieldId} ref={fieldRef} type="text" autoFocus autoComplete="off" maxLength={100} placeholder={named ? undefined : target.current}
