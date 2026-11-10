@@ -16,6 +16,13 @@ There is no automatic update installation. Update checking is not securely
 configured while the embedded updater public key is empty. Download a later
 version from the repository's Releases page.
 
+The Windows uninstaller's **Delete app data** checkbox currently misses the main
+notes/recordings folder and saved credentials ([KNEG-545](https://linear.app/axelalbertkarlsson/issue/KNEG-545)).
+Uninstall is not a complete data-removal operation. Read
+[what is retained and how to remove it](GETTING_STARTED.md#uninstall-on-windows)
+before uninstalling. These expectations come from a source/script audit;
+installed-app verification remains pending under KNEG-534.
+
 ## Audio and models
 
 - Long Parakeet imports have crashed the native runtime. Use Whisper for long

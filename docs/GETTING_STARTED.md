@@ -55,6 +55,78 @@ Select a local recording. Converted audio is retained with its note for replay;
 your source file stays intact. You can edit notes, search transcripts and export
 text, Markdown, JSON or subtitle formats. See [Notes workspace](NOTES_WORKSPACE.md).
 
+## Uninstall on Windows
+
+Quit KnegisWhisper from its tray menu, then use **Windows Settings > Apps >
+Installed apps > KnegisWhisper > Uninstall**. Closing the window alone can leave
+it running in the tray. Uninstall requires administrator rights.
+
+**Uninstalling currently keeps your notes, recordings and saved credentials,
+even if you select ?Delete app data?.** That checkbox removes different folders
+from the ones used for the main application data. This is tracked in
+[KNEG-545](https://linear.app/axelalbertkarlsson/issue/KNEG-545).
+
+The following is the expected behaviour from the current Windows installer script
+and application source, not a completed uninstall test. The v0.1.1 source uses the
+same storage paths and uninstall configuration; its published installer still
+needs the [installed-app acceptance checks](RELEASING.md#windows-uninstall-acceptance).
+See the [audit record](UNINSTALL_AUDIT.md) for versions and evidence.
+
+| Data or files | Checkbox unchecked | Checkbox checked |
+| --- | --- | --- |
+| Installed executable, bundled resources and app shortcuts | Removed by ordinary uninstall | Removed by ordinary uninstall |
+| Notes, transcripts, summaries, settings, dictation history and saved voice data in `%APPDATA%\KnegisWhisper\knegiswhisper.db` | Kept | Kept |
+| Retained recordings and recovery files in `%APPDATA%\KnegisWhisper\meetings` | Kept | Kept |
+| Downloaded models, runtimes and temporary audio under `%APPDATA%\KnegisWhisper` | Kept | Kept |
+| Fallback models and temporary audio under `%ProgramData%\KnegisWhisper\cache` | Kept | Kept |
+| Provider keys and calendar tokens in Windows Credential Manager | Kept | Kept |
+| Tauri/WebView data under `%APPDATA%\com.knegis.knegiswhisper` and `%LOCALAPPDATA%\com.knegis.knegiswhisper`, if present | Kept | Deletion attempted for the account running the elevated uninstaller |
+| Exported/shared files, original imported recordings and logs saved outside those folders | Kept | Kept |
+| `%USERPROFILE%\.knegiswhisper\local-api.json`, if left after an abnormal exit | Kept | Kept |
+
+Deleting WebView data can reset interface preferences even though notes and
+application settings remain. An upgrade using the installer's update mode skips
+the delete-data step. Silent and passive uninstall offer no checkbox and retain
+user data. Reinstalling under the same Windows account is expected to find the
+retained data again. Removal can fail for locked files; a checkbox is not proof
+that a folder was removed.
+
+### Remove retained data yourself
+
+1. Back up anything you want to keep. Export wanted notes and copy their recordings.
+   For a full local data backup, quit the app and copy the entire
+   `%APPDATA%\KnegisWhisper` folder. Credentials are stored separately.
+2. If the app is still installed, clear saved provider keys in **Settings >
+   Providers** and disconnect calendar accounts in **Integrations > Calendar**.
+   Quit from the tray. Stop any remaining KnegisWhisper transcription/model
+   processes before deleting files; check their executable paths so you do not
+   stop another application's runtime.
+3. Sign into the Windows account that used the app. In File Explorer, enter
+   `%APPDATA%\KnegisWhisper` and verify the full resolved path and folder name.
+   Delete that specific folder only when you intend to erase its contents,
+   including notes, recordings, settings, downloads and any diagnostic files.
+   Check the Recycle Bin if you also want to remove the deleted copy.
+4. If present, inspect and remove only the two app-specific Tauri folders listed
+   above. After the app has stopped, the specific leftover
+   `%USERPROFILE%\.knegiswhisper\local-api.json` can also be removed. It may contain
+   a local API token; do not paste its contents into a support report.
+5. Open **Control Panel > Credential Manager > Windows Credentials** and inspect
+   **Generic Credentials**. This build stores entries named
+   `<slot>.com.knegis.knegiswhisper`, with the username equal to `<slot>`; for
+   example, `openai.com.knegis.knegiswhisper`. Remove only entries matching that
+   exact app suffix and username convention. Do not clear all saved credentials.
+   Local deletion does not revoke keys or account access at the remote provider.
+6. Treat `%ProgramData%\KnegisWhisper\cache` separately. It can hold shared models
+   and temporary audio when a Windows path contains non-ASCII characters. Review
+   it with the PC's owner and other app users before removing identified files;
+   do not delete the shared cache just because one account uninstalled the app.
+
+If elevation asks for another administrator's credentials, that administrator's
+AppData folders may be targeted by the checkbox instead of yours. Check cleanup
+under each intended account; do not assume a per-machine uninstall erased every
+user's data. Uninstall does not remove copies you exported or sent elsewhere.
+These steps remove local copies; they are not a secure-erasure guarantee.
+
 ## If something goes wrong
 
 - **No audio:** check the selected input, Windows microphone permissions and whether

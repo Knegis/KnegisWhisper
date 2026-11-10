@@ -48,7 +48,8 @@ Record the machine, commit, installer hash, date and result for each check:
 - Import an audio/video file, edit a note, replay its audio and export the result.
 - Restart and verify settings, notes and recordings persist.
 - Install a subsequent test version over the preview and verify data preservation.
-- Uninstall and check the documented treatment of retained user data.
+- Run the [Windows uninstall acceptance matrix](#windows-uninstall-acceptance)
+  against the [documented retention behaviour](GETTING_STARTED.md#uninstall-on-windows).
 - Confirm update checking reports that it is not securely configured.
 
 A debug app, browser fixtures or a successful packaging job does not substitute
@@ -82,3 +83,45 @@ The product description and topics can be maintained in GitHub's About panel.
 The social-preview image is `docs/assets/social-preview.png`; upload it in
 **Settings > General > Social preview** when preparing the public-facing repository.
 Keep repository visibility unchanged unless the owner explicitly requests a public launch.
+
+## Windows uninstall acceptance
+
+KNEG-535 supplies the expected results; KNEG-534 owns the installed-app run.
+The incomplete delete-data option is tracked separately in
+[KNEG-545](https://linear.app/axelalbertkarlsson/issue/KNEG-545). Matching today's
+retention table does not close that bug or prove complete erasure.
+
+Use a disposable Windows 11 VM or separate test machine, with a snapshot/reset
+between cases. Do not uninstall the owner's working app to obtain evidence.
+Record the installer filename, SHA-256, source commit/tag, Windows version,
+installation directory, invoking/elevated account and exit code. Record whether
+results are observed, source-derived or not run; capture the actual checkbox.
+
+Before each case, create fictional notes, settings, a retained recording and a
+recovery file. Seed small identifiable files in the per-user downloads/audio
+folders, both bundle-ID folders, the shared fallback cache and an external export
+folder. Include sentinels in another test user's app folders and an unrelated
+sibling directory. Record filenames/hashes without transcript contents. Use only
+fake, uniquely named credentials; record target names and presence, never values.
+Include a non-ASCII Windows test account to exercise the real fallback paths.
+
+| Case | Expected result from the current script |
+| --- | --- |
+| Interactive uninstall, checkbox unchecked | Installed app/resources and ordinary shortcuts removed; main data, bundle-ID folders, shared files, exports and credentials retained. |
+| Interactive uninstall, checkbox checked, same user elevation | Same retained main data and credentials; the two bundle-ID folders for that account are removed if accessible. Other accounts and sibling sentinels untouched. |
+| Uninstall using another administrator's credentials | Main data for both users retained; identify whose bundle-ID folders are targeted. Source suggests the elevated account; measure it explicitly. |
+| Reinstall after each interactive case | Retained fictional notes, settings and recordings reopen under the original account; cache presence and fake credential presence remain checkable. |
+| Upgrade through the installer, including `/UPDATE` | No user-data deletion; verify notes/settings/recordings survive and record the actual path through the reinstall/update UI. |
+| Silent `/S` and passive `/P` uninstall, tested separately | No checkbox selection; main and bundle-ID data, shared files, exports and credentials retained. |
+| Checked uninstall with a locked sentinel in a bundle-ID folder | Record exit/UI behaviour and any leftovers; do not report deletion as successful merely because uninstall exits. |
+
+Compare filesystem hashes and credential presence before/after each case, then
+open the reinstalled app for the reinstall cases. Verify external exports and
+other users' sentinels are unchanged. Any divergence from the expected table is
+a finding with exact version/account context, not permission to adjust expected
+results silently. Clean up only the test fixtures or reset the VM afterward.
+
+For the published v0.1.1 asset, record its own hash and results. The
+[source audit](UNINSTALL_AUDIT.md) compares its tag with current code, but neither
+a newer debug installer nor the credential naming probe is a substitute for
+running that published asset. Keep unrun cases explicitly pending in KNEG-534.
