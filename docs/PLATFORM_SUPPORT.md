@@ -1089,43 +1089,29 @@ Both Parakeet archives were re-measured the same way and the same day —
 unchanged. Before this, only their lengths had been checked, against
 `content-length`.
 
-**`parakeet-tdt-0.6b-v3` has since been swapped, as the next paragraph says it
-could be.** On 2026-11-07 k2-fsa re-uploaded it under the same name, rebuilt with
-new int8 weights, and the weekly check failed on 2026-11-09. It is re-pinned to
-the new upload, 487,211,443 bytes, from that run's hash and GitHub's stated
-digest, which agree. Those bytes have not been downloaded here (KNEG-531;
-KNEG-532 is the alternative of a commit-pinned Hugging Face mirror).
+**Current model download sources (KNEG-532, 2026-11-10).** The four sherpa
+speech models and pyannote segmentation now download required files from full
+Hugging Face commit hashes. Each file's size and SHA-256 were compared against
+the existing digest-pinned GitHub archive before switching. The current TDT v3
+archive (487,211,443 bytes, rebuilt upstream on 2026-11-07) was downloaded and
+verified in this pass; the switch preserves that build's weights.
 
-**What this proves and what it does not.** Every one of these eight digests
-matches the bytes the host serves today. That is the check, run once, and it says
-nothing about who built those bytes.
+`config/model-file-pins.json` is the source for those immutable file manifests.
+The installer retains existing model IDs and directory layouts, stages all files,
+checks their exact sizes and hashes, and publishes only a complete payload.
+Existing complete installations are reused. OS locks serialize competing installs;
+failed downloads, cancellation and Windows file locks preserve previous data.
 
-About tomorrow the two families now differ, and the difference is the whole of
-KNEG-103. **The six whisper URLs name a commit** — `5359861c739e955e79d9a303bcbc70fb988958b1`,
-measured into `HF_REVISIONS` on 2026-08-31 — so a push to `ggerganov/whisper.cpp`
-cannot move the bytes these digests describe. **The two Parakeet archives sit in
-k2-fsa's rolling `asr-models` release**, where an asset can be replaced under the
-same name, and **no immutable URL exists for them** — that was measured rather
-than assumed, and the measurements are in `ENGINEERING_LOG.md` under 2026-08-31
-(KNEG-112). What they have instead is a digest stated by the host:
+The English CAM++ embedding model still uses its original size/digest-pinned
+GitHub URL. No byte-equivalent publisher mirror has been verified for it.
+This is the remaining KNEG-532 limitation, not a reason to replace its weights.
 
-**GitHub's release API returns a **`size`** per asset, and a **`digest`** for
-assets uploaded from about mid-2025**, one request for all 498 in the release.
-Both Parakeet archives are recent enough to have one. On 2026-08-31 both stated
-digests and both stated sizes matched the committed pins to the character —
-independent corroboration of a measurement, from the publisher's own metadata,
-at no bandwidth cost. `node tools/model-pin/pin.mjs --verify-stated` re-reads
-them weekly beside the Hugging Face trees. The two diarization models, in
-k2-fsa's speaker releases, predate GitHub's digests and are compared by size
-alone; `SECURITY.md` says what that costs (KNEG-358).
-
-That is the same standard the thirty-two stated GGUF pins meet and it is
-*weaker* than how these two were pinned, since their bytes were hashed here. So
-agreement there means the asset has not been swapped, not that the bytes are
-still what we hashed; only the weekly `--verify`, which re-downloads about a
-gigabyte, proves the second thing. Having both is what separates "the pin is
-stale" from "the download was damaged" in seconds rather than after a
-gigabyte.
+The pin verifier now checks individual immutable files. For Git-tracked token
+files without LFS metadata, stated verification downloads and hashes the small
+file; ONNX files are compared with LFS digests. Only the remaining embedding
+download is checked through GitHub's asset metadata. Fixed commits protect
+against replacement under a release asset name; they do not guarantee permanent
+hosting or establish model quality.
 
 **Consequence for an install.** All six models are now held to
 `kw_sidecar::integrity::verify`, so the *Verified by* column reads `digest` for

@@ -1,0 +1,114 @@
+{
+  "nemotron-3.5-asr-streaming-0.6b": [
+    {
+      "expectedSizeBytes": 14978075,
+      "path": "decoder.int8.onnx",
+      "sha256": "19f9c98fc6d0a2c33a65a43b36fdb2e914c26c0aa9764be3aebc502a1e982fb0",
+      "url": "https://huggingface.co/csukuangfj2/sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-560ms-int8-2026-06-11/resolve/ab43d895f5985b1bbab8b6eac8607fcdc05343f3/decoder.int8.onnx"
+    },
+    {
+      "expectedSizeBytes": 657601403,
+      "path": "encoder.int8.onnx",
+      "sha256": "012e9321373af99021415e0b0eb3ec827b4be3153be6f30d9b448fe65e896e68",
+      "url": "https://huggingface.co/csukuangfj2/sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-560ms-int8-2026-06-11/resolve/ab43d895f5985b1bbab8b6eac8607fcdc05343f3/encoder.int8.onnx"
+    },
+    {
+      "expectedSizeBytes": 9504438,
+      "path": "joiner.int8.onnx",
+      "sha256": "4101c7c679a0bc30483794b27a059e34e79232aa2068d78d51231a22c8b0d7ce",
+      "url": "https://huggingface.co/csukuangfj2/sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-560ms-int8-2026-06-11/resolve/ab43d895f5985b1bbab8b6eac8607fcdc05343f3/joiner.int8.onnx"
+    },
+    {
+      "expectedSizeBytes": 131440,
+      "path": "tokens.txt",
+      "sha256": "729cc103155bafa785f9cd45746cd41cabe97eab7182fc04d594129587958f8a",
+      "url": "https://huggingface.co/csukuangfj2/sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-560ms-int8-2026-06-11/resolve/ab43d895f5985b1bbab8b6eac8607fcdc05343f3/tokens.txt"
+    }
+  ],
+  "nemotron-speech-streaming-en-0.6b": [
+    {
+      "expectedSizeBytes": 7257753,
+      "path": "decoder.int8.onnx",
+      "sha256": "0be9702c2f427a2b6bb241d298e0d3836a558de1f5b9fd3018f1cce6e2b3fa98",
+      "url": "https://huggingface.co/csukuangfj2/sherpa-onnx-nemotron-speech-streaming-en-0.6b-560ms-int8-2026-04-25/resolve/52056fdc070914a48dcd68b31b44d6a6f5b85902/decoder.int8.onnx"
+    },
+    {
+      "expectedSizeBytes": 652916849,
+      "path": "encoder.int8.onnx",
+      "sha256": "7d932213491ad355c6e5576705dc3494731a52af87d7a1b954559340147909d8",
+      "url": "https://huggingface.co/csukuangfj2/sherpa-onnx-nemotron-speech-streaming-en-0.6b-560ms-int8-2026-04-25/resolve/52056fdc070914a48dcd68b31b44d6a6f5b85902/encoder.int8.onnx"
+    },
+    {
+      "expectedSizeBytes": 1735862,
+      "path": "joiner.int8.onnx",
+      "sha256": "a35eac38a22ebceb04d230ed7afe0d68f446ba6914a036b97f14fece95967e23",
+      "url": "https://huggingface.co/csukuangfj2/sherpa-onnx-nemotron-speech-streaming-en-0.6b-560ms-int8-2026-04-25/resolve/52056fdc070914a48dcd68b31b44d6a6f5b85902/joiner.int8.onnx"
+    },
+    {
+      "expectedSizeBytes": 8952,
+      "path": "tokens.txt",
+      "sha256": "dc0b4584ab2e4ddbf888425c076c61b736e7356a015250db7d307e6f1a8188ff",
+      "url": "https://huggingface.co/csukuangfj2/sherpa-onnx-nemotron-speech-streaming-en-0.6b-560ms-int8-2026-04-25/resolve/52056fdc070914a48dcd68b31b44d6a6f5b85902/tokens.txt"
+    }
+  ],
+  "parakeet-tdt-0.6b-v3": [
+    {
+      "expectedSizeBytes": 11845274,
+      "path": "decoder.int8.onnx",
+      "sha256": "0222a86147299d4dee90edf95b6d13827edb42ad8b7c9cf0b2582f030937c0b5",
+      "url": "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/resolve/ed5d745623472f97cfc2e6c2916ee248798fc5a8/decoder.int8.onnx"
+    },
+    {
+      "expectedSizeBytes": 652282294,
+      "path": "encoder.int8.onnx",
+      "sha256": "1afbe69c1ffdabee94755f42e4daf1d93549131a3da11356bda84fcef0f2c479",
+      "url": "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/resolve/ed5d745623472f97cfc2e6c2916ee248798fc5a8/encoder.int8.onnx"
+    },
+    {
+      "expectedSizeBytes": 6355277,
+      "path": "joiner.int8.onnx",
+      "sha256": "cbd02f3696e9944970111fb439d9c3fd365a80374565f13f2b9c7007d253fc98",
+      "url": "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/resolve/ed5d745623472f97cfc2e6c2916ee248798fc5a8/joiner.int8.onnx"
+    },
+    {
+      "expectedSizeBytes": 93939,
+      "path": "tokens.txt",
+      "sha256": "d58544679ea4bc6ac563d1f545eb7d474bd6cfa467f0a6e2c1dc1c7d37e3c35d",
+      "url": "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/resolve/ed5d745623472f97cfc2e6c2916ee248798fc5a8/tokens.txt"
+    }
+  ],
+  "parakeet-unified-en-0.6b": [
+    {
+      "expectedSizeBytes": 7257753,
+      "path": "decoder.int8.onnx",
+      "sha256": "a5e223392c90e75f8144cdb5eb95af7625db389e39edef2bd1a9c872b3298fe6",
+      "url": "https://huggingface.co/csukuangfj2/sherpa-onnx-nemo-parakeet-unified-en-0.6b-int8-non-streaming/resolve/8c3a10fb13408c7a7054f6898958bf1c64a8d6c7/decoder.int8.onnx"
+    },
+    {
+      "expectedSizeBytes": 654040552,
+      "path": "encoder.int8.onnx",
+      "sha256": "6716910b7a0833997fec7a410494c995d70124001a0e9b66d6370d6aced577e0",
+      "url": "https://huggingface.co/csukuangfj2/sherpa-onnx-nemo-parakeet-unified-en-0.6b-int8-non-streaming/resolve/8c3a10fb13408c7a7054f6898958bf1c64a8d6c7/encoder.int8.onnx"
+    },
+    {
+      "expectedSizeBytes": 1735860,
+      "path": "joiner.int8.onnx",
+      "sha256": "869f43f7d24595c55581ad3bf249a935fb8a71389fbdaa7504b9f46f93140f8a",
+      "url": "https://huggingface.co/csukuangfj2/sherpa-onnx-nemo-parakeet-unified-en-0.6b-int8-non-streaming/resolve/8c3a10fb13408c7a7054f6898958bf1c64a8d6c7/joiner.int8.onnx"
+    },
+    {
+      "expectedSizeBytes": 8952,
+      "path": "tokens.txt",
+      "sha256": "dc0b4584ab2e4ddbf888425c076c61b736e7356a015250db7d307e6f1a8188ff",
+      "url": "https://huggingface.co/csukuangfj2/sherpa-onnx-nemo-parakeet-unified-en-0.6b-int8-non-streaming/resolve/8c3a10fb13408c7a7054f6898958bf1c64a8d6c7/tokens.txt"
+    }
+  ],
+  "sherpa-onnx-pyannote-segmentation-3-0": [
+    {
+      "expectedSizeBytes": 5992913,
+      "path": "model.onnx",
+      "sha256": "220ad67ca923bef2fa91f2390c786097bf305bceb5e261d4af67b38e938e1079",
+      "url": "https://huggingface.co/csukuangfj/sherpa-onnx-pyannote-segmentation-3-0/resolve/9403a6902bb58e3d5ae8c7e77c3422de279db2e0/model.onnx"
+    }
+  ]
+}
