@@ -1,9 +1,30 @@
-//! Install speaker models with verified downloads.
+//! Installing the two models a diarization run needs.
 //!
-//! Segmentation uses a commit-pinned file manifest and the shared staging/locking
-//! transaction. The embedding model retains its size/digest-pinned GitHub download:
-//! a byte-equivalent publisher mirror has not been verified (KNEG-532).
-//! Existing installed paths and the English embedding limitation remain unchanged.
+//! Pyannote segmentation is discovered as `model.onnx` inside `extract_dir`;
+//! CAM++ speaker embedding is a single ONNX file at `file_name`. The registry
+//! generator rejects entries declaring both or neither, so discovery and install
+//! agree on what must exist. A directory alone never counts as installed.
+//!
+//! Segmentation now uses an immutable per-file manifest and the shared
+//! `kw_transcription_core::sherpa_models::install_verified_files` installer.
+//! It bounds and hashes the transfer, stages beside the destination, serializes
+//! competing installs with an OS lock, and recovers interrupted staging/backup
+//! directories on retry. The old archive layout is preserved for existing users.
+//!
+//! The English CAM++ embedding has no verified equivalent immutable mirror yet.
+//! Its existing GitHub download writes a fixed `.partial` file, checks the exact
+//! pinned size and digest, and renames only verified bytes into place. Archive
+//! fallback entries also use `kw_sidecar::extract_with_limit` to enforce a
+//! separate decompression ceiling. Missing pins refuse installation; display
+//! size estimates do not replace integrity checks.
+//!
+//! These staging rules matter because [`installed`] discovers models by path:
+//! a half-written ONNX file at its final location could otherwise appear ready.
+//! Downloads go through `NetworkPolicy` as user-triggered model requests.
+//!
+//! Measured 2026-09-01: segmentation is language-independent, but only the
+//! English CAM++ embedding is pinned. Anything offering this install must show
+//! that language limit; see [`crate::diarization`] for the measurement.
 
 use std::path::{Path, PathBuf};
 

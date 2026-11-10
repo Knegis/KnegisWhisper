@@ -1,10 +1,20 @@
-import { readFileSync, readdirSync, existsSync } from "node:fs";
+import { readFileSync, readdirSync, existsSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { dirname, join, parse } from "node:path";
 
 // Inventory modules in emitted chunks, rather than every installed package.
 export function dependencyNotices() {
+  let inventoryPath;
+  let inventory;
   return {
     name: "dependency-notices",
+    apply: "build",
+    configResolved(config) {
+      inventoryPath = join(config.root, ".notice-build", "dependency-notices.json");
+    },
+    buildStart() {
+      inventory = undefined;
+      rmSync(inventoryPath, { force: true });
+    },
     generateBundle(_options, bundle) {
       const packages = new Map();
       for (const chunk of Object.values(bundle)) {
@@ -30,8 +40,16 @@ export function dependencyNotices() {
             source: typeof pkg.repository === "string" ? pkg.repository : pkg.repository?.url, texts });
         }
       }
-      this.emitFile({ type: "asset", fileName: "dependency-notices.json",
-        source: JSON.stringify([...packages.values()].sort((a,b) => a.name.localeCompare(b.name, "en")), null, 2) + "\n" });
+      inventory = JSON.stringify([...packages.values()].sort((a,b) => a.name.localeCompare(b.name, "en")), null, 2) + "\n";
+    },
+    writeBundle() {
+      // Build tooling consumes this inventory; it is not a shipped Vite asset.
+      mkdirSync(dirname(inventoryPath), { recursive: true });
+      writeFileSync(inventoryPath, inventory);
+    },
+    renderError() {
+      inventory = undefined;
+      rmSync(inventoryPath, { force: true });
     },
   };
 }

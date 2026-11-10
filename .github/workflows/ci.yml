@@ -23,6 +23,7 @@ jobs:
     outputs:
       frontend: ${{ steps.paths.outputs.frontend }}
       windows: ${{ steps.paths.outputs.windows }}
+      notices: ${{ steps.paths.outputs.notices }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -287,6 +288,8 @@ jobs:
 
   notices:
     name: Bundled dependency notices
+    needs: [changes, contracts]
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.notices == 'true'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7

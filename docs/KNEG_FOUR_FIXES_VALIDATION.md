@@ -27,7 +27,7 @@ The English CAM++ embedding download is still on its existing verified GitHub UR
 No byte-equivalent publisher mirror was established; no model was substituted.
 This is the remaining KNEG-532 item.
 
-## Automated checks
+## Initial implementation checks
 
 - Release Python tests: 7 passed. Actual Git Bash GNU sha256sum accepted the generated
   checksum and rejected a deliberately modified disposable installer fixture.
@@ -60,7 +60,8 @@ This proves download/layout/runtime compatibility, not recognition quality.
 Stated-metadata verification passed for TDT (including measured Git-tracked tokens)
 and segmentation. No live streaming protocol or recognition-quality gate changed.
 
-A debug-profile Windows NSIS installer built successfully with the production frontend.
+Before the review follow-up below, a debug-profile Windows NSIS installer built
+successfully with the production frontend.
 The frontend was built separately because the local Tauri beforeBuildCommand could
 not resolve tsc through the worktree dependency junction. A validation-only config
 disabled that duplicate step; shipped workflow/build commands were not weakened.
@@ -75,3 +76,48 @@ This is bundling/resource evidence. The installer was not installed into the use
 profile, and this is not an optimized release, clean-machine, macOS or Linux acceptance run.
 Experimental platform jobs generate target-specific notices and fail if new attribution
 needs attention; those jobs were not run locally.
+
+
+## Review follow-up, 2026-11-10
+
+- Notices CI now uses the changes job, including standalone NOTICE/LICENSE inputs.
+  Docs-only PRs skip it; manual runs still execute it. Tests cover classification
+  and the workflow wiring.
+- Per-file installs use one fixed staging path per model under its OS lock. After
+  process termination, the next install reclaims that path before downloading or
+  reusing a complete installation. Cancellation still cleans it immediately.
+  Recovery does not sweep other models' staging paths.
+- Retained publication backups are restored when the target is missing/incomplete,
+  or removed when the new target is complete. Filesystem failures report the
+  recovery action instead of an invalid-manifest error and can be retried.
+- The frontend inventory is written to ignored `.notice-build/`, outside `dist/`.
+  The rebuilt production bundle contains no dependency-notices.json; the separate
+  inventory still contains 110 packages. Fresh cargo-about 0.8.4 generation passes
+  `--check` with the same 3,823,482 notice bytes and SHA-256 recorded above.
+- PLATFORM_SUPPORT restores "What this proves and what it does not", including
+  Whisper commit pins and the different weekly verification guarantees. It records
+  immutable upstream export-workflow links establishing the csukuangfj2 publishing
+  account for both Nemotrons and Parakeet Unified: three of the five repositories.
+  Module-level installer explanations, notice-regeneration guidance in DEVELOPMENT,
+  and NOTICE wrapping are restored/corrected.
+- All four Linear descriptions now render the full branch name as code. Statuses
+  remain three In Review and KNEG-532 In Progress for the embedding mirror gap.
+  Follow-up commits include explanatory bodies; prior reviewed commits are retained.
+
+Fresh checks on Rust 1.99.0: meeting-core 261, transcription-core 221 and
+provider-registry 17 unit tests passed (499 total). Clippy for those crates with
+`--all-targets -- -D warnings` and workspace formatting passed. Recovery coverage
+includes a child process exiting mid-transfer without destructors, repeated exits
+and retry, preservation of other staging data, lock-before-cleanup, publication
+boundary states, a failed retry preserving the recovered model, and Windows locks
+with an actionable error and successful retry.
+
+Node tool suites: 73 passed (CI selection/entry points, notices, model pins and
+retry). License Python tests: 4 passed. Registry freshness, domain scanner,
+frontend typecheck/production build and fresh notice generation passed.
+Logs for this follow-up are under ignored `.validation/review-*` in the worktree.
+
+The original real-download, browser and NSIS results above were not repeated for
+this follow-up; those remain evidence for the initial implementation. No native
+window, clean-machine installer, desktop-app Clippy or hosted CI run was added.
+No merge or push was performed.

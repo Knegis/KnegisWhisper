@@ -7,7 +7,8 @@ export function classifyChanges(paths) {
     || /^(?:Cargo\.(?:toml|lock)|rust-toolchain(?:\.toml)?|rustfmt\.toml|clippy\.toml|package(?:-lock)?\.json)$/.test(p));
   const frontend = shared || paths.some(p => p.startsWith("apps/desktop/") && !p.startsWith("apps/desktop/src-tauri/"));
   const windows = shared || frontend || paths.some(p => p.startsWith("crates/") || p.startsWith("apps/desktop/src-tauri/") || p.endsWith(".rs"));
-  return { frontend, windows };
+  const notices = windows || paths.some(p => /^(?:NOTICE|LICENSE(?:\..*)?|COPYING(?:\..*)?|\.gitattributes)$/.test(p));
+  return { frontend, windows, notices };
 }
 
 if (isEntryPoint(import.meta.url)) {

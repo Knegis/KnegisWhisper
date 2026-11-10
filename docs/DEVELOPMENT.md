@@ -32,6 +32,26 @@ The executable is `target/release/knegiswhisper-desktop.exe` on Windows. The des
 is named `knegiswhisper-desktop`; `knegiswhisper` is the CLI. Building the application does
 not install transcription models or sidecars; install those through the app.
 
+### Updating dependency notices
+
+After changing a Rust/npm dependency, bundled font, or Silero asset, regenerate the
+installer notices. This requires **cargo-about 0.8.4** and a fresh production build:
+
+```sh
+cargo install cargo-about --version 0.8.4 --locked
+npm --prefix apps/desktop ci
+npm --prefix apps/desktop run build
+cargo fetch --locked
+python tools/licenses/generate.py
+python tools/licenses/generate.py --check
+```
+
+Commit `apps/desktop/src-tauri/resources/THIRD_PARTY_NOTICES.txt` with the change.
+The frontend inventory in `apps/desktop/.notice-build/` is an ignored build input;
+it is not shipped. CI checks freshness for code, dependency, license and build
+changes; docs-only PRs skip the Windows notices job. See
+[notice generation](../tools/licenses/README.md) for target selection and attribution.
+
 ### Repository layout and runtime data
 
 | Path | Responsibility |

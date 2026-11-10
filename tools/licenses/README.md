@@ -19,7 +19,9 @@ taken from each crate's packaged .cargo_vcs_info.json revision. Fonts retain the
 texts. Silero's converted bytes are checked against the publisher's pinned model hash;
 assets/sources.json records upstream license and conversion-card provenance.
 
-The frontend build emits dependency-notices.json from the modules in emitted chunks.
+The frontend build writes `apps/desktop/.notice-build/dependency-notices.json`
+from the modules in emitted chunks. This ignored intermediate inventory stays outside
+`dist/` and is not bundled into the application. Each build clears stale inventory.
 Missing package owners or notice files fail the build. No timestamps or local paths go
 into the installed notice document. The development-only --rust-json option reuses a
 previous inventory; CI never uses it.

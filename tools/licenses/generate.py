@@ -88,7 +88,7 @@ def main():
                 "--target", args.target, "--config", str(ROOT / "tools/licenses/about.toml"),
                 "--locked", "--offline", "--fail", "--format", "json", "--output-file", str(output)], check=True, cwd=ROOT)
             rust = json.loads(output.read_text(encoding="utf-8"))
-    frontend = json.loads((ROOT / "apps/desktop/dist/dependency-notices.json").read_text(encoding="utf-8"))
+    frontend = json.loads((ROOT / "apps/desktop/.notice-build/dependency-notices.json").read_text(encoding="utf-8"))
     content = render(rust, frontend).encode("utf-8")
     if args.check:
         if OUTPUT.read_bytes() != content:

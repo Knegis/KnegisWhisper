@@ -1101,15 +1101,42 @@ The installer retains existing model IDs and directory layouts, stages all files
 checks their exact sizes and hashes, and publishes only a complete payload.
 Existing complete installations are reused. OS locks serialize competing installs;
 failed downloads, cancellation and Windows file locks preserve previous data.
+Per-model staging paths are reclaimed on retry after process termination. A
+retained backup is restored if publication was interrupted, or removed when a
+complete new target already exists. Recovery errors identify the filesystem action.
+
+The pinned repositories use two upstream publishing accounts: TDT v3 and
+segmentation are under `csukuangfj`; both Nemotrons and Parakeet Unified are under
+`csukuangfj2` (three of the five repositories). This attribution is based on
+upstream publication code, separately from the byte comparisons. At sherpa-onnx
+commit `60847b8db45212c02af72a3011b18ed6181b6526`, the official export workflows for
+[Nemotron 3.5](https://github.com/k2-fsa/sherpa-onnx/blob/60847b8db45212c02af72a3011b18ed6181b6526/.github/workflows/export-nemotron-3.5-asr-streaming-0.6b.yaml#L183-L222),
+[Nemotron speech](https://github.com/k2-fsa/sherpa-onnx/blob/60847b8db45212c02af72a3011b18ed6181b6526/.github/workflows/export-nemotron-speech-streaming-en-0.6b.yaml#L133-L177),
+and [Parakeet Unified](https://github.com/k2-fsa/sherpa-onnx/blob/60847b8db45212c02af72a3011b18ed6181b6526/.github/workflows/export-nemo-parakeet-unified-en-0.6b.yaml#L115-L148)
+push those model exports to `csukuangfj2` with the repository's Hugging Face
+credential and identify the Git author as Fangjun Kuang. This establishes an
+upstream-operated distribution account; no personal-account identity claim is
+needed. Checked 2026-11-10.
 
 The English CAM++ embedding model still uses its original size/digest-pinned
 GitHub URL. No byte-equivalent publisher mirror has been verified for it.
 This is the remaining KNEG-532 limitation, not a reason to replace its weights.
 
+**What this proves and what it does not.** A matching digest proves equality to
+our pinned bytes, not who trained a model or its recognition quality. The six
+Whisper URLs remain fixed to `5359861c739e955e79d9a303bcbc70fb988958b1`
+(`HF_REVISIONS`), as established for KNEG-103. The five migrated sherpa/segmentation
+repositories now also name full commits. The remaining CAM++ GitHub asset can
+still be replaced or removed upstream, in which case its pinned checks fail.
+
+The weekly `node tools/model-pin/pin.mjs --verify` downloads and hashes model
+bytes. `--verify-stated` compares committed sizes/digests with host metadata;
+it is a cheaper independent check, not a re-download of the large weights.
 The pin verifier now checks individual immutable files. For Git-tracked token
 files without LFS metadata, stated verification downloads and hashes the small
 file; ONNX files are compared with LFS digests. Only the remaining embedding
-download is checked through GitHub's asset metadata. Fixed commits protect
+download is checked through GitHub's asset metadata; that older asset has no
+stated digest, so its metadata check establishes size only. Fixed commits protect
 against replacement under a release asset name; they do not guarantee permanent
 hosting or establish model quality.
 
