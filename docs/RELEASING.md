@@ -86,10 +86,10 @@ Keep repository visibility unchanged unless the owner explicitly requests a publ
 
 ## Windows uninstall acceptance
 
-KNEG-535 supplies the expected results; KNEG-534 owns the installed-app run.
-The incomplete delete-data option is tracked separately in
-[KNEG-545](https://linear.app/axelalbertkarlsson/issue/KNEG-545). Matching today's
-retention table does not close that bug or prove complete erasure.
+KNEG-535 records the pre-helper behaviour. KNEG-534 owns the published v0.1.1
+installed-app run. The new helper and its release acceptance are tracked in
+[KNEG-545](https://linear.app/axelalbertkarlsson/issue/KNEG-545). Do not close that
+issue or publish the new deletion behaviour until the matrix below passes.
 
 Use a disposable Windows 11 VM or separate test machine, with a snapshot/reset
 between cases. Do not uninstall the owner's working app to obtain evidence.
@@ -105,15 +105,22 @@ sibling directory. Record filenames/hashes without transcript contents. Use only
 fake, uniquely named credentials; record target names and presence, never values.
 Include a non-ASCII Windows test account to exercise the real fallback paths.
 
-| Case | Expected result from the current script |
+| Case | Required result for the new helper |
 | --- | --- |
-| Interactive uninstall, checkbox unchecked | Installed app/resources and ordinary shortcuts removed; main data, bundle-ID folders, shared files, exports and credentials retained. |
-| Interactive uninstall, checkbox checked, same user elevation | Same retained main data and credentials; the two bundle-ID folders for that account are removed if accessible. Other accounts and sibling sentinels untouched. |
-| Uninstall using another administrator's credentials | Main data for both users retained; identify whose bundle-ID folders are targeted. Source suggests the elevated account; measure it explicitly. |
-| Reinstall after each interactive case | Retained fictional notes, settings and recordings reopen under the original account; cache presence and fake credential presence remain checkable. |
-| Upgrade through the installer, including `/UPDATE` | No user-data deletion; verify notes/settings/recordings survive and record the actual path through the reinstall/update UI. |
-| Silent `/S` and passive `/P` uninstall, tested separately | No checkbox selection; main and bundle-ID data, shared files, exports and credentials retained. |
-| Checked uninstall with a locked sentinel in a bundle-ID folder | Record exit/UI behaviour and any leftovers; do not report deletion as successful merely because uninstall exits. |
+| Windows Installed apps, both options unchecked | Choices appear before UAC. App/resources and ordinary shortcuts removed; all personal/shared fixtures and credentials retained. |
+| Personal checked, shared unchecked; split-token administrator | Original account's app root, both bundle-ID folders, discovery file, exact app credentials and startup registry values removed. Shared cache and all external/other-user sentinels retained. |
+| Personal checked; standard user supplies a different administrator at UAC | Same original-user cleanup. Administrator's personal files, credentials and startup values must remain unchanged. |
+| Personal unchecked, shared checked | Only shared cache and application removed. Personal data/credentials of every account retained. |
+| Both checked | Both selected scopes removed; unrelated siblings, exports and other users' personal data untouched. |
+| Cancel each choice/confirmation and deny UAC | No data, credentials or application removed. |
+| Launch interactive helper already elevated | Refuses to select a personal profile; no deletion. Normal unelevated launch works. |
+| Reinstall after checked and unchecked cases | Kept data reopens; removed data does not reappear. Also reinstall before reboot and verify the NEW helper survives that reboot. |
+| Upgrade from v0.1.1 and helper-based build, including `/UPDATE` | No helper choices or personal/shared deletion. Notes/settings/recordings/credentials survive. Check reinstall UI and updater-style arguments separately. |
+| Helper `--quiet`, direct NSIS `/S`, `/P`, ordinary direct NSIS | All personal/shared data retained. Direct UI explains retention and has no delete-data checkbox. |
+| Active app/recording, model server, locked file, read-only file, denied ACL | Stop/retry or explicit failure; no false success or forced termination. Unlocking then retrying completes cleanup. Cancel may leave partial deletion and says so. |
+| Junction at app root, child or ancestor; redirected folder and non-ASCII account | Reparse points rejected without touching target sentinel. Ordinary non-ASCII paths work. Shared fallback follows only the separate choice. |
+| Broker exits/crashes, pipe spoof, connection timeout, app relaunch during uninstall | Explicit failure, never a success message for unfinished cleanup. Authenticate exact peer process and retain unrelated sentinels. |
+| Installer/helper file removal requires reboot | Explicit restart-required result (3010); no automatic restart. Record leftovers before/after reboot and uninstall registration/shortcuts. |
 
 Compare filesystem hashes and credential presence before/after each case, then
 open the reinstalled app for the reinstall cases. Verify external exports and
@@ -124,4 +131,6 @@ results silently. Clean up only the test fixtures or reset the VM afterward.
 For the published v0.1.1 asset, record its own hash and results. The
 [source audit](UNINSTALL_AUDIT.md) compares its tag with current code, but neither
 a newer debug installer nor the credential naming probe is a substitute for
-running that published asset. Keep unrun cases explicitly pending in KNEG-534.
+running that published asset. Use the older retention table in GETTING_STARTED.md
+for v0.1.1, not the new helper matrix. Keep its unrun cases pending in KNEG-534;
+keep the new helper cases pending in KNEG-545.

@@ -1,5 +1,8 @@
 # Windows uninstall audit (KNEG-535)
 
+This is the historical pre-helper audit. The subsequent implementation and its
+current validation limits are in [UNINSTALL_IMPLEMENTATION.md](UNINSTALL_IMPLEMENTATION.md).
+
 Audited 2026-11-10 on `codex/kneg-535`, from runtime source
 `26220ba8df97c6f1c16c8324d421aef02d6c2a54`. This change documents existing
 behaviour; it changes no application code, installer configuration or deletion policy.

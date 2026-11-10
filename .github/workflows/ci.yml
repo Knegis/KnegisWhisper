@@ -55,6 +55,11 @@ jobs:
       - name: Release-tool tests
         run: python -m unittest discover -s tools/release -p "test_*.py"
 
+      - name: Pinned Windows uninstall template
+        run: |
+          python tools/uninstall/generate.py --check
+          python -m unittest discover -s tools/uninstall -p "test_*.py"
+
       - name: CI selection and entry-point tests
         run: node --test tools/ci/changes.test.mjs tools/ci/entry.test.mjs
 
@@ -278,6 +283,14 @@ jobs:
       # in the Contracts job is what keeps it from silently going away again.
       - name: Test (Tauri IPC boundary)
         run: cargo test --profile ci -p knegiswhisper --lib --features tauri-test
+
+      - name: Windows uninstall helper tests
+        if: runner.os == 'Windows'
+        run: cargo test --profile ci -p knegiswhisper --bin knegiswhisper-uninstall --features tauri-test,windows-uninstall
+
+      - name: Windows uninstall helper lint
+        if: runner.os == 'Windows'
+        run: cargo clippy --profile ci -p knegiswhisper --bin knegiswhisper-uninstall --tests --features tauri-test,windows-uninstall -- -D warnings
 
   whisper-macos:
     name: macOS Whisper packages

@@ -93,6 +93,9 @@ jobs:
           cargo test --workspace --profile ci --locked
           cargo clippy -p knegiswhisper --lib --tests --features tauri-test --profile ci --locked -- -D warnings
           cargo test -p knegiswhisper --lib --features tauri-test --profile ci --locked
+          cargo test -p knegiswhisper --bin knegiswhisper-uninstall --features tauri-test,windows-uninstall --profile ci --locked
+          cargo clippy -p knegiswhisper --bin knegiswhisper-uninstall --tests --features tauri-test,windows-uninstall --profile ci --locked -- -D warnings
+          python tools/uninstall/generate.py --check
       - name: Install pinned notice generator
         run: cargo install cargo-about --version 0.8.4 --locked
       - name: Verify bundled notices
@@ -101,6 +104,8 @@ jobs:
         working-directory: apps/desktop
         shell: bash
         run: npm run tauri:build -- --target x86_64-pc-windows-msvc --bundles nsis --config ../../tools/release/unsigned.json
+      - name: Verify built uninstall entry point
+        run: python tools/uninstall/verify_build.py target/x86_64-pc-windows-msvc/release
       - name: Prepare installer, checksums and notes
         env:
           RELEASE_TAG: ${{ inputs.tag }}

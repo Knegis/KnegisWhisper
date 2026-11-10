@@ -61,12 +61,46 @@ Quit KnegisWhisper from its tray menu, then use **Windows Settings > Apps >
 Installed apps > KnegisWhisper > Uninstall**. Closing the window alone can leave
 it running in the tray. Uninstall requires administrator rights.
 
-**Uninstalling currently keeps your notes, recordings and saved credentials,
+### New uninstall flow (unreleased)
+
+Source builds now register a separate uninstall helper. It opens two choices,
+both unchecked:
+
+- **Delete my KnegisWhisper data** removes the initiating Windows account's
+  notes, transcripts, summaries, history, saved voices, recordings, recovery
+  files, settings, downloaded models/runtimes and temporary audio. It also
+  removes that account's two app-specific WebView folders, saved provider and
+  calendar credentials, local API discovery file and app startup registry values.
+- **Delete shared downloads and temporary audio for all users** separately
+  removes `%ProgramData%\KnegisWhisper\cache`. Other Windows accounts may use it.
+
+Leaving both unchecked keeps these data. A final confirmation appears before
+Windows asks for administrator access. Personal cleanup stays in the original
+account when you supply another administrator's credentials. Start uninstall
+normally; an already-elevated interactive launch refuses to guess whose data
+to remove. Exports, original imports and other users' personal data stay intact.
+
+Locked files, access failures and redirected folders stop cleanup with a
+Retry/Cancel message. Cancel can leave partial deletion; it cannot restore files.
+The helper does not kill running recordings or model processes. A restart may
+be needed to remove running installer/helper files; it never restarts Windows.
+Upgrades, the helper's `--quiet` mode and direct NSIS `/S` or `/P` uninstall
+retain all personal and shared data. These are local deletions, not secure erasure
+or revocation of access at a remote provider.
+
+This flow has build and fixture-test evidence. The full disposable-machine
+acceptance matrix, including alternate-administrator elevation, is still pending
+under [KNEG-545](https://linear.app/axelalbertkarlsson/issue/KNEG-545).
+See [the implementation record](UNINSTALL_IMPLEMENTATION.md).
+
+### Published v0.1.1 and older uninstallers
+
+**These uninstallers keep your notes, recordings and saved credentials,
 even if you select ?Delete app data?.** That checkbox removes different folders
 from the ones used for the main application data. This is tracked in
 [KNEG-545](https://linear.app/axelalbertkarlsson/issue/KNEG-545).
 
-The following is the expected behaviour from the current Windows installer script
+The following is the expected behaviour from the pre-helper Windows installer script
 and application source, not a completed uninstall test. The v0.1.1 source uses the
 same storage paths and uninstall configuration; its published installer still
 needs the [installed-app acceptance checks](RELEASING.md#windows-uninstall-acceptance).
