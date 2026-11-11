@@ -869,6 +869,22 @@ recording, recovery's name and folder, and a folder deleted between Rust's
 lookup and its insert -- is covered by `cargo test`, not here. Not measured:
 the notification window's Record, which starts an unnamed meeting.
 
+## Calendar settings
+
+```powershell
+node tools/visual-check/calendar-settings.mjs --url http://127.0.0.1:5191/ --out tools/visual-check/out/calendar-settings
+```
+
+Captures both providers at 1280x800 and 720x520 using the invoke stub over dev
+fixtures: app, custom and missing clients; browser sign-in (including a browser
+that did not open), Cancel and Copy sign-in link; timeout Retry; Reconnect from
+token, connect and sync failures; imported connections and Remove; credential
+cleanup and Retry; Advanced save, discard, secret removal and return to the
+built-in client; and connected controls during sync. Key wording and wrapper
+calls are asserted, with a false check exiting 1. Generated test passwords are
+never included in reports. Real OAuth and credential-store behavior are outside
+this browser check.
+
 ## Meeting recordings
 
 ```
