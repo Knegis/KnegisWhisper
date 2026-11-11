@@ -602,6 +602,7 @@ pub fn run() -> anyhow::Result<()> {
             meeting_window::meeting_notification_placement_save,
             meeting_window::meeting_notification_placement_reset,
             meeting::meeting_start,
+            meeting::meeting_set_calendar,
             meeting::meeting_stop,
             meeting::meeting_cancel,
             meeting::meeting_dismiss,

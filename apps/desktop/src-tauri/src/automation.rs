@@ -142,12 +142,13 @@ impl kw_local_api::runtime::Runtime for DesktopRuntime {
         }
         value(
             runtime
-                // Unnamed and in no folder: the local API has no fields for
-                // either yet (KNEG-365).
+                // The API has no title or folder input; resolve its calendar
+                // snapshot automatically, exactly as the desktop Start does.
                 .start(
                     provider,
                     system_audio,
                     crate::meeting::MeetingPlan::default(),
+                    crate::meeting::CalendarLinkChoice::Auto,
                 )
                 .await
                 .map_err(unavailable)?,
@@ -188,9 +189,15 @@ impl kw_local_api::runtime::Runtime for DesktopRuntime {
         } else {
             None
         };
+        let meeting = meeting_status_for_api(value(
+            self.app
+                .state::<Arc<crate::meeting::MeetingRuntime>>()
+                .status()
+                .await,
+        )?);
         Ok(json!({
             "dictation": self.app.state::<Arc<crate::dictation::DictationRuntime>>().state(),
-            "meeting": self.app.state::<Arc<crate::meeting::MeetingRuntime>>().status().await,
+            "meeting": meeting,
             "route": route,
             "import_job": job,
         }))
@@ -206,9 +213,41 @@ impl kw_local_api::runtime::Runtime for DesktopRuntime {
     }
 }
 
+/// Calendar linking extends desktop IPC, not the local API's response schema.
+/// Its status used to forward all meeting fields, so explicitly leave the new
+/// session controls and event snapshot out rather than silently extending it.
+fn meeting_status_for_api(mut status: Value) -> Value {
+    if let Some(object) = status.as_object_mut() {
+        for key in ["sessionId", "calendarNotice", "calendarChoices"] {
+            object.remove(key);
+        }
+        if let Some(plan) = object.get_mut("plan").and_then(Value::as_object_mut) {
+            plan.remove("calendar");
+        }
+    }
+    status
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
+    #[test]
+    #[allow(clippy::indexing_slicing)]
+    fn api_meeting_status_preserves_its_shape_without_calendar_controls_or_snapshot() {
+        let before = serde_json::json!({
+            "state": "recording", "provider": "local",
+            "plan": {"title": "Meeting", "folderId": null, "deleteRecording": false, "liveProviderId": "local"}
+        });
+        let mut desktop = before.clone();
+        desktop["sessionId"] = serde_json::json!("20261111-120000-fixture");
+        desktop["calendarNotice"] = serde_json::json!(null);
+        desktop["calendarChoices"] = serde_json::json!([]);
+        desktop["plan"]["calendar"] = serde_json::json!({"eventId": "fixture", "participants": []});
+        assert_eq!(super::meeting_status_for_api(desktop), before);
+        let idle = serde_json::json!({"state": "idle", "plan": null});
+        assert_eq!(super::meeting_status_for_api(idle.clone()), idle);
+    }
+
     #[tokio::test]
     async fn crash_cleanup_removes_only_audio_owned_by_a_durable_job() {
         let directory = tempfile::tempdir().unwrap();

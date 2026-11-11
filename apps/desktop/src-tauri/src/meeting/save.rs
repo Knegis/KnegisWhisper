@@ -48,6 +48,18 @@ pub(super) async fn create_meeting_note_with_voices(
     recording: Option<(&str, f64)>,
     samples: &kw_notes_core::known_voices::Analysis,
 ) -> Result<(i64, bool), kw_storage::StorageError> {
+    note.calendar_event_id = plan.calendar.as_ref().map(|event| event.event_id.clone());
+    if note.participants.is_none() {
+        if let Some(event) = plan
+            .calendar
+            .as_ref()
+            .filter(|event| !event.participants.is_empty())
+        {
+            // Participants contain only optional strings, so encoding has no
+            // fallible provider-specific values, just as for the transcript.
+            note.participants = serde_json::to_string(&event.participants).ok();
+        }
+    }
     note.folder_id = match kw_notes_core::notes::existing_folder(db.pool(), plan.folder_id).await {
         Ok(found) => found,
         // Unknown rather than gone: the insert below says which.
@@ -242,6 +254,7 @@ pub(super) async fn save_discarded(
         return None;
     }
     let note = kw_notes_core::notes::NewNote {
+        calendar_event_id: None,
         title: notes_only_title(plan.title.as_deref(), started_at),
         content: notes.trim_end().to_owned(),
         recording_details: Some("The recording was discarded before it was transcribed.".into()),
@@ -372,6 +385,7 @@ pub(super) fn compose_note(
     }
     let transcribed = !segments.is_empty();
     Some(kw_notes_core::notes::NewNote {
+        calendar_event_id: None,
         title,
         content: notes.trim_end().to_owned(),
         recording_details: Some(recording_details.to_owned()),
