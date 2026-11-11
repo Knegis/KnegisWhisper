@@ -30,7 +30,12 @@ fixture tests and a new installer build do not establish that result.
   recordings; see [the measured findings](PARAKEET_BENCHMARK.md).
 - Replay seeks use available segment timings. Recordings without those timings
   can have only a whole-recording playback cue.
-- Cloud providers, calendar account flows, speaker identification and meeting
+- Google Calendar and Outlook offer app-owned one-click Connect or an Advanced custom client
+  and bounded snapshot sync. Owner registration and real-account validation are pending; no
+  build has carried the values. Meetings Upcoming/event picker and recording links are built
+  and fixture-tested, still unverified against real accounts.
+  See [the owner runbook](CALENDAR_PROVIDER_SETUP.md).
+- Cloud providers, speaker identification and meeting
   detection have different validation coverage. See [platform support](PLATFORM_SUPPORT.md)
   and [the engineering status reference](ENGINEERING_STATUS.md).
 - Local audio/video import is supported. URL import is disabled.

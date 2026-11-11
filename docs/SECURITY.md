@@ -33,10 +33,25 @@ Routes carry a **key reference**, not a key. Route resolution is a pure function
 to credentials at all; only `crates/security` can resolve a reference, and only
 `crates/network-policy` can transmit the result. A test never needs a real credential.
 
-Calendar OAuth refresh tokens go to the credential store too. Upstream keeps them in plaintext
-SQLite columns; the importer relocates them and leaves a reference behind. Google's flow moves to
-a **PKCE-only installed-app public client** — upstream ships a `client_secret` in the app
-environment, which is not a secret in a distributed binary.
+Calendar OAuth tokens go to the OS credential store. The importer relocates upstream's
+plaintext refresh tokens from SQLite and leaves only a slot reference. Google Calendar and
+Outlook use PKCE clients: Advanced custom configuration takes precedence over app-owned build
+values, then Missing. Microsoft's public client never carries a client secret.
+
+Google's desktop client secret is a **public build value**. Anyone with the binary can extract
+it, so it cannot authenticate an installation or protect user data. Rust sends it only on token
+and refresh grants, never in the authorization URL or to the frontend. The custom Google secret
+lives only in credential-store slot `calendar-google-custom-client`. The app-owned value is
+compiled into Rust, not stored in runtime settings or a `VITE_` variable.
+
+`TokenBundle.client_id` binds each grant to its issuing client. Unbound or mismatched grants
+require reconnecting. The durable `calendar.<provider>.cleanupRefs` list holds only credential
+slot names whose deletion failed, never tokens. Disconnect deletes the connected account's rows
+and slot, including imported slots; failed deletions remain retryable.
+
+The callback checks `state` before handling `error`. Only allowlisted `CalendarProblem`
+descriptions cross IPC; provider descriptions and HTTP bodies never leave Rust. Real-account
+consent and refresh are unverified; see [the owner runbook](CALENDAR_PROVIDER_SETUP.md).
 
 ## Network
 

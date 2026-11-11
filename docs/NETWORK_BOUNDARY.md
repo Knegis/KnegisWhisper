@@ -13,7 +13,7 @@ path.
 | --- | --- |
 | `user-configured-ai-provider` | A reasoning call to the provider whose key the user entered. |
 | `user-configured-transcription-provider` | A transcription call to a user-configured endpoint. |
-| `user-configured-calendar-provider` | Google or Microsoft Graph, with the user's own OAuth grant. |
+| `user-configured-calendar-provider` | Google Calendar or Outlook, with the user's OAuth grant issued to the app-owned client or an Advanced custom client. |
 | `user-triggered-model-download` | Fetching a GGUF or GGML the user chose to install. |
 | `user-triggered-media-import` | yt-dlp fetching a URL the user pasted. **No live caller** — see "SSRF guards for URL import". |
 | `own-github-releases-updater` | Optional update check against this project's own releases. |
@@ -81,7 +81,19 @@ only, and only when a person explicitly asks (`updater.rs`). Never on
 startup, never on a timer.
 
 **Calendars** — `accounts.google.com`, `oauth2.googleapis.com`, `www.googleapis.com`,
-`login.microsoftonline.com`, `graph.microsoft.com`.
+`login.microsoftonline.com`, `graph.microsoft.com`. Google uses the authorization and token
+endpoints plus `www.googleapis.com` Calendar v3 `users/me/calendarList` and
+`calendars/{id}/events`. Outlook uses Microsoft authorization/token endpoints and Graph
+**v1.0** `me/calendars` and `me/calendars/{id}/calendarView`, with
+`Prefer: outlook.timezone="UTC"`. These use only
+`RequestPurpose::UserConfiguredCalendarProvider`; there is no new host or purpose.
+
+Calendar requests happen on Connect, Sync now, or when Meetings opens (at most once per
+5 minutes per provider for that automatic sync). They never run at launch, on focus or on a
+timer. Event sync is a bounded snapshot of [now - 24 hours, now + 30 days), with UTC times
+and declined events excluded. Each calendar commits atomically; a page failure keeps its cache.
+The local Upcoming and meeting-candidate readers make no network requests; their Meetings UI
+is built and fixture-tested, still unverified against real accounts.
 
 **Media import** — nothing, currently. The entry point is closed; see "SSRF guards for URL
 import" below.
