@@ -1403,6 +1403,7 @@ pub async fn notes_create(state: State<'_, AppState>, request: NewNoteRequest) -
     notes::create(
         state.db().pool(),
         &notes::NewNote {
+            calendar_event_id: None,
             recording_details: None,
             title: request.title,
             content: request.content,

@@ -767,7 +767,33 @@ deleteRecording: boolean,
  * The actual live provider selected at Start, never a caller's claim.
  * Older sidecars have no provider to disclose.
  */
-liveProviderId: string | null, };
+liveProviderId: string | null,
+/**
+ * Local event snapshot, retained even when the calendar cache changes.
+ */
+calendar: LinkedEvent | null, };
+
+/**
+ * The event and people captured locally for this recording. Saving and recovery
+ * use this snapshot rather than consulting a calendar that may have changed.
+ */
+export type LinkedEvent = { eventId: string, provider: CalendarProvider, title: string | null, titleFromEvent: boolean, omittedParticipants: number, };
+
+/**
+ * Missing Start input means Auto; explicit choices never fall back to Auto.
+ */
+export type CalendarLinkChoice = { "mode": "auto" } | { "mode": "none" } | { "mode": "event", event_id: string, };
+
+/**
+ * A live edit must express the person's choice, without automatic selection.
+ */
+export type CalendarSetChoice = { "mode": "none" } | { "mode": "event", event_id: string, };
+
+/**
+ * Start continues even when the calendar cannot be linked durably. These
+ * reasons belong to the live session, never to the recovery sidecar.
+ */
+export type CalendarLinkNotice = "overlap" | "choice-unavailable" | "calendar-unreadable" | "not-saved";
 
 /**
  * What became of a saved meeting's recording, when it was to be deleted.
@@ -787,7 +813,7 @@ export type FinalisationUpdate = { revision: number, progress: FinalisationProgr
 /**
  * What can be said about the meeting session.
  */
-export type MeetingStatus = { state: MeetingState, finalisation: FinalisationUpdate,
+export type MeetingStatus = { sessionId: string | null, calendarNotice: CalendarLinkNotice | null, calendarChoices: Array<CandidateEvent>, state: MeetingState, finalisation: FinalisationUpdate,
 /**
  * Why the live transcription stopped, when it has.
  *

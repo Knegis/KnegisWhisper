@@ -99,6 +99,7 @@
 //! be switched off within a day. Teams and FaceTime are reported on the screen
 //! instead, with the reason, so the limit is visible rather than felt as a bug.
 
+pub mod calendar_link;
 mod config;
 pub mod draft;
 mod notes;
@@ -152,6 +153,9 @@ pub mod finalisation;
 use finalisation::{
     FinalisationUpdate, Kind as FinalisationKind, Stage as FinalisationStage, Tracker,
 };
+
+/// A durable plan edit; all windows re-read status after this notification.
+pub const PLAN_CHANGED_EVENT: &str = "meeting-plan-changed";
 
 pub const STATE_EVENT: &str = "meeting-state";
 /// One piece of transcript, as it is produced.
@@ -341,12 +345,63 @@ pub struct MeetingPlan {
     /// The actual live provider selected at Start, never a caller's claim.
     /// Older sidecars have no provider to disclose.
     pub live_provider_id: Option<String>,
+    /// Local event snapshot, retained even when the calendar cache changes.
+    #[serde(default)]
+    pub calendar: Option<LinkedEvent>,
+}
+
+/// The event and people captured locally for this recording. Saving and recovery
+/// use this snapshot rather than consulting a calendar that may have changed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct LinkedEvent {
+    pub event_id: String,
+    pub provider: crate::calendar::CalendarProvider,
+    pub title: Option<String>,
+    pub title_from_event: bool,
+    #[ts(skip)]
+    pub participants: Vec<kw_notes_core::people::Participant>,
+    pub omitted_participants: u32,
+}
+
+/// Missing Start input means Auto; explicit choices never fall back to Auto.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[serde(tag = "mode", rename_all = "kebab-case")]
+pub enum CalendarLinkChoice {
+    #[default]
+    Auto,
+    None,
+    Event {
+        event_id: String,
+    },
+}
+
+/// A live edit must express the person's choice, without automatic selection.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(tag = "mode", rename_all = "kebab-case")]
+pub enum CalendarSetChoice {
+    None,
+    Event { event_id: String },
+}
+
+/// Start continues even when the calendar cannot be linked durably. These
+/// reasons belong to the live session, never to the recovery sidecar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "kebab-case")]
+pub enum CalendarLinkNotice {
+    Overlap,
+    ChoiceUnavailable,
+    CalendarUnreadable,
+    NotSaved,
 }
 
 /// What can be said about the meeting session.
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct MeetingStatus {
+    pub session_id: Option<String>,
+    pub calendar_notice: Option<CalendarLinkNotice>,
+    pub calendar_choices: Vec<crate::calendar::CandidateEvent>,
     pub state: MeetingState,
     pub finalisation: FinalisationUpdate,
     /// Why the live transcription stopped, when it has.
@@ -659,6 +714,8 @@ struct Live {
     started: std::time::Instant,
     /// What the meeting is saved as, as chosen before Start (KNEG-365).
     plan: MeetingPlan,
+    calendar_notice: Option<CalendarLinkNotice>,
+    calendar_choices: Vec<crate::calendar::CandidateEvent>,
     /// When it started on the clock, which names a note given no name: the
     /// instant in the recording's file name, which recovery reads, so a Stop
     /// note and a recovered one agree ([`recording_start`]). `started` above
@@ -1093,6 +1150,7 @@ impl MeetingRuntime {
         provider_id: &str,
         system_audio: bool,
         plan: MeetingPlan,
+        calendar: CalendarLinkChoice,
     ) -> Result<Sources, String> {
         let _microphone_use = crate::capture_interlock::CaptureInterlock::shared().recording()?;
         // Kept for the entire start, including provider connection. Polling and
@@ -1101,7 +1159,7 @@ impl MeetingRuntime {
         let mut lifecycle = self.lifecycle.lock().await;
         let generation = lifecycle.begin_start().map_err(str::to_owned)?;
 
-        let plan = plan_at_start(&self.db, plan, provider_id).await;
+        let plan = plan_at_start(&self.db, plan, provider_id, calendar).await;
         match self.start_live(provider_id, system_audio, plan).await {
             Ok(sources) => {
                 if !lifecycle.started(generation) {
@@ -1252,8 +1310,13 @@ impl MeetingRuntime {
         &self,
         provider_id: &str,
         system_audio: bool,
-        plan: MeetingPlan,
+        resolved: calendar_link::StartPlan,
     ) -> Result<Sources, String> {
+        let calendar_link::StartPlan {
+            mut plan,
+            mut notice,
+            choices,
+        } = resolved;
         let mut held = self.live.lock().await;
         if held.is_some() {
             return Err("a meeting is already being recorded".to_owned());
@@ -1370,17 +1433,11 @@ impl MeetingRuntime {
         self.notes.begin(&path);
         // Beside the recording from its first second, as the typed notes are,
         // so a meeting recovered after a crash keeps its name, folder and
-        // delete choice. Not a reason to refuse the meeting: without it, a
-        // recovered note is named for when it started and filed in no
-        // folder, as before, and its recording is kept or deleted as the
-        // setting says at recovery, not as it said at Start (KNEG-409).
-        if let Err(error) = draft::write_plan(&path, &plan) {
-            tracing::warn!(
-                %error,
-                path = %draft::plan_path(&path).display(),
-                "could not write the meeting's plan beside its recording"
-            );
-        }
+        // delete choice. Without it, recovery names the note for its start,
+        // files it in no folder, and reads today's delete setting (KNEG-409).
+        // Keep recording if writing fails, but drop the calendar link in memory
+        // too: Stop must not link what Recover could never discover on disk.
+        calendar_link::persist_start(&path, &mut plan, &mut notice);
 
         // The pump announces its own ending, which is the whole of KNEG-95's
         // fix: until now the failure was detected at second zero and reported
@@ -1429,6 +1486,8 @@ impl MeetingRuntime {
             sources: sources.clone(),
             started: std::time::Instant::now(),
             plan,
+            calendar_notice: notice,
+            calendar_choices: choices,
             started_at,
             stream_lease,
             model_loan,
@@ -1682,6 +1741,10 @@ impl MeetingRuntime {
     pub async fn status(&self) -> MeetingStatus {
         let phase = self.lifecycle.lock().await.phase;
         let held = self.live.lock().await;
+        let session_id = calendar_link::running_session_id(
+            phase,
+            held.as_ref().map(|live| live.recording_path.as_path()),
+        );
         let system_audio = kw_audio_core::system_audio::support();
         let (detected, microphone, offer) = {
             let held = self.watch.lock().await;
@@ -1730,6 +1793,9 @@ impl MeetingRuntime {
                 transcript_failure: None,
                 provider: None,
                 plan: None,
+                session_id,
+                calendar_notice: None,
+                calendar_choices: Vec::new(),
                 elapsed_seconds: 0.0,
                 sources: None,
                 system_audio,
@@ -1752,6 +1818,9 @@ impl MeetingRuntime {
                     transcript_failure: live.transcript_failure.get().cloned(),
                     provider: Some(live.provider_id.clone()),
                     plan: Some(live.plan.clone()),
+                    session_id,
+                    calendar_notice: live.calendar_notice,
+                    calendar_choices: live.calendar_choices.clone(),
                     elapsed_seconds: live.started.elapsed().as_secs_f64(),
                     sources: Some(live.sources.clone()),
                     system_audio,
@@ -1768,6 +1837,9 @@ impl MeetingRuntime {
                     transcript_failure: None,
                     provider: None,
                     plan: None,
+                    session_id,
+                    calendar_notice: None,
+                    calendar_choices: Vec::new(),
                     elapsed_seconds: 0.0,
                     sources: None,
                     system_audio,
@@ -2523,8 +2595,8 @@ pub async fn meeting_recover_recording(
 }
 
 /// Start recording a meeting, saved under `title` in `folder_id` (KNEG-365).
-/// Both are optional, so a caller that sends neither -- the offer's Record,
-/// the local API -- starts an unnamed meeting in no folder, as before.
+/// Both are optional: absent a typed title, a locally linked event can name
+/// the meeting. The offer and local API share the same automatic resolution.
 /// Whether its recording is deleted once saved is not the caller's to say:
 /// `start` reads it from the setting (KNEG-409).
 #[tauri::command]
@@ -2534,6 +2606,7 @@ pub async fn meeting_start(
     system_audio: bool,
     title: Option<String>,
     folder_id: Option<i64>,
+    calendar: Option<CalendarLinkChoice>,
 ) -> Result<Sources, String> {
     runtime
         .start(
@@ -2544,8 +2617,20 @@ pub async fn meeting_start(
                 folder_id,
                 ..MeetingPlan::default()
             },
+            calendar.unwrap_or_default(),
         )
         .await
+}
+
+/// Both meeting windows use the same command and re-read status on the emitted
+/// event. Only a successfully written sidecar can become the visible live plan.
+#[tauri::command]
+pub async fn meeting_set_calendar(
+    runtime: State<'_, Arc<MeetingRuntime>>,
+    session_id: String,
+    choice: CalendarSetChoice,
+) -> Result<(), String> {
+    runtime.set_calendar(&session_id, choice).await
 }
 
 #[tauri::command]
@@ -2932,9 +3017,10 @@ mod tests {
                 folder_id: Some(3),
                 delete_recording: true,
                 live_provider_id: Some("openai-realtime".into()),
+                calendar: None,
             })
             .unwrap(),
-            serde_json::json!({"title": "Board review", "folderId": 3, "deleteRecording": true, "liveProviderId": "openai-realtime"})
+            serde_json::json!({"title": "Board review", "folderId": 3, "deleteRecording": true, "liveProviderId": "openai-realtime", "calendar": null})
         );
         let cancelled =
             serde_json::to_value(MeetingOutcome::Cancelled { note_id: Some(9) }).unwrap();
@@ -3380,19 +3466,30 @@ mod tests {
             folder_id: Some(3),
             delete_recording: true,
             live_provider_id: Some("fake-provider".into()),
+            calendar: None,
         };
         assert_eq!(
-            plan_at_start(&db, asked, "openai-realtime").await,
+            plan_at_start(&db, asked, "openai-realtime", CalendarLinkChoice::Auto)
+                .await
+                .plan,
             MeetingPlan {
                 title: Some("Board review".into()),
                 folder_id: Some(3),
                 delete_recording: false,
                 live_provider_id: Some("openai-realtime".into()),
+                calendar: None,
             }
         );
 
         deleting(&db, true).await;
-        let plan = plan_at_start(&db, MeetingPlan::default(), "local-streaming").await;
+        let plan = plan_at_start(
+            &db,
+            MeetingPlan::default(),
+            "local-streaming",
+            CalendarLinkChoice::Auto,
+        )
+        .await
+        .plan;
         assert!(plan.delete_recording);
         // Turned off while the meeting runs: the session's plan and the one
         // beside its recording are what Stop and recovery read, not the
@@ -3405,9 +3502,15 @@ mod tests {
             Some(true)
         );
         assert!(
-            !plan_at_start(&db, MeetingPlan::default(), "local-streaming")
-                .await
-                .delete_recording
+            !plan_at_start(
+                &db,
+                MeetingPlan::default(),
+                "local-streaming",
+                CalendarLinkChoice::Auto
+            )
+            .await
+            .plan
+            .delete_recording
         );
 
         let saved = save_stopped(

@@ -115,6 +115,10 @@ import type {
   MediaSidecar,
   MeetingOutcome,
   MeetingPlan,
+  CalendarLinkChoice,
+  CalendarSetChoice,
+  CalendarLinkNotice,
+  LinkedEvent,
   RecoverableRecording,
   MeetingProviderSummary,
   MeetingState,
@@ -263,6 +267,10 @@ export type {
   MediaSidecar,
   MeetingOutcome,
   MeetingPlan,
+  CalendarLinkChoice,
+  CalendarSetChoice,
+  CalendarLinkNotice,
+  LinkedEvent,
   RecoverableRecording,
   MeetingProviderSummary,
   MeetingState,
@@ -423,11 +431,18 @@ export async function recoverMeetingRecording(storageKey: string): Promise<Meeti
 export async function saveMeetingNotificationPlacement(): Promise<void> { return invoke("meeting_notification_placement_save"); }
 export async function resetMeetingNotificationPlacement(): Promise<void> { return invoke("meeting_notification_placement_reset"); }
 
+export type MeetingStartOptions = {
+  title?: string | null;
+  folderId?: number | null;
+  calendar?: CalendarLinkChoice;
+};
+
 /**
- * Start recording a meeting, saved under `plan`'s name in its folder
- * (KNEG-365). Rust keeps the plan with the meeting, so it applies however the
- * meeting ends; without one, the meeting is unnamed and in no folder. Whether
- * its recording is deleted once saved is not sent: Rust reads Settings ›
+ * Start recording with the person's title, folder and local calendar choice.
+ * Rust captures the trusted plan at Start and keeps it for every save path.
+ * A blank title can take the linked event's name; an absent calendar choice
+ * means Auto. Whether its recording is deleted once saved is not sent:
+ * Rust reads Settings ›
  * Meetings' choice at Start (KNEG-409).
  *
  * Returns which captures actually started: a meeting works microphone-only, and
@@ -436,9 +451,20 @@ export async function resetMeetingNotificationPlacement(): Promise<void> { retur
 export async function startMeeting(
   provider: string,
   systemAudio: boolean,
-  plan: Omit<MeetingPlan, "deleteRecording" | "liveProviderId"> = { title: null, folderId: null },
+  options: MeetingStartOptions = {},
 ): Promise<Sources> {
-  return invoke<Sources>("meeting_start", { provider, systemAudio, title: plan.title, folderId: plan.folderId });
+  return invoke<Sources>("meeting_start", {
+    provider, systemAudio, title: options.title, folderId: options.folderId,
+    ...(options.calendar === undefined ? {} : { calendar: options.calendar }),
+  });
+}
+
+export async function setMeetingCalendar(sessionId: string, choice: CalendarSetChoice): Promise<void> {
+  return invoke("meeting_set_calendar", { sessionId, choice });
+}
+
+export async function onMeetingPlanChanged(handler: () => void): Promise<UnlistenFn> {
+  return listen("meeting-plan-changed", () => handler());
 }
 
 export async function stopMeeting(): Promise<MeetingOutcome> {
