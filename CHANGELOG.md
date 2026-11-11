@@ -5,6 +5,8 @@ version, supported platforms, installation requirements and known limitations.
 
 ## Unreleased
 
+- Return to the original task or note when closing Settings, while protecting unsaved changes (KNEG-548).
+
 - Write release checksums with portable LF line endings (KNEG-536).
 - Keep the library toggle clear of the narrow transcript header (KNEG-515).
 - Bundle generated dependency notices and verify their freshness in CI (KNEG-533).

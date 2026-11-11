@@ -1,4 +1,4 @@
-import { DEFAULT_VIEW, type ViewId } from "./navigation.js";
+import { DEFAULT_VIEW, railOf, type ViewId } from "./navigation.js";
 
 /**
  * A page, a note on Notes, and the transcript row a search hit opens it at
@@ -10,6 +10,15 @@ export type NavigationHistory = { entries: Destination[]; index: number };
 export type NavigationAction = { type: "visit"; destination: Destination } | { type: "back" | "forward" };
 export const defaultDestination: Destination = { view: DEFAULT_VIEW };
 export const initialHistory: NavigationHistory = { entries: [defaultDestination], index: 0 };
+
+/** Settings returns to the task on this branch of history, including its note/row. */
+export function settingsReturnDestination(state: NavigationHistory): Destination {
+  for (let index = state.index; index >= 0; index--) {
+    const entry = state.entries[index];
+    if (entry && railOf(entry.view) !== "settings") return entry;
+  }
+  return defaultDestination;
+}
 
 export function navigationHistory(state: NavigationHistory, action: NavigationAction): NavigationHistory {
   if (action.type !== "visit") {

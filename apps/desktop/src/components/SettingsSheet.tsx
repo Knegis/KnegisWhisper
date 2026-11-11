@@ -86,7 +86,7 @@ function TileArt({ id }: { id: SheetView }) {
  * control. The Settings pill is the exception: passing that press on would open
  * the sheet it just closed.
  */
-export function SettingsSheet({ open, view, version, onSelect, onClose }: { open: boolean; view: ViewId; version: string | null; onSelect: (id: ViewId) => void; onClose: () => void }) {
+export function SettingsSheet({ open, view, version, onSelect, onHide, onDismiss }: { open: boolean; view: ViewId; version: string | null; onSelect: (id: ViewId) => void; onHide: () => void; onDismiss: () => void }) {
   const ref = useRef<HTMLDialogElement>(null);
   const [active, setActive] = useState<SheetView>(FIRST_TILE);
   useEffect(() => {
@@ -99,14 +99,22 @@ export function SettingsSheet({ open, view, version, onSelect, onClose }: { open
     if (!open && dialog.open) dialog.close();
   }, [open, view]);
 
+  // Close synchronously before navigation can open the unsaved-drafts dialog.
+  // The native close event is only an acknowledgement, never a second intent.
+  const hide = () => { ref.current?.close(); onHide(); };
+  const dismiss = () => { hide(); onDismiss(); };
+
   const onBackdrop = (event: MouseEvent<HTMLDialogElement>) => {
     if (event.target !== event.currentTarget) return;
     const { clientX, clientY } = event;
     // Closed first, so the title bar is no longer inert when it is asked
     // what sits under the pointer.
-    event.currentTarget.close();
+    hide();
     const control = document.elementFromPoint(clientX, clientY)?.closest<HTMLButtonElement>(".app-titlebar button");
-    if (control && !control.disabled && control.getAttribute("aria-haspopup") !== "dialog") control.click();
+    if (control && !control.disabled && control.getAttribute("aria-haspopup") !== "dialog") {
+      // Explicit navigation/window actions own this click; do not also return.
+      control.click();
+    } else onDismiss();
   };
 
   const onGridKey = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -133,14 +141,14 @@ export function SettingsSheet({ open, view, version, onSelect, onClose }: { open
       ref={ref}
       className="settings-sheet"
       aria-labelledby="settings-sheet-title"
-      onClose={onClose}
+      onCancel={event => { event.preventDefault(); dismiss(); }}
       onClick={onBackdrop}
     >
       <div className="settings-sheet-body" onKeyDown={onGridKey}>
         <div className="settings-sheet-head">
           <span />
           <KnegisMark />
-          <button type="button" className="sheet-close" aria-label="Close settings" title="Close settings" onClick={onClose}>
+          <button type="button" className="sheet-close" aria-label="Close settings" title="Close settings" onClick={dismiss}>
             <Icon name="close" size={18} />
           </button>
         </div>
@@ -165,7 +173,7 @@ export function SettingsSheet({ open, view, version, onSelect, onClose }: { open
                           aria-current={view === id ? "page" : undefined}
                           style={{ animationDelay: `${(group * 8 + index) * 30}ms` }}
                           onFocus={() => setActive(id)}
-                          onClick={() => { onSelect(id); onClose(); }}
+                          onClick={() => { hide(); onSelect(id); }}
                         >
                           <span className="sheet-tile-art" data-art={id} aria-hidden="true"><TileArt id={id} /></span>
                           <span className="sheet-tile-label">{LABEL_OF[id]}<span className="sr-only">{id === "meeting-settings" ? " settings" : ""}</span></span>
