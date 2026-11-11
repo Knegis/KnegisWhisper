@@ -270,6 +270,14 @@
       "ui": "Integrations > Calendar",
       "reachable": true
     },
+    "calendar.google.cleanupRefs": {
+      "what": "Credential slot names awaiting deletion, never credential values.",
+      "internal": "Queued atomically when calendar metadata stops referencing a slot; retained until provider-guarded cleanup succeeds."
+    },
+    "calendar.microsoft.cleanupRefs": {
+      "what": "Credential slot names awaiting deletion, never credential values.",
+      "internal": "Queued atomically when calendar metadata stops referencing a slot; retained until provider-guarded cleanup succeeds."
+    },
     "calendar.google.account": {
       "what": "The email of the one connected Google account.",
       "internal": "Written by CalendarRuntime::connect from what the OAuth exchange returned, and removed by disconnect. Not something a user types: an address typed here would not match the token in the credential store, and the screen offers connect and disconnect rather than a field."

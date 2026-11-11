@@ -17,6 +17,7 @@
 import type {
   Accelerator,
   AppleCalendarSupport,
+  CalendarProblem,
   BinaryLocation,
   Binding,
   CaptureExclusion,
@@ -1446,12 +1447,32 @@ export function tokenStatusLabel(status: TokenStatus): { text: string; detail: s
       };
     case "missing":
       return { text: "Not connected", detail: "", more: null };
+    case "reconnect-required":
+      return { text: "Not connected", detail: "Reconnect the account.", more: null };
     case "refresh-failed":
       return {
         text: "Not connected",
         detail: "Reconnect the account.",
         more: `The last attempt to renew the access token failed: ${status.message}`,
       };
+  }
+}
+
+/** Safe wording for every classified calendar failure, shared by connect and sync. */
+function calendarProblemLabel(problem: CalendarProblem): string {
+  switch (problem.kind) {
+    case "cancelled": return "Connection cancelled.";
+    case "timed-out": return "Sign-in timed out. Try again.";
+    case "access-denied": return "Calendar access was declined.";
+    case "admin-consent-required": return "Ask your administrator to approve calendar access.";
+    case "app-blocked": return "Your organisation has blocked this app.";
+    case "client-misconfigured": return "Check the calendar client configuration.";
+    case "client-rejected": return "The provider rejected this calendar client.";
+    case "reconnect-required": return "Reconnect the account.";
+    case "network": return "Could not reach the calendar provider. Try again.";
+    case "provider-unavailable": return "The calendar provider is unavailable. Try again.";
+    case "storage": return "Could not save or read calendar data.";
+    case "invalid-response": return "The calendar provider returned an invalid response.";
   }
 }
 
@@ -1465,6 +1486,13 @@ export function connectOutcomeLabel(outcome: ConnectOutcome): Plain {
       };
     case "denied":
       return { text: "Not connected: access was declined.", more: outcome.reason };
+    case "failed":
+      return {
+        text: outcome.problem.kind === "reconnect-required"
+          ? "The previous connection could not be kept. Reconnect the account."
+          : calendarProblemLabel(outcome.problem),
+        more: null,
+      };
   }
 }
 
@@ -1491,7 +1519,7 @@ export function syncOutcomeLabel(outcome: SyncOutcome): Plain {
     case "token-unavailable":
       return { text: "Couldn't sync. Reconnect the account.", more: outcome.message };
     case "failed":
-      return { text: "Couldn't sync.", more: outcome.message };
+      return { text: outcome.problem ? calendarProblemLabel(outcome.problem) : "Couldn't sync.", more: outcome.problem ? null : outcome.message };
   }
 }
 

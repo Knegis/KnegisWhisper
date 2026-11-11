@@ -43,6 +43,11 @@ import type {
   BinaryLocation,
   Binding,
   CalendarProvider,
+  CalendarProblem,
+  CalendarOperation,
+  PendingSignIn,
+  LeftoverConnection,
+  LeftoverOrigin,
   SecretChange,
   ClientSource,
   CalendarStatus,
@@ -180,6 +185,11 @@ export type {
   BinaryLocation,
   Binding,
   CalendarProvider,
+  CalendarProblem,
+  CalendarOperation,
+  PendingSignIn,
+  LeftoverConnection,
+  LeftoverOrigin,
   SecretChange,
   ClientSource,
   CalendarStatus,
@@ -1523,6 +1533,21 @@ export async function connectCalendar(
   provider: CalendarProvider,
 ): Promise<ConnectOutcome> {
   return invoke<ConnectOutcome>("calendar_connect", { provider });
+}
+
+/** Stop waiting for browser sign-in; a no-op when no redirect is pending. */
+export async function cancelCalendarConnect(provider: CalendarProvider): Promise<void> {
+  return invoke("calendar_cancel_connect", { provider });
+}
+
+/** Remove a leftover account and queue its stored credential for cleanup. */
+export async function removeLeftoverCalendar(provider: CalendarProvider, email: string): Promise<void> {
+  return invoke("calendar_remove_leftover", { provider, email });
+}
+
+/** Retry pending credential deletions without contacting a provider. */
+export async function retryCalendarCleanup(provider: CalendarProvider): Promise<void> {
+  return invoke("calendar_retry_cleanup", { provider });
 }
 
 /** Disconnect whichever account is connected for `provider`, if any. */

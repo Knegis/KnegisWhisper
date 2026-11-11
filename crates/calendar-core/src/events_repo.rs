@@ -117,9 +117,18 @@ pub async fn delete_all_for_calendar(
 /// Purge pre-snapshot data for an account, including unselected calendars and
 /// events outside the window. Keep SQL here because the desktop crate only
 /// depends on SQLx for tests; no new application dependency is needed for the
-/// version gate. The marker is written by the caller after this commits.
+/// version gate. The caller uses `purge_account_on` to commit the marker with the purge.
 pub async fn purge_account(
     pool: &SqlitePool,
+    kind: crate::provider::CalendarProviderKind,
+    account_email: &str,
+) -> Result<(), sqlx::Error> {
+    purge_account_on(pool, kind, account_email).await
+}
+
+/// Executor variant so the version marker commits with the purge.
+pub async fn purge_account_on<'e>(
+    executor: impl Executor<'e, Database = Sqlite>,
     kind: crate::provider::CalendarProviderKind,
     account_email: &str,
 ) -> Result<(), sqlx::Error> {
@@ -128,10 +137,8 @@ pub async fn purge_account(
         CalendarProviderKind::Google => ("google_calendars", "google"),
         CalendarProviderKind::Microsoft => ("microsoft_calendars", "microsoft"),
     };
-    let mut tx = pool.begin().await?;
     sqlx::query(&format!("DELETE FROM calendar_events WHERE provider = ? AND calendar_id IN (SELECT id FROM {table} WHERE account_email = ?)"))
-        .bind(provider).bind(account_email).execute(&mut *tx).await?;
-    tx.commit().await?;
+        .bind(provider).bind(account_email).execute(executor).await?;
     Ok(())
 }
 

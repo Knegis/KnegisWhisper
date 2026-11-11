@@ -2141,6 +2141,19 @@ export type UpdateCheckResult = { "state": "no-public-key-configured" } | { "sta
 export type CalendarProvider = "google" | "microsoft";
 
 /**
+ * Stable, allowlisted failure vocabulary. Provider prose and bodies never cross IPC.
+ */
+export type CalendarProblem = { "kind": "cancelled" } | { "kind": "timed-out" } | { "kind": "access-denied" } | { "kind": "admin-consent-required" } | { "kind": "app-blocked" } | { "kind": "client-misconfigured" } | { "kind": "client-rejected" } | { "kind": "reconnect-required" } | { "kind": "network" } | { "kind": "provider-unavailable" } | { "kind": "storage" } | { "kind": "invalid-response" };
+
+export type CalendarOperation = "idle" | "connecting" | "syncing";
+
+export type PendingSignIn = { authorizeUrl: string, browserOpened: boolean, };
+
+export type LeftoverOrigin = "openwhispr" | "earlier";
+
+export type LeftoverConnection = { email: string, origin: LeftoverOrigin, };
+
+/**
  * Secret edits are explicit: an omitted edit must never erase a saved value.
  * Debug intentionally omits Set's payload when callers inspect a pending edit.
  */
@@ -2151,21 +2164,16 @@ export type ClientSource = "app" | "custom" | "missing";
 /**
  * What happened when someone clicked "Connect".
  *
- * Only the two outcomes that are not simply a refusal: a plain error (no
- * client ID configured, the loopback receiver could not bind, the token
- * exchange itself failed) crosses as `Err` the same as every other command,
- * because there is nothing more for the frontend to do with those than show
- * them. Being turned down at the consent screen is different -- an ordinary
- * outcome, not a bug -- so it gets its own state rather than the same
- * generic error text.
+ * A held operation guard is the only command-level refusal. Every consent,
+ * transport, provider and persistence failure has a stable classified outcome.
  */
-export type ConnectOutcome = { "state": "connected", accountEmail: string, calendars: number, } | { "state": "denied", reason: string, };
+export type ConnectOutcome = { "state": "connected", accountEmail: string, calendars: number, } | { "state": "denied", reason: string, } | { "state": "failed", problem: CalendarProblem, };
 
 /**
  * What one sync attempt found. Both the command's own return value and
- * what [`CalendarRuntime::record_sync`] persists to settings -- one shape
- * for both means the screen can never see a different answer from a sync
- * it just ran than from the record `calendar_status` reads back later.
+ * what [`CalendarRuntime::record_sync`] persists to settings use this shape.
+ * If recording fails, the command reports Storage and the previous durable
+ * record remains available; a successful fetch must not hide that failure.
  */
 export type SyncOutcome = { "state": "completed", eventsUpserted: number, eventsRemoved: number,
 /**
@@ -2173,7 +2181,7 @@ export type SyncOutcome = { "state": "completed", eventsUpserted: number, events
  * calendar list refresh can succeed while one calendar's events
  * fail, and reporting only the aggregate would hide which one.
  */
-calendarErrors: Array<string>, } | { "state": "token-unavailable", message: string, } | { "state": "failed", message: string, };
+calendarErrors: Array<string>, } | { "state": "token-unavailable", problem: CalendarProblem | null, message: string, } | { "state": "failed", problem: CalendarProblem | null, message: string, };
 
 /**
  * A sync outcome together with when it happened, persisted to settings so
@@ -2198,8 +2206,8 @@ lastSuccessAt: string | null, };
  * poll is exactly what `docs/NETWORK_BOUNDARY.md` rules out for a passive
  * status command. `Missing` covers both "never connected" and "the
  * credential is gone even though the database row is still there", which is
- * exactly the state [`CalendarRuntime::disconnect`] leaves behind -- see its
- * doc comment on why the row itself is not deleted. Checking the credential
+ * also possible after a credential-store reset. Disconnect removes its row.
+ * Checking the credential
  * store directly, rather than trusting the row's mere existence, is what
  * keeps that decision from ever reading back as "connected".
  *
@@ -2212,7 +2220,7 @@ lastSuccessAt: string | null, };
  * automatically" in the same payload as a `SyncOutcome::TokenUnavailable`
  * telling the user to reconnect.
  */
-export type TokenStatus = { "state": "active" } | { "state": "needs-refresh" } | { "state": "missing" } | { "state": "refresh-failed", message: string, };
+export type TokenStatus = { "state": "active" } | { "state": "needs-refresh" } | { "state": "missing" } | { "state": "refresh-failed", message: string, } | { "state": "reconnect-required" };
 
 export type CalendarSummary = { id: string, summary: string, isPrimary: boolean, isSelected: boolean,
 /**
@@ -2243,7 +2251,7 @@ customGoogleSecretConfigured: boolean,
 /**
  * Whether this build provides an app-owned client for the provider.
  */
-appClientAvailable: boolean, account: AccountStatus | null, };
+appClientAvailable: boolean, account: AccountStatus | null, operation: CalendarOperation, pendingSignIn: PendingSignIn | null, cleanupPending: number, leftover: Array<LeftoverConnection>, };
 
 export type CalendarStatus = { google: ProviderStatus, microsoft: ProviderStatus, apple: AppleCalendarSupport, };
 

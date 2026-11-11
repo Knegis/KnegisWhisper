@@ -1303,6 +1303,10 @@ const SIDECARS: SidecarStatus[] = [
 
 const CALENDAR: CalendarStatus = {
   google: {
+    operation: "idle",
+    pendingSignIn: null,
+    cleanupPending: 1,
+    leftover: [{ email: "imported@example.com", origin: "openwhispr" }],
     clientIdConfigured: true,
     customClientId: "918273645-abcdef.apps.googleusercontent.com",
     clientSource: "custom",
@@ -1351,6 +1355,10 @@ const CALENDAR: CalendarStatus = {
     },
   },
   microsoft: {
+    operation: "idle",
+    pendingSignIn: null,
+    cleanupPending: 0,
+    leftover: [],
     clientIdConfigured: false,
     customClientId: null,
     clientSource: "missing",
@@ -2749,6 +2757,9 @@ A fixture summary of "${note.title}", written without a model.
   calendar_set_custom_client: () => null,
   calendar_set_selected: () => null,
   calendar_disconnect: () => null,
+  calendar_cancel_connect: () => null,
+  calendar_remove_leftover: () => null,
+  calendar_retry_cleanup: () => null,
   calendar_connect: () =>
     ({
       state: "connected",
