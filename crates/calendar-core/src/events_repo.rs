@@ -462,3 +462,287 @@ mod tests {
             .unwrap();
     }
 }
+
+/// Read a local snapshot for selected calendars of one provider account.
+/// Day prefixes only narrow the SQL scan: widening by a day on either side
+/// keeps legacy offset timestamps eligible, and the shared parser then applies
+/// exact half-open overlap. Unreadable candidate intervals are counted once
+/// per row so callers can report incomplete local data without guessing times.
+/// This reader intentionally leaves cancellation and meeting eligibility to
+/// the selection rules; all-day events retain their exclusive stored end date.
+/// The caller is responsible for checking the snapshot version before reading.
+pub async fn list_overlapping(
+    pool: &SqlitePool,
+    kind: crate::provider::CalendarProviderKind,
+    account_email: &str,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+) -> Result<(Vec<EventRow>, u32), sqlx::Error> {
+    use crate::provider::CalendarProviderKind;
+    let (table, provider) = match kind {
+        CalendarProviderKind::Google => ("google_calendars", "google"),
+        CalendarProviderKind::Microsoft => ("microsoft_calendars", "microsoft"),
+    };
+    let query = format!(
+        "SELECT e.* FROM calendar_events e JOIN {table} c ON c.id = e.calendar_id \
+         WHERE e.provider = ? AND c.account_email = ? AND c.is_selected = 1 \
+         AND substr(e.start_time,1,10) <= ? AND substr(e.end_time,1,10) >= ?"
+    );
+    let candidates = sqlx::query(&query)
+        .bind(provider)
+        .bind(account_email)
+        .bind(
+            to.checked_add_signed(chrono::Duration::days(1))
+                .unwrap_or(DateTime::<Utc>::MAX_UTC)
+                .format("%Y-%m-%d")
+                .to_string(),
+        )
+        .bind(
+            from.checked_sub_signed(chrono::Duration::days(1))
+                .unwrap_or(DateTime::<Utc>::MIN_UTC)
+                .format("%Y-%m-%d")
+                .to_string(),
+        )
+        .fetch_all(pool)
+        .await?;
+    let mut events = Vec::new();
+    let mut unreadable = 0_u32;
+    for row in candidates {
+        let start_time: String = row.try_get("start_time")?;
+        let end_time: String = row.try_get("end_time")?;
+        let (Some(start), Some(end)) =
+            (parse_row_instant(&start_time), parse_row_instant(&end_time))
+        else {
+            unreadable = unreadable.saturating_add(1);
+            continue;
+        };
+        if start >= to || end <= from {
+            continue;
+        }
+        let attendees_json: Option<String> = row.try_get("attendees")?;
+        let attendees = attendees_json
+            .map(|json| serde_json::from_str(&json))
+            .transpose()
+            .map_err(|source| sqlx::Error::ColumnDecode {
+                index: "attendees".to_owned(),
+                source: Box::new(source),
+            })?
+            .unwrap_or_default();
+        events.push(EventRow {
+            id: row.try_get("id")?,
+            calendar_id: row.try_get("calendar_id")?,
+            provider,
+            summary: row.try_get("summary")?,
+            start_time,
+            end_time,
+            is_all_day: row.try_get("is_all_day")?,
+            status: row.try_get("status")?,
+            hangout_link: row.try_get("hangout_link")?,
+            conference_data: row.try_get("conference_data")?,
+            organizer_email: row.try_get("organizer_email")?,
+            attendees,
+        });
+    }
+    Ok((events, unreadable))
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing
+)]
+mod overlap_tests {
+    use super::*;
+    use crate::provider::CalendarProviderKind;
+    use kw_storage::Db;
+
+    fn event(provider: &'static str, calendar: &str, id: &str, start: &str, end: &str) -> EventRow {
+        EventRow {
+            id: row_id(provider, calendar, id),
+            calendar_id: calendar.to_owned(),
+            provider,
+            summary: Some("Meeting".to_owned()),
+            start_time: start.to_owned(),
+            end_time: end.to_owned(),
+            is_all_day: false,
+            status: "confirmed".to_owned(),
+            hangout_link: Some("https://meet.example/test".to_owned()),
+            conference_data: Some("{}".to_owned()),
+            organizer_email: Some("owner@example.com".to_owned()),
+            attendees: vec![StoredAttendee {
+                email: Some("guest@example.com".to_owned()),
+                name: Some("Guest".to_owned()),
+                response_status: Some("accepted".to_owned()),
+            }],
+        }
+    }
+
+    async fn calendar(pool: &SqlitePool, table: &str, id: &str, account: &str, selected: bool) {
+        sqlx::query(&format!("INSERT INTO {table} (id, summary, account_email, is_selected) VALUES (?, 'Calendar', ?, ?)"))
+            .bind(id).bind(account).bind(selected).execute(pool).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn only_selected_calendars_of_the_requested_provider_account_are_read() {
+        let db = Db::open_in_memory().await.unwrap();
+        let from = parse_row_instant("2026-11-11T12:00:00Z").unwrap();
+        let to = parse_row_instant("2026-11-11T13:00:00Z").unwrap();
+        for table in ["google_calendars", "microsoft_calendars"] {
+            for (id, account, selected) in [
+                ("selected", "user@example.com", true),
+                ("deselected", "user@example.com", false),
+                ("other", "other@example.com", true),
+            ] {
+                calendar(db.pool(), table, id, account, selected).await;
+            }
+        }
+        for provider in ["google", "microsoft"] {
+            for id in ["selected", "deselected", "other", "orphan"] {
+                let row = event(
+                    provider,
+                    id,
+                    "event",
+                    "2026-11-11T12:00:00Z",
+                    "2026-11-11T13:00:00Z",
+                );
+                upsert_event(db.pool(), &row).await.unwrap();
+                let mut bad = row.clone();
+                bad.id = row_id(provider, id, "bad");
+                bad.start_time = "2026-11-11-invalid".to_owned();
+                upsert_event(db.pool(), &bad).await.unwrap();
+            }
+        }
+        for (kind, provider) in [
+            (CalendarProviderKind::Google, "google"),
+            (CalendarProviderKind::Microsoft, "microsoft"),
+        ] {
+            let (rows, unreadable) =
+                list_overlapping(db.pool(), kind, "user@example.com", from, to)
+                    .await
+                    .unwrap();
+            assert_eq!(unreadable, 1, "only the selected calendar's bad row counts");
+            assert_eq!(
+                rows,
+                [event(
+                    provider,
+                    "selected",
+                    "event",
+                    "2026-11-11T12:00:00Z",
+                    "2026-11-11T13:00:00Z"
+                )]
+            );
+            assert_eq!(
+                list_overlapping(db.pool(), kind, "missing@example.com", from, to)
+                    .await
+                    .unwrap(),
+                (vec![], 0)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn exact_overlap_table_includes_long_events_and_neighbouring_offset_days() {
+        let db = Db::open_in_memory().await.unwrap();
+        let from = parse_row_instant("2026-11-11T00:00:00Z").unwrap();
+        let to = parse_row_instant("2026-11-12T00:00:00Z").unwrap();
+        for (kind, provider, table) in [
+            (CalendarProviderKind::Google, "google", "google_calendars"),
+            (
+                CalendarProviderKind::Microsoft,
+                "microsoft",
+                "microsoft_calendars",
+            ),
+        ] {
+            calendar(db.pool(), table, "cal", "user@example.com", true).await;
+            let mut expected = Vec::new();
+            for (id, start, end, included) in [
+                (
+                    "ends-at-from",
+                    "2026-11-10T23:00:00Z",
+                    "2026-11-11T00:00:00Z",
+                    false,
+                ),
+                (
+                    "starts-at-to",
+                    "2026-11-12T00:00:00Z",
+                    "2026-11-12T01:00:00Z",
+                    false,
+                ),
+                (
+                    "starts-at-from",
+                    "2026-11-11T00:00:00Z",
+                    "2026-11-11T01:00:00Z",
+                    true,
+                ),
+                (
+                    "ends-at-to",
+                    "2026-11-11T23:00:00Z",
+                    "2026-11-12T00:00:00Z",
+                    true,
+                ),
+                ("long", "2026-01-01T00:00:00Z", "2026-12-01T00:00:00Z", true),
+                (
+                    "offset-previous-day",
+                    "2026-11-10T23:00:00-02:00",
+                    "2026-11-10T23:30:00-02:00",
+                    true,
+                ),
+                (
+                    "offset-next-day",
+                    "2026-11-12T01:00:00+02:00",
+                    "2026-11-12T01:30:00+02:00",
+                    true,
+                ),
+                (
+                    "offset-outside",
+                    "2026-11-11T00:00:00+02:00",
+                    "2026-11-11T01:00:00+02:00",
+                    false,
+                ),
+                ("all-day", "2026-11-11", "2026-11-12", true),
+                ("all-day-ended", "2026-11-10", "2026-11-11", false),
+                (
+                    "bad-start",
+                    "2026-11-11T01:00:00",
+                    "2026-11-11T02:00:00Z",
+                    false,
+                ),
+                (
+                    "bad-end",
+                    "2026-11-11T01:00:00Z",
+                    "2026-11-11-invalid",
+                    false,
+                ),
+                (
+                    "bad-both",
+                    "2026-11-11-invalid",
+                    "2026-11-11-invalid",
+                    false,
+                ),
+            ] {
+                let mut row = event(provider, "cal", id, start, end);
+                if id.starts_with("all-day") {
+                    row.is_all_day = true;
+                    row.attendees.clear();
+                }
+                if id == "ends-at-to" {
+                    row.status = "cancelled".to_owned();
+                }
+                upsert_event(db.pool(), &row).await.unwrap();
+                if included {
+                    expected.push(row);
+                }
+            }
+            let (mut actual, unreadable) =
+                list_overlapping(db.pool(), kind, "user@example.com", from, to)
+                    .await
+                    .unwrap();
+            actual.sort_by(|a, b| a.id.cmp(&b.id));
+            expected.sort_by(|a, b| a.id.cmp(&b.id));
+            assert_eq!(actual, expected);
+            assert_eq!(unreadable, 3);
+        }
+    }
+}
