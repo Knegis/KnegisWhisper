@@ -67,7 +67,9 @@ fn recovered_provider_and_lightweight_notes_cross_native_ipc() {
             ..Default::default()
         },
         "openai-realtime",
-    ));
+        CalendarLinkChoice::Auto,
+    ))
+    .plan;
     draft::write_plan(&wav, &plan).unwrap();
     let finished = Arc::new(AtomicBool::new(false));
     let observed = finished.clone();
