@@ -1093,6 +1093,10 @@ Whisper model's languages are derived from its id, held to the registry
 there. Not measured: a real install, and Rust's refusals of a model that
 can't be chosen.
 
+## Meetings calendar
+
+Run `node tools/visual-check/meetings-calendar.mjs --url http://127.0.0.1:5183/ --out tools/visual-check/out/meetings-calendar` against the fixture dev server. It writes screenshots and JSON/Markdown assertions for upcoming states, freshness, event pickers, Start arguments and live calendar edits at 1280x800 and 720x520 in light theme and 1280x800 in dark theme. Recording panels use `#meeting` at 440x560, with a 392x280 fit check. These browser fixtures do not validate native windows or provider sync.
+
 ## Running application windows
 
 Launch the running development application with its WebView2 debugger exposed:

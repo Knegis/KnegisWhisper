@@ -396,6 +396,45 @@ mod tests {
     /// it reintroduces exactly the bug it was written to prevent.
     #[test]
     fn a_tagged_enums_struct_fields_are_camel_case() {
+        for decl in [
+            crate::meeting::CalendarLinkChoice::decl(&config()),
+            crate::meeting::CalendarSetChoice::decl(&config()),
+        ] {
+            assert!(decl.contains("eventId"), "missing camelCase field: {decl}");
+            assert!(!decl.contains("event_id"), "snake_case field: {decl}");
+        }
+        let json = serde_json::json!({ "mode": "event", "eventId": "fixture" });
+        let start: crate::meeting::CalendarLinkChoice =
+            serde_json::from_value(json.clone()).unwrap();
+        let edit: crate::meeting::CalendarSetChoice = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(serde_json::to_value(start).unwrap(), json);
+        assert_eq!(serde_json::to_value(edit).unwrap(), json);
+        // Check every generated declaration too, so adding a new tagged enum
+        // with a snake_case field fails without remembering to extend this list.
+        // Declarations may span lines around field docs. Strip those docs
+        // before checking whole declarations, including fields after a comment.
+        let rendered = render();
+        let mut declarations = String::new();
+        for (index, part) in rendered.split("/*").enumerate() {
+            if index == 0 {
+                declarations.push_str(part);
+            } else if let Some((_, code)) = part.split_once("*/") {
+                declarations.push_str(code);
+            }
+        }
+        for decl in declarations
+            .split(';')
+            .filter(|decl| decl.contains("export type "))
+        {
+            let fields = decl.split(':').collect::<Vec<_>>();
+            for field in fields.iter().take(fields.len().saturating_sub(1)) {
+                let name = field
+                    .split(|c: char| !c.is_alphanumeric() && c != '_')
+                    .rfind(|part| !part.is_empty())
+                    .unwrap_or_default();
+                assert!(!name.contains('_'), "snake_case IPC field {name}: {decl}");
+            }
+        }
         let decl = kw_overlay::CaptureExclusion::decl(&config());
         assert!(
             decl.contains("verifiedBy"),

@@ -1,4 +1,6 @@
 import { TaskLoading } from "../components/TaskLoading";
+import { CalendarRecordingLine } from "../components/MeetingPanel";
+import { calendarChipText, calendarProviderLabel, eventTitle, providerFreshness, startCalendarChoice, upcomingEmpty, upcomingEmptyLabels, upcomingTime } from "../lib/upcoming";
 import { useFinalisationProgress } from "../lib/useFinalisationProgress";
 import { MeetingProgress } from "../components/MeetingProgress";
 import { askConfirm } from "../components/ConfirmDialog";
@@ -6,7 +8,7 @@ import { askConfirm } from "../components/ConfirmDialog";
  * Meetings: the recording task, the meeting under way, and the meetings
  * behind it.
  *
- * Three parts, the way the canvas draws them:
+ * Four parts, the way the canvas draws them:
  *
  *   - **Idle**, a task page like Dictation's. The status notice says whether a
  *     meeting can be recorded (`lib/readiness.ts`, `lib/meetingNotice.ts`) and,
@@ -24,6 +26,8 @@ import { askConfirm } from "../components/ConfirmDialog";
  *     link to Settings > Meetings until that is set up, and the folder the note
  *     is saved to. Then where the audio goes, which is never hidden, the caveats
  *     and what the microphone check heard.
+ *     A local calendar choice supplies the event chip and name placeholder;
+ *     Start refreshes the candidates and sends the event or explicit refusal.
  *     The name and the folder go to Rust with Start and stay with the meeting
  *     (KNEG-365); the page keeps neither for a meeting already running.
  *     While Settings > Meetings deletes each recording once its transcript
@@ -36,6 +40,9 @@ import { askConfirm } from "../components/ConfirmDialog";
  *     microphone the meeting actually opened, from Rust, not the one chosen now
  *     (KNEG-364). Finishing keeps the idle chips live, since turning Summary on
  *     then applies to the meeting being saved (below). Saved offers the note.
+ *   - **Upcoming**, under either and before Recent: five cached calendar events,
+ *     with independent loading, failure and provider freshness. Opening the page
+ *     asks Rust for a throttled sync without holding rendering or Start.
  *   - **Recent**, under either: the meetings saved lately -- each opens its note
  *     in Notes -- and any recording an earlier session left behind, with Recover.
  *
@@ -82,7 +89,9 @@ import { askConfirm } from "../components/ConfirmDialog";
  * Meeting state arrives from Rust by event as well as by read: a meeting can
  * be started from the notification window whether or not this page is open,
  * so it reads the live state when it mounts and follows the events after
- * that. (The meeting hotkey starts nothing yet -- `shortcuts.rs` dispatches
+ * that. Calendar plan changes have their own event and reread the status in
+ * both recording windows; progress events do not carry a changed link.
+ * (The meeting hotkey starts nothing yet -- `shortcuts.rs` dispatches
  * it as "Meeting capture is not built yet.") Detection has no event -- only
  * an offer does -- so while no meeting is running the page reads
  * `meeting_status` again every five seconds for the call card, and stops as
@@ -117,6 +126,11 @@ import {
   getLocalStatus,
   getMeetingLocalModel,
   getMeetingStatus,
+  getUpcomingMeetings,
+  getMeetingCalendarCandidates,
+  syncCalendarsIfStale,
+  onCalendarChanged,
+  onMeetingPlanChanged,
   getNoteSummaries,
   getRecoverableRecordings,
   getSherpaStatus,
@@ -135,6 +149,7 @@ import {
   startMeeting,
   stopMeeting,
   type Detected,
+  type CalendarLinkChoice,
   type MeetingOutcome,
   type MeetingState,
   type MicrophoneCheck,
@@ -241,6 +256,37 @@ export function Meetings({
   // the read succeeds.
   const loadRecent = useCallback(() => getNoteSummaries({ noteType: "meeting", limit: 20 }), []);
   const recentRead = useRefresh(loadRecent);
+  // Calendar cache reads never join the page's main read. A slow provider
+  // sync cannot delay recording, Recent, or the cached upcoming rows.
+  const loadUpcoming = useCallback(() => getUpcomingMeetings(5), []);
+  const upcomingRead = useRefresh(loadUpcoming);
+  const candidatesRead = useRefresh(getMeetingCalendarCandidates);
+  const [calendarChoice, setCalendarChoice] = useState<CalendarLinkChoice | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const syncRequest = useRef<Promise<unknown> | null>(null);
+  const [starting, setStarting] = useState(false);
+  const startPending = useRef(false);
+  const upcomingGuard = upcomingRead.guard;
+  const candidatesGuard = candidatesRead.guard;
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void onCalendarChanged(() => {
+      if (disposed) return;
+      setSyncError(null);
+      void upcomingGuard(async () => {});
+      void candidatesGuard(async () => {});
+    }).then(stop => {
+      if (disposed) { stop(); return; }
+      unlisten = stop;
+      // Keep one request across React's effect replay, too. Rust owns the
+      // five-minute throttle; this page has no calendar timer or focus sync.
+      syncRequest.current ??= syncCalendarsIfStale();
+      void syncRequest.current.catch(cause => { if (!disposed) setSyncError(message(cause)); });
+    }).catch(cause => { if (!disposed) setSyncError(message(cause)); });
+    return () => { disposed = true; unlisten?.(); };
+  }, [upcomingGuard, candidatesGuard]);
   // What the two local providers need on this computer (KNEG-387), read on
   // their own for the same reason: a failure leaves both unknown, which holds
   // nothing back, and Start still says what went wrong.
@@ -345,6 +391,8 @@ export function Meetings({
       if (disposed) unlisten();
       else unlisteners.push(unlisten);
     };
+    void onMeetingPlanChanged(() => { if (!disposed) void reload(); }).then(keep)
+      .catch(cause => { if (!disposed) setPollError(message(cause)); });
     void onMeetingState((next) => {
       if (disposed) return;
       setState(next);
@@ -415,6 +463,15 @@ export function Meetings({
 
   const currentState: MeetingState | null = state ?? loadedStatus?.state ?? null;
   const idle = currentState === "idle";
+  const previousState = useRef<MeetingState | null>(null);
+  useEffect(() => {
+    // A second recording on this visit needs a new local snapshot as well.
+    // The initial snapshot is already owned by useRefresh above.
+    if (currentState === "idle" && previousState.current !== null && previousState.current !== "idle") {
+      void candidatesGuard(async () => {});
+    }
+    previousState.current = currentState;
+  }, [currentState, candidatesGuard]);
   // Kept here rather than asked for every second: the runtime owns the
   // clock, and an IPC round trip a second for a timer is arithmetic's job.
   // Each tick reads the time since the start (`liveElapsed`) rather than
@@ -545,7 +602,7 @@ export function Meetings({
   // know that the new provider needs a language. And the microphone check
   // while it listens: five seconds, and a meeting would open the microphone
   // under it (KNEG-364).
-  const startHeld = current === "finishing" || startBlocked || selected === null || writing || !reviewCurrent || checking;
+  const startHeld = current === "finishing" || startBlocked || selected === null || writing || !reviewCurrent || checking || starting;
   // While a meeting is running, the provider it is running with -- which the
   // notification's Record button may have picked rather than this page.
   const liveProvider =
@@ -585,6 +642,31 @@ export function Meetings({
   // The card is for a call nobody is recording yet. While one is being
   // recorded or transcribed there is nothing it could offer.
   const call = current === "idle" ? activeCall(detected ?? status.detected) : null;
+  const candidates = candidatesRead.data;
+  const chosenEventId = calendarChoice?.mode === "event" ? calendarChoice.eventId : calendarChoice?.mode === "none" ? null : candidates?.auto;
+  const chosenEvent = candidates?.events.find(event => event.id === chosenEventId) ?? null;
+  const upcoming = upcomingRead.data;
+  const emptyUpcoming = upcoming ? upcomingEmpty(upcoming) : null;
+  const upcomingSection = <section className="upcoming" aria-labelledby="upcoming-title">
+    <div className="history-head"><h2 id="upcoming-title" className="section-label">upcoming</h2></div>
+    {upcomingRead.error ? <div className="recent-error" role="alert">
+      <p className="error">Couldn't load upcoming meetings: {upcomingRead.error}</p>
+      <button type="button" className="pill" onClick={() => { void upcomingGuard(async () => {}); }}>Retry</button>
+    </div> : !upcoming ? <div className="upcoming-loading" role="status" aria-label="Loading upcoming meetings">
+      {[0, 1, 2].map(row => <span key={row} className="task-placeholder" aria-hidden="true" />)}
+    </div> : <>
+      {emptyUpcoming ? <p className="history-note">{upcomingEmptyLabels[emptyUpcoming]} {emptyUpcoming !== "no-events" ? <button type="button" className="pill" onClick={() => onGoTo("calendar")}><Icon name="calendar" size={16} />Calendar</button> : null}</p>
+        : <ul className="upcoming-rows">{upcoming.events.map(event => <li key={event.id}>
+          <span className="upcoming-time">{upcomingTime(event, now)}</span><span className="upcoming-title" dir="auto">{eventTitle(event)}</span><span className="upcoming-provider">{calendarProviderLabel(event.provider)}</span>
+        </li>)}</ul>}
+      {!emptyUpcoming && upcoming.hasMore ? <p className="history-note">and more this week</p> : null}
+      <div className="calendar-freshness">{upcoming.providers.filter(provider => provider.connected).map(provider => {
+        const freshness = providerFreshness(provider, now);
+        return <p key={provider.provider}>{freshness.settings ? <button type="button" className="calendar-settings-link" onClick={() => onGoTo("calendar")}>{freshness.text}</button> : freshness.text}</p>;
+      })}</div>
+    </>}
+    {syncError ? <p className="calendar-freshness error" role="alert">Couldn't sync calendars: {syncError} <button type="button" className="calendar-settings-link" onClick={() => onGoTo("calendar")}>See Settings</button></p> : null}
+  </section>;
 
   // The two menus. A choice is written and then everything is read back
   // (`guard`), so `selected`, the review, the hero and the privacy line all
@@ -632,7 +714,9 @@ export function Meetings({
   };
 
   const start = (withSystem: boolean) => {
-    if (startHeld) return;
+    if (startHeld || startPending.current) return;
+    startPending.current = true;
+    setStarting(true);
     void guard(async () => {
       setOutcome(null);
       setCheck(null);
@@ -641,11 +725,25 @@ export function Meetings({
       setTranscript(emptyLiveTranscript());
       // Rust tidies the name (`note_title`); a blank one is no name.
       const title = meetingName.trim() === "" ? null : meetingName;
-      setSources(await startMeeting(selected, withSystem, { title, folderId: folderChoice.folderId }));
+      // Resolve Auto again at the point of Start. Explicit event/none choices
+      // remain explicit even if the cache changed; Rust validates their ids.
+      let calendar = calendarChoice ?? undefined;
+      try {
+        const candidates = await getMeetingCalendarCandidates();
+        calendar = startCalendarChoice(candidates, calendarChoice);
+        candidatesRead.clearError();
+      } catch (cause) {
+        // Calendar context is optional. Preserve an explicit choice, otherwise
+        // leave Auto to Rust, which can record with a calendar-unreadable notice.
+        candidatesRead.fail(cause);
+      }
+      setSources(await startMeeting(selected, withSystem, { title, folderId: folderChoice.folderId, ...(calendar ? { calendar } : {}) }));
       // That meeting has the name now; the next one starts unnamed. The
       // folder stays chosen, as the chips do.
       setMeetingName("");
-    });
+      setCalendarChoice(null);
+      setPickerOpen(false);
+    }).finally(() => { startPending.current = false; setStarting(false); });
   };
   // Stop and Discard first ask the meeting window to save what was typed in
   // it, so the note Stop saves has the last edit; a flush that fails says so
@@ -1070,6 +1168,7 @@ export function Meetings({
                 </p>
               ) : null}
             </header>
+            {recording ? <CalendarRecordingLine key={status.sessionId} status={status} /> : null}
             {error || pollError || stalled || transcriptEnded || notesFlushFailed || recoveringKey !== null || recoveryOutcome || recoveryError ? (
               <div className="live-caveats">
                 {error && !notesFlushFailed ? <p className="error">{error}</p> : null}
@@ -1168,6 +1267,7 @@ export function Meetings({
               </LiveTranscript>
             </div>
           </section>
+          {upcomingSection}
           {recentSection(true)}
         </div>
       </div>
@@ -1231,6 +1331,21 @@ export function Meetings({
               <span className="tile-label"><span className="tile-label-dot" aria-hidden="true" />{statusView.tile} · {timeOfDay(now)}</span>
               <p className="tile-clock" aria-hidden="true">00:00:00</p>
               <div className="tile-form">
+                {candidates && candidates.events.length > 0 ? <div className="calendar-choice">
+                  <div className="calendar-line">
+                    <span>{chosenEvent ? calendarChipText(chosenEvent, now) : "Not linked"}</span>
+                    <button type="button" className="glass-plain" disabled={starting} aria-expanded={pickerOpen} onClick={() => setPickerOpen(!pickerOpen)}>{chosenEvent ? "Change" : "Link to an event"}</button>
+                    {chosenEvent ? <button type="button" className="glass-plain" disabled={starting} onClick={() => { setCalendarChoice({ mode: "none" }); setPickerOpen(false); }}>Don't link</button> : null}
+                  </div>
+                  {pickerOpen ? <div className="calendar-picker" role="group" aria-label="Choose an event">
+                    {candidates.events.map(event => <button type="button" key={event.id} disabled={starting} aria-pressed={chosenEventId === event.id} onClick={() => { setCalendarChoice({ mode: "event", eventId: event.id }); setPickerOpen(false); }}>
+                      <span>{upcomingTime(event, now)} · {eventTitle(event)}</span><small>{calendarProviderLabel(event.provider)}{event.meetingLike ? "" : " · no invitees"}</small>
+                    </button>)}
+                    <button type="button" disabled={starting} onClick={() => { setCalendarChoice({ mode: "none" }); setPickerOpen(false); }}>Don't link</button>
+                    <button type="button" disabled={starting} onClick={() => setPickerOpen(false)}>Cancel</button>
+                  </div> : null}
+                </div> : null}
+                {candidatesRead.error ? <p className="calendar-choice-error" role="alert">Couldn't read calendar choices: {candidatesRead.error} <button type="button" className="glass-plain" onClick={() => { void candidatesGuard(async () => {}); }}>Retry</button></p> : null}
                 {startBlocked ? (
                   /* Needs setup always holds Start back (see Start's comment), so the
                      fix is the one thing to do next and takes the filled button. */
@@ -1250,14 +1365,14 @@ export function Meetings({
                   </button>
                 ) : null}
                 {/* The meeting's name, the note's title (KNEG-365); left
-                    blank, the note is named for when the meeting started.
+                    blank, it uses the linked event or when the meeting started.
                     Rust caps a title at 200 characters. */}
                 <input
                   type="text"
                   className="meeting-name"
                   value={meetingName}
                   maxLength={200}
-                  placeholder="Name this meeting (optional)"
+                  placeholder={chosenEvent?.title?.trim() || "Name this meeting (optional)"}
                   aria-label="Meeting name (optional)"
                   onChange={(event) => setMeetingName(event.target.value)}
                 />
@@ -1390,6 +1505,7 @@ export function Meetings({
             </ControlBar>
           </div>
         </section>
+        {upcomingSection}
         {recentSection(false)}
       </div>
     </div>

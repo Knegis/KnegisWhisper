@@ -4217,6 +4217,41 @@ button.microphone-error-retry { align-self: flex-start; min-height: 32px; margin
 .task-loading[data-details="true"] .task-placeholder { visibility: visible; }
 .task-placeholder-title { width: min(540px, 90%); height: 56px; }
 .task-placeholder-subtitle { width: min(420px, 75%); }
+
+/* Calendar cache rows and choices share the page tokens in both themes.
+   The recording tile uses its own opaque glass so small text stays legible
+   throughout the moving dusk background. */
+.upcoming { display: flex; flex-direction: column; gap: 12px; width: 100%; max-width: 1228px; margin: 0 auto; padding: 72px 24px 0; background: none; }
+.task-page-live .upcoming { padding-top: 56px; }
+.upcoming-rows { margin: 12px 0; padding: 0; list-style: none; }
+.upcoming-rows > li { display: grid; grid-template-columns: 170px minmax(0, 1fr) 140px; gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--rule); font-size: 14px; }
+.upcoming-time { font-family: var(--font-mono); color: var(--muted); }
+.upcoming-title { min-width: 0; overflow-wrap: anywhere; color: var(--text); }
+.upcoming-provider, .calendar-freshness { color: var(--muted); font-size: 13px; }
+.calendar-freshness p { margin: 8px 0; }
+.upcoming-loading { display: grid; gap: 14px; padding: 16px 0; }
+.upcoming-loading .task-placeholder { height: 24px; visibility: visible; }
+button.calendar-settings-link { height: auto; min-height: 0; padding: 0; border-radius: 0; background: none; color: var(--text); font: inherit; text-align: left; text-decoration: underline; text-underline-offset: 3px; white-space: normal; }
+.calendar-line { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.calendar-line > span { flex: 1 1 180px; min-width: 0; overflow-wrap: anywhere; }
+.calendar-line .pill { flex: none; }
+.calendar-choice { padding: 12px; border-radius: var(--r-control); background: rgb(255 255 255 / 92%); color: #17171b; font-size: 14px; }
+.calendar-choice .calendar-line > span { flex-basis: 100%; }
+.calendar-choice button.glass-plain, .calendar-choice-error button.glass-plain { height: 30px; min-height: 0; padding: 0 10px; font-size: 13px; }
+.calendar-choice-error { margin: 0; padding: 10px; border-radius: var(--r-control); color: #17171b; background: rgb(255 255 255 / 92%); font-size: 13px; overflow-wrap: anywhere; }
+.calendar-picker { display: flex; flex-direction: column; gap: 4px; max-height: 220px; overflow: auto; margin-top: 8px; padding: 6px; border-radius: var(--r-control); background: var(--panel); color: var(--text); }
+.calendar-picker > button { display: flex; flex: none; flex-direction: column; align-items: flex-start; gap: 3px; height: auto; min-height: 36px; margin: 0; padding: 8px; background: var(--control); color: var(--text); font-size: 13px; line-height: 1.35; text-align: left; white-space: normal; overflow-wrap: anywhere; }
+.calendar-picker > button small { color: var(--muted); }
+.calendar-picker > button[aria-pressed="true"] { outline: 2px solid var(--band); outline-offset: -2px; }
+.recording-calendar { margin: 12px 0; color: var(--text); font-size: 14px; }
+.recording-calendar .error { margin: 6px 0 0; overflow-wrap: anywhere; }
+.notify-panel > .recording-calendar { flex: 0 1 auto; min-height: 0; max-height: 35%; overflow: auto; margin: 0 16px 10px; font-size: 12px; }
+.notify-panel .recording-calendar .pill { height: 26px; min-height: 26px; padding: 0 8px; font-size: 12px; }
+.notify-panel .calendar-picker { max-height: 100px; }
+@media (max-width: 760px) {
+  .upcoming-rows > li { grid-template-columns: 145px minmax(0, 1fr); gap: 6px 12px; }
+  .upcoming-provider { grid-column: 2; }
+}
 .task-loading-lines { display: flex; flex-direction: column; gap: 18px; }
 .task-loading-lines > :last-child { width: 65%; }
 .task-page.task-arrival { animation: kw-fade 120ms ease-out both; }
