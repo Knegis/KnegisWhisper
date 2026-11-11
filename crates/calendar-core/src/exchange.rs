@@ -35,6 +35,9 @@ pub enum ExchangeError {
     #[error("the token endpoint could not be reached: {0}")]
     Http(#[source] reqwest::Error),
 
+    #[error("the token endpoint returned {status}")]
+    HttpStatus { status: u16 },
+
     #[error("the token endpoint rejected the request: {error}")]
     Rejected {
         error: String,
@@ -98,7 +101,9 @@ struct RawErrorResponse {
 
 /// Sends one `application/x-www-form-urlencoded` POST to a token endpoint and
 /// returns the raw response body, or the parsed OAuth2 error if the endpoint
-/// rejected the request.
+/// rejected the request. Non-success responses without an OAuth2 error retain
+/// their HTTP status so callers can distinguish provider outages from invalid
+/// responses without exposing the body.
 #[async_trait]
 pub trait TokenSender: Send + Sync {
     async fn post_form(&self, url: &str, form: &[(&str, &str)]) -> Result<String, ExchangeError>;
@@ -140,19 +145,16 @@ async fn read_body(response: reqwest::Response) -> Result<String, ExchangeError>
     if status.is_success() {
         return Ok(body);
     }
-    Err(parse_error_body(&body))
+    Err(parse_error_body(&body, status.as_u16()))
 }
 
-fn parse_error_body(body: &str) -> ExchangeError {
+fn parse_error_body(body: &str, status: u16) -> ExchangeError {
     match serde_json::from_str::<RawErrorResponse>(body) {
         Ok(err) => ExchangeError::Rejected {
             error: err.error,
             description: err.error_description,
         },
-        Err(_json_error) => ExchangeError::Rejected {
-            error: "http_error".to_owned(),
-            description: None,
-        },
+        Err(_json_error) => ExchangeError::HttpStatus { status },
     }
 }
 
@@ -268,7 +270,10 @@ mod tests {
 
     #[test]
     fn an_oauth2_error_body_is_parsed_rather_than_treated_as_malformed() {
-        let err = parse_error_body(r#"{"error":"invalid_grant","error_description":"Bad code"}"#);
+        let err = parse_error_body(
+            r#"{"error":"invalid_grant","error_description":"Bad code"}"#,
+            400,
+        );
         match err {
             ExchangeError::Rejected { error, description } => {
                 assert_eq!(error, "invalid_grant");
@@ -276,6 +281,19 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn a_non_oauth_error_preserves_the_http_status() {
+        assert!(matches!(
+            parse_error_body("<html>Service unavailable</html>", 503),
+            ExchangeError::HttpStatus { status: 503 }
+        ));
+        // OAuth errors take precedence even when the endpoint reports a 5xx.
+        assert!(matches!(
+            parse_error_body(r#"{"error":"temporarily_unavailable"}"#, 503),
+            ExchangeError::Rejected { error, .. } if error == "temporarily_unavailable"
+        ));
     }
 
     #[test]
@@ -398,6 +416,7 @@ mod tests {
         assert!(!debug.contains("private-refresh"));
         let error = parse_error_body(
             r#"{"error":"invalid_grant","error_description":"private-description"}"#,
+            400,
         );
         assert!(!format!("{error:?} {error}").contains("private-description"));
     }

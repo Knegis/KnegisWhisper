@@ -14,7 +14,7 @@
 //! compile-time constants rather than caller-supplied strings, which is what
 //! keeps interpolating them into a query free of an injection path.
 
-use sqlx::{Row as _, SqlitePool};
+use sqlx::{Executor, Row as _, Sqlite, SqlitePool};
 
 use crate::google::CalendarListEntry as GoogleCalendarListEntry;
 use crate::microsoft::CalendarListEntry as MicrosoftCalendarListEntry;
@@ -50,6 +50,15 @@ pub async fn upsert_google_calendar(
     account_email: &str,
     entry: &GoogleCalendarListEntry,
 ) -> Result<(), sqlx::Error> {
+    upsert_google_calendar_on(pool, account_email, entry).await
+}
+
+/// Executor variant for atomic grant installation.
+pub async fn upsert_google_calendar_on<'e>(
+    executor: impl Executor<'e, Database = Sqlite>,
+    account_email: &str,
+    entry: &GoogleCalendarListEntry,
+) -> Result<(), sqlx::Error> {
     sqlx::query(
         "INSERT INTO google_calendars \
             (id, summary, description, background_color, is_selected, is_primary, account_email) \
@@ -66,7 +75,7 @@ pub async fn upsert_google_calendar(
     .bind(entry.selected)
     .bind(entry.is_primary)
     .bind(account_email)
-    .execute(pool)
+    .execute(executor)
     .await?;
     Ok(())
 }
@@ -76,6 +85,15 @@ pub async fn upsert_google_calendar(
 /// schema's own default (`is_selected = 1`) rather than this binding it.
 pub async fn upsert_microsoft_calendar(
     pool: &SqlitePool,
+    account_email: &str,
+    entry: &MicrosoftCalendarListEntry,
+) -> Result<(), sqlx::Error> {
+    upsert_microsoft_calendar_on(pool, account_email, entry).await
+}
+
+/// Executor variant for atomic grant installation.
+pub async fn upsert_microsoft_calendar_on<'e>(
+    executor: impl Executor<'e, Database = Sqlite>,
     account_email: &str,
     entry: &MicrosoftCalendarListEntry,
 ) -> Result<(), sqlx::Error> {
@@ -91,7 +109,7 @@ pub async fn upsert_microsoft_calendar(
     .bind(&entry.background_color)
     .bind(entry.is_primary)
     .bind(account_email)
-    .execute(pool)
+    .execute(executor)
     .await?;
     Ok(())
 }
@@ -105,11 +123,26 @@ pub async fn prune_calendars(
     keep_ids: &[String],
 ) -> Result<Vec<String>, sqlx::Error> {
     let mut tx = pool.begin().await?;
+    let removed = prune_calendars_on(&mut *tx, kind, account_email, keep_ids).await?;
+    tx.commit().await?;
+    Ok(removed)
+}
+
+/// Use the caller's transaction for both calendar and event removal.
+pub async fn prune_calendars_on<C: Send>(
+    connection: &mut C,
+    kind: CalendarProviderKind,
+    account_email: &str,
+    keep_ids: &[String],
+) -> Result<Vec<String>, sqlx::Error>
+where
+    for<'c> &'c mut C: Executor<'c, Database = Sqlite>,
+{
     let table = table(kind);
     let select = format!("SELECT id FROM {table} WHERE account_email = ?");
     let rows = sqlx::query(&select)
         .bind(account_email)
-        .fetch_all(&mut *tx)
+        .fetch_all(&mut *connection)
         .await?;
 
     let mut removed = Vec::new();
@@ -127,13 +160,15 @@ pub async fn prune_calendars(
                 CalendarProviderKind::Microsoft => "microsoft",
             })
             .bind(id)
-            .execute(&mut *tx)
+            .execute(&mut *connection)
             .await?;
         let delete = format!("DELETE FROM {table} WHERE id = ?");
-        sqlx::query(&delete).bind(id).execute(&mut *tx).await?;
+        sqlx::query(&delete)
+            .bind(id)
+            .execute(&mut *connection)
+            .await?;
     }
 
-    tx.commit().await?;
     Ok(removed)
 }
 

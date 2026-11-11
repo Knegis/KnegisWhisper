@@ -46,12 +46,42 @@ test("a sync says what changed, or what to do, with the errors under Learn more"
   assert.equal(partly.text, "Synced: 0 events updated, 0 removed. 1 calendar couldn't be synced.");
   assert.equal(partly.more, "Team: 403 Forbidden");
 
-  const token = syncOutcomeLabel({ state: "token-unavailable", message: "invalid_grant" });
+  const token = syncOutcomeLabel({ state: "token-unavailable", message: "invalid_grant", problem: null });
   assert.equal(token.text, "Couldn't sync. Reconnect the account.");
   assert.equal(token.more, "invalid_grant");
 
-  assert.deepEqual(syncOutcomeLabel({ state: "failed", message: "connection reset" }), {
+  assert.deepEqual(syncOutcomeLabel({ state: "failed", message: "connection reset", problem: null }), {
     text: "Couldn't sync.",
     more: "connection reset",
   });
+});
+
+
+test("classified calendar problems give short actionable wording", () => {
+  const cases = [
+    ["cancelled", "Connection cancelled."],
+    ["timed-out", "Sign-in timed out. Try again."],
+    ["access-denied", "Calendar access was declined."],
+    ["admin-consent-required", "Ask your administrator to approve calendar access."],
+    ["app-blocked", "Your organisation has blocked this app."],
+    ["client-misconfigured", "Check the calendar client configuration."],
+    ["client-rejected", "The provider rejected this calendar client."],
+    ["reconnect-required", "Reconnect the account."],
+    ["network", "Could not reach the calendar provider. Try again."],
+    ["provider-unavailable", "The calendar provider is unavailable. Try again."],
+    ["storage", "Could not save or read calendar data."],
+    ["invalid-response", "The calendar provider returned an invalid response."],
+  ] as const;
+  for (const [kind, text] of cases) {
+    assert.deepEqual(connectOutcomeLabel({ state: "failed", problem: { kind } }), {
+      text: kind === "reconnect-required" ? "The previous connection could not be kept. Reconnect the account." : text,
+      more: null,
+    });
+    assert.deepEqual(syncOutcomeLabel({ state: "failed", problem: { kind }, message: "safe fallback" }), { text, more: null });
+  }
+  assert.deepEqual(tokenStatusLabel({ state: "reconnect-required" }), {
+    text: "Not connected", detail: "Reconnect the account.", more: null,
+  });
+  assert.equal(syncOutcomeLabel({ state: "token-unavailable", problem: { kind: "reconnect-required" }, message: "Reconnect." }).text,
+    "Couldn't sync. Reconnect the account.");
 });

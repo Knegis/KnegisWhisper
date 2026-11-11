@@ -84,6 +84,33 @@ pub(crate) fn decode_bundle(secret: &Secret) -> Result<TokenBundle, BundleError>
     serde_json::from_str(secret.expose()).map_err(BundleError::Decode)
 }
 
+/// Read only the OAuth client binding. Bundle decoding stays inside calendar-core;
+/// callers performing status reads never receive access or refresh tokens.
+pub fn bundle_client_id(
+    store: &dyn kw_security::CredentialStore,
+    slot: &KeyRef,
+) -> Result<Option<String>, crate::CalendarError> {
+    Ok(decode_bundle(&store.get(slot)?)?.client_id)
+}
+
+/// Encode a newly exchanged grant without touching SQLite or the credential store.
+/// This lets the command layer compensate the credential write around its one
+/// database commit, while keeping the bundle representation private to this crate.
+pub fn grant_secret(
+    tokens: &crate::TokenSet,
+    client_id: &str,
+) -> Result<Secret, crate::CalendarError> {
+    let refresh = tokens
+        .refresh_token
+        .as_ref()
+        .ok_or(crate::CalendarError::NoRefreshToken)?;
+    Ok(encode_bundle(&TokenBundle {
+        access_token: tokens.access_token.expose().to_owned(),
+        refresh_token: refresh.expose().to_owned(),
+        client_id: Some(client_id.to_owned()),
+    })?)
+}
+
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,

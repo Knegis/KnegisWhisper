@@ -37,13 +37,13 @@
 //! showing stale rows as current.
 
 use crate::calendar_clients::{self, ClientChoice, ClientSource};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use kw_calendar_core::{
     apple, begin_authorization, calendars_repo, complete_authorization, credentials,
-    ensure_fresh_access_token, events_repo, google, microsoft, store_tokens, tokens_repo,
-    CalendarError, CalendarProviderKind, LoopbackReceiver, NetworkPolicySender, OAuthClientConfig,
+    ensure_fresh_access_token, events_repo, google, microsoft, tokens_repo, CalendarError,
+    CalendarProviderKind, LoopbackReceiver, NetworkPolicySender, OAuthClientConfig,
     ProviderEndpoints,
 };
 use kw_network_policy::NetworkPolicy;
@@ -246,22 +246,248 @@ where
     Ok(())
 }
 
+/// Stable, allowlisted failure vocabulary. Provider prose and bodies never cross IPC.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum CalendarProblem {
+    Cancelled,
+    TimedOut,
+    AccessDenied,
+    AdminConsentRequired,
+    AppBlocked,
+    ClientMisconfigured,
+    ClientRejected,
+    ReconnectRequired,
+    Network,
+    ProviderUnavailable,
+    Storage,
+    InvalidResponse,
+}
+
+/// Classification has no I/O and examines only known codes, never arbitrary prose.
+fn classify(error: &CalendarError, provider: CalendarProvider, refresh: bool) -> CalendarProblem {
+    use kw_calendar_core::ExchangeError;
+    use CalendarProblem as P;
+    match error {
+        CalendarError::AuthorizationDenied { error, description } => {
+            if error == "access_denied" {
+                return P::AccessDenied;
+            }
+            if provider == CalendarProvider::Google
+                && matches!(error.as_str(), "admin_policy_enforced" | "org_internal")
+            {
+                return P::AppBlocked;
+            }
+            if provider == CalendarProvider::Microsoft {
+                if let Some(problem) = aad_problem(description.as_deref()) {
+                    return problem;
+                }
+            }
+            if error == "redirect_uri_mismatch" {
+                P::ClientMisconfigured
+            } else {
+                P::InvalidResponse
+            }
+        }
+        CalendarError::Exchange(ExchangeError::Rejected { error, description }) => {
+            if provider == CalendarProvider::Microsoft {
+                if let Some(problem) = aad_problem(description.as_deref()) {
+                    return problem;
+                }
+            }
+            match error.as_str() {
+                "invalid_client" | "unauthorized_client" => P::ClientRejected,
+                "invalid_grant" if refresh => P::ReconnectRequired,
+                "redirect_uri_mismatch" => P::ClientMisconfigured,
+                _ => P::InvalidResponse,
+            }
+        }
+        CalendarError::Exchange(ExchangeError::HttpStatus { status: 500..=599 }) => {
+            P::ProviderUnavailable
+        }
+        CalendarError::Exchange(ExchangeError::HttpStatus { .. }) => P::InvalidResponse,
+        CalendarError::Exchange(ExchangeError::Http(error)) => {
+            if error.is_decode() {
+                P::InvalidResponse
+            } else {
+                P::Network
+            }
+        }
+        CalendarError::Exchange(ExchangeError::Policy(_)) => P::Network,
+        CalendarError::ReconnectRequired | CalendarError::NotConnected { .. } => {
+            P::ReconnectRequired
+        }
+        CalendarError::Credential(_) | CalendarError::Storage(_) => P::Storage,
+        _ => P::InvalidResponse,
+    }
+}
+
+fn problem_message(problem: CalendarProblem) -> String {
+    match problem {
+        CalendarProblem::Cancelled => "Connection cancelled.",
+        CalendarProblem::TimedOut => "Sign-in timed out. Try again.",
+        CalendarProblem::AccessDenied => "Calendar access was declined.",
+        CalendarProblem::AdminConsentRequired => "Your administrator must approve calendar access.",
+        CalendarProblem::AppBlocked => "Your organisation has blocked this app.",
+        CalendarProblem::ClientMisconfigured => "The calendar client needs configuration.",
+        CalendarProblem::ClientRejected => "The provider rejected this calendar client.",
+        CalendarProblem::ReconnectRequired => "Reconnect this account to keep syncing.",
+        CalendarProblem::Network => "Could not reach the calendar provider. Try again.",
+        CalendarProblem::ProviderUnavailable => "The calendar provider is unavailable. Try again.",
+        CalendarProblem::Storage => "Could not save or read calendar data.",
+        CalendarProblem::InvalidResponse => "The calendar provider returned an invalid response.",
+    }
+    .to_owned()
+}
+
+fn sync_failure(problem: CalendarProblem) -> SyncOutcome {
+    let message = problem_message(problem);
+    if problem == CalendarProblem::ReconnectRequired {
+        SyncOutcome::TokenUnavailable {
+            message,
+            problem: Some(problem),
+        }
+    } else {
+        SyncOutcome::Failed {
+            message,
+            problem: Some(problem),
+        }
+    }
+}
+
+fn aad_problem(description: Option<&str>) -> Option<CalendarProblem> {
+    // Match a complete AADSTS code prefix, not a numeric substring in prose.
+    description?.split_whitespace().find_map(|word| {
+        let code = word.split_once(':')?.0;
+        match code {
+            "AADSTS65001" | "AADSTS90094" | "AADSTS90095" => {
+                Some(CalendarProblem::AdminConsentRequired)
+            }
+            "AADSTS50011" | "AADSTS700016" => Some(CalendarProblem::ClientMisconfigured),
+            _ => None,
+        }
+    })
+}
+
+fn classify_sync(error: &kw_calendar_core::SyncError) -> CalendarProblem {
+    use kw_calendar_core::SyncError;
+    match error {
+        SyncError::HttpStatus { status: 500..=599 } => CalendarProblem::ProviderUnavailable,
+        SyncError::HttpStatus { status: 401 | 403 } => CalendarProblem::ClientMisconfigured,
+        SyncError::Http(_) | SyncError::Policy(_) => CalendarProblem::Network,
+        SyncError::Storage(_) => CalendarProblem::Storage,
+        _ => CalendarProblem::InvalidResponse,
+    }
+}
+
+fn classify_redirect(error: &kw_calendar_core::RedirectError) -> CalendarProblem {
+    use kw_calendar_core::RedirectError;
+    match error {
+        RedirectError::TimedOut => CalendarProblem::TimedOut,
+        RedirectError::MalformedRequest => CalendarProblem::InvalidResponse,
+        _ => CalendarProblem::Network,
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, TS)]
+#[serde(rename_all = "kebab-case")]
+pub enum CalendarOperation {
+    #[default]
+    Idle,
+    Connecting,
+    Syncing,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingSignIn {
+    pub authorize_url: String,
+    pub browser_opened: bool,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "kebab-case")]
+pub enum LeftoverOrigin {
+    Openwhispr,
+    Earlier,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct LeftoverConnection {
+    pub email: String,
+    pub origin: LeftoverOrigin,
+}
+
+#[derive(Default)]
+struct OperationState {
+    operation: CalendarOperation,
+    pending_sign_in: Option<PendingSignIn>,
+    cancel: Option<tokio::sync::oneshot::Sender<()>>,
+}
+
+#[derive(Default)]
+struct ProviderControl {
+    guard: tokio::sync::Mutex<()>,
+    state: Mutex<OperationState>,
+}
+
+impl ProviderControl {
+    fn state(&self) -> std::sync::MutexGuard<'_, OperationState> {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+    fn acquire(&self, operation: CalendarOperation) -> CmdResult<OperationGuard<'_>> {
+        let guard = self
+            .guard
+            .try_lock()
+            .map_err(|_| "a calendar connection or sync is already in progress".to_owned())?;
+        self.state().operation = operation;
+        Ok(OperationGuard {
+            control: self,
+            _guard: guard,
+        })
+    }
+}
+
+/// Clear status even if the command future is dropped, before releasing its guard.
+struct OperationGuard<'a> {
+    control: &'a ProviderControl,
+    _guard: tokio::sync::MutexGuard<'a, ()>,
+}
+impl Drop for OperationGuard<'_> {
+    fn drop(&mut self) {
+        *self.control.state() = OperationState::default();
+    }
+}
+
+fn cleanup_key(provider: CalendarProvider) -> &'static str {
+    match provider {
+        CalendarProvider::Google => "calendar.google.cleanupRefs",
+        CalendarProvider::Microsoft => "calendar.microsoft.cleanupRefs",
+    }
+}
+
+/// Already-fetched calendar metadata; installing it cannot reach the network.
+enum GrantCalendars {
+    Google(Vec<google::CalendarListEntry>),
+    Microsoft(Vec<microsoft::CalendarListEntry>),
+}
+
 /* -------------------------------------------------------------- the runtime */
 
 /// What connecting an account, or syncing one, needs: the database,
 /// credential store, and network boundary the rest of the application
-/// already built, plus a guard against two calendar operations running at
-/// once.
+/// already built, plus independent provider guards. Operations for the same
+/// provider refuse overlapping clicks; Google and Outlook can run together.
 pub struct CalendarRuntime {
     db: Db,
     credentials: Arc<dyn CredentialStore>,
     policy: NetworkPolicy,
-    /// One calendar network operation (a connect or a sync) at a time.
-    /// `try_lock` rather than `lock`, because a second click while one is
-    /// already running should be refused immediately, not queued -- a
-    /// queued second `connect` would open a second browser tab for the same
-    /// flow.
-    busy: tokio::sync::Mutex<()>,
+    google: ProviderControl,
+    microsoft: ProviderControl,
+    browser_opener: fn(&str) -> std::io::Result<()>,
 }
 
 impl std::fmt::Debug for CalendarRuntime {
@@ -277,278 +503,505 @@ impl CalendarRuntime {
             db,
             credentials,
             policy,
-            busy: tokio::sync::Mutex::new(()),
+            google: ProviderControl::default(),
+            microsoft: ProviderControl::default(),
+            browser_opener: open_in_browser,
         }
     }
 
-    async fn client(&self, provider: CalendarProvider) -> CmdResult<OAuthClientConfig> {
+    fn control(&self, provider: CalendarProvider) -> &ProviderControl {
+        match provider {
+            CalendarProvider::Google => &self.google,
+            CalendarProvider::Microsoft => &self.microsoft,
+        }
+    }
+
+    async fn client(
+        &self,
+        provider: CalendarProvider,
+    ) -> Result<OAuthClientConfig, CalendarProblem> {
         let custom_id = settings::get::<String>(self.db.pool(), client_id_key(provider))
             .await
-            .map_err(|e| fail("could not read the client ID", e))?;
-        let secret = read_custom_secret(self.credentials.as_ref(), provider)?;
+            .map_err(|_| CalendarProblem::Storage)?;
+        let secret = read_custom_secret(self.credentials.as_ref(), provider)
+            .map_err(|_| CalendarProblem::Storage)?;
         match calendar_clients::resolve(provider.kind(), custom_id.as_deref(), secret) {
             ClientChoice::Custom(client) | ClientChoice::AppOwned(client) => Ok(client),
-            ClientChoice::Missing => Err(format!(
-                "This build has no built-in {} connection. Add your own client under Advanced.",
-                match provider {
-                    CalendarProvider::Google => "Google Calendar",
-                    CalendarProvider::Microsoft => "Outlook",
-                }
-            )),
+            ClientChoice::Missing => Err(CalendarProblem::ClientMisconfigured),
         }
     }
 
     /// The account currently on file as connected for `provider`, if any.
     ///
     /// A read failure is propagated as `Err`, never folded into `Ok(None)`.
-    /// `connect` uses this to decide whether to disconnect a previously
-    /// connected account before storing a new one; treating a failed read
-    /// the same as "nothing was connected" would skip that disconnect
-    /// silently, leaving a different account's refresh token live in the OS
-    /// credential store with no way for `calendar_status` to ever find it
-    /// again once `account_key` is overwritten.
+    /// Grant installation reads it before writing a credential so its one
+    /// transaction can remove the previous account and queue the actual old
+    /// slot. A read failure must never silently skip that replacement work.
     async fn read_previous_account(&self, provider: CalendarProvider) -> CmdResult<Option<String>> {
         settings::get::<String>(self.db.pool(), account_key(provider))
             .await
             .map_err(|e| fail("could not read the previously connected account", e))
     }
 
-    /// Run the loopback OAuth flow, discover which account it belongs to
-    /// from the provider's own calendar list, and store the result --
-    /// replacing whichever account was previously connected for this
-    /// provider, if it was a different one.
+    /// Consent and discovery perform no local grant writes. Installation has one
+    /// SQLite commit point and compensates the preceding credential write.
     pub async fn connect(&self, provider: CalendarProvider) -> CmdResult<ConnectOutcome> {
-        let Ok(_guard) = self.busy.try_lock() else {
-            return Err("a calendar connection or sync is already in progress".to_owned());
-        };
-
-        let client = self.client(provider).await?;
-        let endpoints = provider.endpoints();
-
-        let receiver = LoopbackReceiver::bind()
-            .await
-            .map_err(|e| format!("could not open a local port to receive the redirect: {e}"))?;
-        let redirect_uri = receiver.redirect_uri(CALLBACK_PATH);
-
-        let pending =
-            begin_authorization(&endpoints, &client, &redirect_uri).map_err(|e| e.to_string())?;
-
-        if let Err(err) = open_in_browser(&pending.authorize_url) {
-            return Err(format!(
-                "could not open your browser automatically ({err}). Open this address \
-                 yourself to finish connecting {}: {}",
-                provider.name(),
-                pending.authorize_url
-            ));
-        }
-
-        let callback = receiver
-            .receive(REDIRECT_WAIT)
-            .await
-            .map_err(|e| format!("waiting for the browser to come back: {e}"))?;
-
-        let sender = NetworkPolicySender::new(&self.policy);
-        let tokens =
-            match complete_authorization(&pending, &callback, &endpoints, &client, &sender).await {
-                Ok(tokens) => tokens,
-                Err(CalendarError::AuthorizationDenied { error: reason, .. }) => {
-                    return Ok(ConnectOutcome::Denied { reason });
-                }
-                Err(err) => return Err(err.to_string()),
-            };
-
-        let (account_email, calendar_count) = match provider {
-            CalendarProvider::Google => self.finish_connect_google(&tokens.access_token).await?,
-            CalendarProvider::Microsoft => {
-                self.finish_connect_microsoft(&tokens.access_token).await?
-            }
-        };
-
-        // A read failure here must not be treated as "nothing was
-        // previously connected" -- that would silently skip disconnecting a
-        // different account, leaving its refresh token live in the OS
-        // credential store with no row anywhere pointing at it once
-        // `account_key` is overwritten below. See `read_previous_account`.
-        if let Some(previous) = self.read_previous_account(provider).await? {
-            if previous != account_email {
-                self.disconnect(provider, &previous).await?;
-            }
-        }
-
-        store_tokens(
-            self.db.pool(),
-            self.credentials.as_ref(),
-            provider.kind(),
-            &account_email,
-            &tokens,
-            client.client_id(),
-        )
-        .await
-        .map_err(|e| e.to_string())?;
-
-        settings::set(self.db.pool(), account_key(provider), &account_email)
-            .await
-            .map_err(|e| fail("could not remember the connected account", e))?;
-
-        Ok(ConnectOutcome::Connected {
-            account_email,
-            calendars: calendar_count,
+        let _guard = self
+            .control(provider)
+            .acquire(CalendarOperation::Connecting)?;
+        let outcome = self.connect_inner(provider).await;
+        Ok(match outcome {
+            Ok(connected) => connected,
+            Err(CalendarProblem::AccessDenied) => ConnectOutcome::Denied {
+                reason: "access_denied".to_owned(),
+            },
+            Err(problem) => ConnectOutcome::Failed { problem },
         })
     }
 
-    async fn finish_connect_google(&self, access_token: &Secret) -> CmdResult<(String, u32)> {
-        let calendars = google::fetch_calendar_list(&self.policy, access_token)
+    async fn connect_inner(
+        &self,
+        provider: CalendarProvider,
+    ) -> Result<ConnectOutcome, CalendarProblem> {
+        self.process_cleanup(provider).await?;
+        let client = self.client(provider).await?;
+        let endpoints = provider.endpoints();
+        let receiver = LoopbackReceiver::bind()
             .await
-            .map_err(|e| {
-                format!("the token exchange succeeded, but the calendar list could not be read to identify the account: {e}")
-            })?;
-        let email = google::primary_email(&calendars)
-            .ok_or_else(|| {
-                "connected, but no primary calendar was found to identify the account".to_owned()
-            })?
-            .to_owned();
-
-        for entry in &calendars {
-            calendars_repo::upsert_google_calendar(self.db.pool(), &email, entry)
-                .await
-                .map_err(|e| fail("could not save the calendar list", e))?;
+            .map_err(|e| classify_redirect(&e))?;
+        let pending =
+            begin_authorization(&endpoints, &client, &receiver.redirect_uri(CALLBACK_PATH))
+                .map_err(|e| classify(&e, provider, false))?;
+        let (send, mut cancel) = tokio::sync::oneshot::channel();
+        {
+            let mut state = self.control(provider).state();
+            state.cancel = Some(send);
+            state.pending_sign_in = Some(PendingSignIn {
+                authorize_url: pending.authorize_url.clone(),
+                browser_opened: true,
+            });
         }
-        let keep_ids: Vec<String> = calendars.iter().map(|c| c.id.clone()).collect();
-        calendars_repo::prune_calendars(
-            self.db.pool(),
-            CalendarProviderKind::Google,
-            &email,
-            &keep_ids,
-        )
-        .await
-        .map_err(|e| fail("could not save the calendar list", e))?;
-
-        Ok((email, u32::try_from(calendars.len()).unwrap_or(u32::MAX)))
-    }
-
-    async fn finish_connect_microsoft(&self, access_token: &Secret) -> CmdResult<(String, u32)> {
-        let calendars = microsoft::fetch_calendars(&self.policy, access_token)
-            .await
-            .map_err(|e| {
-                format!("the token exchange succeeded, but the calendar list could not be read to identify the account: {e}")
-            })?;
-        let email = microsoft::account_owner_email(&calendars)
-            .ok_or_else(|| {
-                "connected, but no default calendar was found to identify the account".to_owned()
-            })?
-            .to_owned();
-
-        for entry in &calendars {
-            calendars_repo::upsert_microsoft_calendar(self.db.pool(), &email, entry)
-                .await
-                .map_err(|e| fail("could not save the calendar list", e))?;
+        let browser_opened = (self.browser_opener)(&pending.authorize_url).is_ok();
+        if let Some(pending) = &mut self.control(provider).state().pending_sign_in {
+            pending.browser_opened = browser_opened;
         }
-        let keep_ids: Vec<String> = calendars.iter().map(|c| c.id.clone()).collect();
-        calendars_repo::prune_calendars(
-            self.db.pool(),
-            CalendarProviderKind::Microsoft,
-            &email,
-            &keep_ids,
-        )
-        .await
-        .map_err(|e| fail("could not save the calendar list", e))?;
-
-        Ok((email, u32::try_from(calendars.len()).unwrap_or(u32::MAX)))
-    }
-
-    /// Remove everything local to one connected account: the OS credential
-    /// (best-effort -- a store that has already lost it is not a reason to
-    /// refuse the rest of this), its calendars, and their events. The
-    /// `google_calendar_tokens` / `microsoft_calendar_tokens` row itself is
-    /// left in place; `kw_calendar_core::tokens_repo` has no delete
-    /// function, deliberately not added for this task -- see the report.
-    /// [`token_status`] reports it honestly regardless, because it checks
-    /// the credential store rather than trusting that row alone.
-    pub async fn disconnect(&self, provider: CalendarProvider, email: &str) -> CmdResult<()> {
-        if let Some(key_ref) = credentials::token_ref_for(provider.kind(), email) {
-            if let Err(err) = self.credentials.delete(&key_ref) {
-                tracing::warn!(error = %err, "could not remove the stored calendar credential");
+        if !browser_opened {
+            tracing::warn!(
+                "could not open the calendar sign-in browser; waiting for manual sign-in"
+            );
+        }
+        let callback = tokio::select! {
+            biased;
+            _ = &mut cancel => return Err(CalendarProblem::Cancelled),
+            callback = receiver.receive(REDIRECT_WAIT) => callback.map_err(|e| classify_redirect(&e))?,
+        };
+        self.control(provider).state().pending_sign_in = None;
+        let sender = NetworkPolicySender::new(&self.policy);
+        let tokens = tokio::select! {
+            biased;
+            _ = &mut cancel => return Err(CalendarProblem::Cancelled),
+            tokens = complete_authorization(&pending, &callback, &endpoints, &client, &sender) =>
+                tokens.map_err(|e| classify(&e, provider, false))?,
+        };
+        let discovery = async {
+            match provider {
+                CalendarProvider::Google => {
+                    let list = google::fetch_calendar_list(&self.policy, &tokens.access_token)
+                        .await
+                        .map_err(|e| classify_sync(&e))?;
+                    let email = google::primary_email(&list)
+                        .ok_or(CalendarProblem::InvalidResponse)?
+                        .to_owned();
+                    Ok((email, GrantCalendars::Google(list)))
+                }
+                CalendarProvider::Microsoft => {
+                    let list = microsoft::fetch_calendars(&self.policy, &tokens.access_token)
+                        .await
+                        .map_err(|e| classify_sync(&e))?;
+                    let email = microsoft::account_owner_email(&list)
+                        .ok_or(CalendarProblem::InvalidResponse)?
+                        .to_owned();
+                    Ok((email, GrantCalendars::Microsoft(list)))
+                }
+            }
+        };
+        let (email, calendars) = tokio::select! {
+            biased;
+            _ = &mut cancel => return Err(CalendarProblem::Cancelled),
+            result = discovery => result?,
+        };
+        {
+            // Close cancellation atomically with checking for an already accepted
+            // request. From here the local grant commit must finish its undo work.
+            let mut state = self.control(provider).state();
+            state.cancel.take();
+            if cancel.try_recv().is_ok() {
+                return Err(CalendarProblem::Cancelled);
             }
         }
-
-        let calendars = calendars_repo::list_calendars(self.db.pool(), provider.kind(), email)
+        self.install_grant(provider, &email, &tokens, client.client_id(), &calendars)
             .await
-            .map_err(|e| fail("could not read the calendar list", e))?;
-        for calendar in &calendars {
-            events_repo::delete_all_for_calendar(self.db.pool(), provider.wire_str(), &calendar.id)
-                .await
-                .map_err(|e| fail("could not remove the calendar's events", e))?;
+    }
+
+    fn cancel_connect(&self, provider: CalendarProvider) {
+        if let Some(cancel) = self.control(provider).state().cancel.take() {
+            let _ = cancel.send(());
         }
-        calendars_repo::prune_calendars(self.db.pool(), provider.kind(), email, &[])
-            .await
-            .map_err(|e| fail("could not remove the calendars", e))?;
+    }
 
-        settings::remove(self.db.pool(), account_key(provider))
+    async fn cleanup_refs(
+        &self,
+        provider: CalendarProvider,
+    ) -> Result<Vec<String>, CalendarProblem> {
+        settings::get_or(self.db.pool(), cleanup_key(provider), Vec::<String>::new())
             .await
-            .map_err(|e| fail("could not clear the connected account", e))?;
-        settings::remove(self.db.pool(), last_sync_key(provider))
+            .map_err(|_| CalendarProblem::Storage)
+    }
+
+    /// Retain failed deletions durably. A live row always wins over a stale cleanup
+    /// entry, including a reconnect reusing a slot whose earlier deletion failed.
+    /// Callers hold the provider guard throughout the read/delete/write sequence.
+    async fn process_cleanup(&self, provider: CalendarProvider) -> Result<(), CalendarProblem> {
+        let refs = self.cleanup_refs(provider).await?;
+        if refs.is_empty() {
+            return Ok(());
+        }
+        let rows = tokens_repo::list(self.db.pool(), provider.kind())
             .await
-            .map_err(|e| fail("could not clear the sync record", e))?;
+            .map_err(|_| CalendarProblem::Storage)?;
+        let remaining: Vec<String> = refs
+            .into_iter()
+            .filter(|name| {
+                if rows.iter().any(|(_, row)| row.token_ref == *name) {
+                    return false;
+                }
+                let Some(key) = KeyRef::new(name) else {
+                    return true;
+                };
+                !matches!(
+                    self.credentials.delete(&key),
+                    Ok(()) | Err(kw_security::CredentialError::NotFound(_))
+                )
+            })
+            .collect();
+        settings::set(self.db.pool(), cleanup_key(provider), &remaining)
+            .await
+            .map_err(|_| CalendarProblem::Storage)?;
+        if !remaining.is_empty() {
+            tracing::warn!(
+                provider = provider.wire_str(),
+                count = remaining.len(),
+                "calendar credential cleanup remains pending"
+            );
+        }
         Ok(())
+    }
+
+    /// The sole grant commit. All metadata and cleanup intentions become visible
+    /// together; credential-store undo never touches the old account's slot.
+    async fn install_grant(
+        &self,
+        provider: CalendarProvider,
+        email: &str,
+        tokens: &kw_calendar_core::TokenSet,
+        client_id: &str,
+        calendars: &GrantCalendars,
+    ) -> Result<ConnectOutcome, CalendarProblem> {
+        let previous = self
+            .read_previous_account(provider)
+            .await
+            .map_err(|_| CalendarProblem::Storage)?;
+        let new_row = tokens_repo::read(self.db.pool(), provider.kind(), email)
+            .await
+            .map_err(|_| CalendarProblem::Storage)?;
+        let old_row = if let Some(previous) = &previous {
+            tokens_repo::read(self.db.pool(), provider.kind(), previous)
+                .await
+                .map_err(|_| CalendarProblem::Storage)?
+        } else {
+            None
+        };
+        let slot =
+            credentials::token_ref_for(provider.kind(), email).ok_or(CalendarProblem::Storage)?;
+        let same_slot = new_row.as_ref().is_some_and(|r| r.token_ref == slot.slot())
+            || old_row.as_ref().is_some_and(|r| r.token_ref == slot.slot());
+        let restore = if same_slot {
+            match self.credentials.get(&slot) {
+                Ok(secret) => Some(secret),
+                Err(kw_security::CredentialError::NotFound(_)) => None,
+                Err(_) => return Err(CalendarProblem::Storage),
+            }
+        } else {
+            None
+        };
+        let mut cleanup = self.cleanup_refs(provider).await?;
+        for row in new_row.iter().chain(old_row.iter()) {
+            if row.token_ref != slot.slot() && !cleanup.contains(&row.token_ref) {
+                cleanup.push(row.token_ref.clone());
+            }
+        }
+        cleanup.retain(|name| name != slot.slot());
+        let secret = credentials::grant_secret(tokens, client_id)
+            .map_err(|e| classify(&e, provider, false))?;
+        self.credentials
+            .set(&slot, &secret)
+            .map_err(|_| CalendarProblem::Storage)?;
+        let commit = async {
+            let mut tx = self
+                .db
+                .pool()
+                .begin()
+                .await
+                .map_err(|_| CalendarProblem::Storage)?;
+            tokens_repo::upsert_on(
+                &mut *tx,
+                provider.kind(),
+                email,
+                slot.slot(),
+                tokens.expires_at,
+                &tokens.scope,
+            )
+            .await
+            .map_err(|_| CalendarProblem::Storage)?;
+            // Purge before an overlapping calendar id can move to the new owner.
+            if let Some(previous) = previous.as_deref().filter(|old| *old != email) {
+                events_repo::purge_account_on(&mut *tx, provider.kind(), previous)
+                    .await
+                    .map_err(|_| CalendarProblem::Storage)?;
+                calendars_repo::prune_calendars_on(&mut *tx, provider.kind(), previous, &[])
+                    .await
+                    .map_err(|_| CalendarProblem::Storage)?;
+                tokens_repo::delete_on(&mut *tx, provider.kind(), previous)
+                    .await
+                    .map_err(|_| CalendarProblem::Storage)?;
+            }
+            let mut keep = Vec::new();
+            match calendars {
+                GrantCalendars::Google(list) => {
+                    for entry in list {
+                        calendars_repo::upsert_google_calendar_on(&mut *tx, email, entry)
+                            .await
+                            .map_err(|_| CalendarProblem::Storage)?;
+                        keep.push(entry.id.clone());
+                    }
+                }
+                GrantCalendars::Microsoft(list) => {
+                    for entry in list {
+                        calendars_repo::upsert_microsoft_calendar_on(&mut *tx, email, entry)
+                            .await
+                            .map_err(|_| CalendarProblem::Storage)?;
+                        keep.push(entry.id.clone());
+                    }
+                }
+            }
+            calendars_repo::prune_calendars_on(&mut *tx, provider.kind(), email, &keep)
+                .await
+                .map_err(|_| CalendarProblem::Storage)?;
+            events_repo::purge_account_on(&mut *tx, provider.kind(), email)
+                .await
+                .map_err(|_| CalendarProblem::Storage)?;
+            settings::set_on(&mut *tx, account_key(provider), &email)
+                .await
+                .map_err(|_| CalendarProblem::Storage)?;
+            settings::remove_on(&mut *tx, last_sync_key(provider))
+                .await
+                .map_err(|_| CalendarProblem::Storage)?;
+            settings::set_on(&mut *tx, cleanup_key(provider), &cleanup)
+                .await
+                .map_err(|_| CalendarProblem::Storage)?;
+            tx.commit().await.map_err(|_| CalendarProblem::Storage)?;
+            Ok::<_, CalendarProblem>(keep.len())
+        }
+        .await;
+        let count = match commit {
+            Ok(count) => count,
+            Err(problem) => {
+                let restored = same_slot
+                    && restore
+                        .as_ref()
+                        .is_some_and(|old| self.credentials.set(&slot, old).is_ok());
+                if !restored {
+                    let deleted = matches!(
+                        self.credentials.delete(&slot),
+                        Ok(()) | Err(kw_security::CredentialError::NotFound(_))
+                    );
+                    if !deleted {
+                        // The transaction rolled back: reread its original list rather
+                        // than publishing any of the failed replacement's deletions.
+                        let queued = async {
+                            let mut refs = self.cleanup_refs(provider).await?;
+                            if !refs.iter().any(|name| name == slot.slot()) {
+                                refs.push(slot.slot().to_owned());
+                            }
+                            settings::set(self.db.pool(), cleanup_key(provider), &refs)
+                                .await
+                                .map_err(|_| CalendarProblem::Storage)
+                        }
+                        .await;
+                        if queued.is_err() {
+                            tracing::warn!(
+                                slot = slot.slot(),
+                                "could not delete or queue the uncommitted calendar credential"
+                            );
+                        }
+                    }
+                    if same_slot && previous.as_deref() == Some(email) {
+                        tracing::warn!("the previous calendar credential could not be restored; reconnection is required");
+                        return Err(CalendarProblem::ReconnectRequired);
+                    }
+                }
+                return Err(problem);
+            }
+        };
+        self.process_cleanup(provider).await?;
+        Ok(ConnectOutcome::Connected {
+            account_email: email.to_owned(),
+            calendars: u32::try_from(count).unwrap_or(u32::MAX),
+        })
+    }
+
+    /// Disconnect only the account named by the setting, never leftover rows.
+    /// Queue the row's actual slot in the same commit that stops referencing it.
+    pub async fn disconnect(&self, provider: CalendarProvider) -> CmdResult<()> {
+        let _guard = self.control(provider).acquire(CalendarOperation::Idle)?;
+        let Some(email) = self.read_previous_account(provider).await? else {
+            return Ok(());
+        };
+        self.process_cleanup(provider)
+            .await
+            .map_err(problem_message)?;
+        self.remove_account(provider, &email, true)
+            .await
+            .map_err(problem_message)
+    }
+
+    async fn remove_leftover(&self, provider: CalendarProvider, email: &str) -> CmdResult<()> {
+        let _guard = self.control(provider).acquire(CalendarOperation::Idle)?;
+        if self.read_previous_account(provider).await?.as_deref() == Some(email) {
+            return Err("Use Disconnect to remove the connected account.".to_owned());
+        }
+        self.process_cleanup(provider)
+            .await
+            .map_err(problem_message)?;
+        self.remove_account(provider, email, false)
+            .await
+            .map_err(problem_message)
+    }
+
+    async fn remove_account(
+        &self,
+        provider: CalendarProvider,
+        email: &str,
+        connected: bool,
+    ) -> Result<(), CalendarProblem> {
+        let row = tokens_repo::read(self.db.pool(), provider.kind(), email)
+            .await
+            .map_err(|_| CalendarProblem::Storage)?;
+        if row.is_none() && !connected {
+            return Ok(());
+        }
+        let mut cleanup = self.cleanup_refs(provider).await?;
+        if let Some(row) = row {
+            if !cleanup.contains(&row.token_ref) {
+                cleanup.push(row.token_ref);
+            }
+        }
+        if !connected {
+            if let Some(active) = self
+                .read_previous_account(provider)
+                .await
+                .map_err(|_| CalendarProblem::Storage)?
+            {
+                if let Some(row) = tokens_repo::read(self.db.pool(), provider.kind(), &active)
+                    .await
+                    .map_err(|_| CalendarProblem::Storage)?
+                {
+                    // Old aliases can share a native slot. Removing an alias does
+                    // not stop the active row referencing it, so never queue it.
+                    cleanup.retain(|name| name != &row.token_ref);
+                }
+            }
+        }
+        let mut tx = self
+            .db
+            .pool()
+            .begin()
+            .await
+            .map_err(|_| CalendarProblem::Storage)?;
+        tokens_repo::delete_on(&mut *tx, provider.kind(), email)
+            .await
+            .map_err(|_| CalendarProblem::Storage)?;
+        events_repo::purge_account_on(&mut *tx, provider.kind(), email)
+            .await
+            .map_err(|_| CalendarProblem::Storage)?;
+        calendars_repo::prune_calendars_on(&mut *tx, provider.kind(), email, &[])
+            .await
+            .map_err(|_| CalendarProblem::Storage)?;
+        if connected {
+            settings::remove_on(&mut *tx, account_key(provider))
+                .await
+                .map_err(|_| CalendarProblem::Storage)?;
+            settings::remove_on(&mut *tx, last_sync_key(provider))
+                .await
+                .map_err(|_| CalendarProblem::Storage)?;
+        }
+        settings::set_on(&mut *tx, cleanup_key(provider), &cleanup)
+            .await
+            .map_err(|_| CalendarProblem::Storage)?;
+        tx.commit().await.map_err(|_| CalendarProblem::Storage)?;
+        self.process_cleanup(provider).await
     }
 
     /// Refresh the calendar list and every selected calendar's events for
     /// whichever account is connected for `provider`.
     pub async fn sync(&self, provider: CalendarProvider) -> CmdResult<SyncOutcome> {
-        let Ok(_guard) = self.busy.try_lock() else {
-            return Err("a calendar connection or sync is already in progress".to_owned());
+        let _guard = self.control(provider).acquire(CalendarOperation::Syncing)?;
+        if let Err(problem) = self.process_cleanup(provider).await {
+            return Ok(sync_failure(problem));
+        }
+        let email = match self.read_previous_account(provider).await {
+            Ok(Some(email)) => email,
+            Ok(None) => return Err(format!("no {} account is connected", provider.name())),
+            Err(_) => return Ok(sync_failure(CalendarProblem::Storage)),
         };
-
-        let Some(email) = settings::get::<String>(self.db.pool(), account_key(provider))
+        let result = async {
+            let client = self.client(provider).await?;
+            let sender = NetworkPolicySender::new(&self.policy);
+            let access_token = ensure_fresh_access_token(
+                self.db.pool(),
+                self.credentials.as_ref(),
+                &sender,
+                &provider.endpoints(),
+                &client,
+                provider.kind(),
+                &email,
+            )
             .await
-            .map_err(|e| fail("could not read the connected account", e))?
-        else {
-            return Err(format!("no {} account is connected", provider.name()));
-        };
-        let client = self.client(provider).await?;
-
-        let endpoints = provider.endpoints();
-        let sender = NetworkPolicySender::new(&self.policy);
-
-        let access_token = match ensure_fresh_access_token(
-            self.db.pool(),
-            self.credentials.as_ref(),
-            &sender,
-            &endpoints,
-            &client,
-            provider.kind(),
-            &email,
-        )
-        .await
-        {
-            Ok(token) => token,
-            Err(err) => {
-                let outcome = SyncOutcome::TokenUnavailable {
-                    message: err.to_string(),
-                };
-                self.record_sync(provider, &email, outcome.clone()).await;
-                return Ok(outcome);
-            }
-        };
-
-        let outcome = match provider {
-            CalendarProvider::Google => self.sync_google(&email, &access_token).await,
-            CalendarProvider::Microsoft => self.sync_microsoft(&email, &access_token).await,
-        };
-        self.record_sync(provider, &email, outcome.clone()).await;
-        Ok(outcome)
+            .map_err(|e| classify(&e, provider, true))?;
+            Ok::<_, CalendarProblem>(match provider {
+                CalendarProvider::Google => self.sync_google(&email, &access_token).await,
+                CalendarProvider::Microsoft => self.sync_microsoft(&email, &access_token).await,
+            })
+        }
+        .await;
+        let outcome = result.unwrap_or_else(sync_failure);
+        Ok(self.record_sync(provider, &email, outcome).await)
     }
 
     async fn sync_google(&self, email: &str, access_token: &Secret) -> SyncOutcome {
         if let Err(message) = self.prepare_snapshot(CalendarProvider::Google, email).await {
-            return SyncOutcome::Failed { message };
+            return SyncOutcome::Failed {
+                message,
+                problem: Some(CalendarProblem::Storage),
+            };
         }
         let (start, end) = snapshot_window();
         let calendars = match google::fetch_calendar_list(&self.policy, access_token).await {
             Ok(list) => list,
             Err(err) => {
                 return SyncOutcome::Failed {
-                    message: err.to_string(),
+                    problem: Some(classify_sync(&err)),
+                    message: problem_message(classify_sync(&err)),
                 }
             }
         };
@@ -557,6 +1010,7 @@ impl CalendarRuntime {
                 calendars_repo::upsert_google_calendar(self.db.pool(), email, entry).await
             {
                 return SyncOutcome::Failed {
+                    problem: Some(CalendarProblem::Storage),
                     message: fail("could not save the calendar list", err),
                 };
             }
@@ -570,10 +1024,10 @@ impl CalendarRuntime {
         )
         .await
         {
-            // Matches `finish_connect_google`: a prune failure must not let
-            // this report `Completed` while a calendar the provider no
-            // longer lists is still sitting here locally.
+            // A prune failure must not report Completed while a calendar the
+            // provider no longer lists is still sitting here locally.
             return SyncOutcome::Failed {
+                problem: Some(CalendarProblem::Storage),
                 message: fail("could not remove calendars no longer listed", err),
             };
         }
@@ -588,6 +1042,7 @@ impl CalendarRuntime {
             Ok(rows) => rows,
             Err(err) => {
                 return SyncOutcome::Failed {
+                    problem: Some(CalendarProblem::Storage),
                     message: fail("could not read the calendar list", err),
                 }
             }
@@ -606,10 +1061,10 @@ impl CalendarRuntime {
         access_token: &Secret,
         start: &chrono::DateTime<chrono::Utc>,
         end: &chrono::DateTime<chrono::Utc>,
-    ) -> Result<(u32, u32, usize), String> {
+    ) -> Result<(u32, u32, usize), CalendarProblem> {
         let snapshot = google::fetch_window(&self.policy, access_token, calendar_id, start, end)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| classify_sync(&e))?;
         self.commit_snapshot(CalendarProvider::Google, calendar_id, start, end, snapshot)
             .await
     }
@@ -619,14 +1074,18 @@ impl CalendarRuntime {
             .prepare_snapshot(CalendarProvider::Microsoft, email)
             .await
         {
-            return SyncOutcome::Failed { message };
+            return SyncOutcome::Failed {
+                message,
+                problem: Some(CalendarProblem::Storage),
+            };
         }
         let (start, end) = snapshot_window();
         let calendars = match microsoft::fetch_calendars(&self.policy, access_token).await {
             Ok(list) => list,
             Err(err) => {
                 return SyncOutcome::Failed {
-                    message: err.to_string(),
+                    problem: Some(classify_sync(&err)),
+                    message: problem_message(classify_sync(&err)),
                 }
             }
         };
@@ -635,6 +1094,7 @@ impl CalendarRuntime {
                 calendars_repo::upsert_microsoft_calendar(self.db.pool(), email, entry).await
             {
                 return SyncOutcome::Failed {
+                    problem: Some(CalendarProblem::Storage),
                     message: fail("could not save the calendar list", err),
                 };
             }
@@ -648,10 +1108,10 @@ impl CalendarRuntime {
         )
         .await
         {
-            // Matches `finish_connect_microsoft`: a prune failure must not
-            // let this report `Completed` while a calendar the provider no
-            // longer lists is still sitting here locally.
+            // A prune failure must not report Completed while a calendar the
+            // provider no longer lists is still sitting here locally.
             return SyncOutcome::Failed {
+                problem: Some(CalendarProblem::Storage),
                 message: fail("could not remove calendars no longer listed", err),
             };
         }
@@ -666,6 +1126,7 @@ impl CalendarRuntime {
             Ok(rows) => rows,
             Err(err) => {
                 return SyncOutcome::Failed {
+                    problem: Some(CalendarProblem::Storage),
                     message: fail("could not read the calendar list", err),
                 }
             }
@@ -684,10 +1145,10 @@ impl CalendarRuntime {
         access_token: &Secret,
         start: &chrono::DateTime<chrono::Utc>,
         end: &chrono::DateTime<chrono::Utc>,
-    ) -> Result<(u32, u32, usize), String> {
+    ) -> Result<(u32, u32, usize), CalendarProblem> {
         let snapshot = microsoft::fetch_window(&self.policy, access_token, calendar_id, start, end)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| classify_sync(&e))?;
         self.commit_snapshot(
             CalendarProvider::Microsoft,
             calendar_id,
@@ -724,6 +1185,7 @@ impl CalendarRuntime {
             .unwrap_or_else(|| SyncRecord {
                 at: chrono::Utc::now().to_rfc3339(),
                 outcome: SyncOutcome::Failed {
+                    problem: None,
                     message: "The first sync after an update did not finish.".to_owned(),
                 },
                 account: None,
@@ -732,12 +1194,21 @@ impl CalendarRuntime {
             });
         record.account = Some(email.to_owned());
         record.snapshot_version = 1;
-        events_repo::purge_account(self.db.pool(), provider.kind(), email)
+        let mut tx = self
+            .db
+            .pool()
+            .begin()
+            .await
+            .map_err(|e| fail("could not start cache purge", e))?;
+        events_repo::purge_account_on(&mut *tx, provider.kind(), email)
             .await
             .map_err(|e| fail("could not purge the old calendar cache", e))?;
-        settings::set(self.db.pool(), last_sync_key(provider), &record)
+        settings::set_on(&mut *tx, last_sync_key(provider), &record)
             .await
             .map_err(|e| fail("could not record the snapshot version", e))?;
+        tx.commit()
+            .await
+            .map_err(|e| fail("could not commit cache purge", e))?;
         Ok(())
     }
 
@@ -750,7 +1221,7 @@ impl CalendarRuntime {
         start: &chrono::DateTime<chrono::Utc>,
         end: &chrono::DateTime<chrono::Utc>,
         snapshot: kw_calendar_core::sync_support::WindowSnapshot,
-    ) -> Result<(u32, u32, usize), String> {
+    ) -> Result<(u32, u32, usize), CalendarProblem> {
         let removed = events_repo::replace_window(
             self.db.pool(),
             provider.wire_str(),
@@ -761,10 +1232,10 @@ impl CalendarRuntime {
             &snapshot.keep_ids,
         )
         .await
-        .map_err(|e| fail("could not replace the calendar snapshot", e))?;
+        .map_err(|_| CalendarProblem::Storage)?;
         calendars_repo::set_sync_token(self.db.pool(), provider.kind(), calendar_id, None)
             .await
-            .map_err(|e| fail("could not clear the legacy sync cursor", e))?;
+            .map_err(|_| CalendarProblem::Storage)?;
         Ok((
             u32::try_from(snapshot.rows.len()).unwrap_or(u32::MAX),
             u32::try_from(removed).unwrap_or(u32::MAX),
@@ -772,7 +1243,12 @@ impl CalendarRuntime {
         ))
     }
 
-    async fn record_sync(&self, provider: CalendarProvider, email: &str, outcome: SyncOutcome) {
+    async fn record_sync(
+        &self,
+        provider: CalendarProvider,
+        email: &str,
+        outcome: SyncOutcome,
+    ) -> SyncOutcome {
         let key = last_sync_key(provider);
         let previous = match settings::get::<SyncRecord>(self.db.pool(), key).await {
             Ok(record) => record,
@@ -792,7 +1268,7 @@ impl CalendarRuntime {
         let version = previous.as_ref().map_or(0, |r| r.snapshot_version);
         let record = SyncRecord {
             at: now.clone(),
-            outcome,
+            outcome: outcome.clone(),
             account: Some(email.to_owned()),
             snapshot_version: version,
             last_success_at: if full_success {
@@ -803,7 +1279,9 @@ impl CalendarRuntime {
         };
         if let Err(err) = settings::set(self.db.pool(), last_sync_key(provider), &record).await {
             tracing::warn!(error = %err, "could not record the calendar sync result");
+            return sync_failure(CalendarProblem::Storage);
         }
+        outcome
     }
 }
 
@@ -816,7 +1294,7 @@ async fn sync_selected_calendars<F, Fut>(
 ) -> SyncOutcome
 where
     F: FnMut(String) -> Fut,
-    Fut: std::future::Future<Output = Result<(u32, u32, usize), String>>,
+    Fut: std::future::Future<Output = Result<(u32, u32, usize), CalendarProblem>>,
 {
     let mut upserted = 0;
     let mut removed = 0;
@@ -830,7 +1308,7 @@ where
                     errors.push(time_error(&row.summary, unreadable));
                 }
             }
-            Err(message) => errors.push(format!("{}: {message}", row.summary)),
+            Err(problem) => errors.push(format!("{}: {}", row.summary, problem_message(problem))),
         }
     }
     SyncOutcome::Completed {
@@ -858,13 +1336,8 @@ fn time_error(calendar: &str, count: usize) -> String {
 
 /// What happened when someone clicked "Connect".
 ///
-/// Only the two outcomes that are not simply a refusal: a plain error (no
-/// client ID configured, the loopback receiver could not bind, the token
-/// exchange itself failed) crosses as `Err` the same as every other command,
-/// because there is nothing more for the frontend to do with those than show
-/// them. Being turned down at the consent screen is different -- an ordinary
-/// outcome, not a bug -- so it gets its own state rather than the same
-/// generic error text.
+/// A held operation guard is the only command-level refusal. Every consent,
+/// transport, provider and persistence failure has a stable classified outcome.
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(
     tag = "state",
@@ -879,12 +1352,15 @@ pub enum ConnectOutcome {
     Denied {
         reason: String,
     },
+    Failed {
+        problem: CalendarProblem,
+    },
 }
 
 /// What one sync attempt found. Both the command's own return value and
-/// what [`CalendarRuntime::record_sync`] persists to settings -- one shape
-/// for both means the screen can never see a different answer from a sync
-/// it just ran than from the record `calendar_status` reads back later.
+/// what [`CalendarRuntime::record_sync`] persists to settings use this shape.
+/// If recording fails, the command reports Storage and the previous durable
+/// record remains available; a successful fetch must not hide that failure.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(
     tag = "state",
@@ -900,14 +1376,17 @@ pub enum SyncOutcome {
         /// fail, and reporting only the aggregate would hide which one.
         calendar_errors: Vec<String>,
     },
-    /// The token could not be resolved or refreshed. Distinguished from
-    /// [`SyncOutcome::Failed`] because it names a specific, actionable fact
-    /// -- reconnecting the account is the fix -- rather than an
-    /// undifferentiated error.
+    /// The grant needs reconnection, including a rejected refresh grant or a
+    /// changed client binding. A transport failure belongs to Failed instead:
+    /// retrying the network is sufficient and need not discard the connection.
     TokenUnavailable {
+        #[serde(default)]
+        problem: Option<CalendarProblem>,
         message: String,
     },
     Failed {
+        #[serde(default)]
+        problem: Option<CalendarProblem>,
         message: String,
     },
 }
@@ -937,8 +1416,8 @@ pub struct SyncRecord {
 /// poll is exactly what `docs/NETWORK_BOUNDARY.md` rules out for a passive
 /// status command. `Missing` covers both "never connected" and "the
 /// credential is gone even though the database row is still there", which is
-/// exactly the state [`CalendarRuntime::disconnect`] leaves behind -- see its
-/// doc comment on why the row itself is not deleted. Checking the credential
+/// also possible after a credential-store reset. Disconnect removes its row.
+/// Checking the credential
 /// store directly, rather than trusting the row's mere existence, is what
 /// keeps that decision from ever reading back as "connected".
 ///
@@ -961,6 +1440,7 @@ pub enum TokenStatus {
     NeedsRefresh,
     Missing,
     RefreshFailed { message: String },
+    ReconnectRequired,
 }
 
 async fn token_status(
@@ -980,6 +1460,29 @@ async fn token_status(
     };
     if !credentials.contains(&key_ref) {
         return Ok(TokenStatus::Missing);
+    }
+    let provider = match kind {
+        CalendarProviderKind::Google => CalendarProvider::Google,
+        CalendarProviderKind::Microsoft => CalendarProvider::Microsoft,
+    };
+    let custom = settings::get::<String>(db.pool(), client_id_key(provider))
+        .await
+        .map_err(|_| problem_message(CalendarProblem::Storage))?;
+    let choice = calendar_clients::resolve(kind, custom.as_deref(), None);
+    let expected = match &choice {
+        ClientChoice::AppOwned(client) | ClientChoice::Custom(client) => Some(client.client_id()),
+        ClientChoice::Missing => None,
+    };
+    let binding = match credentials::bundle_client_id(credentials, &key_ref) {
+        Ok(binding) => binding,
+        Err(CalendarError::Credential(kw_security::CredentialError::NotFound(_))) => {
+            return Ok(TokenStatus::Missing)
+        }
+        Err(CalendarError::Bundle(_)) => return Ok(TokenStatus::ReconnectRequired),
+        Err(_) => return Err(problem_message(CalendarProblem::Storage)),
+    };
+    if binding.is_none() || binding.as_deref() != expected {
+        return Ok(TokenStatus::ReconnectRequired);
     }
     Ok(if row.expires_at > now_epoch() {
         TokenStatus::Active
@@ -1016,7 +1519,7 @@ fn combine_token_status(row_status: TokenStatus, last_sync: Option<&SyncRecord>)
         return row_status;
     }
     match last_sync.map(|record| &record.outcome) {
-        Some(SyncOutcome::TokenUnavailable { message }) => TokenStatus::RefreshFailed {
+        Some(SyncOutcome::TokenUnavailable { message, .. }) => TokenStatus::RefreshFailed {
             message: message.clone(),
         },
         _ => TokenStatus::NeedsRefresh,
@@ -1058,6 +1561,10 @@ pub struct ProviderStatus {
     /// Whether this build provides an app-owned client for the provider.
     pub app_client_available: bool,
     pub account: Option<AccountStatus>,
+    pub operation: CalendarOperation,
+    pub pending_sign_in: Option<PendingSignIn>,
+    pub cleanup_pending: u32,
+    pub leftover: Vec<LeftoverConnection>,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -1088,6 +1595,31 @@ async fn provider_status(
         .await
         .map_err(|e| fail("could not read the connected account", e))?;
 
+    let leftover = tokens_repo::list(db.pool(), provider.kind())
+        .await
+        .map_err(|_| problem_message(CalendarProblem::Storage))?
+        .into_iter()
+        .filter(|(email, _)| account_email.as_ref() != Some(email))
+        .map(|(email, row)| {
+            let positional = row
+                .token_ref
+                .strip_prefix(&format!("calendar-{}-", provider.wire_str()))
+                .is_some_and(|suffix| {
+                    !suffix.is_empty() && suffix.bytes().all(|b| b.is_ascii_digit())
+                });
+            LeftoverConnection {
+                email,
+                origin: if positional {
+                    LeftoverOrigin::Openwhispr
+                } else {
+                    LeftoverOrigin::Earlier
+                },
+            }
+        })
+        .collect();
+    let cleanup: Vec<String> = settings::get_or(db.pool(), cleanup_key(provider), Vec::new())
+        .await
+        .map_err(|_| problem_message(CalendarProblem::Storage))?;
     let account = match account_email {
         None => None,
         Some(email) => {
@@ -1129,6 +1661,10 @@ async fn provider_status(
     };
 
     Ok(ProviderStatus {
+        operation: CalendarOperation::Idle,
+        pending_sign_in: None,
+        cleanup_pending: u32::try_from(cleanup.len()).unwrap_or(u32::MAX),
+        leftover,
         client_id_configured,
         custom_client_id,
         client_source,
@@ -1183,10 +1719,20 @@ fn open_in_browser(url: &str) -> std::io::Result<()> {
 #[tauri::command]
 pub async fn calendar_status(
     state: State<'_, crate::state::AppState>,
+    runtime: State<'_, Arc<CalendarRuntime>>,
 ) -> CmdResult<CalendarStatus> {
-    let google = provider_status(state.db(), state.credentials(), CalendarProvider::Google).await?;
-    let microsoft =
+    let mut google =
+        provider_status(state.db(), state.credentials(), CalendarProvider::Google).await?;
+    let mut microsoft =
         provider_status(state.db(), state.credentials(), CalendarProvider::Microsoft).await?;
+    for (provider, status) in [
+        (CalendarProvider::Google, &mut google),
+        (CalendarProvider::Microsoft, &mut microsoft),
+    ] {
+        let state = runtime.control(provider).state();
+        status.operation = state.operation;
+        status.pending_sign_in = state.pending_sign_in.clone();
+    }
     Ok(CalendarStatus {
         google,
         microsoft,
@@ -1204,9 +1750,7 @@ pub async fn calendar_set_client_id(
 ) -> CmdResult<()> {
     // Serialize client edits with connect and sync so a grant cannot be issued
     // while its client configuration is being replaced.
-    let Ok(_guard) = runtime.busy.try_lock() else {
-        return Err("a calendar connection or sync is already in progress".to_owned());
-    };
+    let _guard = runtime.control(provider).acquire(CalendarOperation::Idle)?;
     let pool = runtime.db.pool();
     persist_custom_client(
         &runtime.db,
@@ -1234,9 +1778,7 @@ pub async fn calendar_set_custom_client(
 ) -> CmdResult<()> {
     // Serialize client edits with connect and sync so a grant cannot be issued
     // while its client configuration is being replaced.
-    let Ok(_guard) = runtime.busy.try_lock() else {
-        return Err("a calendar connection or sync is already in progress".to_owned());
-    };
+    let _guard = runtime.control(provider).acquire(CalendarOperation::Idle)?;
     let pool = runtime.db.pool();
     persist_custom_client(
         &runtime.db,
@@ -1270,13 +1812,38 @@ pub async fn calendar_disconnect(
     runtime: State<'_, Arc<CalendarRuntime>>,
     provider: CalendarProvider,
 ) -> CmdResult<()> {
-    let Some(email) = settings::get::<String>(runtime.db.pool(), account_key(provider))
+    runtime.disconnect(provider).await
+}
+
+/// Cancellation never waits for the operation guard it is meant to release.
+#[tauri::command]
+pub async fn calendar_cancel_connect(
+    runtime: State<'_, Arc<CalendarRuntime>>,
+    provider: CalendarProvider,
+) -> CmdResult<()> {
+    runtime.cancel_connect(provider);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn calendar_remove_leftover(
+    runtime: State<'_, Arc<CalendarRuntime>>,
+    provider: CalendarProvider,
+    email: String,
+) -> CmdResult<()> {
+    runtime.remove_leftover(provider, &email).await
+}
+
+#[tauri::command]
+pub async fn calendar_retry_cleanup(
+    runtime: State<'_, Arc<CalendarRuntime>>,
+    provider: CalendarProvider,
+) -> CmdResult<()> {
+    let _guard = runtime.control(provider).acquire(CalendarOperation::Idle)?;
+    runtime
+        .process_cleanup(provider)
         .await
-        .map_err(|e| fail("could not read the connected account", e))?
-    else {
-        return Ok(());
-    };
-    runtime.disconnect(provider, &email).await
+        .map_err(problem_message)
 }
 
 #[tauri::command]
@@ -1287,18 +1854,17 @@ pub async fn calendar_sync(
     runtime.sync(provider).await
 }
 
-/// Toggle whether one calendar is synced. Never touches the sync cursor --
-/// see `kw_calendar_core::calendars_repo`'s module doc -- so switching a
-/// calendar off and back on resumes from where it left off rather than
-/// starting over.
+/// Toggle whether one calendar is synced. The change takes effect at the next
+/// sync, which replaces that calendar's snapshot when it is selected.
 #[tauri::command]
 pub async fn calendar_set_selected(
-    state: State<'_, crate::state::AppState>,
+    runtime: State<'_, Arc<CalendarRuntime>>,
     provider: CalendarProvider,
     calendar_id: String,
     selected: bool,
 ) -> CmdResult<()> {
-    calendars_repo::set_selected(state.db().pool(), provider.kind(), &calendar_id, selected)
+    let _guard = runtime.control(provider).acquire(CalendarOperation::Idle)?;
+    calendars_repo::set_selected(runtime.db.pool(), provider.kind(), &calendar_id, selected)
         .await
         .map_err(|e| fail("could not save the calendar selection", e))
 }
@@ -1312,6 +1878,1036 @@ pub async fn calendar_set_selected(
 )]
 mod tests {
     use super::*;
+
+    fn grant_tokens(access: &str) -> kw_calendar_core::TokenSet {
+        kw_calendar_core::TokenSet {
+            access_token: Secret::new(access.to_owned()),
+            refresh_token: Some(Secret::new("refresh-fixture".into())),
+            expires_at: now_epoch() + 3600,
+            scope: "scope".into(),
+        }
+    }
+
+    #[derive(Debug, Default)]
+    struct ControlledCredentials {
+        memory: kw_security::MemoryCredentialStore,
+        fail_delete: std::sync::atomic::AtomicBool,
+        fail_set_at: std::sync::atomic::AtomicUsize,
+        sets: std::sync::atomic::AtomicUsize,
+    }
+
+    impl CredentialStore for ControlledCredentials {
+        fn get(&self, key: &KeyRef) -> Result<Secret, kw_security::CredentialError> {
+            self.memory.get(key)
+        }
+        fn set(&self, key: &KeyRef, secret: &Secret) -> Result<(), kw_security::CredentialError> {
+            let count = self.sets.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            if self.fail_set_at.load(std::sync::atomic::Ordering::SeqCst) == count {
+                return Err(kw_security::CredentialError::Backend(
+                    "private-store-error".into(),
+                ));
+            }
+            self.memory.set(key, secret)
+        }
+        fn delete(&self, key: &KeyRef) -> Result<(), kw_security::CredentialError> {
+            if self.fail_delete.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err(kw_security::CredentialError::Backend(
+                    "private-store-error".into(),
+                ));
+            }
+            self.memory.delete(key)
+        }
+    }
+
+    fn grant_calendars(provider: CalendarProvider, email: &str) -> GrantCalendars {
+        match provider {
+            CalendarProvider::Google => GrantCalendars::Google(vec![google::CalendarListEntry {
+                id: email.into(),
+                summary: email.into(),
+                description: None,
+                background_color: None,
+                is_primary: true,
+                selected: true,
+            }]),
+            CalendarProvider::Microsoft => {
+                GrantCalendars::Microsoft(vec![microsoft::CalendarListEntry {
+                    id: email.into(),
+                    summary: email.into(),
+                    background_color: None,
+                    is_primary: true,
+                    owner_email: Some(email.into()),
+                }])
+            }
+        }
+    }
+
+    async fn lifecycle_runtime() -> (CalendarRuntime, Arc<ControlledCredentials>) {
+        let db = Db::open_in_memory().await.unwrap();
+        let creds = Arc::new(ControlledCredentials::default());
+        for provider in [CalendarProvider::Google, CalendarProvider::Microsoft] {
+            write_client_id(&db, provider, Some("client".into()))
+                .await
+                .unwrap();
+        }
+        (
+            CalendarRuntime::new(db, creds.clone(), NetworkPolicy::new().unwrap()),
+            creds,
+        )
+    }
+
+    async fn install(
+        runtime: &CalendarRuntime,
+        provider: CalendarProvider,
+        email: &str,
+        access: &str,
+    ) -> Result<ConnectOutcome, CalendarProblem> {
+        runtime
+            .install_grant(
+                provider,
+                email,
+                &grant_tokens(access),
+                "client",
+                &grant_calendars(provider, email),
+            )
+            .await
+    }
+
+    async fn seed_import(
+        runtime: &CalendarRuntime,
+        provider: CalendarProvider,
+        email: &str,
+        name: &str,
+    ) {
+        let slot = KeyRef::new(name).unwrap();
+        runtime
+            .credentials
+            .set(
+                &slot,
+                &credentials::grant_secret(&grant_tokens("imported-access"), "client").unwrap(),
+            )
+            .unwrap();
+        tokens_repo::upsert(
+            runtime.db.pool(),
+            provider.kind(),
+            email,
+            name,
+            now_epoch() + 3600,
+            "scope",
+        )
+        .await
+        .unwrap();
+        seed_snapshot_calendar(&runtime.db, provider, email, email).await;
+    }
+
+    #[tokio::test]
+    async fn calendar_provider_guards_are_independent_in_both_directions() {
+        let (runtime, _) = lifecycle_runtime().await;
+        for (held, other) in [
+            (CalendarProvider::Google, CalendarProvider::Microsoft),
+            (CalendarProvider::Microsoft, CalendarProvider::Google),
+        ] {
+            let _guard = runtime
+                .control(held)
+                .acquire(CalendarOperation::Syncing)
+                .unwrap();
+            assert!(runtime
+                .sync(held)
+                .await
+                .unwrap_err()
+                .contains("already in progress"));
+            assert!(runtime.disconnect(held).await.is_err());
+            assert!(runtime.remove_leftover(held, "none").await.is_err());
+            assert_eq!(
+                runtime.sync(other).await.unwrap_err(),
+                format!("no {} account is connected", other.name())
+            );
+            assert!(
+                settings::get::<SyncRecord>(runtime.db.pool(), last_sync_key(other))
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+            runtime.disconnect(other).await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn calendar_cancel_and_failed_browser_keep_the_previous_connection() {
+        for browser_ok in [true, false] {
+            let (mut runtime, creds) = lifecycle_runtime().await;
+            let provider = CalendarProvider::Google;
+            install(&runtime, provider, "old@example.com", "old-access")
+                .await
+                .unwrap();
+            let slot = credentials::token_ref_for(provider.kind(), "old@example.com").unwrap();
+            let before = creds.get(&slot).unwrap();
+            runtime.browser_opener = if browser_ok {
+                |_| Ok(())
+            } else {
+                |_| Err(std::io::Error::other("browser unavailable"))
+            };
+            let task = async {
+                let (outcome, ()) = tokio::join!(runtime.connect(provider), async {
+                    loop {
+                        if let Some(pending) =
+                            runtime.control(provider).state().pending_sign_in.clone()
+                        {
+                            assert_eq!(pending.browser_opened, browser_ok);
+                            assert!(pending
+                                .authorize_url
+                                .starts_with("https://accounts.google.com/"));
+                            break;
+                        }
+                        tokio::task::yield_now().await;
+                    }
+                    assert!(matches!(
+                        runtime.control(provider).state().operation,
+                        CalendarOperation::Connecting
+                    ));
+                    assert!(runtime.connect(provider).await.is_err());
+                    runtime.cancel_connect(provider);
+                });
+                outcome.unwrap()
+            };
+            let outcome = tokio::time::timeout(Duration::from_secs(2), task)
+                .await
+                .unwrap();
+            assert!(matches!(
+                outcome,
+                ConnectOutcome::Failed {
+                    problem: CalendarProblem::Cancelled
+                }
+            ));
+            assert_eq!(
+                runtime
+                    .read_previous_account(provider)
+                    .await
+                    .unwrap()
+                    .as_deref(),
+                Some("old@example.com")
+            );
+            assert_eq!(creds.get(&slot).unwrap().expose(), before.expose());
+            assert_eq!(
+                tokens_repo::list(runtime.db.pool(), provider.kind())
+                    .await
+                    .unwrap()
+                    .len(),
+                1
+            );
+            assert_eq!(
+                calendars_repo::list_calendars(
+                    runtime.db.pool(),
+                    provider.kind(),
+                    "old@example.com"
+                )
+                .await
+                .unwrap()
+                .len(),
+                1
+            );
+            assert!(runtime.control(provider).state().pending_sign_in.is_none());
+            assert!(matches!(
+                runtime.control(provider).state().operation,
+                CalendarOperation::Idle
+            ));
+            runtime.cancel_connect(provider); // idempotent without an active flow
+        }
+    }
+
+    #[tokio::test]
+    async fn calendar_replacement_commit_failure_keeps_all_previous_state() {
+        for provider in [CalendarProvider::Google, CalendarProvider::Microsoft] {
+            let (runtime, creds) = lifecycle_runtime().await;
+            install(&runtime, provider, "old@example.com", "old-access")
+                .await
+                .unwrap();
+            seed_snapshot_calendar(&runtime.db, provider, "with-event", "old@example.com").await;
+            let old_slot = credentials::token_ref_for(provider.kind(), "old@example.com").unwrap();
+            let before = creds.get(&old_slot).unwrap();
+            settings::set(runtime.db.pool(), last_sync_key(provider), &"old-record")
+                .await
+                .unwrap();
+            sqlx::query("CREATE TRIGGER refuse_account BEFORE INSERT ON settings WHEN NEW.key LIKE 'calendar.%.account' BEGIN SELECT RAISE(ABORT, 'fixture'); END").execute(runtime.db.pool()).await.unwrap();
+            assert_eq!(
+                install(&runtime, provider, "new@example.com", "new-access")
+                    .await
+                    .unwrap_err(),
+                CalendarProblem::Storage
+            );
+            assert_eq!(
+                runtime
+                    .read_previous_account(provider)
+                    .await
+                    .unwrap()
+                    .as_deref(),
+                Some("old@example.com")
+            );
+            assert_eq!(creds.get(&old_slot).unwrap().expose(), before.expose());
+            assert!(!creds.contains(
+                &credentials::token_ref_for(provider.kind(), "new@example.com").unwrap()
+            ));
+            assert!(
+                tokens_repo::read(runtime.db.pool(), provider.kind(), "new@example.com")
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+            assert_eq!(
+                calendars_repo::list_calendars(
+                    runtime.db.pool(),
+                    provider.kind(),
+                    "old@example.com"
+                )
+                .await
+                .unwrap()
+                .len(),
+                2
+            );
+            assert_eq!(
+                events_repo::count_events(runtime.db.pool(), provider.wire_str(), "with-event")
+                    .await
+                    .unwrap(),
+                1
+            );
+            assert_eq!(
+                settings::get::<String>(runtime.db.pool(), last_sync_key(provider))
+                    .await
+                    .unwrap()
+                    .as_deref(),
+                Some("old-record")
+            );
+            assert!(runtime.cleanup_refs(provider).await.unwrap().is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn calendar_same_account_restore_and_restore_failure_have_defined_states() {
+        for restore_fails in [false, true] {
+            let (runtime, creds) = lifecycle_runtime().await;
+            let provider = CalendarProvider::Google;
+            install(&runtime, provider, "same@example.com", "old-access")
+                .await
+                .unwrap();
+            let slot = credentials::token_ref_for(provider.kind(), "same@example.com").unwrap();
+            let old = creds.get(&slot).unwrap();
+            if restore_fails {
+                creds.fail_set_at.store(
+                    creds.sets.load(std::sync::atomic::Ordering::SeqCst) + 2,
+                    std::sync::atomic::Ordering::SeqCst,
+                );
+            }
+            sqlx::query("CREATE TRIGGER refuse_account BEFORE INSERT ON settings WHEN NEW.key LIKE 'calendar.%.account' BEGIN SELECT RAISE(ABORT, 'fixture'); END").execute(runtime.db.pool()).await.unwrap();
+            let problem = install(&runtime, provider, "same@example.com", "new-access")
+                .await
+                .unwrap_err();
+            if restore_fails {
+                assert_eq!(problem, CalendarProblem::ReconnectRequired);
+                assert!(!creds.contains(&slot));
+                assert_eq!(
+                    token_status(
+                        &runtime.db,
+                        creds.as_ref(),
+                        provider.kind(),
+                        "same@example.com"
+                    )
+                    .await
+                    .unwrap(),
+                    TokenStatus::Missing
+                );
+            } else {
+                assert_eq!(problem, CalendarProblem::Storage);
+                assert_eq!(creds.get(&slot).unwrap().expose(), old.expose());
+            }
+            assert_eq!(
+                runtime
+                    .read_previous_account(provider)
+                    .await
+                    .unwrap()
+                    .as_deref(),
+                Some("same@example.com")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn calendar_leftover_restore_failure_does_not_require_active_account_reconnect() {
+        for provider in [CalendarProvider::Google, CalendarProvider::Microsoft] {
+            for (bundle_present, restore_fails, delete_fails) in [
+                (true, false, false),
+                (true, true, false),
+                (true, true, true),
+                (false, false, false),
+                (false, false, true),
+            ] {
+                let (runtime, creds) = lifecycle_runtime().await;
+                install(&runtime, provider, "active@example.com", "active-access")
+                    .await
+                    .unwrap();
+                let active_slot =
+                    credentials::token_ref_for(provider.kind(), "active@example.com").unwrap();
+                let active = creds.get(&active_slot).unwrap();
+                let slot =
+                    credentials::token_ref_for(provider.kind(), "leftover@example.com").unwrap();
+                seed_import(&runtime, provider, "leftover@example.com", slot.slot()).await;
+                let leftover = creds.get(&slot).unwrap();
+                if !bundle_present {
+                    creds.delete(&slot).unwrap();
+                }
+                if restore_fails {
+                    creds.fail_set_at.store(
+                        creds.sets.load(std::sync::atomic::Ordering::SeqCst) + 2,
+                        std::sync::atomic::Ordering::SeqCst,
+                    );
+                }
+                creds
+                    .fail_delete
+                    .store(delete_fails, std::sync::atomic::Ordering::SeqCst);
+                sqlx::query("CREATE TRIGGER refuse_account BEFORE INSERT ON settings WHEN NEW.key LIKE 'calendar.%.account' BEGIN SELECT RAISE(ABORT, 'fixture'); END").execute(runtime.db.pool()).await.unwrap();
+                assert_eq!(
+                    install(
+                        &runtime,
+                        provider,
+                        "leftover@example.com",
+                        "replacement-access"
+                    )
+                    .await
+                    .unwrap_err(),
+                    CalendarProblem::Storage
+                );
+                assert_eq!(
+                    runtime
+                        .read_previous_account(provider)
+                        .await
+                        .unwrap()
+                        .as_deref(),
+                    Some("active@example.com")
+                );
+                assert_eq!(creds.get(&active_slot).unwrap().expose(), active.expose());
+                assert!(tokens_repo::read(
+                    runtime.db.pool(),
+                    provider.kind(),
+                    "leftover@example.com"
+                )
+                .await
+                .unwrap()
+                .is_some());
+                if bundle_present && !restore_fails {
+                    assert_eq!(creds.get(&slot).unwrap().expose(), leftover.expose());
+                } else {
+                    assert_eq!(creds.contains(&slot), delete_fails);
+                }
+                assert_eq!(
+                    runtime.cleanup_refs(provider).await.unwrap(),
+                    if delete_fails {
+                        vec![slot.slot().to_owned()]
+                    } else {
+                        vec![]
+                    }
+                );
+                // Even a queued failed undo cannot delete a still-referenced slot.
+                creds
+                    .fail_delete
+                    .store(false, std::sync::atomic::Ordering::SeqCst);
+                runtime.process_cleanup(provider).await.unwrap();
+                if delete_fails {
+                    assert!(creds.contains(&slot));
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn calendar_cleanup_survives_restart_and_reused_slot_is_never_deleted() {
+        let (runtime, creds) = lifecycle_runtime().await;
+        let provider = CalendarProvider::Google;
+        install(&runtime, provider, "same@example.com", "old-access")
+            .await
+            .unwrap();
+        let slot = credentials::token_ref_for(provider.kind(), "same@example.com").unwrap();
+        creds
+            .fail_delete
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        runtime.disconnect(provider).await.unwrap();
+        assert_eq!(
+            runtime.cleanup_refs(provider).await.unwrap(),
+            vec![slot.slot()]
+        );
+        assert_eq!(
+            provider_status(&runtime.db, creds.as_ref(), provider)
+                .await
+                .unwrap()
+                .cleanup_pending,
+            1
+        );
+        let restarted = CalendarRuntime::new(
+            runtime.db.clone(),
+            creds.clone(),
+            NetworkPolicy::new().unwrap(),
+        );
+        restarted.process_cleanup(provider).await.unwrap(); // start-of-connect retry still fails
+        assert_eq!(
+            restarted.cleanup_refs(provider).await.unwrap(),
+            vec![slot.slot()]
+        );
+        install(&restarted, provider, "same@example.com", "new-access")
+            .await
+            .unwrap();
+        assert!(restarted.cleanup_refs(provider).await.unwrap().is_empty());
+        let new = creds.get(&slot).unwrap();
+        creds
+            .fail_delete
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        for _ in 0..3 {
+            restarted.process_cleanup(provider).await.unwrap();
+        }
+        assert_eq!(creds.get(&slot).unwrap().expose(), new.expose());
+        // A stale list from an earlier interrupted cleanup must also preserve a live row.
+        settings::set(runtime.db.pool(), cleanup_key(provider), &vec![slot.slot()])
+            .await
+            .unwrap();
+        restarted.process_cleanup(provider).await.unwrap();
+        assert!(restarted.cleanup_refs(provider).await.unwrap().is_empty());
+        assert_eq!(creds.get(&slot).unwrap().expose(), new.expose());
+        creds
+            .fail_delete
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        install(&restarted, provider, "other@example.com", "other-access")
+            .await
+            .unwrap();
+        assert_eq!(
+            restarted.cleanup_refs(provider).await.unwrap(),
+            vec![slot.slot()]
+        );
+        let restarted = CalendarRuntime::new(
+            runtime.db.clone(),
+            creds.clone(),
+            NetworkPolicy::new().unwrap(),
+        );
+        creds
+            .fail_delete
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        restarted.process_cleanup(provider).await.unwrap();
+        assert!(restarted.cleanup_refs(provider).await.unwrap().is_empty());
+        assert!(!creds.contains(&slot));
+    }
+
+    #[tokio::test]
+    async fn calendar_imported_and_native_leftovers_are_listed_and_removed_independently() {
+        for provider in [CalendarProvider::Google, CalendarProvider::Microsoft] {
+            let (runtime, creds) = lifecycle_runtime().await;
+            let positional = format!("calendar-{}-0", provider.wire_str());
+            seed_import(&runtime, provider, "import@example.com", &positional).await;
+            let earlier =
+                credentials::token_ref_for(provider.kind(), "earlier@example.com").unwrap();
+            seed_import(&runtime, provider, "earlier@example.com", earlier.slot()).await;
+            runtime.disconnect(provider).await.unwrap();
+            assert_eq!(
+                tokens_repo::list(runtime.db.pool(), provider.kind())
+                    .await
+                    .unwrap()
+                    .len(),
+                2
+            );
+            install(&runtime, provider, "active@example.com", "active-access")
+                .await
+                .unwrap();
+            let status = provider_status(&runtime.db, creds.as_ref(), provider)
+                .await
+                .unwrap();
+            assert_eq!(status.leftover.len(), 2);
+            assert!(matches!(status.leftover[0].origin, LeftoverOrigin::Earlier));
+            assert!(matches!(
+                status.leftover[1].origin,
+                LeftoverOrigin::Openwhispr
+            ));
+            let json = serde_json::to_string(&status).unwrap();
+            for private in [
+                "active-access",
+                "refresh-fixture",
+                "imported-access",
+                earlier.slot(),
+                &positional,
+            ] {
+                assert!(!json.contains(private));
+            }
+            assert!(runtime
+                .remove_leftover(provider, "active@example.com")
+                .await
+                .unwrap_err()
+                .contains("Disconnect"));
+            runtime
+                .remove_leftover(provider, "import@example.com")
+                .await
+                .unwrap();
+            runtime
+                .remove_leftover(provider, "import@example.com")
+                .await
+                .unwrap();
+            assert!(!creds.contains(&KeyRef::new(&positional).unwrap()));
+            assert_eq!(
+                events_repo::count_events(
+                    runtime.db.pool(),
+                    provider.wire_str(),
+                    "import@example.com"
+                )
+                .await
+                .unwrap(),
+                0
+            );
+            runtime.disconnect(provider).await.unwrap();
+            assert!(creds.contains(&earlier));
+            assert!(
+                tokens_repo::read(runtime.db.pool(), provider.kind(), "earlier@example.com")
+                    .await
+                    .unwrap()
+                    .is_some()
+            );
+            assert!(runtime
+                .read_previous_account(provider)
+                .await
+                .unwrap()
+                .is_none());
+            // An imported positional row can be the connected account as well.
+            settings::set(
+                runtime.db.pool(),
+                account_key(provider),
+                &"earlier@example.com",
+            )
+            .await
+            .unwrap();
+            runtime.disconnect(provider).await.unwrap();
+            seed_import(&runtime, provider, "import@example.com", &positional).await;
+            settings::set(
+                runtime.db.pool(),
+                account_key(provider),
+                &"import@example.com",
+            )
+            .await
+            .unwrap();
+            runtime.disconnect(provider).await.unwrap();
+            assert!(!creds.contains(&KeyRef::new(&positional).unwrap()));
+            assert!(tokens_repo::list(runtime.db.pool(), provider.kind())
+                .await
+                .unwrap()
+                .is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn calendar_removing_a_leftover_alias_never_queues_the_active_slot() {
+        let (runtime, creds) = lifecycle_runtime().await;
+        let provider = CalendarProvider::Google;
+        install(&runtime, provider, "active@example.com", "active-access")
+            .await
+            .unwrap();
+        let slot = credentials::token_ref_for(provider.kind(), "active@example.com").unwrap();
+        tokens_repo::upsert(
+            runtime.db.pool(),
+            provider.kind(),
+            "alias@example.com",
+            slot.slot(),
+            now_epoch() + 3600,
+            "scope",
+        )
+        .await
+        .unwrap();
+        runtime
+            .remove_leftover(provider, "alias@example.com")
+            .await
+            .unwrap();
+        assert!(runtime.cleanup_refs(provider).await.unwrap().is_empty());
+        assert!(creds.contains(&slot));
+    }
+
+    #[tokio::test]
+    async fn calendar_reconnect_uses_native_slot_and_clears_cache_and_sync_record() {
+        let (runtime, creds) = lifecycle_runtime().await;
+        let provider = CalendarProvider::Google;
+        seed_import(
+            &runtime,
+            provider,
+            "import@example.com",
+            "calendar-google-12",
+        )
+        .await;
+        settings::set(runtime.db.pool(), last_sync_key(provider), &"stale-record")
+            .await
+            .unwrap();
+        for access in ["first-access", "second-access"] {
+            install(&runtime, provider, "import@example.com", access)
+                .await
+                .unwrap();
+            let native = credentials::token_ref_for(provider.kind(), "import@example.com").unwrap();
+            assert_eq!(
+                tokens_repo::read(runtime.db.pool(), provider.kind(), "import@example.com")
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .token_ref,
+                native.slot()
+            );
+            assert!(creds.contains(&native));
+            assert!(!creds.contains(&KeyRef::new("calendar-google-12").unwrap()));
+            assert_eq!(
+                tokens_repo::list(runtime.db.pool(), provider.kind())
+                    .await
+                    .unwrap()
+                    .len(),
+                1
+            );
+            assert_eq!(
+                events_repo::count_events(runtime.db.pool(), "google", "import@example.com")
+                    .await
+                    .unwrap(),
+                0
+            );
+            assert!(
+                settings::get::<serde_json::Value>(runtime.db.pool(), last_sync_key(provider))
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn calendar_failed_new_grant_deletion_is_queued_and_write_failure_keeps_old_grant() {
+        let (runtime, creds) = lifecycle_runtime().await;
+        let provider = CalendarProvider::Google;
+        install(&runtime, provider, "old@example.com", "old-access")
+            .await
+            .unwrap();
+        creds.fail_set_at.store(
+            creds.sets.load(std::sync::atomic::Ordering::SeqCst) + 1,
+            std::sync::atomic::Ordering::SeqCst,
+        );
+        assert_eq!(
+            install(&runtime, provider, "new@example.com", "new-access")
+                .await
+                .unwrap_err(),
+            CalendarProblem::Storage
+        );
+        assert_eq!(
+            runtime
+                .read_previous_account(provider)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("old@example.com")
+        );
+        sqlx::query("CREATE TRIGGER refuse_account BEFORE INSERT ON settings WHEN NEW.key LIKE 'calendar.%.account' BEGIN SELECT RAISE(ABORT, 'fixture'); END").execute(runtime.db.pool()).await.unwrap();
+        creds
+            .fail_delete
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(
+            install(&runtime, provider, "new@example.com", "new-access")
+                .await
+                .unwrap_err(),
+            CalendarProblem::Storage
+        );
+        let slot = credentials::token_ref_for(provider.kind(), "new@example.com").unwrap();
+        assert_eq!(
+            runtime.cleanup_refs(provider).await.unwrap(),
+            vec![slot.slot()]
+        );
+        creds
+            .fail_delete
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        runtime.process_cleanup(provider).await.unwrap();
+        assert!(!creds.contains(&slot));
+    }
+
+    #[tokio::test]
+    async fn calendar_binding_status_requires_reconnect_without_network() {
+        let (runtime, creds) = lifecycle_runtime().await;
+        let provider = CalendarProvider::Google;
+        install(&runtime, provider, "user@example.com", "access")
+            .await
+            .unwrap();
+        let slot = credentials::token_ref_for(provider.kind(), "user@example.com").unwrap();
+        for binding in [None, Some("another-client")] {
+            let bundle = serde_json::json!({ "access_token": "private-access", "refresh_token": "private-refresh", "client_id": binding });
+            creds.set(&slot, &Secret::new(bundle.to_string())).unwrap();
+            assert_eq!(
+                provider_status(&runtime.db, creds.as_ref(), provider)
+                    .await
+                    .unwrap()
+                    .account
+                    .unwrap()
+                    .token,
+                TokenStatus::ReconnectRequired
+            );
+            assert!(matches!(
+                runtime.sync(provider).await.unwrap(),
+                SyncOutcome::TokenUnavailable {
+                    problem: Some(CalendarProblem::ReconnectRequired),
+                    ..
+                }
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn calendar_purge_marker_failure_rolls_back_the_cache_purge() {
+        let (runtime, _) = lifecycle_runtime().await;
+        let provider = CalendarProvider::Google;
+        seed_snapshot_calendar(&runtime.db, provider, "cached", "user@example.com").await;
+        sqlx::query("CREATE TRIGGER refuse_marker BEFORE INSERT ON settings WHEN NEW.key = 'calendar.google.lastSync' BEGIN SELECT RAISE(ABORT, 'fixture'); END").execute(runtime.db.pool()).await.unwrap();
+        assert!(runtime
+            .prepare_snapshot(provider, "user@example.com")
+            .await
+            .is_err());
+        assert_eq!(
+            events_repo::count_events(runtime.db.pool(), "google", "cached")
+                .await
+                .unwrap(),
+            1
+        );
+        assert!(
+            settings::get::<SyncRecord>(runtime.db.pool(), last_sync_key(provider))
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn calendar_missing_restore_bundle_and_disconnect_transaction_failure() {
+        let (runtime, creds) = lifecycle_runtime().await;
+        let provider = CalendarProvider::Google;
+        install(&runtime, provider, "user@example.com", "old-access")
+            .await
+            .unwrap();
+        let slot = credentials::token_ref_for(provider.kind(), "user@example.com").unwrap();
+        creds.delete(&slot).unwrap();
+        sqlx::query("CREATE TRIGGER refuse_account BEFORE INSERT ON settings WHEN NEW.key = 'calendar.google.account' BEGIN SELECT RAISE(ABORT, 'fixture'); END").execute(runtime.db.pool()).await.unwrap();
+        assert_eq!(
+            install(&runtime, provider, "user@example.com", "new-access")
+                .await
+                .unwrap_err(),
+            CalendarProblem::ReconnectRequired
+        );
+        assert!(!creds.contains(&slot));
+        sqlx::query("DROP TRIGGER refuse_account")
+            .execute(runtime.db.pool())
+            .await
+            .unwrap();
+        install(&runtime, provider, "user@example.com", "working-access")
+            .await
+            .unwrap();
+        seed_snapshot_calendar(&runtime.db, provider, "cached", "user@example.com").await;
+        sqlx::query("CREATE TRIGGER refuse_disconnect BEFORE DELETE ON settings WHEN OLD.key = 'calendar.google.account' BEGIN SELECT RAISE(ABORT, 'fixture'); END").execute(runtime.db.pool()).await.unwrap();
+        assert!(runtime.disconnect(provider).await.is_err());
+        assert!(creds.contains(&slot));
+        assert!(
+            tokens_repo::read(runtime.db.pool(), provider.kind(), "user@example.com")
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert_eq!(
+            events_repo::count_events(runtime.db.pool(), "google", "cached")
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            runtime
+                .read_previous_account(provider)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("user@example.com")
+        );
+        assert!(runtime.cleanup_refs(provider).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn calendar_connect_classifies_pre_consent_storage_failures() {
+        let (runtime, _) = lifecycle_runtime().await;
+        runtime.db.pool().close().await;
+        assert!(matches!(
+            runtime.connect(CalendarProvider::Google).await.unwrap(),
+            ConnectOutcome::Failed {
+                problem: CalendarProblem::Storage
+            }
+        ));
+        assert!(matches!(
+            runtime.control(CalendarProvider::Google).state().operation,
+            CalendarOperation::Idle
+        ));
+    }
+
+    #[tokio::test]
+    async fn calendar_sync_record_write_failure_is_classified() {
+        let (runtime, _) = lifecycle_runtime().await;
+        sqlx::query("CREATE TRIGGER refuse_marker BEFORE INSERT ON settings WHEN NEW.key = 'calendar.google.lastSync' BEGIN SELECT RAISE(ABORT, 'fixture'); END").execute(runtime.db.pool()).await.unwrap();
+        let outcome = runtime
+            .record_sync(
+                CalendarProvider::Google,
+                "user@example.com",
+                SyncOutcome::Completed {
+                    events_upserted: 0,
+                    events_removed: 0,
+                    calendar_errors: vec![],
+                },
+            )
+            .await;
+        assert!(matches!(
+            outcome,
+            SyncOutcome::Failed {
+                problem: Some(CalendarProblem::Storage),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn calendar_problem_classification_is_allowlisted_and_contextual() {
+        use kw_calendar_core::ExchangeError as E;
+        use CalendarProblem as P;
+        let google = CalendarProvider::Google;
+        let microsoft = CalendarProvider::Microsoft;
+        for (provider, code, expected) in [
+            (google, "access_denied", P::AccessDenied),
+            (microsoft, "access_denied", P::AccessDenied),
+            (google, "admin_policy_enforced", P::AppBlocked),
+            (google, "org_internal", P::AppBlocked),
+            (google, "redirect_uri_mismatch", P::ClientMisconfigured),
+            (google, "private-unknown-error", P::InvalidResponse),
+            (microsoft, "org_internal", P::InvalidResponse),
+        ] {
+            let error = CalendarError::AuthorizationDenied {
+                error: code.into(),
+                description: Some("private-description".into()),
+            };
+            assert_eq!(classify(&error, provider, false), expected);
+            assert!(
+                !serde_json::to_string(&ConnectOutcome::Failed { problem: expected })
+                    .unwrap()
+                    .contains("private")
+            );
+        }
+        for (code, expected) in [
+            ("65001", P::AdminConsentRequired),
+            ("90094", P::AdminConsentRequired),
+            ("90095", P::AdminConsentRequired),
+            ("50011", P::ClientMisconfigured),
+            ("700016", P::ClientMisconfigured),
+            ("650010", P::InvalidResponse),
+        ] {
+            let description = Some(format!("AADSTS{code}: private-description"));
+            for error in [
+                CalendarError::AuthorizationDenied {
+                    error: "unknown".into(),
+                    description: description.clone(),
+                },
+                CalendarError::Exchange(E::Rejected {
+                    error: "unknown".into(),
+                    description,
+                }),
+            ] {
+                assert_eq!(classify(&error, microsoft, false), expected);
+                assert_eq!(classify(&error, google, false), P::InvalidResponse);
+            }
+        }
+        for (code, refresh, expected) in [
+            ("invalid_client", false, P::ClientRejected),
+            ("unauthorized_client", false, P::ClientRejected),
+            ("invalid_grant", false, P::InvalidResponse),
+            ("invalid_grant", true, P::ReconnectRequired),
+        ] {
+            assert_eq!(
+                classify(
+                    &CalendarError::Exchange(E::Rejected {
+                        error: code.into(),
+                        description: None
+                    }),
+                    google,
+                    refresh
+                ),
+                expected
+            );
+        }
+        for (error, expected) in [
+            (CalendarError::ReconnectRequired, P::ReconnectRequired),
+            (CalendarError::StateMismatch, P::InvalidResponse),
+            (CalendarError::MissingCallbackParams, P::InvalidResponse),
+            (CalendarError::NoRefreshToken, P::InvalidResponse),
+            (
+                CalendarError::Exchange(E::MalformedResponse),
+                P::InvalidResponse,
+            ),
+            (
+                CalendarError::Credential(kw_security::CredentialError::Backend("private".into())),
+                P::Storage,
+            ),
+            (CalendarError::Storage(sqlx::Error::PoolClosed), P::Storage),
+        ] {
+            assert_eq!(classify(&error, google, false), expected);
+        }
+        for status in [401, 403, 500, 503] {
+            assert_eq!(
+                classify_sync(&kw_calendar_core::SyncError::HttpStatus { status }),
+                if status >= 500 {
+                    P::ProviderUnavailable
+                } else {
+                    P::ClientMisconfigured
+                }
+            );
+        }
+        for (status, expected) in [
+            (400, P::InvalidResponse),
+            (499, P::InvalidResponse),
+            (500, P::ProviderUnavailable),
+            (503, P::ProviderUnavailable),
+            (599, P::ProviderUnavailable),
+            (600, P::InvalidResponse),
+        ] {
+            for provider in [google, microsoft] {
+                for refresh in [false, true] {
+                    assert_eq!(
+                        classify(
+                            &CalendarError::Exchange(E::HttpStatus { status }),
+                            provider,
+                            refresh
+                        ),
+                        expected
+                    );
+                }
+            }
+        }
+        assert_eq!(
+            classify_redirect(&kw_calendar_core::RedirectError::TimedOut),
+            P::TimedOut
+        );
+        assert_eq!(
+            classify_redirect(&kw_calendar_core::RedirectError::Bind(
+                std::io::Error::other("fixture")
+            )),
+            P::Network
+        );
+        assert_eq!(
+            classify_redirect(&kw_calendar_core::RedirectError::MalformedRequest),
+            P::InvalidResponse
+        );
+        // Construct a reqwest error without performing a request.
+        let transport = reqwest::Client::new()
+            .get("invalid-url")
+            .build()
+            .unwrap_err();
+        let problem = classify(&CalendarError::Exchange(E::Http(transport)), google, true);
+        assert!(matches!(
+            sync_failure(problem),
+            SyncOutcome::Failed {
+                problem: Some(P::Network),
+                ..
+            }
+        ));
+        let old: SyncOutcome =
+            serde_json::from_str(r#"{"state":"failed","message":"legacy"}"#).unwrap();
+        assert!(matches!(old, SyncOutcome::Failed { problem: None, .. }));
+    }
 
     async fn write_client_id(
         db: &Db,
@@ -1353,7 +2949,7 @@ mod tests {
             let runtime = &runtime;
             async move {
                 if id == "bad" {
-                    return Err("page two failed".to_owned());
+                    return Err(CalendarProblem::Network);
                 }
                 let keep_ids = if id == "unreadable" {
                     vec![events_repo::row_id("google", &id, "old")]
@@ -1387,7 +2983,7 @@ mod tests {
         assert_eq!(
             calendar_errors,
             [
-                "bad: page two failed",
+                "bad: Could not reach the calendar provider. Try again.",
                 "1 event in unreadable had a time that could not be read"
             ]
         );
@@ -1457,6 +3053,7 @@ mod tests {
                     let record = SyncRecord {
                         at: "2026-01-01T00:00:00Z".to_owned(),
                         outcome: SyncOutcome::Failed {
+                            problem: Some(CalendarProblem::Storage),
                             message: "previous".to_owned(),
                         },
                         account: Some(
@@ -1506,7 +3103,7 @@ mod tests {
                     assert_ne!(gate.at, "2026-01-01T00:00:00Z");
                     assert!(gate.last_success_at.is_none());
                     assert!(
-                        matches!(gate.outcome, SyncOutcome::Failed { message } if message == "The first sync after an update did not finish.")
+                        matches!(gate.outcome, SyncOutcome::Failed { message, problem: None } if message == "The first sync after an update did not finish.")
                     );
                 } else {
                     assert_eq!(gate.at, "2026-01-01T00:00:00Z");
@@ -1515,7 +3112,7 @@ mod tests {
                         Some("2025-12-01T00:00:00Z")
                     );
                     assert!(
-                        matches!(gate.outcome, SyncOutcome::Failed { message } if message == "previous")
+                        matches!(gate.outcome, SyncOutcome::Failed { message, problem: Some(CalendarProblem::Storage) } if message == "previous")
                     );
                 }
                 // Version one for this account is idempotent, even with new
@@ -1569,7 +3166,7 @@ mod tests {
         assert_eq!(gate.snapshot_version, 1);
         assert!(gate.last_success_at.is_none());
         assert!(
-            matches!(gate.outcome, SyncOutcome::Failed { message } if message == "The first sync after an update did not finish.")
+            matches!(gate.outcome, SyncOutcome::Failed { message, problem: None } if message == "The first sync after an update did not finish.")
         );
 
         // A normal result preserves the repaired gate. Also exercise recording
@@ -1587,6 +3184,7 @@ mod tests {
                     provider,
                     "user@example.com",
                     SyncOutcome::TokenUnavailable {
+                        problem: Some(CalendarProblem::ReconnectRequired),
                         message: "unavailable".to_owned(),
                     },
                 )
@@ -1599,7 +3197,7 @@ mod tests {
             assert_eq!(record.snapshot_version, if corrupt_again { 0 } else { 1 });
             assert!(record.last_success_at.is_none());
             assert!(
-                matches!(record.outcome, SyncOutcome::TokenUnavailable { message } if message == "unavailable")
+                matches!(record.outcome, SyncOutcome::TokenUnavailable { message, .. } if message == "unavailable")
             );
         }
     }
@@ -1612,6 +3210,7 @@ mod tests {
         let old = SyncRecord {
             at: "2026-01-01T00:00:00Z".to_owned(),
             outcome: SyncOutcome::Failed {
+                problem: Some(CalendarProblem::Storage),
                 message: "previous".to_owned(),
             },
             account: Some("other@example.com".to_owned()),
@@ -1626,6 +3225,7 @@ mod tests {
                 provider,
                 "user@example.com",
                 SyncOutcome::TokenUnavailable {
+                    problem: Some(CalendarProblem::ReconnectRequired),
                     message: "unavailable".to_owned(),
                 },
             )
@@ -1642,9 +3242,11 @@ mod tests {
             .unwrap();
         for outcome in [
             SyncOutcome::Failed {
+                problem: Some(CalendarProblem::Storage),
                 message: "failed".to_owned(),
             },
             SyncOutcome::TokenUnavailable {
+                problem: Some(CalendarProblem::ReconnectRequired),
                 message: "unavailable".to_owned(),
             },
             SyncOutcome::Completed {
@@ -1806,6 +3408,7 @@ mod tests {
         assert_eq!(json["eventsUpserted"], 5);
 
         let json = serde_json::to_value(SyncOutcome::TokenUnavailable {
+            problem: Some(CalendarProblem::ReconnectRequired),
             message: "expired".to_owned(),
         })
         .unwrap();
@@ -1829,9 +3432,8 @@ mod tests {
 
     #[tokio::test]
     async fn a_database_row_with_no_matching_credential_reports_missing_not_active() {
-        // The exact state `CalendarRuntime::disconnect` leaves behind: the
-        // credential is gone, but the token_ref row was deliberately left in
-        // place. A caller that only looked at the row's `expires_at` would
+        // An older build or external credential reset can leave metadata
+        // behind after its credential is gone. A caller that only looked at the row's `expires_at` would
         // report this account as still connected.
         let db = kw_storage::Db::open_in_memory().await.unwrap();
         let creds = kw_security::MemoryCredentialStore::new();
@@ -1861,10 +3463,16 @@ mod tests {
     async fn a_present_credential_within_its_expiry_reports_active() {
         let db = kw_storage::Db::open_in_memory().await.unwrap();
         let creds = kw_security::MemoryCredentialStore::new();
+        write_client_id(&db, CalendarProvider::Google, Some("client".into()))
+            .await
+            .unwrap();
         let slot =
             credentials::token_ref_for(CalendarProviderKind::Google, "user@example.com").unwrap();
         creds
-            .set(&slot, &kw_security::Secret::new("bundle".to_owned()))
+            .set(
+                &slot,
+                &credentials::grant_secret(&grant_tokens("access"), "client").unwrap(),
+            )
             .unwrap();
         kw_calendar_core::tokens_repo::upsert(
             db.pool(),
@@ -1892,10 +3500,16 @@ mod tests {
     async fn a_present_credential_past_its_expiry_reports_needs_refresh() {
         let db = kw_storage::Db::open_in_memory().await.unwrap();
         let creds = kw_security::MemoryCredentialStore::new();
+        write_client_id(&db, CalendarProvider::Google, Some("client".into()))
+            .await
+            .unwrap();
         let slot =
             credentials::token_ref_for(CalendarProviderKind::Google, "user@example.com").unwrap();
         creds
-            .set(&slot, &kw_security::Secret::new("bundle".to_owned()))
+            .set(
+                &slot,
+                &credentials::grant_secret(&grant_tokens("access"), "client").unwrap(),
+            )
             .unwrap();
         kw_calendar_core::tokens_repo::upsert(
             db.pool(),
@@ -1926,6 +3540,7 @@ mod tests {
             last_success_at: None,
             at: "2026-01-01T00:00:00Z".to_owned(),
             outcome: SyncOutcome::TokenUnavailable {
+                problem: Some(CalendarProblem::ReconnectRequired),
                 message: message.to_owned(),
             },
         }
@@ -1978,6 +3593,7 @@ mod tests {
             last_success_at: None,
             at: "2026-01-01T00:00:00Z".to_owned(),
             outcome: SyncOutcome::Failed {
+                problem: Some(CalendarProblem::Storage),
                 message: "the calendar list could not be read".to_owned(),
             },
         };
@@ -2326,7 +3942,11 @@ mod tests {
             .manage(runtime.clone())
             .build(tauri::test::mock_context(tauri::test::noop_assets()))
             .unwrap();
-        let _guard = runtime.busy.try_lock().unwrap();
+        let _guard = runtime
+            .control(CalendarProvider::Google)
+            .guard
+            .try_lock()
+            .unwrap();
         let expected = "a calendar connection or sync is already in progress";
         assert_eq!(
             calendar_set_custom_client(

@@ -294,6 +294,11 @@ fn render() -> String {
         ],
         "calendars" => [
             crate::calendar::CalendarProvider,
+            crate::calendar::CalendarProblem,
+            crate::calendar::CalendarOperation,
+            crate::calendar::PendingSignIn,
+            crate::calendar::LeftoverOrigin,
+            crate::calendar::LeftoverConnection,
             crate::calendar::SecretChange,
             crate::calendar_clients::ClientSource,
             crate::calendar::ConnectOutcome,
