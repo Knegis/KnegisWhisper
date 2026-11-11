@@ -782,12 +782,12 @@ export type LinkedEvent = { eventId: string, provider: CalendarProvider, title: 
 /**
  * Missing Start input means Auto; explicit choices never fall back to Auto.
  */
-export type CalendarLinkChoice = { "mode": "auto" } | { "mode": "none" } | { "mode": "event", event_id: string, };
+export type CalendarLinkChoice = { "mode": "auto" } | { "mode": "none" } | { "mode": "event", eventId: string, };
 
 /**
  * A live edit must express the person's choice, without automatic selection.
  */
-export type CalendarSetChoice = { "mode": "none" } | { "mode": "event", event_id: string, };
+export type CalendarSetChoice = { "mode": "none" } | { "mode": "event", eventId: string, };
 
 /**
  * Start continues even when the calendar cannot be linked durably. These

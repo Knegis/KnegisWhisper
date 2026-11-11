@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { clock } from "../MeetingNotification";
-import { confirmMeetingNotesFlush, onMeetingNotesFlush, stopMeeting, updateMeetingNotes } from "../lib/ipc";
+import { confirmMeetingNotesFlush, onMeetingNotesFlush, setMeetingCalendar, stopMeeting, updateMeetingNotes, type MeetingStatus, type CalendarSetChoice } from "../lib/ipc";
+import { calendarNoticeLabels, calendarProviderLabel, eventTitle, upcomingTime } from "../lib/upcoming";
 import type { LiveRow } from "../lib/liveTranscript";
 import { useAutosave } from "../lib/useAutosave";
 import { Icon } from "./Icon";
 import { NoteEditor } from "./NoteEditor";
 
-type MeetingPanelProps = { session: number; elapsed: number; detail: string; alert: boolean; transcriptAllowed: boolean; rows: LiveRow[]; initialNotes: string | null; onProblem: (message: string) => void };
+type CalendarStatus = Pick<MeetingStatus, "sessionId" | "plan" | "calendarNotice" | "calendarChoices">;
+type MeetingPanelProps = { session: number; elapsed: number; detail: string; alert: boolean; transcriptAllowed: boolean; rows: LiveRow[]; initialNotes: string | null; onProblem: (message: string) => void; calendarStatus: CalendarStatus | null };
 const TABS = ["notes", "transcript"] as const;
 type Tab = typeof TABS[number];
 
@@ -22,7 +24,42 @@ function LiveTranscriptList({ rows, container, active, nearBottom }: { rows: Liv
   </li>)}</ol>;
 }
 
-export function MeetingPanel({ session, elapsed, detail, alert, transcriptAllowed, rows, initialNotes, onProblem }: MeetingPanelProps) {
+/** Both recording surfaces use the same controls. The backend's plan event,
+ * followed by a status read in each window, is the only writer of the link. */
+export function CalendarRecordingLine({ status }: { status: CalendarStatus }) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const linked = status.plan?.calendar;
+  const change = async (choice: CalendarSetChoice) => {
+    if (!status.sessionId || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await setMeetingCalendar(status.sessionId, choice);
+      setOpen(false);
+    } catch (cause) { setError(String(cause)); }
+    finally { setBusy(false); }
+  };
+  const choices = status.calendarChoices;
+  if (!linked && !status.calendarNotice && choices.length === 0) return null;
+  return <div className="recording-calendar" data-tauri-drag-region="false" aria-busy={busy}>
+    <div className="calendar-line">
+      <span>{linked ? (linked.title?.trim() ? `Linked to ${linked.title}` : "Linked to an untitled event") : status.calendarNotice ? calendarNoticeLabels[status.calendarNotice] : "Not linked"}</span>
+      {linked ? <button type="button" className="pill" disabled={busy || !status.sessionId} onClick={() => { void change({ mode: "none" }); }}>Remove</button>
+        : choices.length > 0 ? <button type="button" className="pill" disabled={busy || !status.sessionId} aria-expanded={open} onClick={() => setOpen(!open)}>Link to…</button> : null}
+    </div>
+    {open && !linked ? <div className="calendar-picker" role="group" aria-label="Link recording to an event">
+      {choices.map(event => <button type="button" key={event.id} disabled={busy} onClick={() => { void change({ mode: "event", eventId: event.id }); }}>
+        <span>{upcomingTime(event, new Date())} · {eventTitle(event)}</span><small>{calendarProviderLabel(event.provider)}{event.meetingLike ? "" : " · no invitees"}</small>
+      </button>)}
+      <button type="button" disabled={busy} onClick={() => setOpen(false)}>Cancel</button>
+    </div> : null}
+    {error ? <p className="error" role="alert">Couldn't change the calendar link: {error}</p> : null}
+  </div>;
+}
+
+export function MeetingPanel({ session, elapsed, detail, alert, transcriptAllowed, rows, initialNotes, onProblem, calendarStatus }: MeetingPanelProps) {
   const [tab, setTab] = useState<Tab>("notes");
   const [stopProblem, setStopProblem] = useState<string | null>(null);
   const tabs = useRef<Partial<Record<Tab, HTMLButtonElement | null>>>({});
@@ -68,6 +105,7 @@ export function MeetingPanel({ session, elapsed, detail, alert, transcriptAllowe
       <span className="notify-body"><strong>Recording {clock(elapsed)}</strong><span className={alert ? "notify-detail notify-alert" : "notify-detail"}>{detail}</span></span>
       <button type="button" className="notify-record" onClick={() => { void stop(); }}>Stop<span className="notify-record-mark" aria-hidden="true"><Icon name="stop" size={14} /></span></button>
     </div>
+    {calendarStatus ? <CalendarRecordingLine key={calendarStatus.sessionId} status={calendarStatus} /> : null}
     <div className="notify-panel-body" data-tauri-drag-region="false" ref={body} onScroll={() => {
       const element = body.current;
       if (element && tab === "transcript") nearBottom.current = element.scrollHeight - element.scrollTop - element.clientHeight <= 8;

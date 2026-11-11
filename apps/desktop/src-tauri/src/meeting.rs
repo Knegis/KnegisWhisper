@@ -366,7 +366,11 @@ pub struct LinkedEvent {
 
 /// Missing Start input means Auto; explicit choices never fall back to Auto.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
-#[serde(tag = "mode", rename_all = "kebab-case")]
+#[serde(
+    tag = "mode",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
 pub enum CalendarLinkChoice {
     #[default]
     Auto,
@@ -378,7 +382,11 @@ pub enum CalendarLinkChoice {
 
 /// A live edit must express the person's choice, without automatic selection.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[serde(tag = "mode", rename_all = "kebab-case")]
+#[serde(
+    tag = "mode",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
 pub enum CalendarSetChoice {
     None,
     Event { event_id: String },
