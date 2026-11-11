@@ -2175,7 +2175,12 @@ export type SyncRecord = {
 /**
  * RFC 3339.
  */
-at: string, outcome: SyncOutcome, };
+at: string, outcome: SyncOutcome, account: string | null, snapshotVersion: number,
+/**
+ * Most recent complete success for this account; partial attempts for the
+ * same account preserve this timestamp.
+ */
+lastSuccessAt: string | null, };
 
 /**
  * Whether a token is on file and, if so, whether it is still within its
