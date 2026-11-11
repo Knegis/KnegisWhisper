@@ -13,6 +13,75 @@ maintained in place rather than appended to, because its purpose is to be curren
 ---
 
 
+## 2026-11-11 — One-click Google Calendar and Outlook, used by Meetings
+
+The reconciled calendar plan of 2026-11-11 (its file in `docs/plans/` is not committed) is implemented on `dev`. Calendars connect with
+KnegisWhisper's own OAuth clients, compiled into release builds from three environment values. Meetings shows what is
+coming up, and a recording made during a calendar event carries that event. Nothing here has met a real account: no
+client is registered yet, and that and the real-account checklist are the owner's next steps
+(`docs/CALENDAR_PROVIDER_SETUP.md`).
+
+**Google's desktop secret ships in the binary.** The owner chose it. Google's token endpoint requires the secret for
+Desktop clients even with PKCE (community-reported, not measured here), and Google documents it as not confidential.
+So `exchange.rs` sends it on the code and refresh grants only, never in the authorize URL, and the frontend never
+receives it. A hosted token exchange was rejected (KNEG-328). Committed values were rejected because every fork would
+sign people in under the owner's consent screen. Microsoft is a public client and carries no secret.
+
+**Grants remember which client issued them** (`TokenBundle.client_id`). An unbound grant, which is every grant imported
+from OpenWhispr and every grant from a custom client since cleared, reads "reconnect required" before any refresh is
+tried. Without the binding, a refresh would send OpenWhispr's grant to our client and fail in a way nobody could
+diagnose.
+
+**Outlook left the beta endpoint, and both providers sync snapshots.** Per-calendar `events/delta` is beta-only
+(KNEG-552), `/me/calendarView/delta` covers only the default calendar, and Google's unbounded `syncToken` sync can't take
+a `timeMin`. Each sync now fetches [now − 24 h, now + 30 days) through Graph v1.0 `calendarView` and Google `events.list`,
+both expanding recurring meetings. Times are normalised to UTC (KNEG-553) and declined events left out. Each calendar
+commits in one transaction that prunes only rows overlapping the window. A migration for the user's own response was
+rejected because sqlx refuses unknown applied migrations on downgrade; declined events are simply not stored. Rows an
+older build cached are kept out of every reader by a snapshot version in the existing `lastSync` record, so no settings
+key was added for it.
+
+**Connecting has one commit point.** SQLite and the credential store can't share a transaction, so the order is: write
+the new grant to `token_ref_for(email)`, then one transaction for rows, calendars, cleared cache, account and the
+cleanup list, then delete superseded credentials. Names whose deletion fails stay on a durable cleanup list until a
+retry succeeds; a slot a token row still references is never deleted. Disconnect now deletes the slot its row names,
+so slots imported from OpenWhispr no longer survive it (KNEG-554), and leftover rows are listed with Remove. Two review
+rounds found the one-commit design sound but Cancel incomplete: it couldn't stop a hanging token exchange, and could be
+lost while the browser was spawning. Both are fixed.
+
+**A browser that fails to open no longer ends the sign-in.** The plan returned `BrowserDidNotOpen { url }`, but
+returning closes the loopback listener, so the URL could never complete. Connect keeps waiting and status carries the
+sign-in link; Settings offers Copy sign-in link.
+
+**Sync happens when Meetings opens**, at most once per 5 minutes per provider, measured from the later of an in-memory
+attempt clock and the persisted `lastSync.at`. Never at launch, on focus or on a timer. Throttling in the frontend was
+rejected: it can't coordinate two windows or protect Microsoft's rotating refresh tokens.
+
+**A recording links at Start, never later.** Looking the event up at Stop or Recover could attach a different event to
+a long or recovered meeting. So `plan_at_start` snapshots the event into the plan beside the recording, and every start
+path shares it: Meetings, the offer's Record and the local API. Auto links only a single meeting-like event (invitees or
+conferencing). Overlaps are offered and never guessed; an explicit choice is revalidated at Start and, if invalid, the
+recording starts unlinked with a notice rather than a substitute. A plan that can't be written leaves the recording
+unlinked in memory too, so Stop never saves a link Recover couldn't find. The local API's request is unchanged, and its
+status response drops the new fields to keep its shape.
+
+**Two contract slips, both caught by a worker stopping.** The meeting-link enums serialised `event_id` while every other
+tagged enum is camelCase. The brief had left out `rename_all_fields`, and the frontend worker refused to build against
+it. The IPC types test now fails on any generated snake_case field. The `tauri-test` build also broke on a stale caller
+that no brief's verification compiled; the full gate run found it.
+
+Verified on the merged tree (`9678cd5`): every contract gate except the gate self-tests, `tsc`, 580 frontend tests,
+`vite build`, the built-asset scans, `cargo fmt`, and clippy with `-D warnings` on both the local 1.90 and 1.99
+toolchains. The gate self-tests fail on `feature-audit`'s fixtures, which predate this work: `windows-uninstall` was
+declared in `ba0b8b5`, before the base `956532c`. The workspace test run was stopped by the machine running low on
+memory before it finished. The same Rust passed `cargo test --workspace` at `8808e2f`, and `tauri-test` (607 passed) in
+the final fix's slot. Three visual checks ran in headless Edge against dev fixtures: Settings > Calendar 24/24, Meetings
+calendar 78/78 (1280×800, 720×520, a dark pass) and the pre-existing meeting-plan 5/5. Not verified: any real consent,
+refresh, sync or recording against a real account; the floating panel and event delivery in the real Tauri window; and
+a downgrade on a copy of a profile.
+
+---
+
 ## 2026-11-10 — Fields, dropdown lists and dialogs outside the settings column, in the new style
 
 The owner said some input fields didn't match the new design. A field-by-field sweep of every screen and pop-up found the
