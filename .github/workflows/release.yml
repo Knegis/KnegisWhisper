@@ -8,6 +8,11 @@ on:
         description: "Existing main-branch tag, e.g. v0.1.0"
         required: true
         type: string
+      require_calendar_clients:
+        description: "Require built-in Google and Outlook calendar clients"
+        required: false
+        type: boolean
+        default: false
       validate_other_platforms:
         description: "Also build experimental macOS/Linux bundles as workflow artifacts"
         required: false
@@ -58,11 +63,17 @@ jobs:
         run: git checkout --detach "refs/tags/$env:RELEASE_TAG"
       - name: Preflight and release-tool tests
         env:
+          KW_GOOGLE_CALENDAR_CLIENT_ID: ${{ vars.KW_GOOGLE_CALENDAR_CLIENT_ID }}
+          KW_GOOGLE_CALENDAR_CLIENT_SECRET: ${{ secrets.KW_GOOGLE_CALENDAR_CLIENT_SECRET }}
+          KW_MICROSOFT_CALENDAR_CLIENT_ID: ${{ vars.KW_MICROSOFT_CALENDAR_CLIENT_ID }}
+          REQUIRE_CALENDAR_CLIENTS: ${{ inputs.require_calendar_clients }}
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
           python -m unittest discover -s tools/release -p "test_*.py"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/release/release.py preflight --tag $env:RELEASE_TAG
+          $calendarArgs = @()
+          if ($env:REQUIRE_CALENDAR_CLIENTS -eq "true") { $calendarArgs += "--require-calendar-clients" }
+          python tools/release/release.py preflight --tag $env:RELEASE_TAG @calendarArgs
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
@@ -101,6 +112,10 @@ jobs:
       - name: Verify bundled notices
         run: python tools/licenses/generate.py --check
       - name: Build unsigned installer
+        env:
+          KW_GOOGLE_CALENDAR_CLIENT_ID: ${{ vars.KW_GOOGLE_CALENDAR_CLIENT_ID }}
+          KW_GOOGLE_CALENDAR_CLIENT_SECRET: ${{ secrets.KW_GOOGLE_CALENDAR_CLIENT_SECRET }}
+          KW_MICROSOFT_CALENDAR_CLIENT_ID: ${{ vars.KW_MICROSOFT_CALENDAR_CLIENT_ID }}
         working-directory: apps/desktop
         shell: bash
         run: npm run tauri:build -- --target x86_64-pc-windows-msvc --bundles nsis --config ../../tools/release/unsigned.json
@@ -110,6 +125,9 @@ jobs:
         run: python tools/uninstall/test_windows.py -v
       - name: Prepare installer, checksums and notes
         env:
+          KW_GOOGLE_CALENDAR_CLIENT_ID: ${{ vars.KW_GOOGLE_CALENDAR_CLIENT_ID }}
+          KW_GOOGLE_CALENDAR_CLIENT_SECRET: ${{ secrets.KW_GOOGLE_CALENDAR_CLIENT_SECRET }}
+          KW_MICROSOFT_CALENDAR_CLIENT_ID: ${{ vars.KW_MICROSOFT_CALENDAR_CLIENT_ID }}
           RELEASE_TAG: ${{ inputs.tag }}
         run: python tools/release/release.py prepare --tag $env:RELEASE_TAG
       - uses: actions/upload-artifact@v4
@@ -197,6 +215,10 @@ jobs:
           target=$(rustc -vV | sed -n 's/^host: //p')
           python tools/licenses/generate.py --target "$target"
       - name: Build experimental unsigned bundles
+        env:
+          KW_GOOGLE_CALENDAR_CLIENT_ID: ${{ vars.KW_GOOGLE_CALENDAR_CLIENT_ID }}
+          KW_GOOGLE_CALENDAR_CLIENT_SECRET: ${{ secrets.KW_GOOGLE_CALENDAR_CLIENT_SECRET }}
+          KW_MICROSOFT_CALENDAR_CLIENT_ID: ${{ vars.KW_MICROSOFT_CALENDAR_CLIENT_ID }}
         working-directory: apps/desktop
         run: npm run tauri:build -- --config ../../tools/release/unsigned.json
       - uses: actions/upload-artifact@v4

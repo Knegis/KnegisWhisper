@@ -2,6 +2,8 @@
 import argparse
 import hashlib
 import json
+import os
+import sys
 import re
 import shutil
 import subprocess
@@ -33,13 +35,35 @@ def validate_version(root, tag):
     return version
 
 
-def preflight(root, tag, main_ref):
+def calendar_clients(environ=None):
+    """Only inspect presence. Desktop secrets are never logged or interpolated."""
+    env = os.environ if environ is None else environ
+    def present(name):
+        return bool(env.get(name, "").strip())
+    return {"google": present("KW_GOOGLE_CALENDAR_CLIENT_ID") and present("KW_GOOGLE_CALENDAR_CLIENT_SECRET"),
+            "microsoft": present("KW_MICROSOFT_CALENDAR_CLIENT_ID")}
+
+
+def calendar_report(clients):
+    return "calendar: " + " ".join(f"{provider}={'included' if included else 'missing'}" for provider, included in clients.items())
+
+
+def preflight(root, tag, main_ref, require_calendar_clients=False, environ=None):
+    clients = calendar_clients(environ)
+    print(calendar_report(clients), file=sys.stderr)
+    if require_calendar_clients and not all(clients.values()):
+        raise ValueError("Both Google and Microsoft calendar clients are required")
     validate_version(root, tag)
     sha = git(root, "rev-parse", "--verify", f"refs/tags/{tag}^{{commit}}")
     if git(root, "rev-parse", "HEAD") != sha:
         raise ValueError("The checkout must be the exact tagged commit")
     subprocess.run(["git", "-C", str(root), "merge-base", "--is-ancestor", sha, main_ref], check=True)
     return sha
+
+
+def calendar_notes(clients):
+    return "\n".join(f"- One-click {label} calendars: {'included' if clients[provider] else 'not included (custom client required under Advanced)'}."
+                     for provider, label in [("google", "Google"), ("microsoft", "Outlook")])
 
 
 def prepare(root, tag, bundle_root, out):
@@ -60,7 +84,7 @@ def prepare(root, tag, bundle_root, out):
     (out / "SHA256SUMS.txt").write_text(f"{digest}  {name}\n", encoding="utf-8", newline="\n")
     template = (root / "tools/release/notes.md").read_text(encoding="utf-8")
     sha = git(root, "rev-parse", "HEAD")
-    (out / "RELEASE_NOTES.md").write_text(template.replace("{{TAG}}", tag).replace("{{SHA}}", sha), encoding="utf-8")
+    (out / "RELEASE_NOTES.md").write_text(template.replace("{{TAG}}", tag).replace("{{SHA}}", sha).replace("{{CALENDAR_CLIENTS}}", calendar_notes(calendar_clients())), encoding="utf-8")
     return target
 
 
@@ -72,9 +96,10 @@ def main():
     parser.add_argument("--main-ref", default="origin/main")
     parser.add_argument("--bundle-root", type=Path, default=Path("target/x86_64-pc-windows-msvc/release/bundle"))
     parser.add_argument("--out", type=Path, default=Path("target/release-assets"))
+    parser.add_argument("--require-calendar-clients", action="store_true")
     args = parser.parse_args()
     if args.command == "preflight":
-        print(preflight(args.root, args.tag, args.main_ref))
+        print(preflight(args.root, args.tag, args.main_ref, args.require_calendar_clients))
     else:
         print(prepare(args.root, args.tag, args.bundle_root, args.out))
 

@@ -2141,6 +2141,14 @@ export type UpdateCheckResult = { "state": "no-public-key-configured" } | { "sta
 export type CalendarProvider = "google" | "microsoft";
 
 /**
+ * Secret edits are explicit: an omitted edit must never erase a saved value.
+ * Debug intentionally omits Set's payload when callers inspect a pending edit.
+ */
+export type SecretChange = { "kind": "keep" } | { "kind": "set", value: string, } | { "kind": "clear" };
+
+export type ClientSource = "app" | "custom" | "missing";
+
+/**
  * What happened when someone clicked "Connect".
  *
  * Only the two outcomes that are not simply a refusal: a plain error (no
@@ -2210,15 +2218,27 @@ eventCount: number, };
 
 export type AccountStatus = { email: string, token: TokenStatus, calendars: Array<CalendarSummary>, lastSync: SyncRecord | null, };
 
-export type ProviderStatus = { clientIdConfigured: boolean,
+export type ProviderStatus = {
 /**
- * The client ID itself, shown back rather than only "configured" or
- * not. It is not a secret -- there is no client secret in this flow at
- * all, see `kw_calendar_core`'s module doc -- so there is nothing to
- * protect by hiding it, and showing it is what makes "you supplied
- * this" a fact on screen rather than a claim in a comment.
+ * Whether an effective client exists, from either a custom ID or this build.
  */
-clientId: string | null, account: AccountStatus | null, };
+clientIdConfigured: boolean,
+/**
+ * The saved custom client ID, shown back because a client ID is not a secret.
+ */
+customClientId: string | null,
+/**
+ * Whether the effective client comes from a custom override, this app, or is missing.
+ */
+clientSource: ClientSource,
+/**
+ * Whether the credential store contains a custom Google secret; false for Microsoft.
+ */
+customGoogleSecretConfigured: boolean,
+/**
+ * Whether this build provides an app-owned client for the provider.
+ */
+appClientAvailable: boolean, account: AccountStatus | null, };
 
 export type CalendarStatus = { google: ProviderStatus, microsoft: ProviderStatus, apple: AppleCalendarSupport, };
 

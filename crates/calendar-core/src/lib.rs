@@ -1,18 +1,10 @@
 //! Loopback PKCE OAuth for Google Calendar and Microsoft Graph.
 //!
-//! Upstream ships a Google OAuth client secret in the built application.
-//! In an open-source build that secret is not a secret at all -- anyone can
-//! extract it and impersonate the application -- so this crate never embeds
-//! one, and never embeds a client id of its own either. Instead it implements
-//! the loopback flow for a public client (RFC 8252, RFC 7636): the user
-//! registers their own OAuth client in Google Cloud or Azure and supplies the
-//! client id, this crate proves the token exchange comes from the process
-//! that started it using a PKCE verifier instead of a secret, and a one-shot
-//! listener on `127.0.0.1` receives the redirect because a client with no
-//! server component has nowhere else to receive one. That is a deliberate
-//! trade of setup friction for the absence of an embedded credential.
-//!
-//! Everything else follows from that one decision:
+//! The caller supplies a provider-typed desktop client, either compiled into
+//! the application or configured by its user. Google's desktop client secret
+//! is a public build value and is sent only on token and refresh grants.
+//! Microsoft never carries a secret. Both providers use PKCE S256 and a
+//! one-shot loopback listener; authorize URLs never contain a secret.
 //!
 //! * [`redirect::LoopbackReceiver`] is a bare `tokio::net::TcpListener`, not a
 //!   router -- one connection, one static page, closed. Loopback only, never
@@ -62,7 +54,7 @@ pub use crate::flow::{
     CalendarError, PendingAuthorization,
 };
 pub use crate::pkce::{constant_time_eq, generate_state, Pkce, PkceError};
-pub use crate::provider::{CalendarProviderKind, ProviderEndpoints};
+pub use crate::provider::{CalendarProviderKind, OAuthClientConfig, ProviderEndpoints};
 pub use crate::redirect::{CallbackParams, LoopbackReceiver, RedirectError};
 pub use crate::sync_support::{StoredAttendee, SyncError};
 pub use crate::tokens_repo::TokenRow;

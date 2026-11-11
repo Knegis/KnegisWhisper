@@ -61,6 +61,8 @@ pub enum BundleError {
 pub(crate) struct TokenBundle {
     pub(crate) access_token: String,
     pub(crate) refresh_token: String,
+    #[serde(default)]
+    pub(crate) client_id: Option<String>,
 }
 
 impl fmt::Debug for TokenBundle {
@@ -139,11 +141,13 @@ mod tests {
         let bundle = TokenBundle {
             access_token: "access-xyz".to_owned(),
             refresh_token: "refresh-xyz".to_owned(),
+            client_id: Some("client-123".to_owned()),
         };
         let secret = encode_bundle(&bundle).unwrap();
         let decoded = decode_bundle(&secret).unwrap();
         assert_eq!(decoded.access_token, "access-xyz");
         assert_eq!(decoded.refresh_token, "refresh-xyz");
+        assert_eq!(decoded.client_id.as_deref(), Some("client-123"));
     }
 
     #[test]
@@ -151,6 +155,7 @@ mod tests {
         let bundle = TokenBundle {
             access_token: "access-xyz".to_owned(),
             refresh_token: "refresh-xyz".to_owned(),
+            client_id: Some("client-123".to_owned()),
         };
         let rendered = format!("{bundle:?}");
         assert!(!rendered.contains("access-xyz"));
@@ -162,5 +167,14 @@ mod tests {
     fn decoding_garbage_is_an_error_not_a_panic() {
         let secret = Secret::new("not json".to_owned());
         assert!(decode_bundle(&secret).is_err());
+    }
+
+    #[test]
+    fn legacy_bundle_decodes_without_client_binding() {
+        let bundle = decode_bundle(&Secret::new(
+            r#"{"access_token":"access","refresh_token":"refresh"}"#.into(),
+        ))
+        .unwrap();
+        assert!(bundle.client_id.is_none());
     }
 }

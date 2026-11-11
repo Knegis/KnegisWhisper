@@ -43,6 +43,8 @@ import type {
   BinaryLocation,
   Binding,
   CalendarProvider,
+  SecretChange,
+  ClientSource,
   CalendarStatus,
   CalendarSummary,
   CaptureExclusion,
@@ -178,6 +180,8 @@ export type {
   BinaryLocation,
   Binding,
   CalendarProvider,
+  SecretChange,
+  ClientSource,
   CalendarStatus,
   CalendarSummary,
   CaptureExclusion,
@@ -1489,14 +1493,23 @@ export async function getCalendarStatus(): Promise<CalendarStatus> {
 
 /**
  * Save (or, given a blank string, clear) the OAuth client ID for `provider`.
- * Never a secret — there is no client secret in this flow at all — so this
- * is a plain settings write, not a credential-store one.
+ * The ID is a public setting. Replacing or clearing it also clears the saved
+ * custom Google secret so credentials cannot carry over to a different client.
  */
 export async function setCalendarClientId(
   provider: CalendarProvider,
   clientId: string,
 ): Promise<void> {
   return invoke("calendar_set_client_id", { provider, clientId });
+}
+
+/** Save an Advanced custom client. Secret changes stay in the Rust credential store. */
+export async function setCustomCalendarClient(
+  provider: CalendarProvider,
+  clientId: string | null,
+  googleSecret: SecretChange,
+): Promise<void> {
+  return invoke("calendar_set_custom_client", { provider, clientId, googleSecret });
 }
 
 /**

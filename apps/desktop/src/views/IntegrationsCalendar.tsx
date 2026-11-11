@@ -99,7 +99,7 @@ function ProviderSection({
   const [note, setNote] = useState<Plain | null>(null);
 
   const savedClient = useRef<string | null>(null);
-  const clientId = draft ?? savedClient.current ?? status.clientId ?? "";
+  const clientId = draft ?? savedClient.current ?? status.customClientId ?? "";
   const company = provider === "google" ? "Google" : "Microsoft";
   const portal = provider === "google" ? "Google Cloud Console" : "the Azure portal";
 
@@ -109,7 +109,7 @@ function ProviderSection({
     await reload();
   }, [provider, clientId, draft, reload]);
 
-  const clientDraft = useSettingsDraft({ label: `${company} calendar client ID`, dirty: draft !== null && draft.trim() !== (savedClient.current ?? status.clientId ?? ""), save: saveClientId, discard: () => setDraft(savedClient.current) });
+  const clientDraft = useSettingsDraft({ label: `${company} calendar client ID`, dirty: draft !== null && draft.trim() !== (savedClient.current ?? status.customClientId ?? ""), save: saveClientId, discard: () => setDraft(savedClient.current) });
   const run = useCallback(
     async (work: () => Promise<void>) => {
       setBusy(true);
