@@ -7,6 +7,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { connectOutcomeLabel, syncOutcomeLabel, tokenStatusLabel } from "../src/lib/labels.js";
+import {
+  calendarCleanupLabel,
+  calendarClientLabel,
+  calendarLeftoverLabel,
+  calendarProblemLabel,
+  calendarTroubleshootingLabel,
+} from "../src/lib/calendarLabels.js";
+import type { CalendarProblem } from "../src/lib/ipc.js";
 
 test("a connection says connected or not, and keeps the token mechanics for Learn more", () => {
   const active = tokenStatusLabel({ state: "active" });
@@ -16,6 +24,45 @@ test("a connection says connected or not, and keeps the token mechanics for Lear
 
   assert.equal(tokenStatusLabel({ state: "needs-refresh" }).text, "Connected");
   assert.deepEqual(tokenStatusLabel({ state: "missing" }), { text: "Not connected", detail: "", more: null });
+});
+
+test("every CalendarProblem kind has a non-empty plain label", () => {
+  // This record must grow when the generated union grows. A representative
+  // array alone would keep passing if a new failure silently lost its label.
+  const kinds = {
+    cancelled: true, "timed-out": true, "access-denied": true,
+    "admin-consent-required": true, "app-blocked": true,
+    "client-misconfigured": true, "client-rejected": true,
+    "reconnect-required": true, network: true, "provider-unavailable": true,
+    storage: true, "invalid-response": true,
+  } satisfies Record<CalendarProblem["kind"], true>;
+  for (const kind of Object.keys(kinds) as CalendarProblem["kind"][]) {
+    const label = calendarProblemLabel({ kind });
+    assert.ok(label.trim().length > 0, kind);
+    assert.equal(syncOutcomeLabel({ state: "token-unavailable", problem: { kind }, message: "fallback" }).text,
+      kind === "reconnect-required" ? "Couldn't sync. Reconnect the account." : label);
+  }
+});
+
+test("client wording distinguishes this build, an override and missing clients", () => {
+  for (const provider of ["google", "microsoft"] as const) {
+    assert.equal(calendarClientLabel(provider, "app"), "Using KnegisWhisper's built-in client");
+    assert.equal(calendarClientLabel(provider, "custom"), "Using your own client");
+  }
+  assert.equal(calendarClientLabel("google", "missing"), "This build has no built-in Google Calendar connection. Add your own client.");
+  assert.equal(calendarClientLabel("microsoft", "missing"), "This build has no built-in Outlook connection. Add your own client.");
+});
+
+test("sign-in troubleshooting names possibilities for each provider", () => {
+  assert.equal(calendarTroubleshootingLabel("google"), "If Google says it hasn't verified this app, you can continue past that warning. If it says access is blocked, your organisation doesn't allow this app.");
+  assert.equal(calendarTroubleshootingLabel("microsoft"), "A work or school account may need an administrator to approve KnegisWhisper first.");
+});
+
+test("leftovers and credential cleanup have plain labels and singular wording", () => {
+  assert.equal(calendarLeftoverLabel("openwhispr"), "Imported from OpenWhispr");
+  assert.equal(calendarLeftoverLabel("earlier"), "Earlier connection");
+  assert.equal(calendarCleanupLabel(1), "1 old sign-in couldn't be removed from the credential store");
+  assert.equal(calendarCleanupLabel(2), "2 old sign-ins couldn't be removed from the credential store");
 });
 
 test("a failed renewal says to reconnect, with the provider's error under Learn more", () => {
