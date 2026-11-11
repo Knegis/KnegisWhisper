@@ -38,6 +38,9 @@ import type {
   AudioLevel,
   Binding,
   CalendarStatus,
+  UpcomingMeetings,
+  CalendarCandidates,
+  ProviderSync,
   CleanupRoute,
   CleanupSettings,
   CliStatus,
@@ -1298,6 +1301,40 @@ const SIDECARS: SidecarStatus[] = [
     installed: false,
   },
 ];
+
+/** Compute at invocation time so a long-running browser session stays useful. */
+function upcomingCalendarFixture(): UpcomingMeetings {
+  const now = Date.now();
+  const midnight = new Date(now);
+  midnight.setHours(24, 0, 0, 0);
+  const laterToday = now + Math.floor((midnight.getTime() - now) / 2);
+  const tomorrow = new Date(now);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  tomorrow.setHours(10, 0, 0, 0);
+  const event = (id: string, provider: "google" | "microsoft", title: string, start: number) => ({
+    id, provider, calendarId: `${provider}-primary`, title,
+    start: new Date(start).toISOString(), end: new Date(start + 30 * 60_000).toISOString(),
+  });
+  return {
+    events: [
+      event("google:primary:running", "google", "Platform standup", now - 10 * 60_000),
+      event("microsoft:primary:later", "microsoft", "Project review", laterToday),
+      event("google:primary:tomorrow", "google", "Planning", tomorrow.getTime()),
+    ],
+    hasMore: false,
+    providers: (["google", "microsoft"] as const).map(provider => ({
+      provider, connected: true, selectedCalendars: 1,
+      lastAttemptAt: new Date(now - 60_000).toISOString(),
+      lastSuccessAt: new Date(now - 60_000).toISOString(),
+      lastOutcome: { state: "completed", eventsUpserted: 3, eventsRemoved: 0, calendarErrors: [] },
+    })),
+  };
+}
+
+function calendarCandidatesFixture(): CalendarCandidates {
+  const event = upcomingCalendarFixture().events[0]!;
+  return { events: [{ ...event, meetingLike: true }], auto: event.id };
+}
 
 /* ---------------------------------------------------------------- calendars */
 
@@ -2753,6 +2790,12 @@ A fixture summary of "${note.title}", written without a model.
     }),
   /* calendars */
   calendar_status: () => CALENDAR,
+  calendar_upcoming: () => upcomingCalendarFixture(),
+  meeting_calendar_candidates: () => calendarCandidatesFixture(),
+  calendar_sync_if_stale: () => ([
+    { provider: "google", outcome: null, skipped: "fresh" },
+    { provider: "microsoft", outcome: null, skipped: "fresh" },
+  ] satisfies ProviderSync[]),
   calendar_set_client_id: () => null,
   calendar_set_custom_client: () => null,
   calendar_set_selected: () => null,

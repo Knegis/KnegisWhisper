@@ -2255,6 +2255,24 @@ appClientAvailable: boolean, account: AccountStatus | null, operation: CalendarO
 
 export type CalendarStatus = { google: ProviderStatus, microsoft: ProviderStatus, apple: AppleCalendarSupport, };
 
+export type UpcomingMeetings = { events: Array<UpcomingEvent>, hasMore: boolean, providers: Array<ProviderFreshness>, };
+
+/**
+ * A small, local projection for the Meetings page. Times are copied exactly
+ * from the normalised snapshot; presenting them in local time belongs to UI.
+ */
+export type UpcomingEvent = { id: string, provider: CalendarProvider, calendarId: string, title: string | null, start: string, end: string, };
+
+export type ProviderFreshness = { provider: CalendarProvider, connected: boolean, selectedCalendars: number, lastAttemptAt: string | null, lastSuccessAt: string | null, lastOutcome: SyncOutcome | null, };
+
+export type CalendarCandidates = { events: Array<CandidateEvent>, auto: string | null, };
+
+export type CandidateEvent = { id: string, provider: CalendarProvider, calendarId: string, title: string | null, start: string, end: string, meetingLike: boolean, };
+
+export type ProviderSync = { provider: CalendarProvider, outcome: SyncOutcome | null, skipped: SyncSkip | null, };
+
+export type SyncSkip = "not-connected" | "fresh" | "busy" | "no-selected-calendars";
+
 /**
  * What this build can do about Apple Calendar, checked rather than assumed.
  *

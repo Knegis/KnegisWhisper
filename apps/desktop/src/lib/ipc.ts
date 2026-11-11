@@ -51,6 +51,13 @@ import type {
   SecretChange,
   ClientSource,
   CalendarStatus,
+  UpcomingMeetings,
+  UpcomingEvent,
+  ProviderFreshness,
+  CalendarCandidates,
+  CandidateEvent,
+  ProviderSync,
+  SyncSkip,
   CalendarSummary,
   CaptureExclusion,
   CleanupRoute,
@@ -193,6 +200,13 @@ export type {
   SecretChange,
   ClientSource,
   CalendarStatus,
+  UpcomingMeetings,
+  UpcomingEvent,
+  ProviderFreshness,
+  CalendarCandidates,
+  CandidateEvent,
+  ProviderSync,
+  SyncSkip,
   CalendarSummary,
   CaptureExclusion,
   CleanupRoute,
@@ -1499,6 +1513,24 @@ export async function onUpdateCheckResult(
  */
 export async function getCalendarStatus(): Promise<CalendarStatus> {
   return invoke<CalendarStatus>("calendar_status");
+}
+
+/** Cached calendar projections never refresh tokens or make network requests. */
+export async function getUpcomingMeetings(limit: number): Promise<UpcomingMeetings> {
+  return invoke<UpcomingMeetings>("calendar_upcoming", { limit });
+}
+
+export async function getMeetingCalendarCandidates(): Promise<CalendarCandidates> {
+  return invoke<CalendarCandidates>("meeting_calendar_candidates");
+}
+
+/** Called when Meetings opens; Rust applies the per-provider five-minute throttle. */
+export async function syncCalendarsIfStale(): Promise<ProviderSync[]> {
+  return invoke<ProviderSync[]>("calendar_sync_if_stale");
+}
+
+export async function onCalendarChanged(handler: () => void): Promise<UnlistenFn> {
+  return listen<void>("calendar-changed", () => handler());
 }
 
 /**

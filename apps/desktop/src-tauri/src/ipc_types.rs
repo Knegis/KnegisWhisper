@@ -309,6 +309,13 @@ fn render() -> String {
             crate::calendar::AccountStatus,
             crate::calendar::ProviderStatus,
             crate::calendar::CalendarStatus,
+            crate::calendar::UpcomingMeetings,
+            crate::calendar::UpcomingEvent,
+            crate::calendar::ProviderFreshness,
+            crate::calendar::CalendarCandidates,
+            crate::calendar::CandidateEvent,
+            crate::calendar::ProviderSync,
+            crate::calendar::SyncSkip,
             kw_calendar_core::AppleCalendarSupport,
         ],
     }
