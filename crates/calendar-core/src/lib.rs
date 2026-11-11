@@ -36,6 +36,7 @@ pub mod events_repo;
 pub mod exchange;
 pub mod flow;
 pub mod google;
+pub mod meetings;
 pub mod microsoft;
 pub mod pkce;
 pub mod provider;
