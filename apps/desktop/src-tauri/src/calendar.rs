@@ -28,9 +28,10 @@
 //! credential store directly rather than trusting the database row alone --
 //! see its doc comment -- and it makes no network call, matching every other
 //! status command in this application (`meeting_status`, `credential_slots`;
-//! see `docs/NETWORK_BOUNDARY.md`). The two commands that do reach the
-//! network, [`calendar_connect`] and [`calendar_sync`], are both explicit
-//! clicks. A sync's outcome -- including a failure -- is persisted to
+//! see `docs/NETWORK_BOUNDARY.md`). The commands that do reach the
+//! network are [`calendar_connect`], [`calendar_sync`] and the throttled
+//! [`calendar_sync_if_stale`] invoked when Meetings opens. A sync's outcome,
+//! including a failure, is persisted to
 //! settings and folded back into the next `calendar_status` read, so a
 //! failed sync is never silently indistinguishable from an empty, successful
 //! one, and an expired token that could not be refreshed says so rather than
@@ -38,12 +39,14 @@
 
 use crate::calendar_clients::{self, ClientChoice, ClientSource};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+use chrono::{DateTime, Utc};
 
 use kw_calendar_core::{
     apple, begin_authorization, calendars_repo, complete_authorization, credentials,
-    ensure_fresh_access_token, events_repo, google, microsoft, tokens_repo, CalendarError,
-    CalendarProviderKind, LoopbackReceiver, NetworkPolicySender, OAuthClientConfig,
+    ensure_fresh_access_token, events_repo, google, meetings, microsoft, tokens_repo,
+    CalendarError, CalendarProviderKind, LoopbackReceiver, NetworkPolicySender, OAuthClientConfig,
     ProviderEndpoints,
 };
 use kw_network_policy::NetworkPolicy;
@@ -65,6 +68,11 @@ fn fail(context: &str, err: impl std::fmt::Display) -> String {
 /// timeout in this application this one is waiting on a person, not a
 /// server.
 const REDIRECT_WAIT: Duration = Duration::from_secs(300);
+
+/// Consumers reread local data; the notification deliberately carries no data.
+pub const CHANGED_EVENT: &str = "calendar-changed";
+
+const PROVIDERS: [CalendarProvider; 2] = [CalendarProvider::Google, CalendarProvider::Microsoft];
 
 const CALLBACK_PATH: &str = "/calendar/callback";
 
@@ -430,6 +438,7 @@ struct OperationState {
 struct ProviderControl {
     guard: tokio::sync::Mutex<()>,
     state: Mutex<OperationState>,
+    last_attempt: Mutex<Option<Instant>>,
 }
 
 impl ProviderControl {
@@ -438,16 +447,24 @@ impl ProviderControl {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
-    fn acquire(&self, operation: CalendarOperation) -> CmdResult<OperationGuard<'_>> {
-        let guard = self
-            .guard
-            .try_lock()
-            .map_err(|_| "a calendar connection or sync is already in progress".to_owned())?;
+    fn try_acquire(&self, operation: CalendarOperation) -> Option<OperationGuard<'_>> {
+        let guard = self.guard.try_lock().ok()?;
         self.state().operation = operation;
-        Ok(OperationGuard {
+        Some(OperationGuard {
             control: self,
             _guard: guard,
         })
+    }
+
+    fn acquire(&self, operation: CalendarOperation) -> CmdResult<OperationGuard<'_>> {
+        self.try_acquire(operation)
+            .ok_or_else(|| "a calendar connection or sync is already in progress".to_owned())
+    }
+
+    fn attempt_clock(&self) -> std::sync::MutexGuard<'_, Option<Instant>> {
+        self.last_attempt
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 
@@ -475,6 +492,15 @@ enum GrantCalendars {
     Microsoft(Vec<microsoft::CalendarListEntry>),
 }
 
+/// Drop after operation guards, including error exits, so listeners see the
+/// completed local state. A failed operation can still have changed cleanup data.
+struct NotifyOnCompletion<'a>(&'a (dyn Fn() + Send + Sync));
+impl Drop for NotifyOnCompletion<'_> {
+    fn drop(&mut self) {
+        (self.0)();
+    }
+}
+
 /* -------------------------------------------------------------- the runtime */
 
 /// What connecting an account, or syncing one, needs: the database,
@@ -488,6 +514,7 @@ pub struct CalendarRuntime {
     google: ProviderControl,
     microsoft: ProviderControl,
     browser_opener: fn(&str) -> std::io::Result<()>,
+    on_changed: Arc<dyn Fn() + Send + Sync>,
 }
 
 impl std::fmt::Debug for CalendarRuntime {
@@ -506,7 +533,19 @@ impl CalendarRuntime {
             google: ProviderControl::default(),
             microsoft: ProviderControl::default(),
             browser_opener: open_in_browser,
+            on_changed: Arc::new(|| {}),
         }
+    }
+
+    /// The app supplies an emitter; tests can count completions without Tauri.
+    #[must_use]
+    pub fn with_notifier(mut self, on_changed: Arc<dyn Fn() + Send + Sync>) -> Self {
+        self.on_changed = on_changed;
+        self
+    }
+
+    fn notify_on_completion(&self) -> NotifyOnCompletion<'_> {
+        NotifyOnCompletion(self.on_changed.as_ref())
     }
 
     fn control(&self, provider: CalendarProvider) -> &ProviderControl {
@@ -546,6 +585,7 @@ impl CalendarRuntime {
     /// Consent and discovery perform no local grant writes. Installation has one
     /// SQLite commit point and compensates the preceding credential write.
     pub async fn connect(&self, provider: CalendarProvider) -> CmdResult<ConnectOutcome> {
+        let _notify = self.notify_on_completion();
         let _guard = self
             .control(provider)
             .acquire(CalendarOperation::Connecting)?;
@@ -863,6 +903,7 @@ impl CalendarRuntime {
     /// Disconnect only the account named by the setting, never leftover rows.
     /// Queue the row's actual slot in the same commit that stops referencing it.
     pub async fn disconnect(&self, provider: CalendarProvider) -> CmdResult<()> {
+        let _notify = self.notify_on_completion();
         let _guard = self.control(provider).acquire(CalendarOperation::Idle)?;
         let Some(email) = self.read_previous_account(provider).await? else {
             return Ok(());
@@ -876,6 +917,7 @@ impl CalendarRuntime {
     }
 
     async fn remove_leftover(&self, provider: CalendarProvider, email: &str) -> CmdResult<()> {
+        let _notify = self.notify_on_completion();
         let _guard = self.control(provider).acquire(CalendarOperation::Idle)?;
         if self.read_previous_account(provider).await?.as_deref() == Some(email) {
             return Err("Use Disconnect to remove the connected account.".to_owned());
@@ -955,7 +997,19 @@ impl CalendarRuntime {
     /// Refresh the calendar list and every selected calendar's events for
     /// whichever account is connected for `provider`.
     pub async fn sync(&self, provider: CalendarProvider) -> CmdResult<SyncOutcome> {
-        let _guard = self.control(provider).acquire(CalendarOperation::Syncing)?;
+        let _notify = self.notify_on_completion();
+        let guard = self.control(provider).acquire(CalendarOperation::Syncing)?;
+        self.sync_guarded(provider, guard).await
+    }
+
+    /// Both entry points hold the same non-waiting guard. Record the monotonic
+    /// attempt before any fallible work, including cleanup or token lookup.
+    async fn sync_guarded(
+        &self,
+        provider: CalendarProvider,
+        _guard: OperationGuard<'_>,
+    ) -> CmdResult<SyncOutcome> {
+        *self.control(provider).attempt_clock() = Some(Instant::now());
         if let Err(problem) = self.process_cleanup(provider).await {
             return Ok(sync_failure(problem));
         }
@@ -986,6 +1040,51 @@ impl CalendarRuntime {
         .await;
         let outcome = result.unwrap_or_else(sync_failure);
         Ok(self.record_sync(provider, &email, outcome).await)
+    }
+
+    /// Meetings opening is the only automatic trigger. Each provider makes its
+    /// decision independently; holding the guard through the decision prevents
+    /// two concurrent opens from both starting a request.
+    async fn sync_if_stale(&self) -> CmdResult<Vec<ProviderSync>> {
+        let mut results = Vec::new();
+        for provider in PROVIDERS {
+            let (freshness, _) = provider_freshness(&self.db, provider).await?;
+            let skipped = if !freshness.connected {
+                Some(SyncSkip::NotConnected)
+            } else if freshness.selected_calendars == 0 {
+                Some(SyncSkip::NoSelectedCalendars)
+            } else if let Some(guard) = self
+                .control(provider)
+                .try_acquire(CalendarOperation::Syncing)
+            {
+                let elapsed = self
+                    .control(provider)
+                    .attempt_clock()
+                    .as_ref()
+                    .map(Instant::elapsed);
+                let persisted = freshness.last_attempt_at.as_deref().and_then(parse_instant);
+                if is_fresh(elapsed, persisted, Utc::now()) {
+                    Some(SyncSkip::Fresh)
+                } else {
+                    let _notify = self.notify_on_completion();
+                    let outcome = self.sync_guarded(provider, guard).await?;
+                    results.push(ProviderSync {
+                        provider,
+                        outcome: Some(outcome),
+                        skipped: None,
+                    });
+                    continue;
+                }
+            } else {
+                Some(SyncSkip::Busy)
+            };
+            results.push(ProviderSync {
+                provider,
+                outcome: None,
+                skipped,
+            });
+        }
+        Ok(results)
     }
 
     async fn sync_google(&self, email: &str, access_token: &Secret) -> SyncOutcome {
@@ -1714,7 +1813,268 @@ fn open_in_browser(url: &str) -> std::io::Result<()> {
     Ok(())
 }
 
+/// A small, local projection for the Meetings page. Times are copied exactly
+/// from the normalised snapshot; presenting them in local time belongs to UI.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UpcomingEvent {
+    pub id: String,
+    pub provider: CalendarProvider,
+    pub calendar_id: String,
+    pub title: Option<String>,
+    pub start: String,
+    pub end: String,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderFreshness {
+    pub provider: CalendarProvider,
+    pub connected: bool,
+    pub selected_calendars: u32,
+    pub last_attempt_at: Option<String>,
+    pub last_success_at: Option<String>,
+    pub last_outcome: Option<SyncOutcome>,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UpcomingMeetings {
+    pub events: Vec<UpcomingEvent>,
+    pub has_more: bool,
+    pub providers: Vec<ProviderFreshness>,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct CandidateEvent {
+    pub id: String,
+    pub provider: CalendarProvider,
+    pub calendar_id: String,
+    pub title: Option<String>,
+    pub start: String,
+    pub end: String,
+    pub meeting_like: bool,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+pub struct CalendarCandidates {
+    pub events: Vec<CandidateEvent>,
+    pub auto: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "kebab-case")]
+pub enum SyncSkip {
+    NotConnected,
+    Fresh,
+    Busy,
+    NoSelectedCalendars,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+pub struct ProviderSync {
+    pub provider: CalendarProvider,
+    pub outcome: Option<SyncOutcome>,
+    pub skipped: Option<SyncSkip>,
+}
+
+/// Internal recording-start input retains the whole event for participant and
+/// link resolution. Explicit choices may include solo blocks; Auto may not.
+#[derive(Debug, Clone)]
+pub(crate) struct CalendarEventAt {
+    pub provider: CalendarProvider,
+    pub row: events_repo::EventRow,
+    pub meeting_like: bool,
+}
+
+fn parse_instant(value: &str) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(value)
+        .ok()
+        .map(|at| at.with_timezone(&Utc))
+}
+
+/// Take the later valid attempt from the monotonic and wall clocks. Ignoring a
+/// future wall clock prevents an OS clock correction from suppressing syncs.
+fn is_fresh(
+    since_memory: Option<Duration>,
+    persisted_at: Option<DateTime<Utc>>,
+    now: DateTime<Utc>,
+) -> bool {
+    since_memory.is_some_and(|elapsed| elapsed < Duration::from_secs(300))
+        || persisted_at.is_some_and(|at| {
+            at <= now && now.signed_duration_since(at) < chrono::Duration::seconds(300)
+        })
+}
+
+/// The sole snapshot gate for every reader. Freshness still describes an
+/// ungated account, but legacy/unbound or another account's rows never escape.
+/// No credential lookup, runtime guard or network policy is needed here.
+async fn provider_freshness(
+    db: &Db,
+    provider: CalendarProvider,
+) -> CmdResult<(ProviderFreshness, Option<String>)> {
+    let account = settings::get::<String>(db.pool(), account_key(provider))
+        .await
+        .map_err(|e| fail("could not read the calendar account", e))?;
+    let record = settings::get::<SyncRecord>(db.pool(), last_sync_key(provider))
+        .await
+        .map_err(|e| fail("could not read calendar freshness", e))?
+        .filter(|r| account.is_some() && r.account == account);
+    let selected = if let Some(email) = account.as_deref() {
+        calendars_repo::list_calendars(db.pool(), provider.kind(), email)
+            .await
+            .map_err(|e| fail("could not read calendar selection", e))?
+            .iter()
+            .filter(|c| c.is_selected)
+            .count()
+    } else {
+        0
+    };
+    let gated_account = account
+        .clone()
+        .filter(|_| record.as_ref().is_some_and(|r| r.snapshot_version == 1));
+    Ok((
+        ProviderFreshness {
+            provider,
+            connected: account.is_some(),
+            selected_calendars: u32::try_from(selected).unwrap_or(u32::MAX),
+            last_attempt_at: record.as_ref().map(|r| r.at.clone()),
+            last_success_at: record.as_ref().and_then(|r| r.last_success_at.clone()),
+            last_outcome: record.map(|r| r.outcome),
+        },
+        gated_account,
+    ))
+}
+
+/// Both projections share the same account/version gate and selected-calendar
+/// repository read. Unreadable rows cannot participate in pure selection rules.
+async fn calendar_window(
+    db: &Db,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+) -> CmdResult<(Vec<events_repo::EventRow>, Vec<ProviderFreshness>)> {
+    let mut rows = Vec::new();
+    let mut providers = Vec::new();
+    for provider in PROVIDERS {
+        let (freshness, gated_account) = provider_freshness(db, provider).await?;
+        if let Some(email) = gated_account {
+            let (events, _) =
+                events_repo::list_overlapping(db.pool(), provider.kind(), &email, from, to)
+                    .await
+                    .map_err(|e| fail("could not read calendar events", e))?;
+            rows.extend(events);
+        }
+        providers.push(freshness);
+    }
+    Ok((rows, providers))
+}
+
+fn row_provider(row: &events_repo::EventRow) -> CalendarProvider {
+    match row.provider {
+        "microsoft" => CalendarProvider::Microsoft,
+        _ => CalendarProvider::Google,
+    }
+}
+
+impl From<events_repo::EventRow> for UpcomingEvent {
+    fn from(row: events_repo::EventRow) -> Self {
+        Self {
+            provider: row_provider(&row),
+            id: row.id,
+            calendar_id: row.calendar_id,
+            title: row.summary,
+            start: row.start_time,
+            end: row.end_time,
+        }
+    }
+}
+
+async fn upcoming_at(db: &Db, now: DateTime<Utc>, limit: u32) -> CmdResult<UpcomingMeetings> {
+    if !(1..=20).contains(&limit) {
+        return Err("calendar upcoming limit must be between 1 and 20".to_owned());
+    }
+    let horizon = now
+        .checked_add_signed(chrono::Duration::days(7))
+        .unwrap_or(DateTime::<Utc>::MAX_UTC);
+    let (rows, providers) = calendar_window(db, now, horizon).await?;
+    let (events, has_more) = meetings::upcoming(now, &rows, limit as usize);
+    Ok(UpcomingMeetings {
+        events: events.into_iter().map(UpcomingEvent::from).collect(),
+        has_more,
+        providers,
+    })
+}
+
+/// Read the snapshot at the recording's actual start instant. The extra second
+/// in the half-open repository window includes the inclusive ten-minute lead.
+/// This function takes only a database and time: it cannot refresh a token or
+/// wait for a provider operation, even while a network sync is in progress.
+pub(crate) async fn calendar_events_at(
+    db: &Db,
+    at: DateTime<Utc>,
+) -> CmdResult<Vec<CalendarEventAt>> {
+    let end = at
+        .checked_add_signed(chrono::Duration::seconds(601))
+        .unwrap_or(DateTime::<Utc>::MAX_UTC);
+    let (rows, _) = calendar_window(db, at, end).await?;
+    Ok(meetings::time_matches(at, &rows)
+        .into_iter()
+        .map(|row| CalendarEventAt {
+            provider: row_provider(&row),
+            meeting_like: meetings::is_meeting_like(&row),
+            row,
+        })
+        .collect())
+}
+
+async fn candidates_at(db: &Db, at: DateTime<Utc>) -> CmdResult<CalendarCandidates> {
+    let matches = calendar_events_at(db, at).await?;
+    let mut meeting_like = matches.iter().filter(|event| event.meeting_like);
+    let auto = meeting_like
+        .next()
+        .filter(|_| meeting_like.next().is_none())
+        .map(|event| event.row.id.clone());
+    let events = matches
+        .into_iter()
+        .map(|event| CandidateEvent {
+            provider: event.provider,
+            id: event.row.id,
+            calendar_id: event.row.calendar_id,
+            title: event.row.summary,
+            start: event.row.start_time,
+            end: event.row.end_time,
+            meeting_like: event.meeting_like,
+        })
+        .collect();
+    Ok(CalendarCandidates { events, auto })
+}
+
 /* ------------------------------------------------------------------ commands */
+
+/// A local-only Meetings read; opening the page chooses separately whether to sync.
+#[tauri::command]
+pub async fn calendar_upcoming(
+    state: State<'_, crate::state::AppState>,
+    limit: u32,
+) -> CmdResult<UpcomingMeetings> {
+    upcoming_at(state.db(), Utc::now(), limit).await
+}
+
+/// Recording Start offers cached choices without waiting for a network operation.
+#[tauri::command]
+pub async fn meeting_calendar_candidates(
+    state: State<'_, crate::state::AppState>,
+) -> CmdResult<CalendarCandidates> {
+    candidates_at(state.db(), Utc::now()).await
+}
+
+#[tauri::command]
+pub async fn calendar_sync_if_stale(
+    runtime: State<'_, Arc<CalendarRuntime>>,
+) -> CmdResult<Vec<ProviderSync>> {
+    runtime.sync_if_stale().await
+}
 
 #[tauri::command]
 pub async fn calendar_status(
@@ -1748,6 +2108,7 @@ pub async fn calendar_set_client_id(
     provider: CalendarProvider,
     client_id: String,
 ) -> CmdResult<()> {
+    let _notify = runtime.notify_on_completion();
     // Serialize client edits with connect and sync so a grant cannot be issued
     // while its client configuration is being replaced.
     let _guard = runtime.control(provider).acquire(CalendarOperation::Idle)?;
@@ -1776,6 +2137,7 @@ pub async fn calendar_set_custom_client(
     client_id: Option<String>,
     google_secret: SecretChange,
 ) -> CmdResult<()> {
+    let _notify = runtime.notify_on_completion();
     // Serialize client edits with connect and sync so a grant cannot be issued
     // while its client configuration is being replaced.
     let _guard = runtime.control(provider).acquire(CalendarOperation::Idle)?;
@@ -1839,6 +2201,7 @@ pub async fn calendar_retry_cleanup(
     runtime: State<'_, Arc<CalendarRuntime>>,
     provider: CalendarProvider,
 ) -> CmdResult<()> {
+    let _notify = runtime.notify_on_completion();
     let _guard = runtime.control(provider).acquire(CalendarOperation::Idle)?;
     runtime
         .process_cleanup(provider)
@@ -1854,8 +2217,8 @@ pub async fn calendar_sync(
     runtime.sync(provider).await
 }
 
-/// Toggle whether one calendar is synced. The change takes effect at the next
-/// sync, which replaces that calendar's snapshot when it is selected.
+/// Toggle whether one calendar is synced and visible to local readers.
+/// Selecting it permits its cached snapshot immediately; the next sync refreshes it.
 #[tauri::command]
 pub async fn calendar_set_selected(
     runtime: State<'_, Arc<CalendarRuntime>>,
@@ -1863,6 +2226,7 @@ pub async fn calendar_set_selected(
     calendar_id: String,
     selected: bool,
 ) -> CmdResult<()> {
+    let _notify = runtime.notify_on_completion();
     let _guard = runtime.control(provider).acquire(CalendarOperation::Idle)?;
     calendars_repo::set_selected(runtime.db.pool(), provider.kind(), &calendar_id, selected)
         .await
@@ -1878,6 +2242,376 @@ pub async fn calendar_set_selected(
 )]
 mod tests {
     use super::*;
+
+    fn at() -> DateTime<Utc> {
+        parse_instant("2026-11-11T12:00:00Z").unwrap()
+    }
+
+    async fn reader_event(
+        db: &Db,
+        provider: CalendarProvider,
+        calendar: &str,
+        id: &str,
+        start: DateTime<Utc>,
+        solo: bool,
+    ) -> String {
+        let id = events_repo::row_id(provider.wire_str(), calendar, id);
+        events_repo::upsert_event(
+            db.pool(),
+            &events_repo::EventRow {
+                id: id.clone(),
+                calendar_id: calendar.into(),
+                provider: provider.wire_str(),
+                summary: Some(id.clone()),
+                start_time: start.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                end_time: (start + chrono::Duration::hours(1))
+                    .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                is_all_day: false,
+                status: "confirmed".into(),
+                hangout_link: (!solo).then(|| "https://example.test/meeting".into()),
+                conference_data: None,
+                organizer_email: None,
+                attendees: vec![],
+            },
+        )
+        .await
+        .unwrap();
+        id
+    }
+
+    async fn reader_account(runtime: &CalendarRuntime, provider: CalendarProvider, calendar: &str) {
+        settings::set(
+            runtime.db.pool(),
+            account_key(provider),
+            &"reader@example.com",
+        )
+        .await
+        .unwrap();
+        seed_snapshot_calendar(&runtime.db, provider, calendar, "reader@example.com").await;
+        runtime
+            .prepare_snapshot(provider, "reader@example.com")
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn calendar_upcoming_merges_providers_caps_and_reports_both_freshness_records() {
+        let db = Db::open_in_memory().await.unwrap();
+        let runtime = snapshot_runtime(&db);
+        let empty = upcoming_at(&db, at(), 5).await.unwrap();
+        assert_eq!(empty.providers.len(), 2);
+        assert!(empty
+            .providers
+            .iter()
+            .all(|p| !p.connected && p.selected_calendars == 0 && p.last_attempt_at.is_none()));
+        for provider in PROVIDERS {
+            reader_account(&runtime, provider, "primary").await;
+        }
+        let earlier = reader_event(
+            &db,
+            CalendarProvider::Microsoft,
+            "primary",
+            "running",
+            at() - chrono::Duration::minutes(10),
+            false,
+        )
+        .await;
+        let later = reader_event(
+            &db,
+            CalendarProvider::Google,
+            "primary",
+            "later",
+            at() + chrono::Duration::hours(2),
+            false,
+        )
+        .await;
+        reader_event(&db, CalendarProvider::Google, "primary", "solo", at(), true).await;
+        let upcoming = upcoming_at(&db, at(), 1).await.unwrap();
+        assert_eq!(upcoming.events.len(), 1);
+        assert_eq!(upcoming.events[0].id, earlier);
+        assert_eq!(upcoming.events[0].provider, CalendarProvider::Microsoft);
+        assert_eq!(upcoming.events[0].start, "2026-11-11T11:50:00Z");
+        assert!(upcoming.has_more);
+        let all = upcoming_at(&db, at(), 20).await.unwrap();
+        assert_eq!(
+            all.events.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(),
+            [earlier, later]
+        );
+        assert!(!all.has_more);
+        assert!(all
+            .providers
+            .iter()
+            .all(|p| p.connected && p.selected_calendars == 1 && p.last_attempt_at.is_some()));
+        for limit in [0, 21] {
+            assert!(upcoming_at(&db, at(), limit).await.is_err());
+        }
+        runtime
+            .disconnect(CalendarProvider::Microsoft)
+            .await
+            .unwrap();
+        let one_connected = upcoming_at(&db, at(), 5).await.unwrap();
+        assert!(one_connected.providers[0].connected);
+        assert!(!one_connected.providers[1].connected);
+    }
+
+    #[tokio::test]
+    async fn calendar_candidates_preserve_solo_choices_and_never_break_a_meeting_tie() {
+        let db = Db::open_in_memory().await.unwrap();
+        let runtime = snapshot_runtime(&db);
+        reader_account(&runtime, CalendarProvider::Google, "g").await;
+        reader_account(&runtime, CalendarProvider::Microsoft, "m").await;
+        let solo = reader_event(&db, CalendarProvider::Google, "g", "solo", at(), true).await;
+        let candidates = candidates_at(&db, at()).await.unwrap();
+        assert_eq!(candidates.events[0].id, solo);
+        assert!(!candidates.events[0].meeting_like);
+        assert!(candidates.auto.is_none());
+        let meeting = reader_event(
+            &db,
+            CalendarProvider::Google,
+            "g",
+            "meeting",
+            at() + chrono::Duration::minutes(10),
+            false,
+        )
+        .await;
+        assert_eq!(candidates_at(&db, at()).await.unwrap().auto, Some(meeting));
+        reader_event(
+            &db,
+            CalendarProvider::Microsoft,
+            "m",
+            "overlap",
+            at(),
+            false,
+        )
+        .await;
+        let candidates = candidates_at(&db, at()).await.unwrap();
+        assert_eq!(candidates.events.len(), 3);
+        assert!(candidates.auto.is_none());
+        reader_event(
+            &db,
+            CalendarProvider::Google,
+            "g",
+            "too-late",
+            at() + chrono::Duration::seconds(601),
+            false,
+        )
+        .await;
+        assert_eq!(calendar_events_at(&db, at()).await.unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn calendar_readers_gate_legacy_unbound_accounts_and_hide_other_calendars() {
+        let db = Db::open_in_memory().await.unwrap();
+        let runtime = snapshot_runtime(&db);
+        for provider in PROVIDERS {
+            // Legacy imported credentials can be present without a client binding.
+            settings::set(db.pool(), account_key(provider), &"reader@example.com")
+                .await
+                .unwrap();
+            let key = credentials::token_ref_for(provider.kind(), "reader@example.com").unwrap();
+            let unbound = Secret::new(
+                serde_json::json!({
+                    "access_token": "fixture-access", "refresh_token": "fixture-refresh"
+                })
+                .to_string(),
+            );
+            runtime.credentials.set(&key, &unbound).unwrap();
+            assert!(
+                credentials::bundle_client_id(runtime.credentials.as_ref(), &key)
+                    .unwrap()
+                    .is_none()
+            );
+            tokens_repo::upsert(
+                db.pool(),
+                provider.kind(),
+                "reader@example.com",
+                key.slot(),
+                now_epoch() + 3600,
+                "scope",
+            )
+            .await
+            .unwrap();
+            seed_snapshot_calendar(&db, provider, "selected", "reader@example.com").await;
+            reader_event(&db, provider, "selected", "legacy", at(), false).await;
+            let legacy = SyncRecord {
+                at: at().to_rfc3339(),
+                account: None,
+                snapshot_version: 0,
+                last_success_at: None,
+                outcome: sync_failure(CalendarProblem::Network),
+            };
+            settings::set(db.pool(), last_sync_key(provider), &legacy)
+                .await
+                .unwrap();
+        }
+        assert!(upcoming_at(&db, at(), 5).await.unwrap().events.is_empty());
+        assert!(candidates_at(&db, at()).await.unwrap().events.is_empty());
+        for provider in PROVIDERS {
+            runtime
+                .prepare_snapshot(provider, "reader@example.com")
+                .await
+                .unwrap();
+            reader_event(&db, provider, "selected", "new", at(), false).await;
+            seed_snapshot_calendar(&db, provider, "deselected", "reader@example.com").await;
+            reader_event(&db, provider, "deselected", "hidden", at(), false).await;
+            calendars_repo::set_selected(db.pool(), provider.kind(), "deselected", false)
+                .await
+                .unwrap();
+            seed_snapshot_calendar(&db, provider, "other", "other@example.com").await;
+            reader_event(&db, provider, "other", "foreign", at(), false).await;
+        }
+        let events = calendar_events_at(&db, at()).await.unwrap();
+        assert_eq!(events.len(), 2);
+        assert!(events.iter().all(|e| e.row.id.ends_with(":new")));
+        assert_eq!(upcoming_at(&db, at(), 5).await.unwrap().events.len(), 2);
+        // A version-one marker bound to another account still cannot open the gate
+        // or disclose that account's success/outcome in freshness.
+        settings::set(
+            db.pool(),
+            account_key(CalendarProvider::Google),
+            &"other@example.com",
+        )
+        .await
+        .unwrap();
+        let upcoming = upcoming_at(&db, at(), 5).await.unwrap();
+        assert_eq!(upcoming.events.len(), 1);
+        assert!(upcoming.providers[0].last_attempt_at.is_none());
+        assert!(upcoming.providers[0].last_success_at.is_none());
+        assert!(upcoming.providers[0].last_outcome.is_none());
+    }
+
+    #[test]
+    fn calendar_freshness_clock_table() {
+        for (memory, persisted, expected) in [
+            (None, None, false),
+            (Some(299), None, true),
+            (Some(300), None, false),
+            (None, Some(-299), true),
+            (None, Some(-300), false),
+            (Some(301), Some(-10), true),
+            (Some(10), Some(-301), true),
+            (None, Some(1), false),
+            (Some(10), Some(1), true),
+            (Some(300), Some(-300), false),
+        ] {
+            assert_eq!(
+                is_fresh(
+                    memory.map(Duration::from_secs),
+                    persisted.map(|s| at() + chrono::Duration::seconds(s)),
+                    at()
+                ),
+                expected
+            );
+        }
+        assert!(!is_fresh(None, parse_instant("unparseable"), at()));
+    }
+
+    #[tokio::test]
+    async fn calendar_throttle_skips_are_local_and_manual_attempts_ignore_freshness() {
+        let db = Db::open_in_memory().await.unwrap();
+        let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let observed = count.clone();
+        let runtime = snapshot_runtime(&db).with_notifier(Arc::new(move || {
+            observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }));
+        let result = runtime.sync_if_stale().await.unwrap();
+        assert!(result
+            .iter()
+            .all(|p| p.skipped == Some(SyncSkip::NotConnected)));
+        settings::set(
+            db.pool(),
+            account_key(CalendarProvider::Google),
+            &"reader@example.com",
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            runtime.sync_if_stale().await.unwrap()[0].skipped,
+            Some(SyncSkip::NoSelectedCalendars)
+        );
+        reader_account(&runtime, CalendarProvider::Google, "primary").await;
+        let result = runtime.sync_if_stale().await.unwrap();
+        assert_eq!(result[0].skipped, Some(SyncSkip::Fresh));
+        let guard = runtime
+            .control(CalendarProvider::Google)
+            .acquire(CalendarOperation::Connecting)
+            .unwrap();
+        assert_eq!(
+            runtime.sync_if_stale().await.unwrap()[0].skipped,
+            Some(SyncSkip::Busy)
+        );
+        drop(guard);
+        assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert!(runtime
+            .control(CalendarProvider::Google)
+            .attempt_clock()
+            .is_none());
+        // No token row exists: this attempt terminates locally, yet must start
+        // the monotonic throttle and emit exactly once despite persisted freshness.
+        runtime.sync(CalendarProvider::Google).await.unwrap();
+        assert!(runtime
+            .control(CalendarProvider::Google)
+            .attempt_clock()
+            .is_some());
+        assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(
+            runtime.sync_if_stale().await.unwrap()[0].skipped,
+            Some(SyncSkip::Fresh)
+        );
+        // Force a stale retry using injected clocks, still with no usable token.
+        *runtime.control(CalendarProvider::Google).attempt_clock() = None;
+        settings::remove(db.pool(), last_sync_key(CalendarProvider::Google))
+            .await
+            .unwrap();
+        let result = runtime.sync_if_stale().await.unwrap();
+        assert!(result[0].outcome.is_some());
+        assert!(result[0].skipped.is_none());
+        assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 2);
+        // Readers remain usable while the provider operation guard is held and
+        // never notify: neither they nor freshness reads are sync triggers.
+        let _guard = runtime
+            .control(CalendarProvider::Google)
+            .acquire(CalendarOperation::Syncing)
+            .unwrap();
+        upcoming_at(&db, at(), 5).await.unwrap();
+        candidates_at(&db, at()).await.unwrap();
+        calendar_events_at(&db, at()).await.unwrap();
+        assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn calendar_notifier_counts_runtime_operations_on_success_and_failure() {
+        let db = Db::open_in_memory().await.unwrap();
+        let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let observed = count.clone();
+        let runtime = snapshot_runtime(&db).with_notifier(Arc::new(move || {
+            observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }));
+        let provider = CalendarProvider::Google;
+        runtime.disconnect(provider).await.unwrap();
+        assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 1);
+        // Invalid cleanup data fails before browser/network construction.
+        settings::set(db.pool(), cleanup_key(provider), &vec!["pending"])
+            .await
+            .unwrap();
+        sqlx::query("DROP TABLE google_calendar_tokens")
+            .execute(db.pool())
+            .await
+            .unwrap();
+        assert!(matches!(
+            runtime.connect(provider).await.unwrap(),
+            ConnectOutcome::Failed { .. }
+        ));
+        assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 2);
+        assert!(runtime
+            .remove_leftover(provider, "leftover@example.com")
+            .await
+            .is_err());
+        assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 3);
+        runtime.sync(provider).await.unwrap();
+        assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 4);
+        assert!(runtime.control(provider).attempt_clock().is_some());
+    }
 
     fn grant_tokens(access: &str) -> kw_calendar_core::TokenSet {
         kw_calendar_core::TokenSet {
@@ -3967,6 +4701,66 @@ mod tests {
         );
         assert!(settings::keys(db.pool()).await.unwrap().is_empty());
     }
+    #[cfg(feature = "tauri-test")]
+    #[tokio::test]
+    async fn calendar_notifier_counts_client_selection_and_cleanup_commands() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tauri::Manager as _;
+
+        let db = Db::open_in_memory().await.unwrap();
+        let count = Arc::new(AtomicUsize::new(0));
+        let observed = count.clone();
+        let runtime = Arc::new(snapshot_runtime(&db).with_notifier(Arc::new(move || {
+            observed.fetch_add(1, Ordering::SeqCst);
+        })));
+        let app = tauri::test::mock_builder()
+            .manage(runtime.clone())
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let provider = CalendarProvider::Google;
+        calendar_set_client_id(app.state(), provider, "custom".into())
+            .await
+            .unwrap();
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+        calendar_set_custom_client(app.state(), provider, None, SecretChange::Keep)
+            .await
+            .unwrap();
+        assert_eq!(count.load(Ordering::SeqCst), 2);
+        seed_snapshot_calendar(&db, provider, "primary", "reader@example.com").await;
+        calendar_set_selected(app.state(), provider, "primary".into(), false)
+            .await
+            .unwrap();
+        assert_eq!(count.load(Ordering::SeqCst), 3);
+        calendar_retry_cleanup(app.state(), provider).await.unwrap();
+        assert_eq!(count.load(Ordering::SeqCst), 4);
+        // Each rejected command also completes once, even before acquiring a
+        // guard. The ongoing operation retains sole ownership of its state.
+        let _guard = runtime
+            .control(provider)
+            .acquire(CalendarOperation::Connecting)
+            .unwrap();
+        assert!(
+            calendar_set_client_id(app.state(), provider, "other".into())
+                .await
+                .is_err()
+        );
+        assert_eq!(count.load(Ordering::SeqCst), 5);
+        assert!(
+            calendar_set_custom_client(app.state(), provider, None, SecretChange::Keep)
+                .await
+                .is_err()
+        );
+        assert_eq!(count.load(Ordering::SeqCst), 6);
+        assert!(
+            calendar_set_selected(app.state(), provider, "primary".into(), true)
+                .await
+                .is_err()
+        );
+        assert_eq!(count.load(Ordering::SeqCst), 7);
+        assert!(calendar_retry_cleanup(app.state(), provider).await.is_err());
+        assert_eq!(count.load(Ordering::SeqCst), 8);
+    }
+
     #[derive(Debug)]
     struct RefusingCredentialWrites(kw_security::MemoryCredentialStore);
 

@@ -379,13 +379,17 @@ pub fn run() -> anyhow::Result<()> {
             app.manage(std::sync::Arc::clone(&stream));
 
             // Calendars. Nothing here reaches the network either: connecting an
-            // account and syncing one are both explicit clicks on
-            // `Integrations > Calendar` -- see calendar.rs's module doc.
+            // account and manual sync are explicit clicks; Meetings opening can
+            // request a throttled sync. Construction starts no calendar work.
+            let calendar_handle = app.handle().clone();
             let calendars = std::sync::Arc::new(calendar::CalendarRuntime::new(
                 db.clone(),
                 calendar_credentials,
                 calendar_policy,
-            ));
+            ).with_notifier(std::sync::Arc::new(move || {
+                use tauri::Emitter;
+                let _ = calendar_handle.emit(calendar::CHANGED_EVENT, ());
+            })));
             app.manage(calendars);
 
             // Off unless the user has switched it on. See local_api.rs.
@@ -625,6 +629,9 @@ pub fn run() -> anyhow::Result<()> {
             updater::update_check_last,
             updater::update_dismiss,
             calendar::calendar_status,
+            calendar::calendar_upcoming,
+            calendar::meeting_calendar_candidates,
+            calendar::calendar_sync_if_stale,
             calendar::calendar_set_client_id,
             calendar::calendar_set_custom_client,
             calendar::calendar_connect,
