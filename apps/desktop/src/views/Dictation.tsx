@@ -1,3 +1,4 @@
+import { TaskLoading } from "../components/TaskLoading";
 /**
  * Dictation: the task, and what came of it.
  *
@@ -290,16 +291,7 @@ export function DictationView({
   const copiedTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => () => clearTimeout(copiedTimer.current), []);
 
-  if (!data) {
-    return (
-      <div className="split-main">
-        <section data-surface="dictation.task" className="task" aria-label="Dictation">
-          <h1 className="sr-only">Dictation</h1>
-          {error ? <p className="error">{error}</p> : <p className="muted">Loading…</p>}
-        </section>
-      </div>
-    );
-  }
+  if (!data) return <TaskLoading task="dictation" error={error} />;
 
   const {
     hotkeys,
@@ -478,7 +470,7 @@ export function DictationView({
 
   return (
     <div className="split-main">
-      <div className="task-page">
+      <div className="task-page task-arrival">
         <div className="task-notice">
           <StatusNotice tone={status.tone} {...status.notice} />
         </div>

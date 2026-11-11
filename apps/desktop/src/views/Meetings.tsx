@@ -1,3 +1,4 @@
+import { TaskLoading } from "../components/TaskLoading";
 import { useFinalisationProgress } from "../lib/useFinalisationProgress";
 import { MeetingProgress } from "../components/MeetingProgress";
 import { askConfirm } from "../components/ConfirmDialog";
@@ -493,16 +494,7 @@ export function Meetings({
     data?.language ?? "",
     (data?.keyterms ?? []).join("\n"),
   );
-  if (!data) {
-    return (
-      <div className="split-main">
-        <section data-surface="meetings.record" className="task" aria-label="Meeting">
-          <h1 className="sr-only">Meetings</h1>
-          {error ? <p className="error">{error}</p> : <p className="muted">Loading…</p>}
-        </section>
-      </div>
-    );
-  }
+  if (!data) return <TaskLoading task="meetings" error={error} />;
 
   const { providers, status, recoverable, summaries } = data;
   const recent = recentRead.data;
@@ -1061,7 +1053,7 @@ export function Meetings({
     const clock = savedOutcome !== null ? elapsedLabel(savedOutcome.durationSeconds) : liveClock;
     return (
       <div className="split-main">
-        <div className="task-page task-page-live">
+        <div className="task-page task-page-live task-arrival">
           <div className="task-notice">
             <StatusNotice tone={statusView.tone} wide {...statusView.notice} />
           </div>
@@ -1201,7 +1193,7 @@ export function Meetings({
 
   return (
     <div className="split-main">
-      <div className="task-page">
+      <div className="task-page task-arrival">
         <div className="task-notice">
           <StatusNotice tone={statusView.tone} {...statusView.notice} />
         </div>

@@ -1,5 +1,13 @@
 # Visual checks
 
+## Settings return and task loading
+
+`settings-return.mjs` checks Settings dismissal, saved-note return, unsaved drafts
+and title-bar click-through. `task-loading.mjs` checks delayed and failed reads,
+rapid navigation, background refresh, both themes/sizes and reduced motion. Both
+use invented browser fixtures. Commands and native validation limits are recorded
+in [KNEG-548/547 validation](../../docs/KNEG_548_547_VALIDATION.md).
+
 ## The approved design (2026-11-04)
 
 `design-compare.mjs` renders a board from the approved canvas beside the fixture screen it

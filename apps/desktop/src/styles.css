@@ -4207,3 +4207,20 @@ button.microphone-error-retry { align-self: flex-start; min-height: 32px; margin
 
 /* KNEG-515: leave the floating library toggle its own space in the inline transcript. */
 .split[data-list-collapsed="true"] .note-transcript-inline .transcript-head { padding-left: 44px; }
+
+/* KNEG-547: keep the task's layout while reading, without inventing its state. */
+.task-page.task-loading { animation: none; }
+.task-loading .task-hero { min-height: 176px; justify-content: center; }
+.task-loading .task-loading-card { min-height: 300px; justify-content: space-between; }
+.task-loading-art { min-height: 300px; border-radius: var(--r-sheet); background: var(--control); }
+.task-placeholder { display: block; width: 100%; height: 16px; border-radius: var(--r-control); background: var(--control); visibility: hidden; }
+.task-loading[data-details="true"] .task-placeholder { visibility: visible; }
+.task-placeholder-title { width: min(540px, 90%); height: 56px; }
+.task-placeholder-subtitle { width: min(420px, 75%); }
+.task-loading-lines { display: flex; flex-direction: column; gap: 18px; }
+.task-loading-lines > :last-child { width: 65%; }
+.task-page.task-arrival { animation: kw-fade 120ms ease-out both; }
+.task-arrival .notice { animation: none; }
+@media (prefers-reduced-motion: reduce) {
+  .task-page.task-arrival { animation: none; }
+}
