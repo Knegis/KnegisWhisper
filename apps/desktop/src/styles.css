@@ -4235,19 +4235,23 @@ button.calendar-settings-link { height: auto; min-height: 0; padding: 0; border-
 .calendar-line { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .calendar-line > span { flex: 1 1 180px; min-width: 0; overflow-wrap: anywhere; }
 .calendar-line .pill { flex: none; }
-.calendar-choice { padding: 12px; border-radius: var(--r-control); background: rgb(255 255 255 / 92%); color: #17171b; font-size: 14px; }
+.calendar-choice { padding: 12px; border-radius: var(--r-row); background: rgb(255 255 255 / 92%); color: #17171b; font-size: 14px; }
 .calendar-choice .calendar-line > span { flex-basis: 100%; }
 .calendar-choice button.glass-plain, .calendar-choice-error button.glass-plain { height: 30px; min-height: 0; padding: 0 10px; font-size: 13px; }
 .calendar-choice-error { margin: 0; padding: 10px; border-radius: var(--r-control); color: #17171b; background: rgb(255 255 255 / 92%); font-size: 13px; overflow-wrap: anywhere; }
-.calendar-picker { display: flex; flex-direction: column; gap: 4px; max-height: 220px; overflow: auto; margin-top: 8px; padding: 6px; border-radius: var(--r-control); background: var(--panel); color: var(--text); }
-.calendar-picker > button { display: flex; flex: none; flex-direction: column; align-items: flex-start; gap: 3px; height: auto; min-height: 36px; margin: 0; padding: 8px; background: var(--control); color: var(--text); font-size: 13px; line-height: 1.35; text-align: left; white-space: normal; overflow-wrap: anywhere; }
+.calendar-picker { display: flex; flex-direction: column; gap: 4px; max-height: 220px; overflow: auto; margin-top: 8px; padding: 6px; border-radius: var(--r-row); background: var(--panel); color: var(--text); }
+.content .calendar-picker > button, .calendar-picker > button { display: flex; flex: none; flex-direction: column; align-items: flex-start; gap: 3px; height: auto; min-height: 36px; margin: 0; padding: 8px 12px; border-radius: var(--r-row); background: var(--control); color: var(--text); font-size: 13px; line-height: 1.35; text-align: left; white-space: normal; overflow-wrap: anywhere; }
 .calendar-picker > button small { color: var(--muted); }
 .calendar-picker > button[aria-pressed="true"] { outline: 2px solid var(--band); outline-offset: -2px; }
 .recording-calendar { margin: 12px 0; color: var(--text); font-size: 14px; }
+.meeting-live > .recording-calendar { max-width: 1228px; margin: 12px auto; padding: 0 24px; }
 .recording-calendar .error { margin: 6px 0 0; overflow-wrap: anywhere; }
-.notify-panel > .recording-calendar { flex: 0 1 auto; min-height: 0; max-height: 35%; overflow: auto; margin: 0 16px 10px; font-size: 12px; }
+.notify-panel > .recording-calendar { flex: none; margin: 0 16px 10px; font-size: 12px; }
 .notify-panel .recording-calendar .pill { height: 26px; min-height: 26px; padding: 0 8px; font-size: 12px; }
-.notify-panel .calendar-picker { max-height: 100px; }
+/* One whole row fits at the panel's minimum size; only the list scrolls, so
+ * the surrounding calendar block cannot cut a second viewport through it. */
+.notify-panel .calendar-picker { max-height: 76px; scroll-snap-type: y mandatory; scroll-padding: 6px; }
+.notify-panel .calendar-picker > button { min-height: 64px; scroll-snap-align: start; }
 @media (max-width: 760px) {
   .upcoming-rows > li { grid-template-columns: 145px minmax(0, 1fr); gap: 6px 12px; }
   .upcoming-provider { grid-column: 2; }
