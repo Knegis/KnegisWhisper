@@ -125,8 +125,14 @@ provider and the two speaker-label models.
 
 *Reachable* is still not *verified*. The three enterprise connectors, the six meeting/calendar/media
 wire shapes and the newly-added meeting-stream clients can all be configured, and every one of them
-still needs a live call nobody has made — no key, no client ID, or no organisational credential
-exists on any machine this project has touched. `docs/PLATFORM_SUPPORT.md` and
+still needs a live call. Calendar Connect now resolves an app-owned or Advanced custom client
+for Google Calendar and Outlook (personal and Microsoft 365), with bounded snapshots through
+Google `events.list` and Graph v1.0 `calendarView`. Local Upcoming readers exist; Meetings
+Upcoming/event picker and recording links are built and fixture-tested, still unverified against
+real accounts. No calendar client has been registered,
+no build has carried the values and no real account has connected. Calendar evidence is unit
+tests and dev-fixture screenshots; [R12](CALENDAR_PROVIDER_SETUP.md#r12-owner-real-account-checklist)
+tracks the owner's pending round trips. `docs/PLATFORM_SUPPORT.md` and
 `docs/BENCH_CHECK.md` keep that distinction per provider and per capability; **none of chunks E
 onward has been exercised by a person at all**, only by tests and code review.
 

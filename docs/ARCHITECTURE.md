@@ -215,7 +215,17 @@ We do not reproduce that. Instead:
    the FTS index. It never writes to the source file, which makes it inherently reversible.
 4. **Relocate secrets during import.** Upstream stores calendar refresh tokens in plaintext
    SQLite columns. The importer moves them into the OS credential store and leaves only a key
-   reference behind.
+   reference behind. Google Calendar and Outlook resolve an Advanced custom client before the
+   app-owned compile-time client, otherwise Missing. Grants are bound to their issuing client;
+   unbound/imported grants require reconnecting. Google expanded `events.list` and Outlook Graph
+   v1.0 `calendarView` fetch snapshots over [now - 24 hours, now + 30 days). Each calendar commits
+   atomically with overlap pruning; failed pages keep its cache. A snapshot-version gate hides
+   old caches until their first new sync purges them. Local Upcoming and candidate readers use
+   that gate without network I/O. Meetings-open sync is throttled to once per 5 minutes per
+   provider, alongside Sync now; never launch, focus or timer. Meetings Upcoming/event picker
+   and the recording-event sidecar link are built and fixture-tested. Calendars need no database migration;
+   new persisted serde fields default on read. Real accounts remain unverified; see
+   [the provider runbook](CALENDAR_PROVIDER_SETUP.md).
 
 Dropped on import because they exist only to serve OpenWhispr Cloud: the `spaces`,
 `pending_vector_purges`, and `optimistic_folder_delete_rows` tables, and every `cloud_id`,

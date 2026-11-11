@@ -55,6 +55,16 @@ Select a local recording. Converted audio is retained with its note for replay;
 your source file stays intact. You can edit notes, search transcripts and export
 text, Markdown, JSON or subtitle formats. See [Notes workspace](NOTES_WORKSPACE.md).
 
+## Calendars
+
+Settings > Calendar offers Google Calendar and Outlook (Outlook.com, Hotmail and Microsoft 365).
+Builds carrying app-owned client values support one-click Connect; Advanced accepts a custom
+client, including for forks without those values. No client has been registered, no build has
+carried the values and no real account has connected. See [provider setup and R12](CALENDAR_PROVIDER_SETUP.md).
+Sync now requests a bounded snapshot. Meetings opening requests one at most once per 5 minutes
+per provider; never launch, focus or timer. Meetings Upcoming/event picker and recording links
+are built and fixture-tested, still unverified against real accounts.
+
 ## Uninstall on Windows
 
 Quit KnegisWhisper from its tray menu, then use **Windows Settings > Apps >
@@ -131,7 +141,7 @@ that a folder was removed.
    For a full local data backup, quit the app and copy the entire
    `%APPDATA%\KnegisWhisper` folder. Credentials are stored separately.
 2. If the app is still installed, clear saved provider keys in **Settings >
-   Providers** and disconnect calendar accounts in **Integrations > Calendar**.
+   Providers** and disconnect calendar accounts in **Settings > Calendar**.
    Quit from the tray. Stop any remaining KnegisWhisper transcription/model
    processes before deleting files; check their executable paths so you do not
    stop another application's runtime.

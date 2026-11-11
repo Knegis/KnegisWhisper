@@ -1073,28 +1073,21 @@ person at the machine.
 
 ### Added by chunk F (calendars), and unchecked
 
-Added by Task 19: this file previously had no entries at all for calendars, media import, the MCP
-and CLI screens, or the Task 20 boundary fix — an omission this run is what found and closes. All
-of chunk F is green tests and code review; none of it has touched real hardware or a real account.
+Calendar evidence so far is unit tests and dev-fixture screenshots, not real accounts.
+[R12 in the provider runbook](CALENDAR_PROVIDER_SETUP.md#r12-owner-real-account-checklist)
+is the full owner procedure and evidence format. All checks below remain unchecked.
 
-1. **Connect a real Google account** through `Integrations > Calendar`, using a PKCE client ID
-   registered by hand. Confirm the loopback redirect actually completes in a real browser, that the
-   calendar list that comes back matches the account, and that the refresh token lands in the OS
-   credential store rather than anywhere in SQLite — `assert_no_credential_columns` proves the
-   schema cannot hold one, not that the runtime code obeys it end to end with a real token.
-2. **The same, for a Microsoft 365 account.** The wire shape (`/me/calendars`, `events/delta`) is
-   modelled on public documentation and has never answered a real request.
-3. **Disconnect an account and reconnect a different one.** Confirms the fix for the settings-read
-   failure that could leave a live, working refresh token in the credential store the app could no
-   longer see or revoke — the automated test proves the code path; only a real reconnect proves the
-   credential store agrees.
-4. **Let a sync fail partway through** (revoke access mid-sync, if the provider's console allows
-   it, or disconnect network partway) and confirm the screen reports `RefreshFailed` or a partial
-   failure rather than `SyncOutcome::Completed`. The `let _ =` that used to discard this is fixed and
-   tested; nobody has watched it happen on a real account.
-5. **Look at `Integrations > Calendar`'s Apple row.** Confirms it reads "Unsupported" with the
-   EventKit reason rather than an empty calendar list or a hidden row — the one thing about Apple
-   Calendar that *is* checkable without a Mac.
+- [ ] One-click Connect in Settings > Calendar with no Advanced values: Google Calendar,
+  personal Outlook.com and Microsoft 365 work accounts (R12.1, 4, 7, 8).
+- [ ] Selected-calendar snapshots over [now - 24 hours, now + 30 days): Google expanded
+  `events.list` and Outlook Graph v1.0 `calendarView`, including a recurring occurrence on a
+  non-default calendar; interrupted paging keeps that calendar's cache (R12.2, 6).
+- [ ] Meetings-open sync obeys the five-minute per-provider throttle; Sync now works;
+  launch, focus and idle cause no calendar requests (R12.3).
+- [ ] Upcoming and event picker: built and fixture-tested, still unverified against real accounts (R12.2).
+- [ ] Recording calendar link and all save/recovery paths: built and fixture-tested, still
+  unverified against real accounts (R12.5).
+- [ ] Apple Calendar still reads Unsupported (R12.9).
 
 ### Added by chunk G (media import), and unchecked
 

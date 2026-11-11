@@ -978,7 +978,7 @@
       "backend": "crates/calendar-core",
       "ui": "Integrations > Calendar",
       "reachable": true,
-      "note": "Reachable: the loopback PKCE flow (crates/calendar-core) plus this task's calendar list and incremental event sync are wired into apps/desktop/src-tauri/src/calendar.rs and driven from Integrations > Calendar, which is where the user pastes in the client ID for a PKCE-only installed-app client they registered themselves -- no client_secret anywhere. Refresh tokens live in the OS credential store, never SQLite. The calendarList/events.list wire shapes are covered by fixtures modelled on Google's public docs; no client ID exists on this machine, so no live call has been made -- see the task report for the full list of what that leaves unverified."
+      "note": "Reachable: Settings > Calendar offers Google Calendar one-click Connect using an app-owned desktop PKCE client or Advanced custom override. The Google desktop secret is public and sent only on token and refresh grants; custom secrets and OAuth tokens live in the OS credential store. Calendar v3 calendarList and expanded events.list use snapshots over [now - 24 hours, now + 30 days), committed per calendar; failed pages keep its cache. No client has been registered, no build has carried the values and no real account has connected. Evidence is unit tests and dev-fixture screenshots. Local Upcoming readers, Meetings Upcoming/event picker and recording links are built and fixture-tested, still unverified against real accounts. See docs/CALENDAR_PROVIDER_SETUP.md, R12."
     },
     "calendar:microsoft": {
       "status": "ported-with-new-rust-implementation",
@@ -990,7 +990,7 @@
       "backend": "crates/calendar-core",
       "ui": "Integrations > Calendar",
       "reachable": true,
-      "note": "Reachable: same path as calendar:google, direct to login.microsoftonline.com and graph.microsoft.com, with the delta-query event sync this task adds. No client ID exists on this machine, so the /me/calendars and events/delta wire shapes are covered by fixtures modelled on Microsoft's public docs rather than a live call -- see the task report."
+      "note": "Reachable: Settings > Calendar offers Outlook (Outlook.com, Hotmail and Microsoft 365) one-click Connect using an app-owned public PKCE client or Advanced custom client, never a client secret. Requests use login.microsoftonline.com and graph.microsoft.com v1.0 me/calendars and me/calendars/{id}/calendarView, with UTC snapshots over [now - 24 hours, now + 30 days). A page failure keeps that calendar cache. No client has been registered, no build has carried the values and no real account has connected. Evidence is unit tests and dev-fixture screenshots. See docs/CALENDAR_PROVIDER_SETUP.md, R12."
     },
     "calendar:apple": {
       "status": "temporarily-deferred",
