@@ -15,6 +15,7 @@ mod audio_level;
 mod automation;
 mod binary_locator;
 mod calendar;
+mod calendar_clients;
 mod commands;
 mod diagnostics;
 mod diarization;
@@ -625,6 +626,7 @@ pub fn run() -> anyhow::Result<()> {
             updater::update_dismiss,
             calendar::calendar_status,
             calendar::calendar_set_client_id,
+            calendar::calendar_set_custom_client,
             calendar::calendar_connect,
             calendar::calendar_disconnect,
             calendar::calendar_sync,

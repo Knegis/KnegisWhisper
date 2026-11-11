@@ -253,17 +253,19 @@
       "reachable": true
     },
     "calendar.google.clientId": {
-      "what": "The OAuth client ID the user registers themselves. There is no embedded client; the screen says why.",
+      "what": "Optional custom OAuth client ID under Advanced; the built-in client is used otherwise.",
       "writtenBy": [
-        "calendar_set_client_id"
+        "calendar_set_client_id",
+        "calendar_set_custom_client"
       ],
       "ui": "Integrations > Calendar",
       "reachable": true
     },
     "calendar.microsoft.clientId": {
-      "what": "The OAuth client ID the user registers themselves.",
+      "what": "Optional custom OAuth client ID under Advanced; the built-in client is used otherwise.",
       "writtenBy": [
-        "calendar_set_client_id"
+        "calendar_set_client_id",
+        "calendar_set_custom_client"
       ],
       "ui": "Integrations > Calendar",
       "reachable": true

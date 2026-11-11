@@ -217,7 +217,7 @@ async fn full_round_trip_from_authorize_to_stored_refresh_token() {
 
     let receiver = LoopbackReceiver::bind().await.unwrap();
     let redirect_uri = receiver.redirect_uri("/callback");
-    let pending = begin_authorization(&provider, "test-client-id", &redirect_uri).unwrap();
+    let pending = begin_authorization(&provider, &client(), &redirect_uri).unwrap();
     let real_state = state_from_authorize_url(&pending.authorize_url);
     let port = receiver.port();
 
@@ -232,7 +232,7 @@ async fn full_round_trip_from_authorize_to_stored_refresh_token() {
         &pending,
         &callback,
         &provider,
-        "test-client-id",
+        &client(),
         &PlaintextLoopbackSender,
     )
     .await
@@ -247,6 +247,7 @@ async fn full_round_trip_from_authorize_to_stored_refresh_token() {
         CalendarProviderKind::Google,
         "user@example.com",
         &tokens,
+        "test-client-id",
     )
     .await
     .unwrap();
@@ -298,7 +299,7 @@ async fn the_code_exchange_sends_no_secret_and_parses_the_real_response() {
     let tokens = kw_calendar_core::exchange::exchange_authorization_code(
         &PlaintextLoopbackSender,
         &token_server.url(),
-        "test-client-id",
+        &client(),
         "http://127.0.0.1:0/callback",
         &kw_security::Secret::new("the-code".to_owned()),
         &kw_security::Secret::new("the-verifier".to_owned()),
@@ -331,7 +332,7 @@ async fn a_mismatched_state_is_refused_and_the_provider_is_never_contacted() {
 
     let receiver = LoopbackReceiver::bind().await.unwrap();
     let redirect_uri = receiver.redirect_uri("/callback");
-    let pending = begin_authorization(&provider, "test-client-id", &redirect_uri).unwrap();
+    let pending = begin_authorization(&provider, &client(), &redirect_uri).unwrap();
     let port = receiver.port();
 
     let browser = tokio::spawn(async move {
@@ -349,7 +350,7 @@ async fn a_mismatched_state_is_refused_and_the_provider_is_never_contacted() {
         &pending,
         &callback,
         &provider,
-        "test-client-id",
+        &client(),
         &PlaintextLoopbackSender,
     )
     .await
@@ -391,6 +392,7 @@ async fn an_expired_access_token_is_refreshed_using_the_stored_refresh_token() {
         CalendarProviderKind::Google,
         "user@example.com",
         &expired,
+        "test-client-id",
     )
     .await
     .unwrap();
@@ -400,7 +402,7 @@ async fn an_expired_access_token_is_refreshed_using_the_stored_refresh_token() {
         &creds,
         &PlaintextLoopbackSender,
         &provider,
-        "test-client-id",
+        &client(),
         CalendarProviderKind::Google,
         "user@example.com",
     )
@@ -429,4 +431,79 @@ async fn an_expired_access_token_is_refreshed_using_the_stored_refresh_token() {
     let stored = creds.get(&slot).unwrap();
     assert!(stored.expose().contains("refresh-rotated"));
     assert!(!stored.expose().contains("refresh-original"));
+    let bundle: serde_json::Value = serde_json::from_str(stored.expose()).unwrap();
+    assert_eq!(bundle["client_id"], "test-client-id");
+}
+
+fn client() -> kw_calendar_core::OAuthClientConfig {
+    kw_calendar_core::OAuthClientConfig::Google {
+        client_id: "test-client-id".to_owned(),
+        client_secret: None,
+    }
+}
+
+#[tokio::test]
+async fn token_forms_on_the_wire_include_only_a_configured_google_secret() {
+    use kw_calendar_core::OAuthClientConfig;
+    use kw_security::Secret;
+    for client in [
+        OAuthClientConfig::Google {
+            client_id: "test-client-id".into(),
+            client_secret: Some(Secret::new("wire-google-secret".into())),
+        },
+        client(),
+        OAuthClientConfig::Microsoft {
+            client_id: "test-client-id".into(),
+        },
+    ] {
+        let server = StubTokenServer::start(
+            200,
+            r#"{"access_token":"access","refresh_token":"refresh"}"#,
+        )
+        .await;
+        let provider = ProviderEndpoints {
+            token_url: server.url(),
+            ..ProviderEndpoints::google()
+        };
+        let pending = begin_authorization(&provider, &client, "http://127.0.0.1/callback").unwrap();
+        assert!(!pending.authorize_url.contains("wire-google-secret"));
+        assert!(!pending.authorize_url.contains("client_secret"));
+        kw_calendar_core::exchange::exchange_authorization_code(
+            &PlaintextLoopbackSender,
+            &server.url(),
+            &client,
+            "http://127.0.0.1/callback",
+            &Secret::new("code".into()),
+            &Secret::new("verifier".into()),
+            0,
+        )
+        .await
+        .unwrap();
+        let body = server.last_request_body().await;
+        let pairs: std::collections::HashMap<_, _> = url::form_urlencoded::parse(body.as_bytes())
+            .into_owned()
+            .collect();
+        assert_eq!(
+            pairs.get("client_secret").map(String::as_str),
+            client.client_secret().map(Secret::expose)
+        );
+        kw_calendar_core::exchange::refresh_access_token(
+            &PlaintextLoopbackSender,
+            &server.url(),
+            &client,
+            &Secret::new("refresh".into()),
+            "scope",
+            0,
+        )
+        .await
+        .unwrap();
+        let body = server.last_request_body().await;
+        let pairs: std::collections::HashMap<_, _> = url::form_urlencoded::parse(body.as_bytes())
+            .into_owned()
+            .collect();
+        assert_eq!(
+            pairs.get("client_secret").map(String::as_str),
+            client.client_secret().map(Secret::expose)
+        );
+    }
 }

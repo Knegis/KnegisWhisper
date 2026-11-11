@@ -6,6 +6,56 @@
 //! points at a stub server on loopback instead, which is the only way this
 //! flow can be exercised end to end without a real client id.
 
+use kw_security::Secret;
+
+/// A provider-typed desktop OAuth client. Google's desktop secret is a public
+/// build value, used only by token grants; Microsoft is always a public client.
+#[derive(Clone)]
+pub enum OAuthClientConfig {
+    Google {
+        client_id: String,
+        client_secret: Option<Secret>,
+    },
+    Microsoft {
+        client_id: String,
+    },
+}
+
+impl OAuthClientConfig {
+    #[must_use]
+    pub fn client_id(&self) -> &str {
+        match self {
+            Self::Google { client_id, .. } | Self::Microsoft { client_id } => client_id,
+        }
+    }
+
+    #[must_use]
+    pub const fn kind(&self) -> CalendarProviderKind {
+        match self {
+            Self::Google { .. } => CalendarProviderKind::Google,
+            Self::Microsoft { .. } => CalendarProviderKind::Microsoft,
+        }
+    }
+
+    #[must_use]
+    pub const fn client_secret(&self) -> Option<&Secret> {
+        match self {
+            Self::Google { client_secret, .. } => client_secret.as_ref(),
+            Self::Microsoft { .. } => None,
+        }
+    }
+}
+
+impl std::fmt::Debug for OAuthClientConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OAuthClientConfig")
+            .field("kind", &self.kind())
+            .field("client_id", &self.client_id())
+            .field("client_secret", &self.client_secret().map(|_| "<redacted>"))
+            .finish()
+    }
+}
+
 /// Which calendar provider an account belongs to.
 ///
 /// Deliberately just Google and Microsoft. Apple/EventKit is not an OAuth
@@ -60,7 +110,8 @@ pub struct ProviderEndpoints {
     /// Provider-specific authorize query parameters beyond the standard
     /// OAuth2/PKCE set. Google needs `access_type=offline` and
     /// `prompt=consent` to hand back a refresh token on every grant;
-    /// Microsoft returns one by default when `offline_access` is scoped.
+    /// Microsoft returns one when `offline_access` is scoped, and uses
+    /// `prompt=select_account` so SSO cannot silently re-link an account.
     pub extra_authorize_params: Vec<(String, String)>,
 }
 
@@ -71,7 +122,10 @@ impl ProviderEndpoints {
         Self {
             authorize_url: "https://accounts.google.com/o/oauth2/v2/auth".to_owned(),
             token_url: "https://oauth2.googleapis.com/token".to_owned(),
-            scopes: vec!["https://www.googleapis.com/auth/calendar.readonly".to_owned()],
+            scopes: vec![
+                "https://www.googleapis.com/auth/calendar.calendarlist.readonly".to_owned(),
+                "https://www.googleapis.com/auth/calendar.events.readonly".to_owned(),
+            ],
             extra_authorize_params: vec![
                 ("access_type".to_owned(), "offline".to_owned()),
                 ("prompt".to_owned(), "consent".to_owned()),
@@ -91,7 +145,7 @@ impl ProviderEndpoints {
                 "offline_access".to_owned(),
                 "https://graph.microsoft.com/Calendars.Read".to_owned(),
             ],
-            extra_authorize_params: Vec::new(),
+            extra_authorize_params: vec![("prompt".to_owned(), "select_account".to_owned())],
         }
     }
 }

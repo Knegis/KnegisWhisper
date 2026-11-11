@@ -17,6 +17,10 @@
 //! directly, under the identical `RequestPurpose::UserConfiguredCalendarProvider`
 //! -- no eighth purpose is introduced anywhere in this module.
 //!
+//! OAuth clients resolve from an Advanced custom override, then the app-owned
+//! compile-time client. Google's optional desktop secret stays in Rust and is
+//! used only at the token endpoint; custom secrets live in the credential store.
+//!
 //! # Honesty
 //!
 //! [`calendar_status`] never claims a provider is connected on the strength
@@ -32,13 +36,15 @@
 //! one, and an expired token that could not be refreshed says so rather than
 //! showing stale rows as current.
 
+use crate::calendar_clients::{self, ClientChoice, ClientSource};
 use std::sync::Arc;
 use std::time::Duration;
 
 use kw_calendar_core::{
     apple, begin_authorization, calendars_repo, complete_authorization, credentials,
     ensure_fresh_access_token, events_repo, google, microsoft, store_tokens, tokens_repo,
-    CalendarError, CalendarProviderKind, LoopbackReceiver, NetworkPolicySender, ProviderEndpoints,
+    CalendarError, CalendarProviderKind, LoopbackReceiver, NetworkPolicySender, OAuthClientConfig,
+    ProviderEndpoints,
 };
 use kw_network_policy::NetworkPolicy;
 use kw_security::{CredentialStore, KeyRef, Secret};
@@ -140,6 +146,106 @@ fn now_epoch() -> i64 {
     chrono::Utc::now().timestamp()
 }
 
+/// Secret edits are explicit: an omitted edit must never erase a saved value.
+/// Debug intentionally omits Set's payload when callers inspect a pending edit.
+#[derive(Deserialize, TS)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum SecretChange {
+    Keep,
+    Set { value: String },
+    Clear,
+}
+
+impl std::fmt::Debug for SecretChange {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Keep => "Keep",
+            Self::Set { .. } => "Set { value: <redacted> }",
+            Self::Clear => "Clear",
+        })
+    }
+}
+
+fn custom_secret_slot() -> CmdResult<KeyRef> {
+    KeyRef::new("calendar-google-custom-client")
+        .ok_or_else(|| "invalid calendar custom client slot".to_owned())
+}
+
+fn read_custom_secret(
+    credentials: &dyn CredentialStore,
+    provider: CalendarProvider,
+) -> CmdResult<Option<Secret>> {
+    if provider == CalendarProvider::Microsoft {
+        return Ok(None);
+    }
+    match credentials.get(&custom_secret_slot()?) {
+        Ok(secret) => Ok(Some(secret)),
+        Err(kw_security::CredentialError::NotFound(_)) => Ok(None),
+        Err(_) => Err("could not read the custom Google client secret".to_owned()),
+    }
+}
+
+/// SQLite and the OS store cannot share a transaction. Read the old pair first,
+/// change the credential first, then compensate if the atomic settings write
+/// fails. Credential errors are static so a backend cannot echo a secret to IPC.
+/// The caller supplies the final write so each command declares its settings
+/// ownership in its body, where the settings audit can attribute it.
+async fn persist_custom_client<Fut>(
+    db: &Db,
+    credentials: &dyn CredentialStore,
+    provider: CalendarProvider,
+    client_id: Option<&str>,
+    change: SecretChange,
+    write_id: impl FnOnce(Option<String>) -> Fut,
+) -> CmdResult<()>
+where
+    Fut: std::future::Future<Output = Result<(), kw_storage::StorageError>>,
+{
+    if provider == CalendarProvider::Microsoft && !matches!(change, SecretChange::Keep) {
+        return Err("Outlook clients do not accept a Google client secret".to_owned());
+    }
+    let id = client_id.map(str::trim).filter(|id| !id.is_empty());
+    if matches!(change, SecretChange::Set { .. }) && id.is_none() {
+        return Err("a custom client ID is required to set a Google client secret".to_owned());
+    }
+    let previous_id = settings::get::<String>(db.pool(), client_id_key(provider))
+        .await
+        .map_err(|e| fail("could not read the client ID", e))?;
+    let previous_secret = read_custom_secret(credentials, provider)?;
+    let changed = previous_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        != id;
+    let credential_changed = provider == CalendarProvider::Google
+        && (changed || id.is_none() || !matches!(change, SecretChange::Keep));
+    let slot = custom_secret_slot()?;
+    if credential_changed {
+        match change {
+            SecretChange::Set { value } => credentials.set(&slot, &Secret::new(value)),
+            SecretChange::Clear | SecretChange::Keep => credentials.delete(&slot),
+        }
+        .map_err(|_| "could not save the custom Google client secret".to_owned())?;
+    }
+    let result = write_id(id.map(str::to_owned)).await;
+    if let Err(error) = result {
+        if credential_changed {
+            let restore = match previous_secret {
+                Some(secret) => credentials.set(&slot, &secret),
+                None => credentials.delete(&slot),
+            };
+            if restore.is_err() {
+                return Err(
+                    "could not save the client ID or restore the previous custom client secret"
+                        .to_owned(),
+                );
+            }
+        }
+        return Err(fail("could not save the client ID", error));
+    }
+    Ok(())
+}
+
 /* -------------------------------------------------------------- the runtime */
 
 /// What connecting an account, or syncing one, needs: the database,
@@ -175,20 +281,21 @@ impl CalendarRuntime {
         }
     }
 
-    async fn client_id(&self, provider: CalendarProvider) -> CmdResult<String> {
-        let raw = settings::get::<String>(self.db.pool(), client_id_key(provider))
+    async fn client(&self, provider: CalendarProvider) -> CmdResult<OAuthClientConfig> {
+        let custom_id = settings::get::<String>(self.db.pool(), client_id_key(provider))
             .await
-            .map_err(|e| fail("could not read the client ID", e))?
-            .unwrap_or_default();
-        let trimmed = raw.trim();
-        if trimmed.is_empty() {
-            return Err(format!(
-                "no client ID is set for {}. Register your own OAuth client and paste its ID \
-                 in on this screen first.",
-                provider.name()
-            ));
+            .map_err(|e| fail("could not read the client ID", e))?;
+        let secret = read_custom_secret(self.credentials.as_ref(), provider)?;
+        match calendar_clients::resolve(provider.kind(), custom_id.as_deref(), secret) {
+            ClientChoice::Custom(client) | ClientChoice::AppOwned(client) => Ok(client),
+            ClientChoice::Missing => Err(format!(
+                "This build has no built-in {} connection. Add your own client under Advanced.",
+                match provider {
+                    CalendarProvider::Google => "Google Calendar",
+                    CalendarProvider::Microsoft => "Outlook",
+                }
+            )),
         }
-        Ok(trimmed.to_owned())
     }
 
     /// The account currently on file as connected for `provider`, if any.
@@ -215,7 +322,7 @@ impl CalendarRuntime {
             return Err("a calendar connection or sync is already in progress".to_owned());
         };
 
-        let client_id = self.client_id(provider).await?;
+        let client = self.client(provider).await?;
         let endpoints = provider.endpoints();
 
         let receiver = LoopbackReceiver::bind()
@@ -223,8 +330,8 @@ impl CalendarRuntime {
             .map_err(|e| format!("could not open a local port to receive the redirect: {e}"))?;
         let redirect_uri = receiver.redirect_uri(CALLBACK_PATH);
 
-        let pending = begin_authorization(&endpoints, &client_id, &redirect_uri)
-            .map_err(|e| e.to_string())?;
+        let pending =
+            begin_authorization(&endpoints, &client, &redirect_uri).map_err(|e| e.to_string())?;
 
         if let Err(err) = open_in_browser(&pending.authorize_url) {
             return Err(format!(
@@ -241,17 +348,14 @@ impl CalendarRuntime {
             .map_err(|e| format!("waiting for the browser to come back: {e}"))?;
 
         let sender = NetworkPolicySender::new(&self.policy);
-        let tokens = match complete_authorization(
-            &pending, &callback, &endpoints, &client_id, &sender,
-        )
-        .await
-        {
-            Ok(tokens) => tokens,
-            Err(CalendarError::AuthorizationDenied(reason)) => {
-                return Ok(ConnectOutcome::Denied { reason });
-            }
-            Err(err) => return Err(err.to_string()),
-        };
+        let tokens =
+            match complete_authorization(&pending, &callback, &endpoints, &client, &sender).await {
+                Ok(tokens) => tokens,
+                Err(CalendarError::AuthorizationDenied { error: reason, .. }) => {
+                    return Ok(ConnectOutcome::Denied { reason });
+                }
+                Err(err) => return Err(err.to_string()),
+            };
 
         let (account_email, calendar_count) = match provider {
             CalendarProvider::Google => self.finish_connect_google(&tokens.access_token).await?,
@@ -277,6 +381,7 @@ impl CalendarRuntime {
             provider.kind(),
             &account_email,
             &tokens,
+            client.client_id(),
         )
         .await
         .map_err(|e| e.to_string())?;
@@ -400,7 +505,7 @@ impl CalendarRuntime {
         else {
             return Err(format!("no {} account is connected", provider.name()));
         };
-        let client_id = self.client_id(provider).await?;
+        let client = self.client(provider).await?;
 
         let endpoints = provider.endpoints();
         let sender = NetworkPolicySender::new(&self.policy);
@@ -410,7 +515,7 @@ impl CalendarRuntime {
             self.credentials.as_ref(),
             &sender,
             &endpoints,
-            &client_id,
+            &client,
             provider.kind(),
             &email,
         )
@@ -939,13 +1044,16 @@ pub struct AccountStatus {
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderStatus {
+    /// Whether an effective client exists, from either a custom ID or this build.
     pub client_id_configured: bool,
-    /// The client ID itself, shown back rather than only "configured" or
-    /// not. It is not a secret -- there is no client secret in this flow at
-    /// all, see `kw_calendar_core`'s module doc -- so there is nothing to
-    /// protect by hiding it, and showing it is what makes "you supplied
-    /// this" a fact on screen rather than a claim in a comment.
-    pub client_id: Option<String>,
+    /// The saved custom client ID, shown back because a client ID is not a secret.
+    pub custom_client_id: Option<String>,
+    /// Whether the effective client comes from a custom override, this app, or is missing.
+    pub client_source: ClientSource,
+    /// Whether the credential store contains a custom Google secret; false for Microsoft.
+    pub custom_google_secret_configured: bool,
+    /// Whether this build provides an app-owned client for the provider.
+    pub app_client_available: bool,
     pub account: Option<AccountStatus>,
 }
 
@@ -962,10 +1070,16 @@ async fn provider_status(
     credentials: &dyn CredentialStore,
     provider: CalendarProvider,
 ) -> CmdResult<ProviderStatus> {
-    let client_id = settings::get::<String>(db.pool(), client_id_key(provider))
+    let custom_client_id = settings::get::<String>(db.pool(), client_id_key(provider))
         .await
         .map_err(|e| fail("could not read the client ID", e))?;
-    let client_id_configured = client_id.as_deref().is_some_and(|s| !s.trim().is_empty());
+    let custom_google_secret_configured =
+        provider == CalendarProvider::Google && credentials.contains(&custom_secret_slot()?);
+    let client_source =
+        calendar_clients::resolve(provider.kind(), custom_client_id.as_deref(), None).source();
+    let app_client_available =
+        calendar_clients::resolve(provider.kind(), None, None).source() == ClientSource::App;
+    let client_id_configured = client_source != ClientSource::Missing;
 
     let account_email = settings::get::<String>(db.pool(), account_key(provider))
         .await
@@ -1013,7 +1127,10 @@ async fn provider_status(
 
     Ok(ProviderStatus {
         client_id_configured,
-        client_id,
+        custom_client_id,
+        client_source,
+        custom_google_secret_configured,
+        app_client_available,
         account,
     })
 }
@@ -1074,24 +1191,65 @@ pub async fn calendar_status(
     })
 }
 
-/// Save (or, given a blank value, clear) the user-supplied OAuth client ID
-/// for `provider`. Never a secret -- see the module doc -- so this is a
-/// plain settings write, the same shape as every other settings command.
+/// Keep the legacy command's argument names while applying the same safe
+/// pair update and secret-clearing rule as the Advanced custom-client command.
 #[tauri::command]
 pub async fn calendar_set_client_id(
-    state: State<'_, crate::state::AppState>,
+    runtime: State<'_, Arc<CalendarRuntime>>,
     provider: CalendarProvider,
     client_id: String,
 ) -> CmdResult<()> {
-    let trimmed = client_id.trim();
-    if trimmed.is_empty() {
-        return settings::remove(state.db().pool(), client_id_key(provider))
-            .await
-            .map_err(|e| fail("could not clear the client ID", e));
-    }
-    settings::set(state.db().pool(), client_id_key(provider), &trimmed)
-        .await
-        .map_err(|e| fail("could not save the client ID", e))
+    // Serialize client edits with connect and sync so a grant cannot be issued
+    // while its client configuration is being replaced.
+    let Ok(_guard) = runtime.busy.try_lock() else {
+        return Err("a calendar connection or sync is already in progress".to_owned());
+    };
+    let pool = runtime.db.pool();
+    persist_custom_client(
+        &runtime.db,
+        runtime.credentials.as_ref(),
+        provider,
+        Some(client_id.as_str()),
+        SecretChange::Keep,
+        |id| async move {
+            if let Some(id) = id {
+                settings::set(pool, client_id_key(provider), &id).await
+            } else {
+                settings::remove(pool, client_id_key(provider)).await
+            }
+        },
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn calendar_set_custom_client(
+    runtime: State<'_, Arc<CalendarRuntime>>,
+    provider: CalendarProvider,
+    client_id: Option<String>,
+    google_secret: SecretChange,
+) -> CmdResult<()> {
+    // Serialize client edits with connect and sync so a grant cannot be issued
+    // while its client configuration is being replaced.
+    let Ok(_guard) = runtime.busy.try_lock() else {
+        return Err("a calendar connection or sync is already in progress".to_owned());
+    };
+    let pool = runtime.db.pool();
+    persist_custom_client(
+        &runtime.db,
+        runtime.credentials.as_ref(),
+        provider,
+        client_id.as_deref(),
+        google_secret,
+        |id| async move {
+            if let Some(id) = id {
+                settings::set(pool, client_id_key(provider), &id).await
+            } else {
+                settings::remove(pool, client_id_key(provider)).await
+            }
+        },
+    )
+    .await
 }
 
 #[tauri::command]
@@ -1151,6 +1309,18 @@ pub async fn calendar_set_selected(
 )]
 mod tests {
     use super::*;
+
+    async fn write_client_id(
+        db: &Db,
+        provider: CalendarProvider,
+        id: Option<String>,
+    ) -> Result<(), kw_storage::StorageError> {
+        if let Some(id) = id {
+            settings::set(db.pool(), client_id_key(provider), &id).await
+        } else {
+            settings::remove(db.pool(), client_id_key(provider)).await
+        }
+    }
 
     #[test]
     fn every_provider_has_distinct_settings_keys() {
@@ -1436,5 +1606,480 @@ mod tests {
             err.contains("could not read"),
             "a read failure must surface as an error, not as Ok(None): {err}"
         );
+    }
+
+    #[tokio::test]
+    async fn calendar_custom_client_updates_and_clears_the_pair() {
+        let db = Db::open_in_memory().await.unwrap();
+        let creds = kw_security::MemoryCredentialStore::new();
+        let provider = CalendarProvider::Google;
+        let slot = custom_secret_slot().unwrap();
+        persist_custom_client(
+            &db,
+            &creds,
+            provider,
+            Some(" first "),
+            SecretChange::Set {
+                value: "first-secret".into(),
+            },
+            |id| write_client_id(&db, provider, id),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            settings::get::<String>(db.pool(), client_id_key(provider))
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("first")
+        );
+        assert_eq!(creds.get(&slot).unwrap().expose(), "first-secret");
+        persist_custom_client(
+            &db,
+            &creds,
+            provider,
+            Some("first"),
+            SecretChange::Keep,
+            |id| write_client_id(&db, provider, id),
+        )
+        .await
+        .unwrap();
+        assert_eq!(creds.get(&slot).unwrap().expose(), "first-secret");
+        let status =
+            serde_json::to_string(&provider_status(&db, &creds, provider).await.unwrap()).unwrap();
+        assert!(!status.contains("first-secret"));
+        assert!(status.contains("\"customGoogleSecretConfigured\":true"));
+        persist_custom_client(
+            &db,
+            &creds,
+            provider,
+            Some("second"),
+            SecretChange::Keep,
+            |id| write_client_id(&db, provider, id),
+        )
+        .await
+        .unwrap();
+        assert!(!creds.contains(&slot));
+        persist_custom_client(
+            &db,
+            &creds,
+            provider,
+            Some("third"),
+            SecretChange::Set {
+                value: "third-secret".into(),
+            },
+            |id| write_client_id(&db, provider, id),
+        )
+        .await
+        .unwrap();
+        assert_eq!(creds.get(&slot).unwrap().expose(), "third-secret");
+        persist_custom_client(
+            &db,
+            &creds,
+            provider,
+            Some("third"),
+            SecretChange::Clear,
+            |id| write_client_id(&db, provider, id),
+        )
+        .await
+        .unwrap();
+        assert!(!creds.contains(&slot));
+        for cleared in [None, Some(" ")] {
+            persist_custom_client(
+                &db,
+                &creds,
+                provider,
+                Some("third"),
+                SecretChange::Set {
+                    value: "third-secret".into(),
+                },
+                |id| write_client_id(&db, provider, id),
+            )
+            .await
+            .unwrap();
+            persist_custom_client(&db, &creds, provider, cleared, SecretChange::Keep, |id| {
+                write_client_id(&db, provider, id)
+            })
+            .await
+            .unwrap();
+            assert!(!creds.contains(&slot));
+            assert!(settings::get::<String>(db.pool(), client_id_key(provider))
+                .await
+                .unwrap()
+                .is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn calendar_custom_client_rejects_invalid_secret_edits() {
+        let db = Db::open_in_memory().await.unwrap();
+        let creds = kw_security::MemoryCredentialStore::new();
+        for change in [
+            SecretChange::Clear,
+            SecretChange::Set {
+                value: "private-value".into(),
+            },
+        ] {
+            let error = persist_custom_client(
+                &db,
+                &creds,
+                CalendarProvider::Microsoft,
+                Some("id"),
+                change,
+                |id| write_client_id(&db, CalendarProvider::Microsoft, id),
+            )
+            .await
+            .unwrap_err();
+            assert!(!error.contains("private-value"));
+        }
+        for id in [None, Some(" ")] {
+            assert!(persist_custom_client(
+                &db,
+                &creds,
+                CalendarProvider::Google,
+                id,
+                SecretChange::Set {
+                    value: "private-value".into()
+                },
+                |id| write_client_id(&db, CalendarProvider::Google, id)
+            )
+            .await
+            .is_err());
+        }
+        assert!(settings::keys(db.pool()).await.unwrap().is_empty());
+        assert!(!creds.contains(&custom_secret_slot().unwrap()));
+        assert!(!format!(
+            "{:?}",
+            SecretChange::Set {
+                value: "private-value".into()
+            }
+        )
+        .contains("private-value"));
+    }
+
+    #[tokio::test]
+    async fn calendar_custom_client_settings_failure_restores_the_previous_pair() {
+        let db = Db::open_in_memory().await.unwrap();
+        let creds = kw_security::MemoryCredentialStore::new();
+        let provider = CalendarProvider::Google;
+        let slot = custom_secret_slot().unwrap();
+        // Fail only writes, so reads and credential changes succeed first.
+        sqlx::query("CREATE TRIGGER reject_calendar_insert BEFORE INSERT ON settings BEGIN SELECT RAISE(FAIL, 'injected failure'); END").execute(db.pool()).await.unwrap();
+        assert!(persist_custom_client(
+            &db,
+            &creds,
+            provider,
+            Some("new"),
+            SecretChange::Set {
+                value: "new-secret".into()
+            },
+            |id| write_client_id(&db, provider, id)
+        )
+        .await
+        .is_err());
+        assert!(!creds.contains(&slot));
+        sqlx::query("DROP TRIGGER reject_calendar_insert")
+            .execute(db.pool())
+            .await
+            .unwrap();
+        persist_custom_client(
+            &db,
+            &creds,
+            provider,
+            Some("old"),
+            SecretChange::Set {
+                value: "old-secret".into(),
+            },
+            |id| write_client_id(&db, provider, id),
+        )
+        .await
+        .unwrap();
+        sqlx::query("CREATE TRIGGER reject_calendar_insert BEFORE INSERT ON settings BEGIN SELECT RAISE(FAIL, 'injected failure'); END").execute(db.pool()).await.unwrap();
+        sqlx::query("CREATE TRIGGER reject_calendar_delete BEFORE DELETE ON settings BEGIN SELECT RAISE(FAIL, 'injected failure'); END").execute(db.pool()).await.unwrap();
+        for (id, change) in [
+            (
+                Some("new"),
+                SecretChange::Set {
+                    value: "new-secret".into(),
+                },
+            ),
+            (Some("new"), SecretChange::Keep),
+            (None, SecretChange::Keep),
+        ] {
+            assert!(persist_custom_client(
+                &db,
+                &creds,
+                provider,
+                id,
+                change,
+                |id| write_client_id(&db, provider, id)
+            )
+            .await
+            .is_err());
+            assert_eq!(creds.get(&slot).unwrap().expose(), "old-secret");
+            assert_eq!(
+                settings::get::<String>(db.pool(), client_id_key(provider))
+                    .await
+                    .unwrap()
+                    .as_deref(),
+                Some("old")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn calendar_custom_client_injected_write_failure_restores_the_previous_pair() {
+        let db = Db::open_in_memory().await.unwrap();
+        let creds = kw_security::MemoryCredentialStore::new();
+        let provider = CalendarProvider::Google;
+        let slot = custom_secret_slot().unwrap();
+        for previous_id in [None, Some("old")] {
+            persist_custom_client(
+                &db,
+                &creds,
+                provider,
+                previous_id,
+                if previous_id.is_some() {
+                    SecretChange::Set {
+                        value: "old-secret".into(),
+                    }
+                } else {
+                    SecretChange::Keep
+                },
+                |id| write_client_id(&db, provider, id),
+            )
+            .await
+            .unwrap();
+            for (id, change) in [
+                (
+                    Some("new"),
+                    SecretChange::Set {
+                        value: "new-secret".into(),
+                    },
+                ),
+                (Some("new"), SecretChange::Keep),
+                (None, SecretChange::Keep),
+            ] {
+                let secret_set = matches!(&change, SecretChange::Set { .. });
+                let error =
+                    persist_custom_client(&db, &creds, provider, id, change, |normalized_id| {
+                        assert_eq!(normalized_id.as_deref(), id);
+                        // The write callback runs after the credential edit.
+                        assert_eq!(creds.contains(&slot), secret_set);
+                        std::future::ready(Err(kw_storage::StorageError::Sqlx(
+                            sqlx::Error::PoolClosed,
+                        )))
+                    })
+                    .await
+                    .unwrap_err();
+                assert!(error.contains("could not save the client ID"));
+                assert_eq!(
+                    settings::get::<String>(db.pool(), client_id_key(provider))
+                        .await
+                        .unwrap()
+                        .as_deref(),
+                    previous_id
+                );
+                assert_eq!(creds.contains(&slot), previous_id.is_some());
+                if previous_id.is_some() {
+                    assert_eq!(creds.get(&slot).unwrap().expose(), "old-secret");
+                }
+            }
+        }
+    }
+
+    #[cfg(feature = "tauri-test")]
+    #[tokio::test]
+    async fn calendar_custom_client_refuses_an_existing_operation_guard() {
+        use tauri::Manager as _;
+
+        let db = Db::open_in_memory().await.unwrap();
+        let runtime = Arc::new(CalendarRuntime::new(
+            db.clone(),
+            Arc::new(kw_security::MemoryCredentialStore::new()),
+            NetworkPolicy::new().unwrap(),
+        ));
+        let app = tauri::test::mock_builder()
+            .manage(runtime.clone())
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let _guard = runtime.busy.try_lock().unwrap();
+        let expected = "a calendar connection or sync is already in progress";
+        assert_eq!(
+            calendar_set_custom_client(
+                app.state(),
+                CalendarProvider::Google,
+                Some("id".into()),
+                SecretChange::Keep,
+            )
+            .await
+            .unwrap_err(),
+            expected,
+        );
+        assert_eq!(
+            calendar_set_client_id(app.state(), CalendarProvider::Google, "id".into())
+                .await
+                .unwrap_err(),
+            expected,
+        );
+        assert!(settings::keys(db.pool()).await.unwrap().is_empty());
+    }
+    #[derive(Debug)]
+    struct RefusingCredentialWrites(kw_security::MemoryCredentialStore);
+
+    impl CredentialStore for RefusingCredentialWrites {
+        fn get(&self, key: &KeyRef) -> Result<Secret, kw_security::CredentialError> {
+            self.0.get(key)
+        }
+        fn set(&self, _key: &KeyRef, _secret: &Secret) -> Result<(), kw_security::CredentialError> {
+            Err(kw_security::CredentialError::Backend(
+                "private-backend-detail".into(),
+            ))
+        }
+        fn delete(&self, _key: &KeyRef) -> Result<(), kw_security::CredentialError> {
+            Err(kw_security::CredentialError::Backend(
+                "private-backend-detail".into(),
+            ))
+        }
+    }
+
+    #[derive(Debug)]
+    struct PresenceOnlyCredentials(bool);
+
+    impl CredentialStore for PresenceOnlyCredentials {
+        fn get(&self, _key: &KeyRef) -> Result<Secret, kw_security::CredentialError> {
+            panic!("status must not read the custom secret value");
+        }
+        fn set(&self, _key: &KeyRef, _secret: &Secret) -> Result<(), kw_security::CredentialError> {
+            panic!("status must not write credentials");
+        }
+        fn delete(&self, _key: &KeyRef) -> Result<(), kw_security::CredentialError> {
+            panic!("status must not delete credentials");
+        }
+        fn contains(&self, key: &KeyRef) -> bool {
+            assert_eq!(key, &custom_secret_slot().unwrap());
+            self.0
+        }
+    }
+
+    #[tokio::test]
+    async fn calendar_status_checks_custom_secret_presence_without_reading_it() {
+        let db = Db::open_in_memory().await.unwrap();
+        for present in [false, true] {
+            let credentials = PresenceOnlyCredentials(present);
+            for provider in [CalendarProvider::Google, CalendarProvider::Microsoft] {
+                let status = provider_status(&db, &credentials, provider).await.unwrap();
+                assert_eq!(
+                    status.custom_google_secret_configured,
+                    present && provider == CalendarProvider::Google
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn calendar_credential_write_failure_keeps_the_previous_pair() {
+        let db = Db::open_in_memory().await.unwrap();
+        let memory = kw_security::MemoryCredentialStore::new();
+        let provider = CalendarProvider::Google;
+        persist_custom_client(
+            &db,
+            &memory,
+            provider,
+            Some("old"),
+            SecretChange::Set {
+                value: "old-secret".into(),
+            },
+            |id| write_client_id(&db, provider, id),
+        )
+        .await
+        .unwrap();
+        let creds = RefusingCredentialWrites(memory);
+        for change in [
+            SecretChange::Keep,
+            SecretChange::Set {
+                value: "new-secret".into(),
+            },
+            SecretChange::Clear,
+        ] {
+            let error = persist_custom_client(&db, &creds, provider, Some("new"), change, |id| {
+                write_client_id(&db, provider, id)
+            })
+            .await
+            .unwrap_err();
+            assert!(!error.contains("private-backend-detail"));
+            assert!(!error.contains("new-secret"));
+            assert_eq!(
+                creds.get(&custom_secret_slot().unwrap()).unwrap().expose(),
+                "old-secret"
+            );
+            assert_eq!(
+                settings::get::<String>(db.pool(), client_id_key(provider))
+                    .await
+                    .unwrap()
+                    .as_deref(),
+                Some("old")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn calendar_runtime_resolves_custom_clients_without_exposing_secrets() {
+        let db = Db::open_in_memory().await.unwrap();
+        let credentials = Arc::new(kw_security::MemoryCredentialStore::new());
+        let runtime = CalendarRuntime::new(
+            db.clone(),
+            credentials.clone(),
+            NetworkPolicy::new().unwrap(),
+        );
+        for provider in [CalendarProvider::Google, CalendarProvider::Microsoft] {
+            persist_custom_client(
+                &db,
+                credentials.as_ref(),
+                provider,
+                Some("custom-id"),
+                SecretChange::Keep,
+                |id| write_client_id(&db, provider, id),
+            )
+            .await
+            .unwrap();
+            let client = runtime.client(provider).await.unwrap();
+            assert_eq!(client.client_id(), "custom-id");
+            assert_eq!(client.kind(), provider.kind());
+            assert!(client.client_secret().is_none());
+            let status = provider_status(&db, credentials.as_ref(), provider)
+                .await
+                .unwrap();
+            assert_eq!(status.client_source, ClientSource::Custom);
+            assert!(status.client_id_configured);
+            assert_eq!(status.custom_client_id.as_deref(), Some("custom-id"));
+            assert!(!status.custom_google_secret_configured);
+        }
+        persist_custom_client(
+            &db,
+            credentials.as_ref(),
+            CalendarProvider::Google,
+            Some("custom-id"),
+            SecretChange::Set {
+                value: "custom-secret".into(),
+            },
+            |id| write_client_id(&db, CalendarProvider::Google, id),
+        )
+        .await
+        .unwrap();
+        let client = runtime.client(CalendarProvider::Google).await.unwrap();
+        assert_eq!(client.client_secret().unwrap().expose(), "custom-secret");
+        for provider in [CalendarProvider::Google, CalendarProvider::Microsoft] {
+            let status = provider_status(&db, credentials.as_ref(), provider)
+                .await
+                .unwrap();
+            assert!(!serde_json::to_string(&status)
+                .unwrap()
+                .contains("custom-secret"));
+            assert_eq!(
+                status.custom_google_secret_configured,
+                provider == CalendarProvider::Google
+            );
+        }
     }
 }

@@ -294,6 +294,8 @@ fn render() -> String {
         ],
         "calendars" => [
             crate::calendar::CalendarProvider,
+            crate::calendar::SecretChange,
+            crate::calendar_clients::ClientSource,
             crate::calendar::ConnectOutcome,
             crate::calendar::SyncOutcome,
             crate::calendar::SyncRecord,

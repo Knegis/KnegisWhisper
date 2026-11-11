@@ -8,6 +8,8 @@ Local-first dictation, meeting transcription and searchable notes.
 - Meeting recording, transcripts, editable notes and recording playback.
 - Local audio/video import and transcript/notes export.
 
+{{CALENDAR_CLIENTS}}
+
 ## In this version
 
 - Parakeet TDT 0.6B installs from its current upstream download, which was rebuilt

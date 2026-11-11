@@ -1,3 +1,8 @@
+import contextlib
+import io
+import os
+from unittest.mock import patch
+
 import hashlib
 import json
 import subprocess
@@ -5,7 +10,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from release import validate_version, preflight, prepare
+from release import validate_version, preflight, prepare, calendar_clients, calendar_report
 
 
 class ReleaseTests(unittest.TestCase):
@@ -18,7 +23,7 @@ class ReleaseTests(unittest.TestCase):
         self.write("apps/desktop/package.json", '{"version":"0.1.0"}')
         self.write("apps/desktop/package-lock.json", '{"version":"0.1.0","packages":{"":{"version":"0.1.0"}}}')
         self.write("apps/desktop/src-tauri/tauri.conf.json", '{"version":"0.1.0"}')
-        self.write("tools/release/notes.md", "{{TAG}} {{SHA}}")
+        self.write("tools/release/notes.md", "{{TAG}} {{SHA}} {{CALENDAR_CLIENTS}}")
         self.git("init", "-q")
         self.git("config", "user.email", "test@example.invalid")
         self.git("config", "user.name", "Release test")
@@ -89,6 +94,57 @@ class ReleaseTests(unittest.TestCase):
         self.write("bundle/nsis/b.exe", "another")
         with self.assertRaises(ValueError):
             prepare(self.root, "v0.1.0", bundle, out)
+
+    def test_calendar_presence_and_required_clients_never_print_values(self):
+        names = ["KW_GOOGLE_CALENDAR_CLIENT_ID", "KW_GOOGLE_CALENDAR_CLIENT_SECRET", "KW_MICROSOFT_CALENDAR_CLIENT_ID"]
+        values = ["dummy-google-id", "dummy-google-secret", "dummy-microsoft-id"]
+        for supplied in [{}, dict(zip(names, values)), {names[0]: values[0]},
+                         {names[1]: values[1]}, {names[2]: values[2]},
+                         {names[0]: " ", names[1]: values[1], names[2]: " "}]:
+            with self.subTest(supplied=list(supplied)):
+                stderr = io.StringIO()
+                stdout = io.StringIO()
+                with contextlib.redirect_stderr(stderr), contextlib.redirect_stdout(stdout):
+                    sha = preflight(self.root, "v0.1.0", "release-main", environ=supplied)
+                    self.assertEqual(sha, self.git("rev-parse", "HEAD"))
+                    if all(calendar_clients(supplied).values()):
+                        preflight(self.root, "v0.1.0", "release-main", True, supplied)
+                    else:
+                        with self.assertRaises(ValueError):
+                            preflight(self.root, "v0.1.0", "release-main", True, supplied)
+                self.assertEqual(stdout.getvalue(), "")
+                self.assertIn(calendar_report(calendar_clients(supplied)), stderr.getvalue())
+                for value in values:
+                    self.assertNotIn(value, stderr.getvalue())
+
+    def test_preflight_cli_keeps_sha_alone_on_stdout_and_accepts_required_flag(self):
+        env = dict(os.environ, KW_GOOGLE_CALENDAR_CLIENT_ID="dummy-google-id",
+                   KW_GOOGLE_CALENDAR_CLIENT_SECRET="dummy-google-secret",
+                   KW_MICROSOFT_CALENDAR_CLIENT_ID="dummy-microsoft-id")
+        result = subprocess.run([os.sys.executable, str(Path(__file__).with_name("release.py")),
+                                 "preflight", "--root", str(self.root), "--tag", "v0.1.0",
+                                 "--main-ref", "release-main", "--require-calendar-clients"],
+                                capture_output=True, text=True, env=env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, self.git("rev-parse", "HEAD") + "\n")
+        self.assertIn("calendar: google=included microsoft=included", result.stderr)
+        for value in ["dummy-google-id", "dummy-google-secret", "dummy-microsoft-id"]:
+            self.assertNotIn(value, result.stdout + result.stderr)
+
+    def test_notes_include_calendar_presence_without_values(self):
+        self.write("bundle/nsis/setup.exe", "installer bytes")
+        for index, env in enumerate([{}, {"KW_GOOGLE_CALENDAR_CLIENT_ID": "dummy-google-id",
+                                          "KW_GOOGLE_CALENDAR_CLIENT_SECRET": "dummy-google-secret",
+                                          "KW_MICROSOFT_CALENDAR_CLIENT_ID": "dummy-microsoft-id"}]):
+            out = self.root / f"calendar-assets-{index}"
+            with patch.dict(os.environ, {**{name: "" for name in ["KW_GOOGLE_CALENDAR_CLIENT_ID", "KW_GOOGLE_CALENDAR_CLIENT_SECRET", "KW_MICROSOFT_CALENDAR_CLIENT_ID"]}, **env}):
+                prepare(self.root, "v0.1.0", self.root / "bundle", out)
+            notes = (out / "RELEASE_NOTES.md").read_text()
+            self.assertNotIn("{{CALENDAR_CLIENTS}}", notes)
+            self.assertIn("One-click Google calendars: " + ("included" if index else "not included"), notes)
+            self.assertIn("One-click Outlook calendars: " + ("included" if index else "not included"), notes)
+            for value in ["dummy-google-id", "dummy-google-secret", "dummy-microsoft-id"]:
+                self.assertNotIn(value, notes)
 
 
 if __name__ == "__main__":

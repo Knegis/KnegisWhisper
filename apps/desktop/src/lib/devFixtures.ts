@@ -1304,7 +1304,10 @@ const SIDECARS: SidecarStatus[] = [
 const CALENDAR: CalendarStatus = {
   google: {
     clientIdConfigured: true,
-    clientId: "918273645-abcdef.apps.googleusercontent.com",
+    customClientId: "918273645-abcdef.apps.googleusercontent.com",
+    clientSource: "custom",
+    customGoogleSecretConfigured: false,
+    appClientAvailable: false,
     account: {
       email: "axel@example.com",
       token: { state: "active" },
@@ -1346,7 +1349,10 @@ const CALENDAR: CalendarStatus = {
   },
   microsoft: {
     clientIdConfigured: false,
-    clientId: null,
+    customClientId: null,
+    clientSource: "missing",
+    customGoogleSecretConfigured: false,
+    appClientAvailable: false,
     account: null,
   },
   apple: {
@@ -2737,6 +2743,7 @@ A fixture summary of "${note.title}", written without a model.
   /* calendars */
   calendar_status: () => CALENDAR,
   calendar_set_client_id: () => null,
+  calendar_set_custom_client: () => null,
   calendar_set_selected: () => null,
   calendar_disconnect: () => null,
   calendar_connect: () =>

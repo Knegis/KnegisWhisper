@@ -1,10 +1,11 @@
-//! Exchanging an authorization code, or a refresh token, for access and
-//! refresh tokens -- without ever presenting a client secret.
+//! Exchanging authorization codes and refresh tokens using PKCE desktop clients.
 //!
-//! This is a public client (RFC 8252): the PKCE verifier proves the exchange
-//! comes from the same process that started the authorize request, and that
-//! is the whole of the client's authentication. No request built here ever
-//! carries a `client_secret` field.
+//! The PKCE verifier proves that the exchange comes from the process that
+//! started the authorize request (RFC 8252 / RFC 7636). Google's desktop
+//! client secret is a public build value that Google documents as not
+//! confidential, so it adds no protection. It is sent only because Google's
+//! token endpoint requires it for desktop clients. Microsoft clients never
+//! carry one. Authorize URLs are built separately without it.
 //!
 //! Sending is behind [`TokenSender`] rather than a direct call into
 //! `kw_network_policy::NetworkPolicy`, for one reason: the network boundary
@@ -19,13 +20,14 @@
 //! exactly like `kw_security::MemoryCredentialStore` stands in for the OS
 //! keychain in tests without ever being wired into the application.
 
+use crate::provider::OAuthClientConfig;
 use async_trait::async_trait;
 use kw_network_policy::{NetworkPolicy, RequestPurpose};
 use kw_security::Secret;
 use serde::Deserialize;
 
 /// Why a token exchange failed.
-#[derive(Debug, thiserror::Error)]
+#[derive(thiserror::Error)]
 pub enum ExchangeError {
     #[error("the network policy refused the token endpoint: {0}")]
     Policy(#[from] kw_network_policy::PolicyError),
@@ -41,6 +43,14 @@ pub enum ExchangeError {
 
     #[error("the token endpoint's response could not be parsed")]
     MalformedResponse,
+}
+
+// Provider descriptions may contain private data. Even diagnostic formatting
+// must use the public error display rather than the stored description.
+impl std::fmt::Debug for ExchangeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
+    }
 }
 
 /// Freshly issued tokens, from either an authorization-code or a
@@ -171,19 +181,22 @@ pub(crate) fn parse_token_response(
 pub async fn exchange_authorization_code(
     sender: &dyn TokenSender,
     token_url: &str,
-    client_id: &str,
+    client: &OAuthClientConfig,
     redirect_uri: &str,
     code: &Secret,
     verifier: &Secret,
     now: i64,
 ) -> Result<TokenSet, ExchangeError> {
-    let form = [
+    let mut form = vec![
         ("grant_type", "authorization_code"),
         ("code", code.expose()),
         ("redirect_uri", redirect_uri),
-        ("client_id", client_id),
+        ("client_id", client.client_id()),
         ("code_verifier", verifier.expose()),
     ];
+    if let Some(secret) = client.client_secret() {
+        form.push(("client_secret", secret.expose()));
+    }
     let body = sender.post_form(token_url, &form).await?;
     parse_token_response(&body, None, now)
 }
@@ -194,16 +207,19 @@ pub async fn exchange_authorization_code(
 pub async fn refresh_access_token(
     sender: &dyn TokenSender,
     token_url: &str,
-    client_id: &str,
+    client: &OAuthClientConfig,
     refresh_token: &Secret,
     previous_scope: &str,
     now: i64,
 ) -> Result<TokenSet, ExchangeError> {
-    let form = [
+    let mut form = vec![
         ("grant_type", "refresh_token"),
         ("refresh_token", refresh_token.expose()),
-        ("client_id", client_id),
+        ("client_id", client.client_id()),
     ];
+    if let Some(secret) = client.client_secret() {
+        form.push(("client_secret", secret.expose()));
+    }
     let body = sender.post_form(token_url, &form).await?;
     parse_token_response(&body, Some(previous_scope), now)
 }
@@ -270,32 +286,6 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn no_request_built_here_ever_carries_a_client_secret() {
-        // Covered structurally too (the form arrays are fixed literals with
-        // no such field), but pinning it as a test means a future edit that
-        // adds one fails loudly rather than silently.
-        let code = Secret::new("code".to_owned());
-        let verifier = Secret::new("verifier".to_owned());
-        let refresh = Secret::new("refresh".to_owned());
-
-        // Re-derive the exact field names used by both exchange functions.
-        let auth_fields = [
-            "grant_type",
-            "code",
-            "redirect_uri",
-            "client_id",
-            "code_verifier",
-        ];
-        let refresh_fields = ["grant_type", "refresh_token", "client_id"];
-        assert!(!auth_fields.contains(&"client_secret"));
-        assert!(!refresh_fields.contains(&"client_secret"));
-
-        // Exercise the constructors so this test also fails to compile if a
-        // parameter list ever grows a secret.
-        let _ = (&code, &verifier, &refresh);
-    }
-
     #[tokio::test]
     async fn the_network_policy_sender_refuses_a_plaintext_loopback_endpoint() {
         // Proves the production sender is wired to the boundary: calendar
@@ -322,5 +312,93 @@ mod tests {
             RequestPurpose::UserConfiguredCalendarProvider
         )
         .is_ok());
+    }
+
+    struct CheckingSender {
+        expected_secret: Option<&'static str>,
+    }
+
+    #[async_trait]
+    impl TokenSender for CheckingSender {
+        async fn post_form(
+            &self,
+            _url: &str,
+            form: &[(&str, &str)],
+        ) -> Result<String, ExchangeError> {
+            assert_eq!(
+                form.iter()
+                    .find(|(key, _)| *key == "client_secret")
+                    .map(|(_, value)| *value),
+                self.expected_secret
+            );
+            assert_eq!(
+                form.iter()
+                    .filter(|(key, _)| *key == "client_secret")
+                    .count(),
+                usize::from(self.expected_secret.is_some())
+            );
+            assert!(form.contains(&("client_id", "test-client")));
+            Ok(r#"{"access_token":"test-access","refresh_token":"test-refresh"}"#.into())
+        }
+    }
+
+    #[tokio::test]
+    async fn every_token_grant_uses_only_the_google_clients_optional_secret() {
+        for client in [
+            OAuthClientConfig::Google {
+                client_id: "test-client".into(),
+                client_secret: Some(Secret::new("test-google-secret".into())),
+            },
+            OAuthClientConfig::Google {
+                client_id: "test-client".into(),
+                client_secret: None,
+            },
+            OAuthClientConfig::Microsoft {
+                client_id: "test-client".into(),
+            },
+        ] {
+            let sender = CheckingSender {
+                expected_secret: client.client_secret().map(|_| "test-google-secret"),
+            };
+            exchange_authorization_code(
+                &sender,
+                "https://example.invalid/token",
+                &client,
+                "http://127.0.0.1/callback",
+                &Secret::new("code".into()),
+                &Secret::new("verifier".into()),
+                0,
+            )
+            .await
+            .unwrap();
+            refresh_access_token(
+                &sender,
+                "https://example.invalid/token",
+                &client,
+                &Secret::new("refresh".into()),
+                "scope",
+                0,
+            )
+            .await
+            .unwrap();
+            assert!(!format!("{client:?}").contains("test-google-secret"));
+        }
+    }
+
+    #[test]
+    fn token_and_error_diagnostics_redact_private_values() {
+        let tokens = parse_token_response(
+            r#"{"access_token":"private-access","refresh_token":"private-refresh"}"#,
+            None,
+            0,
+        )
+        .unwrap();
+        let debug = format!("{tokens:?}");
+        assert!(!debug.contains("private-access"));
+        assert!(!debug.contains("private-refresh"));
+        let error = parse_error_body(
+            r#"{"error":"invalid_grant","error_description":"private-description"}"#,
+        );
+        assert!(!format!("{error:?} {error}").contains("private-description"));
     }
 }
