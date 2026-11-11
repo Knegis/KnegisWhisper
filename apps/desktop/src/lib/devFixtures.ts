@@ -1335,6 +1335,9 @@ const CALENDAR: CalendarStatus = {
         },
       ],
       lastSync: {
+        account: "axel@example.com",
+        snapshotVersion: 1,
+        lastSuccessAt: null,
         at: "2026-08-27T07:12:00Z",
         outcome: {
           state: "completed",

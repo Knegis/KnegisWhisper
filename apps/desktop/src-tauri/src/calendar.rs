@@ -526,7 +526,7 @@ impl CalendarRuntime {
                 let outcome = SyncOutcome::TokenUnavailable {
                     message: err.to_string(),
                 };
-                self.record_sync(provider, outcome.clone()).await;
+                self.record_sync(provider, &email, outcome.clone()).await;
                 return Ok(outcome);
             }
         };
@@ -535,11 +535,15 @@ impl CalendarRuntime {
             CalendarProvider::Google => self.sync_google(&email, &access_token).await,
             CalendarProvider::Microsoft => self.sync_microsoft(&email, &access_token).await,
         };
-        self.record_sync(provider, outcome.clone()).await;
+        self.record_sync(provider, &email, outcome.clone()).await;
         Ok(outcome)
     }
 
     async fn sync_google(&self, email: &str, access_token: &Secret) -> SyncOutcome {
+        if let Err(message) = self.prepare_snapshot(CalendarProvider::Google, email).await {
+            return SyncOutcome::Failed { message };
+        }
+        let (start, end) = snapshot_window();
         let calendars = match google::fetch_calendar_list(&self.policy, access_token).await {
             Ok(list) => list,
             Err(err) => {
@@ -589,109 +593,35 @@ impl CalendarRuntime {
             }
         };
 
-        let mut upserted = 0u32;
-        let mut removed = 0u32;
-        let mut errors = Vec::new();
-        for row in rows.iter().filter(|r| r.is_selected) {
-            match self
-                .sync_google_events(&row.id, row.sync_token.as_deref(), access_token)
+        sync_selected_calendars(rows, |calendar_id| async move {
+            self.sync_google_events(&calendar_id, access_token, &start, &end)
                 .await
-            {
-                Ok((u, r)) => {
-                    upserted += u;
-                    removed += r;
-                }
-                Err(message) => errors.push(format!("{}: {message}", row.summary)),
-            }
-        }
-
-        SyncOutcome::Completed {
-            events_upserted: upserted,
-            events_removed: removed,
-            calendar_errors: errors,
-        }
+        })
+        .await
     }
 
     async fn sync_google_events(
         &self,
         calendar_id: &str,
-        sync_token: Option<&str>,
         access_token: &Secret,
-    ) -> Result<(u32, u32), String> {
-        let fetch = match google::fetch_events(&self.policy, access_token, calendar_id, sync_token)
+        start: &chrono::DateTime<chrono::Utc>,
+        end: &chrono::DateTime<chrono::Utc>,
+    ) -> Result<(u32, u32, usize), String> {
+        let snapshot = google::fetch_window(&self.policy, access_token, calendar_id, start, end)
             .await
-        {
-            Ok(fetch) => fetch,
-            Err(kw_calendar_core::SyncError::SyncTokenExpired) => {
-                events_repo::delete_all_for_calendar(self.db.pool(), "google", calendar_id)
-                    .await
-                    .map_err(|e| fail("could not clear the calendar before a full resync", e))?;
-                calendars_repo::set_sync_token(
-                    self.db.pool(),
-                    CalendarProviderKind::Google,
-                    calendar_id,
-                    None,
-                )
-                .await
-                .map_err(|e| fail("could not clear the sync cursor", e))?;
-                google::fetch_events(&self.policy, access_token, calendar_id, None)
-                    .await
-                    .map_err(|e| e.to_string())?
-            }
-            Err(err) => return Err(err.to_string()),
-        };
-
-        let mut upserted = 0u32;
-        let mut removed = 0u32;
-        for item in fetch.events {
-            match item {
-                google::SyncedEvent::Upsert(evt) => {
-                    let row = events_repo::EventRow {
-                        id: events_repo::row_id("google", calendar_id, &evt.id),
-                        calendar_id: calendar_id.to_owned(),
-                        provider: "google",
-                        summary: evt.summary,
-                        start_time: evt.start_time,
-                        end_time: evt.end_time,
-                        is_all_day: evt.is_all_day,
-                        status: evt.status,
-                        hangout_link: evt.hangout_link,
-                        conference_data: evt.conference_data,
-                        organizer_email: evt.organizer_email,
-                        attendees: evt.attendees,
-                    };
-                    events_repo::upsert_event(self.db.pool(), &row)
-                        .await
-                        .map_err(|e| fail("could not save an event", e))?;
-                    upserted += 1;
-                }
-                google::SyncedEvent::Removed { id } => {
-                    events_repo::delete_event(
-                        self.db.pool(),
-                        &events_repo::row_id("google", calendar_id, &id),
-                    )
-                    .await
-                    .map_err(|e| fail("could not remove a cancelled event", e))?;
-                    removed += 1;
-                }
-            }
-        }
-
-        if let Some(token) = &fetch.next_sync_token {
-            calendars_repo::set_sync_token(
-                self.db.pool(),
-                CalendarProviderKind::Google,
-                calendar_id,
-                Some(token),
-            )
+            .map_err(|e| e.to_string())?;
+        self.commit_snapshot(CalendarProvider::Google, calendar_id, start, end, snapshot)
             .await
-            .map_err(|e| fail("could not save the sync cursor", e))?;
-        }
-
-        Ok((upserted, removed))
     }
 
     async fn sync_microsoft(&self, email: &str, access_token: &Secret) -> SyncOutcome {
+        if let Err(message) = self
+            .prepare_snapshot(CalendarProvider::Microsoft, email)
+            .await
+        {
+            return SyncOutcome::Failed { message };
+        }
+        let (start, end) = snapshot_window();
         let calendars = match microsoft::fetch_calendars(&self.policy, access_token).await {
             Ok(list) => list,
             Err(err) => {
@@ -741,122 +671,187 @@ impl CalendarRuntime {
             }
         };
 
-        let mut upserted = 0u32;
-        let mut removed = 0u32;
-        let mut errors = Vec::new();
-        for row in rows.iter().filter(|r| r.is_selected) {
-            match self
-                .sync_microsoft_events(&row.id, row.sync_token.as_deref(), access_token)
+        sync_selected_calendars(rows, |calendar_id| async move {
+            self.sync_microsoft_events(&calendar_id, access_token, &start, &end)
                 .await
-            {
-                Ok((u, r)) => {
-                    upserted += u;
-                    removed += r;
-                }
-                Err(message) => errors.push(format!("{}: {message}", row.summary)),
-            }
-        }
-
-        SyncOutcome::Completed {
-            events_upserted: upserted,
-            events_removed: removed,
-            calendar_errors: errors,
-        }
+        })
+        .await
     }
 
     async fn sync_microsoft_events(
         &self,
         calendar_id: &str,
-        delta_cursor: Option<&str>,
         access_token: &Secret,
-    ) -> Result<(u32, u32), String> {
-        let fetch = match microsoft::fetch_events_delta(
-            &self.policy,
-            access_token,
+        start: &chrono::DateTime<chrono::Utc>,
+        end: &chrono::DateTime<chrono::Utc>,
+    ) -> Result<(u32, u32, usize), String> {
+        let snapshot = microsoft::fetch_window(&self.policy, access_token, calendar_id, start, end)
+            .await
+            .map_err(|e| e.to_string())?;
+        self.commit_snapshot(
+            CalendarProvider::Microsoft,
             calendar_id,
-            delta_cursor,
+            start,
+            end,
+            snapshot,
         )
         .await
-        {
-            Ok(fetch) => fetch,
-            Err(kw_calendar_core::SyncError::SyncTokenExpired) => {
-                events_repo::delete_all_for_calendar(self.db.pool(), "microsoft", calendar_id)
-                    .await
-                    .map_err(|e| fail("could not clear the calendar before a full resync", e))?;
-                calendars_repo::set_sync_token(
-                    self.db.pool(),
-                    CalendarProviderKind::Microsoft,
-                    calendar_id,
-                    None,
-                )
-                .await
-                .map_err(|e| fail("could not clear the sync cursor", e))?;
-                microsoft::fetch_events_delta(&self.policy, access_token, calendar_id, None)
-                    .await
-                    .map_err(|e| e.to_string())?
-            }
-            Err(err) => return Err(err.to_string()),
-        };
-
-        let mut upserted = 0u32;
-        let mut removed = 0u32;
-        for item in fetch.events {
-            match item {
-                microsoft::SyncedEvent::Upsert(evt) => {
-                    let row = events_repo::EventRow {
-                        id: events_repo::row_id("microsoft", calendar_id, &evt.id),
-                        calendar_id: calendar_id.to_owned(),
-                        provider: "microsoft",
-                        summary: evt.summary,
-                        start_time: evt.start_time,
-                        end_time: evt.end_time,
-                        is_all_day: evt.is_all_day,
-                        status: evt.status,
-                        hangout_link: evt.hangout_link,
-                        conference_data: None,
-                        organizer_email: evt.organizer_email,
-                        attendees: evt.attendees,
-                    };
-                    events_repo::upsert_event(self.db.pool(), &row)
-                        .await
-                        .map_err(|e| fail("could not save an event", e))?;
-                    upserted += 1;
-                }
-                microsoft::SyncedEvent::Removed { id } => {
-                    events_repo::delete_event(
-                        self.db.pool(),
-                        &events_repo::row_id("microsoft", calendar_id, &id),
-                    )
-                    .await
-                    .map_err(|e| fail("could not remove a deleted event", e))?;
-                    removed += 1;
-                }
-            }
-        }
-
-        if let Some(link) = &fetch.delta_link {
-            calendars_repo::set_sync_token(
-                self.db.pool(),
-                CalendarProviderKind::Microsoft,
-                calendar_id,
-                Some(link),
-            )
-            .await
-            .map_err(|e| fail("could not save the sync cursor", e))?;
-        }
-
-        Ok((upserted, removed))
     }
 
-    async fn record_sync(&self, provider: CalendarProvider, outcome: SyncOutcome) {
+    /// Apply the version gate before even fetching the calendar list. Purging
+    /// includes unselected calendars and events outside the new window: those
+    /// rows were written before UTC and decline filtering were guaranteed.
+    /// A database read failure is treated as missing history so the gate can
+    /// repair the bookkeeping record; only this account's history survives a
+    /// version-zero upgrade. Undecodable settings already read as `Ok(None)`.
+    async fn prepare_snapshot(&self, provider: CalendarProvider, email: &str) -> CmdResult<()> {
+        let key = last_sync_key(provider);
+        let previous = match settings::get::<SyncRecord>(self.db.pool(), key).await {
+            Ok(record) => record,
+            Err(_) => {
+                tracing::warn!(key, "could not read the previous calendar sync result");
+                None
+            }
+        };
+        if previous
+            .as_ref()
+            .is_some_and(|r| r.snapshot_version == 1 && r.account.as_deref() == Some(email))
+        {
+            return Ok(());
+        }
+        let mut record = previous
+            .filter(|r| r.account.as_deref() == Some(email))
+            .unwrap_or_else(|| SyncRecord {
+                at: chrono::Utc::now().to_rfc3339(),
+                outcome: SyncOutcome::Failed {
+                    message: "The first sync after an update did not finish.".to_owned(),
+                },
+                account: None,
+                snapshot_version: 0,
+                last_success_at: None,
+            });
+        record.account = Some(email.to_owned());
+        record.snapshot_version = 1;
+        events_repo::purge_account(self.db.pool(), provider.kind(), email)
+            .await
+            .map_err(|e| fail("could not purge the old calendar cache", e))?;
+        settings::set(self.db.pool(), last_sync_key(provider), &record)
+            .await
+            .map_err(|e| fail("could not record the snapshot version", e))?;
+        Ok(())
+    }
+
+    /// Fetching is complete before entering this method. Each calendar commits
+    /// independently so another calendar's network failure cannot undo it.
+    async fn commit_snapshot(
+        &self,
+        provider: CalendarProvider,
+        calendar_id: &str,
+        start: &chrono::DateTime<chrono::Utc>,
+        end: &chrono::DateTime<chrono::Utc>,
+        snapshot: kw_calendar_core::sync_support::WindowSnapshot,
+    ) -> Result<(u32, u32, usize), String> {
+        let removed = events_repo::replace_window(
+            self.db.pool(),
+            provider.wire_str(),
+            calendar_id,
+            start,
+            end,
+            &snapshot.rows,
+            &snapshot.keep_ids,
+        )
+        .await
+        .map_err(|e| fail("could not replace the calendar snapshot", e))?;
+        calendars_repo::set_sync_token(self.db.pool(), provider.kind(), calendar_id, None)
+            .await
+            .map_err(|e| fail("could not clear the legacy sync cursor", e))?;
+        Ok((
+            u32::try_from(snapshot.rows.len()).unwrap_or(u32::MAX),
+            u32::try_from(removed).unwrap_or(u32::MAX),
+            snapshot.keep_ids.len(),
+        ))
+    }
+
+    async fn record_sync(&self, provider: CalendarProvider, email: &str, outcome: SyncOutcome) {
+        let key = last_sync_key(provider);
+        let previous = match settings::get::<SyncRecord>(self.db.pool(), key).await {
+            Ok(record) => record,
+            Err(_) => {
+                // A database read failure is missing bookkeeping history; the
+                // new sync result is still worth writing without it.
+                tracing::warn!(key, "could not read the previous calendar sync result");
+                None
+            }
+        }
+        .filter(|r| r.account.as_deref() == Some(email));
+        let now = chrono::Utc::now().to_rfc3339();
+        let full_success = matches!(&outcome, SyncOutcome::Completed { calendar_errors, .. } if calendar_errors.is_empty());
+        // A failed token attempt for a new account must not relabel another
+        // account's version-one record and accidentally bypass the purge, or
+        // inherit that account's last successful sync.
+        let version = previous.as_ref().map_or(0, |r| r.snapshot_version);
         let record = SyncRecord {
-            at: chrono::Utc::now().to_rfc3339(),
+            at: now.clone(),
             outcome,
+            account: Some(email.to_owned()),
+            snapshot_version: version,
+            last_success_at: if full_success {
+                Some(now)
+            } else {
+                previous.and_then(|r| r.last_success_at)
+            },
         };
         if let Err(err) = settings::set(self.db.pool(), last_sync_key(provider), &record).await {
             tracing::warn!(error = %err, "could not record the calendar sync result");
         }
     }
+}
+
+/// Keep partial success accounting identical for both providers. The callback
+/// returns only after a whole calendar snapshot committed, so an incomplete
+/// fetch contributes an error and cannot inflate either event counter.
+async fn sync_selected_calendars<F, Fut>(
+    rows: Vec<calendars_repo::CalendarRow>,
+    mut sync: F,
+) -> SyncOutcome
+where
+    F: FnMut(String) -> Fut,
+    Fut: std::future::Future<Output = Result<(u32, u32, usize), String>>,
+{
+    let mut upserted = 0;
+    let mut removed = 0;
+    let mut errors = Vec::new();
+    for row in rows.into_iter().filter(|r| r.is_selected) {
+        match sync(row.id).await {
+            Ok((u, r, unreadable)) => {
+                upserted += u;
+                removed += r;
+                if unreadable > 0 {
+                    errors.push(time_error(&row.summary, unreadable));
+                }
+            }
+            Err(message) => errors.push(format!("{}: {message}", row.summary)),
+        }
+    }
+    SyncOutcome::Completed {
+        events_upserted: upserted,
+        events_removed: removed,
+        calendar_errors: errors,
+    }
+}
+
+/// Freeze bounds once per sync, avoiding moving edges between calendars/pages.
+fn snapshot_window() -> (chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>) {
+    let now = chrono::Utc::now();
+    (
+        now - chrono::Duration::hours(24),
+        now + chrono::Duration::days(30),
+    )
+}
+
+fn time_error(calendar: &str, count: usize) -> String {
+    let noun = if count == 1 { "event" } else { "events" };
+    format!("{count} {noun} in {calendar} had a time that could not be read")
 }
 
 /* --------------------------------------------------------------- the wire */
@@ -925,6 +920,14 @@ pub struct SyncRecord {
     /// RFC 3339.
     pub at: String,
     pub outcome: SyncOutcome,
+    #[serde(default)]
+    pub account: Option<String>,
+    #[serde(default)]
+    pub snapshot_version: u32,
+    /// Most recent complete success for this account; partial attempts for the
+    /// same account preserve this timestamp.
+    #[serde(default)]
+    pub last_success_at: Option<String>,
 }
 
 /// Whether a token is on file and, if so, whether it is still within its
@@ -1322,6 +1325,417 @@ mod tests {
         }
     }
 
+    fn snapshot_runtime(db: &Db) -> CalendarRuntime {
+        CalendarRuntime::new(
+            db.clone(),
+            Arc::new(kw_security::MemoryCredentialStore::new()),
+            NetworkPolicy::new().unwrap(),
+        )
+    }
+
+    #[tokio::test]
+    async fn calendar_failures_and_item_errors_report_partial_success_without_losing_counters() {
+        let db = Db::open_in_memory().await.unwrap();
+        let runtime = snapshot_runtime(&db);
+        for id in ["bad", "good", "unreadable"] {
+            seed_snapshot_calendar(&db, CalendarProvider::Google, id, "user@example.com").await;
+        }
+        let calendars = calendars_repo::list_calendars(
+            db.pool(),
+            CalendarProviderKind::Google,
+            "user@example.com",
+        )
+        .await
+        .unwrap();
+        let start = events_repo::parse_row_instant("2019-01-01").unwrap();
+        let end = events_repo::parse_row_instant("2021-01-01").unwrap();
+        let outcome = sync_selected_calendars(calendars, |id| {
+            let runtime = &runtime;
+            async move {
+                if id == "bad" {
+                    return Err("page two failed".to_owned());
+                }
+                let keep_ids = if id == "unreadable" {
+                    vec![events_repo::row_id("google", &id, "old")]
+                } else {
+                    vec![]
+                };
+                runtime
+                    .commit_snapshot(
+                        CalendarProvider::Google,
+                        &id,
+                        &start,
+                        &end,
+                        kw_calendar_core::sync_support::WindowSnapshot {
+                            rows: vec![],
+                            keep_ids,
+                        },
+                    )
+                    .await
+            }
+        })
+        .await;
+        let SyncOutcome::Completed {
+            events_upserted,
+            events_removed,
+            calendar_errors,
+        } = outcome
+        else {
+            panic!("expected partial completion");
+        };
+        assert_eq!((events_upserted, events_removed), (0, 1));
+        assert_eq!(
+            calendar_errors,
+            [
+                "bad: page two failed",
+                "1 event in unreadable had a time that could not be read"
+            ]
+        );
+        assert_eq!(
+            events_repo::count_events(db.pool(), "google", "bad")
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            events_repo::count_events(db.pool(), "google", "good")
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            events_repo::count_events(db.pool(), "google", "unreadable")
+                .await
+                .unwrap(),
+            1
+        );
+    }
+
+    async fn seed_snapshot_calendar(db: &Db, provider: CalendarProvider, id: &str, email: &str) {
+        let table = match provider {
+            CalendarProvider::Google => "google_calendars",
+            CalendarProvider::Microsoft => "microsoft_calendars",
+        };
+        sqlx::query(&format!(
+            "INSERT INTO {table} (id, summary, account_email) VALUES (?, ?, ?)"
+        ))
+        .bind(id)
+        .bind(id)
+        .bind(email)
+        .execute(db.pool())
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO calendar_events (id, provider, calendar_id, start_time, end_time) VALUES (?, ?, ?, '2020-01-01', '2020-01-02')")
+            .bind(events_repo::row_id(provider.wire_str(), id, "old")).bind(provider.wire_str()).bind(id).execute(db.pool()).await.unwrap();
+    }
+
+    #[test]
+    fn old_sync_records_default_to_an_ungated_snapshot() {
+        let record: SyncRecord = serde_json::from_str(
+            r#"{"at":"2026-01-01T00:00:00Z","outcome":{"state":"failed","message":"old"}}"#,
+        )
+        .unwrap();
+        assert_eq!(record.snapshot_version, 0);
+        assert!(record.account.is_none());
+        assert!(record.last_success_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn snapshot_gate_purges_only_this_accounts_provider_before_any_new_rows() {
+        for provider in [CalendarProvider::Google, CalendarProvider::Microsoft] {
+            for mode in ["missing", "version-zero", "other-account"] {
+                let db = Db::open_in_memory().await.unwrap();
+                let runtime = snapshot_runtime(&db);
+                seed_snapshot_calendar(&db, provider, "current", "user@example.com").await;
+                seed_snapshot_calendar(&db, provider, "other", "other@example.com").await;
+                let other_provider = match provider {
+                    CalendarProvider::Google => CalendarProvider::Microsoft,
+                    CalendarProvider::Microsoft => CalendarProvider::Google,
+                };
+                seed_snapshot_calendar(&db, other_provider, "current", "user@example.com").await;
+                if mode != "missing" {
+                    let record = SyncRecord {
+                        at: "2026-01-01T00:00:00Z".to_owned(),
+                        outcome: SyncOutcome::Failed {
+                            message: "previous".to_owned(),
+                        },
+                        account: Some(
+                            if mode == "other-account" {
+                                "other@example.com"
+                            } else {
+                                "user@example.com"
+                            }
+                            .to_owned(),
+                        ),
+                        snapshot_version: if mode == "other-account" { 1 } else { 0 },
+                        last_success_at: Some("2025-12-01T00:00:00Z".to_owned()),
+                    };
+                    settings::set(db.pool(), last_sync_key(provider), &record)
+                        .await
+                        .unwrap();
+                }
+                runtime
+                    .prepare_snapshot(provider, "user@example.com")
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    events_repo::count_events(db.pool(), provider.wire_str(), "current")
+                        .await
+                        .unwrap(),
+                    0
+                );
+                assert_eq!(
+                    events_repo::count_events(db.pool(), provider.wire_str(), "other")
+                        .await
+                        .unwrap(),
+                    1
+                );
+                assert_eq!(
+                    events_repo::count_events(db.pool(), other_provider.wire_str(), "current")
+                        .await
+                        .unwrap(),
+                    1
+                );
+                let gate = settings::get::<SyncRecord>(db.pool(), last_sync_key(provider))
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(gate.snapshot_version, 1);
+                assert_eq!(gate.account.as_deref(), Some("user@example.com"));
+                if mode != "version-zero" {
+                    assert_ne!(gate.at, "2026-01-01T00:00:00Z");
+                    assert!(gate.last_success_at.is_none());
+                    assert!(
+                        matches!(gate.outcome, SyncOutcome::Failed { message } if message == "The first sync after an update did not finish.")
+                    );
+                } else {
+                    assert_eq!(gate.at, "2026-01-01T00:00:00Z");
+                    assert_eq!(
+                        gate.last_success_at.as_deref(),
+                        Some("2025-12-01T00:00:00Z")
+                    );
+                    assert!(
+                        matches!(gate.outcome, SyncOutcome::Failed { message } if message == "previous")
+                    );
+                }
+                // Version one for this account is idempotent, even with new
+                // rows outside the snapshot window left by a later sync.
+                sqlx::query("INSERT INTO calendar_events (id, provider, calendar_id, start_time, end_time) VALUES ('new', ?, 'current', '2030-01-01', '2030-01-02')")
+                    .bind(provider.wire_str()).execute(db.pool()).await.unwrap();
+                runtime
+                    .prepare_snapshot(provider, "user@example.com")
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    events_repo::count_events(db.pool(), provider.wire_str(), "current")
+                        .await
+                        .unwrap(),
+                    1
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn undecodable_sync_record_is_replaced_by_snapshot_gate_and_sync_result() {
+        let db = Db::open_in_memory().await.unwrap();
+        let runtime = snapshot_runtime(&db);
+        let provider = CalendarProvider::Google;
+        let key = last_sync_key(provider);
+        seed_snapshot_calendar(&db, provider, "current", "user@example.com").await;
+        settings::set(db.pool(), key, &"undecodable sync record")
+            .await
+            .unwrap();
+        assert!(matches!(
+            settings::get::<SyncRecord>(db.pool(), key).await,
+            Ok(None)
+        ));
+
+        runtime
+            .prepare_snapshot(provider, "user@example.com")
+            .await
+            .unwrap();
+        assert_eq!(
+            events_repo::count_events(db.pool(), "google", "current")
+                .await
+                .unwrap(),
+            0
+        );
+        let gate = settings::get::<SyncRecord>(db.pool(), key)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(gate.account.as_deref(), Some("user@example.com"));
+        assert_eq!(gate.snapshot_version, 1);
+        assert!(gate.last_success_at.is_none());
+        assert!(
+            matches!(gate.outcome, SyncOutcome::Failed { message } if message == "The first sync after an update did not finish.")
+        );
+
+        // A normal result preserves the repaired gate. Also exercise recording
+        // directly over corrupt history, as a token failure can precede gating.
+        for corrupt_again in [false, true] {
+            if corrupt_again {
+                settings::set(db.pool(), key, &42).await.unwrap();
+                assert!(matches!(
+                    settings::get::<SyncRecord>(db.pool(), key).await,
+                    Ok(None)
+                ));
+            }
+            runtime
+                .record_sync(
+                    provider,
+                    "user@example.com",
+                    SyncOutcome::TokenUnavailable {
+                        message: "unavailable".to_owned(),
+                    },
+                )
+                .await;
+            let record = settings::get::<SyncRecord>(db.pool(), key)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(record.account.as_deref(), Some("user@example.com"));
+            assert_eq!(record.snapshot_version, if corrupt_again { 0 } else { 1 });
+            assert!(record.last_success_at.is_none());
+            assert!(
+                matches!(record.outcome, SyncOutcome::TokenUnavailable { message } if message == "unavailable")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn last_success_changes_only_after_full_success_and_token_failure_cannot_skip_gate() {
+        let db = Db::open_in_memory().await.unwrap();
+        let runtime = snapshot_runtime(&db);
+        let provider = CalendarProvider::Google;
+        let old = SyncRecord {
+            at: "2026-01-01T00:00:00Z".to_owned(),
+            outcome: SyncOutcome::Failed {
+                message: "previous".to_owned(),
+            },
+            account: Some("other@example.com".to_owned()),
+            snapshot_version: 1,
+            last_success_at: Some("2025-12-01T00:00:00Z".to_owned()),
+        };
+        settings::set(db.pool(), last_sync_key(provider), &old)
+            .await
+            .unwrap();
+        runtime
+            .record_sync(
+                provider,
+                "user@example.com",
+                SyncOutcome::TokenUnavailable {
+                    message: "unavailable".to_owned(),
+                },
+            )
+            .await;
+        let token_failure = settings::get::<SyncRecord>(db.pool(), last_sync_key(provider))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(token_failure.snapshot_version, 0);
+        assert!(token_failure.last_success_at.is_none());
+        runtime
+            .prepare_snapshot(provider, "user@example.com")
+            .await
+            .unwrap();
+        for outcome in [
+            SyncOutcome::Failed {
+                message: "failed".to_owned(),
+            },
+            SyncOutcome::TokenUnavailable {
+                message: "unavailable".to_owned(),
+            },
+            SyncOutcome::Completed {
+                events_upserted: 1,
+                events_removed: 0,
+                calendar_errors: vec!["partial".to_owned()],
+            },
+        ] {
+            runtime
+                .record_sync(provider, "user@example.com", outcome)
+                .await;
+            let record = settings::get::<SyncRecord>(db.pool(), last_sync_key(provider))
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(record.last_success_at.is_none());
+            assert_eq!(record.snapshot_version, 1);
+        }
+        runtime
+            .record_sync(
+                provider,
+                "user@example.com",
+                SyncOutcome::Completed {
+                    events_upserted: 0,
+                    events_removed: 0,
+                    calendar_errors: vec![],
+                },
+            )
+            .await;
+        let record = settings::get::<SyncRecord>(db.pool(), last_sync_key(provider))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(record.last_success_at.as_deref(), Some(record.at.as_str()));
+        assert_ne!(record.last_success_at, old.last_success_at);
+        assert_eq!(record.account.as_deref(), Some("user@example.com"));
+        assert_eq!(record.snapshot_version, 1);
+        runtime
+            .record_sync(
+                provider,
+                "user@example.com",
+                SyncOutcome::Completed {
+                    events_upserted: 1,
+                    events_removed: 0,
+                    calendar_errors: vec!["partial".to_owned()],
+                },
+            )
+            .await;
+        let partial = settings::get::<SyncRecord>(db.pool(), last_sync_key(provider))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(partial.last_success_at, record.last_success_at);
+    }
+
+    #[tokio::test]
+    async fn unreadable_item_preserves_its_row_and_counts_as_a_calendar_error() {
+        let db = Db::open_in_memory().await.unwrap();
+        let runtime = snapshot_runtime(&db);
+        seed_snapshot_calendar(&db, CalendarProvider::Google, "team", "user@example.com").await;
+        let id = events_repo::row_id("google", "team", "old");
+        sqlx::query("UPDATE calendar_events SET start_time = '2026-11-11T09:00:00Z', end_time = '2026-11-11T10:00:00Z' WHERE id = ?")
+            .bind(&id).execute(db.pool()).await.unwrap();
+        let start = events_repo::parse_row_instant("2026-11-10").unwrap();
+        let end = start + chrono::Duration::days(31);
+        let (upserted, removed, unreadable) = runtime
+            .commit_snapshot(
+                CalendarProvider::Google,
+                "team",
+                &start,
+                &end,
+                kw_calendar_core::sync_support::WindowSnapshot {
+                    rows: vec![],
+                    keep_ids: vec![id],
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!((upserted, removed, unreadable), (0, 0, 1));
+        assert_eq!(
+            events_repo::count_events(db.pool(), "google", "team")
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            time_error("Team calendar", unreadable),
+            "1 event in Team calendar had a time that could not be read"
+        );
+    }
+
     #[test]
     fn every_provider_has_distinct_settings_keys() {
         for provider in [CalendarProvider::Google, CalendarProvider::Microsoft] {
@@ -1507,6 +1921,9 @@ mod tests {
 
     fn token_unavailable_record(message: &str) -> SyncRecord {
         SyncRecord {
+            account: None,
+            snapshot_version: 0,
+            last_success_at: None,
             at: "2026-01-01T00:00:00Z".to_owned(),
             outcome: SyncOutcome::TokenUnavailable {
                 message: message.to_owned(),
@@ -1540,6 +1957,9 @@ mod tests {
     #[test]
     fn needs_refresh_with_an_unrelated_recorded_outcome_stays_needs_refresh() {
         let completed = SyncRecord {
+            account: None,
+            snapshot_version: 0,
+            last_success_at: None,
             at: "2026-01-01T00:00:00Z".to_owned(),
             outcome: SyncOutcome::Completed {
                 events_upserted: 3,
@@ -1553,6 +1973,9 @@ mod tests {
         );
 
         let failed = SyncRecord {
+            account: None,
+            snapshot_version: 0,
+            last_success_at: None,
             at: "2026-01-01T00:00:00Z".to_owned(),
             outcome: SyncOutcome::Failed {
                 message: "the calendar list could not be read".to_owned(),

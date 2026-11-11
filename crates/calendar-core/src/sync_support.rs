@@ -29,17 +29,6 @@ pub enum SyncError {
     #[error("the calendar provider returned an unsafe pagination URL")]
     UnsafePaginationUrl,
 
-    /// Google's documented behaviour for an incremental sync whose
-    /// `syncToken` has expired: a 410 Gone, after which the client must clear
-    /// its cursor and perform a full resync. Believed from
-    /// <https://developers.google.com/calendar/api/guides/sync>, not
-    /// confirmed against a live account -- see the module doc on
-    /// `crate::google`. `crate::microsoft::fetch_events_delta` reports the
-    /// same variant for a 410 on a Graph delta query, for the analogous
-    /// reason documented in its own module doc.
-    #[error("the sync cursor has expired; a full resync is required")]
-    SyncTokenExpired,
-
     /// A page-token loop that did not terminate within
     /// [`MAX_PAGES`]. Bounded the same way
     /// `kw_network_policy::NetworkPolicy::download_to_file` bounds redirects:
@@ -51,7 +40,7 @@ pub enum SyncError {
     Storage(#[from] sqlx::Error),
 }
 
-/// Upper bound on how many pages a single list/delta fetch will follow.
+/// Upper bound on how many pages a single list/window fetch will follow.
 pub const MAX_PAGES: u8 = 25;
 
 /// One attendee, in the shape both providers normalise into and
@@ -65,10 +54,68 @@ pub struct StoredAttendee {
     pub email: Option<String>,
     pub name: Option<String>,
     /// Google's `responseStatus` (`accepted`, `declined`, `tentative`,
-    /// `needsAction`). Microsoft Graph's `status.response` uses the same four
-    /// words lower-cased, so this is populated from either provider without a
-    /// second field.
+    /// `needsAction`), or Graph's `status.response` (also including `organizer`
+    /// and `notResponded`). Preserve provider response words for future readers.
     pub response_status: Option<String>,
+}
+
+/// Convert a provider timestamp to a comparable UTC instant. Offset-free
+/// timestamps are safe only when the provider explicitly identifies UTC;
+/// interpreting another zone without its rules would invent an instant.
+#[must_use]
+pub fn to_utc(date_time: &str, zone: Option<&str>) -> Option<String> {
+    use chrono::{DateTime, NaiveDateTime, SecondsFormat, Utc};
+    if let Ok(value) = DateTime::parse_from_rfc3339(date_time) {
+        return Some(
+            value
+                .with_timezone(&Utc)
+                .to_rfc3339_opts(SecondsFormat::Secs, true),
+        );
+    }
+    if !zone.is_some_and(|z| z.eq_ignore_ascii_case("UTC")) {
+        return None;
+    }
+    NaiveDateTime::parse_from_str(date_time, "%Y-%m-%dT%H:%M:%S%.f")
+        .ok()
+        .map(|value| value.and_utc().to_rfc3339_opts(SecondsFormat::Secs, true))
+}
+
+/// A fetched snapshot contains no writes. Invalid item times preserve the
+/// corresponding cached ids, while a page error discards the whole snapshot.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct WindowSnapshot {
+    pub rows: Vec<crate::events_repo::EventRow>,
+    pub keep_ids: Vec<String>,
+}
+
+/// Collect a bounded page chain before handing any rows to storage. Injecting
+/// transport keeps the production pagination and failure semantics testable
+/// without credentials or network access.
+pub(crate) async fn collect_window<F, Fut>(
+    initial_url: String,
+    mut fetch: F,
+    mut parse: impl FnMut(&str) -> Result<(WindowSnapshot, Option<String>), SyncError>,
+) -> Result<WindowSnapshot, SyncError>
+where
+    F: FnMut(String) -> Fut,
+    Fut: std::future::Future<Output = Result<(u16, String), SyncError>>,
+{
+    let mut url = initial_url;
+    let mut snapshot = WindowSnapshot::default();
+    for _ in 0..MAX_PAGES {
+        let (status, body) = fetch(url).await?;
+        if status != 200 {
+            return Err(SyncError::HttpStatus { status });
+        }
+        let (page, next) = parse(&body)?;
+        snapshot.rows.extend(page.rows);
+        snapshot.keep_ids.extend(page.keep_ids);
+        match next {
+            Some(next) => url = next,
+            None => return Ok(snapshot),
+        }
+    }
+    Err(SyncError::TooManyPages)
 }
 
 /// Percent-encode `input` for use as one path segment or query value.
@@ -104,6 +151,49 @@ pub fn percent_encode_path_segment(input: &str) -> String {
 )]
 mod tests {
     use super::*;
+
+    #[test]
+    fn utc_conversion_table() {
+        for (input, zone, expected) in [
+            (
+                "2026-11-11T09:00:00+01:00",
+                None,
+                Some("2026-11-11T08:00:00Z"),
+            ),
+            (
+                "2026-11-11T09:00:00-05:00",
+                None,
+                Some("2026-11-11T14:00:00Z"),
+            ),
+            ("2026-11-11T09:00:00Z", None, Some("2026-11-11T09:00:00Z")),
+            (
+                "2026-11-11T09:00:00.123456789123Z",
+                None,
+                Some("2026-11-11T09:00:00Z"),
+            ),
+            (
+                "2026-11-11T09:00:00.0000000",
+                Some("uTc"),
+                Some("2026-11-11T09:00:00Z"),
+            ),
+            (
+                "2026-11-11T09:00:00.123456789123",
+                Some("UTC"),
+                Some("2026-11-11T09:00:00Z"),
+            ),
+            (
+                "2026-11-11T09:00:00",
+                Some("UTC"),
+                Some("2026-11-11T09:00:00Z"),
+            ),
+            ("2026-11-11T09:00:00", None, None),
+            ("2026-11-11T09:00:00", Some("Europe/Stockholm"), None),
+            ("2026-11-11", Some("UTC"), None),
+            ("garbage", Some("UTC"), None),
+        ] {
+            assert_eq!(to_utc(input, zone).as_deref(), expected, "{input}");
+        }
+    }
 
     #[test]
     fn unreserved_characters_pass_through_unchanged() {
