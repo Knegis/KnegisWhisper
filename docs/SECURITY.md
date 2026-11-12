@@ -264,17 +264,17 @@ on a later click. That is not the shape `note_export_to_file` uses, which fuses 
 into one atomic command so the frontend never sees or supplies a path at all; fusing pick and
 import the same way would fight this screen's pick-then-review-then-confirm flow, which a
 single-click save does not need. So the path does cross the boundary, and what makes that safe is a
-capability rather than the shape: **`commands::DialogGrants` records the canonical form of every
-path `pick_import_file` returns, and those three commands — the only three in the application that
+capability rather than the shape: **`commands::DialogGrants` records every exact picker-returned
+string and its canonical target, and those three commands — the only three in the application that
 accept a path at all — refuse anything that set does not hold.** A compromised renderer calling
 `media_import_audio` directly with an arbitrary local path is refused before the file is opened,
 which is what stops that file's contents from reaching a configured cloud transcription provider.
 
-Four properties of that set, each a deliberate choice. It is keyed on `std::fs::canonicalize`
-output, not on the string the renderer sent, because `pick_import_file` returns
-`path.display().to_string()` and `display()` is lossy — the cost is that a path whose name does not
-survive lossy conversion cannot be imported, which was already true in practice and is now an
-explicit refusal. It lasts until the application exits, because single-use would break
+Four properties of that set, each a deliberate choice. Unknown strings are refused by exact
+in-memory lookup before any canonicalization or metadata access, including remote filesystem
+access. Known strings are resolved again and must still name the recorded canonical target.
+Non-UTF-8 picker names are refused before returning a lossy string. Each explicitly picked alias
+has its own bounded grant. It lasts until the application exits, because single-use would break
 retry-after-failure, which the screen relies on today. It is not time-bounded, because the review
 step can legitimately sit open across a sidecar install of tens of megabytes. And it is bounded by
 count (32) so a renderer calling the picker in a loop cannot grow it without limit.

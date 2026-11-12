@@ -5,6 +5,8 @@ version, supported platforms, installation requirements and known limitations.
 
 ## Unreleased
 
+- Reject import paths that were not selected in the file picker before accessing their filesystem.
+
 - Keep opening imported notes responsive when participant fields contain long runs of whitespace.
 
 - Reject malformed Corti environment settings before sending credentials or opening a connection.
