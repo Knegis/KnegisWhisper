@@ -33,6 +33,16 @@ Routes carry a **key reference**, not a key. Route resolution is a pure function
 to credentials at all; only `crates/security` can resolve a reference, and only
 `crates/network-policy` can transmit the result. A test never needs a real credential.
 
+The shared `custom` key is a versioned vault record containing the secret and its
+authorized HTTP(S) origins (scheme, host and effective port). Saving a freshly
+entered key binds the currently configured Custom transcription, cleanup and
+summary server addresses. Settings writes never extend that authority. Both chat
+and batch transcription check the final request URL before sending anything.
+Existing unbound keys require re-entry; they are never migrated using mutable
+settings. A self-hosted chat server can still operate without a stored key, but a
+locked vault or an origin mismatch fails the request. Paths on an authorized
+origin may change without re-entry. Changing a scheme, host or port requires it.
+
 Calendar OAuth tokens go to the OS credential store. The importer relocates upstream's
 plaintext refresh tokens from SQLite and leaves only a slot reference. Google Calendar and
 Outlook use PKCE clients: Advanced custom configuration takes precedence over app-owned build

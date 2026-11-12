@@ -62,6 +62,9 @@ pub enum TranscriptionError {
     #[error("no credential is stored for {slot}. Add one in settings.")]
     MissingCredential { slot: String },
 
+    #[error("{0}")]
+    Credential(#[from] kw_security::CredentialError),
+
     #[error("{provider} returned HTTP {status}: {body}")]
     ProviderRejected {
         provider: String,
@@ -233,7 +236,7 @@ impl<'a> Executor<'a> {
             } => {
                 self.check_size(provider, *max_upload_bytes, wav.len())?;
 
-                let credential = self.resolve_credential(auth)?;
+                let credential = self.resolve_credential(auth, endpoint)?;
 
                 self.post_multipart(
                     &BatchRequest {
@@ -311,7 +314,11 @@ impl<'a> Executor<'a> {
     }
 
     /// Turn the route's slot name into a secret. The last possible moment.
-    fn resolve_credential(&self, auth: &Auth) -> Result<Option<Secret>, TranscriptionError> {
+    fn resolve_credential(
+        &self,
+        auth: &Auth,
+        endpoint: &str,
+    ) -> Result<Option<Secret>, TranscriptionError> {
         if auth.scheme == AuthScheme::None {
             return Ok(None);
         }
@@ -324,10 +331,15 @@ impl<'a> Executor<'a> {
             })?;
 
         let secret =
-            self.credentials
-                .get(slot)
-                .map_err(|_| TranscriptionError::MissingCredential {
-                    slot: slot.slot().to_owned(),
+            kw_security::endpoint_credential::get_for_endpoint(self.credentials, slot, endpoint)
+                .map_err(|err| {
+                    if slot.slot() == "custom" {
+                        TranscriptionError::Credential(err)
+                    } else {
+                        TranscriptionError::MissingCredential {
+                            slot: slot.slot().to_owned(),
+                        }
+                    }
                 })?;
 
         if secret.is_empty() {
@@ -922,7 +934,9 @@ mod tests {
         let creds = MemoryCredentialStore::new();
         let executor = Executor::new(&policy, &creds);
 
-        let resolved = executor.resolve_credential(&Auth::none()).unwrap();
+        let resolved = executor
+            .resolve_credential(&Auth::none(), "http://127.0.0.1/v1")
+            .unwrap();
         assert!(
             resolved.is_none(),
             "a self-hosted server needs no credential"
@@ -930,6 +944,127 @@ mod tests {
     }
 
     /* -------------------------------------------------------- honest refusals */
+
+    #[tokio::test]
+    async fn custom_transcription_refuses_changed_origins_and_legacy_keys() {
+        let policy = NetworkPolicy::new().unwrap();
+        let creds = MemoryCredentialStore::new();
+        let slot = KeyRef::new("custom").unwrap();
+        let authorized = kw_security::endpoint_credential::bind_custom(
+            &Secret::new("synthetic-key".into()),
+            &["https://approved.example/v1"],
+        )
+        .unwrap();
+        for stored in [authorized, Secret::new("legacy-key".into())] {
+            creds.set(&slot, &stored).unwrap();
+            for scheme in [AuthScheme::Bearer, AuthScheme::AzureApiKey] {
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let transport = Transport::HttpBatch {
+                    provider: "custom".into(),
+                    endpoint: format!(
+                        "http://{}/v1/audio/transcriptions",
+                        listener.local_addr().unwrap()
+                    ),
+                    model: "m".into(),
+                    auth: Auth {
+                        scheme,
+                        key_ref: Some(slot.clone()),
+                    },
+                    max_upload_bytes: None,
+                    language: None,
+                };
+                let executor = Executor::new(&policy, &creds);
+                tokio::select! {
+                    biased;
+                    _ = listener.accept() => panic!("custom key reached an unapproved transcription origin"),
+                    result = executor.transcribe(&transport, b"synthetic audio".to_vec()) => assert!(matches!(result, Err(TranscriptionError::Credential(kw_security::CredentialError::UnapprovedEndpoint)))),
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn approved_custom_transcription_retains_bearer_and_azure_headers() {
+        use std::io::{Read as _, Write as _};
+        let policy = NetworkPolicy::new().unwrap();
+        let creds = MemoryCredentialStore::new();
+        let slot = KeyRef::new("custom").unwrap();
+        for (scheme, expected) in [
+            (AuthScheme::Bearer, "authorization: bearer synthetic-key"),
+            (AuthScheme::AzureApiKey, "api-key: synthetic-key"),
+        ] {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let endpoint = format!(
+                "http://{}/v1/audio/transcriptions",
+                listener.local_addr().unwrap()
+            );
+            creds
+                .set(
+                    &slot,
+                    &kw_security::endpoint_credential::bind_custom(
+                        &Secret::new("synthetic-key".into()),
+                        &[&endpoint],
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+            let request = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                    .unwrap();
+                let mut seen = Vec::new();
+                let mut chunk = [0_u8; 4096];
+                loop {
+                    let read = stream.read(&mut chunk).unwrap();
+                    if read == 0 {
+                        break;
+                    }
+                    seen.extend_from_slice(chunk.get(..read).unwrap());
+                    let text = String::from_utf8_lossy(&seen);
+                    if let Some((head, body)) = text.split_once("\r\n\r\n") {
+                        let size = head
+                            .lines()
+                            .find_map(|line| {
+                                line.to_ascii_lowercase()
+                                    .strip_prefix("content-length:")
+                                    .map(|s| s.trim().parse::<usize>().unwrap())
+                            })
+                            .unwrap();
+                        if body.len() >= size {
+                            break;
+                        }
+                    }
+                }
+                let body = r#"{"text":"approved transcript"}"#;
+                write!(stream, "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}", body.len()).unwrap();
+                String::from_utf8(seen).unwrap()
+            });
+            let transport = Transport::HttpBatch {
+                provider: "custom".into(),
+                endpoint,
+                model: "m".into(),
+                auth: Auth {
+                    scheme,
+                    key_ref: Some(slot.clone()),
+                },
+                max_upload_bytes: None,
+                language: None,
+            };
+            assert_eq!(
+                Executor::new(&policy, &creds)
+                    .transcribe(&transport, b"synthetic audio".to_vec())
+                    .await
+                    .unwrap()
+                    .text,
+                "approved transcript"
+            );
+            let seen = request.join().unwrap().to_ascii_lowercase();
+            assert!(seen.contains(expected));
+            assert!(seen.contains("synthetic audio"));
+            assert!(!seen.contains("origins"));
+        }
+    }
 
     #[tokio::test]
     async fn a_provider_needing_its_own_client_is_refused_rather_than_substituted() {
@@ -968,7 +1103,12 @@ mod tests {
         creds
             .set(
                 &KeyRef::new("custom").unwrap(),
-                &Secret::new("sk-x".to_owned()),
+                &kw_security::endpoint_credential::bind_custom(
+                    &Secret::new("sk-x".to_owned()),
+                    // domain-scanner:allow-next-line a bound fixture must still be refused by network policy
+                    &["https://api.openwhispr.com"],
+                )
+                .unwrap(),
             )
             .unwrap();
         let executor = Executor::new(&policy, &creds);

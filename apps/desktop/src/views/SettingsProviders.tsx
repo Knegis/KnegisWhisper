@@ -347,6 +347,7 @@ export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) 
         ) : null}
         {isOpen ? (
           <span className="controls provider-form" id={formId}>
+            {row.slot === "custom" ? <span className="muted">Configure your server addresses first. Saving authorizes this key for the addresses set for Custom transcription, cleanup and summaries. Re-enter the key after changing a server address, or to authorize a key saved before this protection was added.</span> : null}
             <input
               type="password"
               autoComplete="off"

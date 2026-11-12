@@ -761,23 +761,27 @@ pub fn credential_slots(state: State<'_, AppState>) -> CmdResult<Vec<CredentialS
 /// The value goes straight to the OS credential store and is never written to
 /// SQLite, a settings row, or a log line.
 #[tauri::command]
-pub fn provider_credential_set(
+pub async fn provider_credential_set(
     state: State<'_, AppState>,
     slot: String,
     value: String,
 ) -> CmdResult<()> {
+    store_provider_credential(&state, &slot, value).await
+}
+
+async fn store_provider_credential(state: &AppState, slot: &str, value: String) -> CmdResult<()> {
     let registry = kw_provider_registry::registry().map_err(|e| fail("provider registry", e))?;
 
     // A frontend may only write to a slot the registry declares. Otherwise the
     // command is an arbitrary write into the user's keychain namespace.
-    if !registry.credential_slots().contains(slot.as_str()) {
+    if !registry.credential_slots().contains(slot) {
         return Err(format!(
             "{slot:?} is not a credential slot this application uses"
         ));
     }
 
     let key =
-        kw_security::KeyRef::new(&slot).ok_or_else(|| format!("{slot:?} is not a valid slot"))?;
+        kw_security::KeyRef::new(slot).ok_or_else(|| format!("{slot:?} is not a valid slot"))?;
 
     if value.trim().is_empty() {
         return state
@@ -786,10 +790,149 @@ pub fn provider_credential_set(
             .map_err(|e| fail("could not remove the credential", e));
     }
 
+    let supplied = kw_security::Secret::new(value);
+    let stored = if slot == "custom" {
+        let endpoints = configured_custom_endpoints(state.db()).await?;
+        let refs: Vec<_> = endpoints.iter().map(String::as_str).collect();
+        kw_security::endpoint_credential::bind_custom(&supplied, &refs)
+            .map_err(|e| fail("could not authorize the custom key", e))?
+    } else {
+        supplied
+    };
     state
         .credentials()
-        .set(&key, &kw_security::Secret::new(value))
+        .set(&key, &stored)
         .map_err(|e| fail("could not store the credential", e))
+}
+
+/// Snapshot routing settings only while saving a fresh value supplied by the
+/// user. Neither a settings write nor a request may rebind an existing key.
+async fn configured_custom_endpoints(db: &kw_storage::Db) -> CmdResult<Vec<String>> {
+    let transcription: kw_transcription_core::RouteSettings = kw_storage::settings::get_or(
+        db.pool(),
+        crate::dictation::ROUTE_SETTINGS_KEY,
+        Default::default(),
+    )
+    .await
+    .map_err(|e| fail("could not read transcription settings", e))?;
+    let cleanup: crate::reasoning::CleanupSettings = kw_storage::settings::get_or(
+        db.pool(),
+        crate::reasoning::CLEANUP_SETTINGS_KEY,
+        Default::default(),
+    )
+    .await
+    .map_err(|e| fail("could not read cleanup settings", e))?;
+    let summaries: kw_notes_core::summary::SummarySettings = kw_storage::settings::get_or(
+        db.pool(),
+        crate::summaries::SUMMARY_SETTINGS_KEY,
+        Default::default(),
+    )
+    .await
+    .map_err(|e| fail("could not read summary settings", e))?;
+    let transcription_url = (transcription
+        .cloud_transcription_provider
+        .as_deref()
+        .map(str::trim)
+        == Some("custom"))
+    .then_some(transcription.cloud_transcription_base_url)
+    .flatten();
+    Ok([
+        transcription_url,
+        cleanup.self_hosted_url,
+        summaries.self_hosted_url,
+    ]
+    .into_iter()
+    .flatten()
+    .map(|url| url.trim().to_owned())
+    .filter(|url| !url.is_empty())
+    .collect())
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod custom_credential_tests {
+    use super::*;
+    use kw_security::{endpoint_credential::get_for_endpoint, KeyRef, Secret};
+
+    #[tokio::test]
+    async fn only_a_fresh_key_authorizes_the_configured_servers() {
+        let state = AppState::in_memory().await.unwrap();
+        let slot = KeyRef::new("custom").unwrap();
+        assert!(
+            store_provider_credential(&state, "custom", "fresh-key".into())
+                .await
+                .is_err()
+        );
+        let settings = [
+            (
+                crate::dictation::ROUTE_SETTINGS_KEY,
+                serde_json::json!({"cloudTranscriptionProvider":" custom ", "cloudTranscriptionBaseUrl":"https://speech.example/v1"}),
+            ),
+            (
+                crate::reasoning::CLEANUP_SETTINGS_KEY,
+                serde_json::json!({"selfHostedUrl":"https://cleanup.example/v1"}),
+            ),
+            (
+                crate::summaries::SUMMARY_SETTINGS_KEY,
+                serde_json::json!({"selfHostedUrl":"https://summaries.example/v1"}),
+            ),
+        ];
+        for (key, value) in &settings {
+            kw_storage::settings::set(state.db().pool(), key, value)
+                .await
+                .unwrap();
+        }
+        state
+            .credentials()
+            .set(&slot, &Secret::new("legacy".into()))
+            .unwrap();
+        assert!(
+            get_for_endpoint(state.credentials(), &slot, "https://cleanup.example/v1").is_err()
+        );
+        store_provider_credential(&state, "custom", "fresh-key".into())
+            .await
+            .unwrap();
+        for url in [
+            "https://speech.example/v1",
+            "https://cleanup.example/v2",
+            "https://summaries.example/v1",
+        ] {
+            assert_eq!(
+                get_for_endpoint(state.credentials(), &slot, url)
+                    .unwrap()
+                    .expose(),
+                "fresh-key"
+            );
+        }
+        // The generic settings store is writable by the renderer. It cannot
+        // extend the authority already saved in the vault.
+        kw_storage::settings::set(
+            state.db().pool(),
+            crate::reasoning::CLEANUP_SETTINGS_KEY,
+            &serde_json::json!({"selfHostedUrl":"https://changed.example/v1"}),
+        )
+        .await
+        .unwrap();
+        assert!(
+            get_for_endpoint(state.credentials(), &slot, "https://changed.example/v1").is_err()
+        );
+        store_provider_credential(&state, "custom", "replacement".into())
+            .await
+            .unwrap();
+        assert_eq!(
+            get_for_endpoint(state.credentials(), &slot, "https://changed.example/v1")
+                .unwrap()
+                .expose(),
+            "replacement"
+        );
+        assert!(
+            get_for_endpoint(state.credentials(), &slot, "https://cleanup.example/v1").is_err()
+        );
+        store_provider_credential(&state, "custom", "".into())
+            .await
+            .unwrap();
+        assert!(!state.credentials().contains(&slot));
+    }
 }
 
 /// Whether a credential exists for a slot. Never returns the value.

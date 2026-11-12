@@ -5,6 +5,8 @@ version, supported platforms, installation requirements and known limitations.
 
 ## Unreleased
 
+- Bind custom server keys to their configured server addresses. Existing custom keys must be re-entered in Settings > Providers; changing a server address also requires re-entering the key.
+
 - Escape terminal control characters when displaying notes and transcripts in the CLI; preserve original content in pipes and exported files.
 
 - Reject import paths that were not selected in the file picker before accessing their filesystem.
