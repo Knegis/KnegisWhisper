@@ -59,18 +59,24 @@ apps/desktop/src-tauri/tauri.conf.json, so a hosted font would load during
                       apps/desktop/src/fonts/geist-variable.woff2
                       apps/desktop/src/fonts/OFL-Geist.txt
 
-    Tiny5             The Tiny5 Project Authors — SIL OFL 1.1
-                      apps/desktop/src/fonts/tiny5-400.woff2
-                      apps/desktop/src/fonts/OFL-Tiny5.txt
+    Ndot 57           Nothing; Colophon Foundry — restricted proprietary terms
+                      apps/desktop/src/fonts/Ndot57-Regular.otf
+                      apps/desktop/src/fonts/NOTICE-Ndot57.txt
 
     Doto              The Doto Project Authors — SIL OFL 1.1
                       apps/desktop/src/fonts/doto-round-variable.woff2
                       apps/desktop/src/fonts/OFL-Doto.txt
 
-Taken from the Google Fonts repository (github.com/google/fonts, ofl/) and
-modified only by subsetting to Latin and converting to WOFF2. Tiny5 is pinned
-to its default instance and Doto to round dots (ROND 100); Geist and Doto keep
-their weight axis. Each retains its license, which sits beside the file.
+Geist and Doto are taken from the Google Fonts repository (github.com/google/fonts,
+ofl/) and modified only by subsetting to Latin and converting to WOFF2. Doto is
+pinned to round dots (ROND 100); both keep their weight axis and OFL license.
+
+Ndot 57 is an unmodified OpenType file from xeji01/nothingfont, pinned by revision
+and SHA-256 in its accompanying notice. Its embedded terms restrict use to Nothing
+brand materials and restrict modification and sharing. It is not covered by this
+project's MIT license or the other fonts' OFL licenses. Permission to distribute
+it with KnegisWhisper has not been established; the source and embedded terms are
+preserved in NOTICE-Ndot57.txt and the generated third-party notices.
 
 
 ================================================================================

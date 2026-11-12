@@ -21,8 +21,8 @@
  *      recording tile, a live clock, words still being heard. Flat colour is
  *      kept for meaning: mint for what is fine, an update or an on chip,
  *      the pink signal dot for recording and for what has failed.
- *   4. Three faces with a job each. Geist sets everything people read. Tiny5,
- *      a pixel face, is the machine talking about itself -- dates, times,
+ *   4. Three faces with a job each. Geist sets everything people read. Ndot 57,
+ *      a dot-matrix face, is the machine talking about itself -- dates, times,
  *      small labels -- in the string's own case. Doto, round dot-matrix
  *      numerals, is reserved for big clocks and counts.
  *
@@ -44,9 +44,9 @@
  *
  * The production CSP is `font-src 'self'` (`src-tauri/tauri.conf.json`). A CDN
  * link would work in `npm run dev` and fail silently in the packaged build,
- * falling back to a system sans. So the three faces are committed, subset to
- * Latin, and served from the bundle. Attribution is in `NOTICE`; each licence
- * sits beside its file.
+ * falling back to a system sans. So the three faces are committed and served
+ * from the bundle. Geist and Doto are subset to Latin; Ndot 57 is unmodified.
+ * Attribution is in `NOTICE`; each license or source notice sits beside its file.
  */
 
 @font-face {
@@ -58,11 +58,11 @@
 }
 
 @font-face {
-  font-family: Tiny5;
+  font-family: "Ndot 57";
   font-style: normal;
   font-weight: 400;
   font-display: swap;
-  src: url("./fonts/tiny5-400.woff2") format("woff2");
+  src: url("./fonts/Ndot57-Regular.otf") format("opentype");
 }
 
 /* Round dots only: the file is pinned to ROND 100, so no `font-variation-settings` is needed. */
@@ -171,9 +171,9 @@
   --content-max: 808px;
 
   --font-sans: Geist, "Helvetica Neue", Arial, sans-serif;
-  /* The pixel voice. The name is the old one's, so every label that used it follows. */
-  --font-mono: Tiny5, ui-monospace, Consolas, monospace;
-  /* Real monospace, for code and file bytes: a pixel face is no good for reading a path. */
+  /* Compact display text. Keep the existing token so its labels change together. */
+  --font-mono: "Ndot 57", ui-monospace, Consolas, monospace;
+  /* Real monospace for code and file bytes, independent of the display font. */
   --font-code: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, monospace;
   --font-dots: Doto, ui-monospace, monospace;
 
@@ -308,12 +308,12 @@ body {
 p { line-height: 1.5; }
 
 /*
- * The machine voice: Tiny5, the pixel face, in the string's own case -- never
+ * The machine voice: Ndot 57, the dot-matrix face, in the string's own case -- never
  * by `text-transform`, which is not reversible by eye: an uppercased path or
  * error string reads as shouting and hides its own casing. It is for the
- * machine talking about itself: times, counts, states, small labels. Never
- * below 15px, where its 5-pixel cap height stops reading as letters, and
- * never a heading people navigate by: those are Geist (`h2`, below).
+ * machine talking about itself: times, counts, states, small labels.
+ * Headings people navigate by use Geist (`h2`, below); large clocks and
+ * counts keep Doto (`--font-dots`).
  */
 .overlay {
   font-family: var(--font-mono);

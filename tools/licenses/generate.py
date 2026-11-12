@@ -59,7 +59,8 @@ def render(rust, frontend):
             raise ValueError("Missing frontend license: " + p["name"])
         blocks.append(f"npm: {p['name']} {p['version']}\nSource: {p.get('source', '')}\nLicense: {p.get('license', '')}\n"
                       + "\n".join(normalized(t) for t in p["texts"]))
-    for path in sorted((ROOT / "apps/desktop/src/fonts").glob("OFL-*.txt")):
+    # Include proprietary font notices as well as the OFL texts.
+    for path in sorted((ROOT / "apps/desktop/src/fonts").glob("*.txt")):
         blocks.append("Bundled font: " + path.stem + "\n" + path.read_text(encoding="utf-8"))
     for item, content in checked_sources(ROOT / "tools/licenses/assets").values():
         model = ROOT / "apps/desktop/src-tauri/resources/ggml-silero-v5.1.2.bin"

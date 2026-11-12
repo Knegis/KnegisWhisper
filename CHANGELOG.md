@@ -5,6 +5,8 @@ version, supported platforms, installation requirements and known limitations.
 
 ## Unreleased
 
+- Use Ndot-57 for compact labels and dates, keeping Doto for the meeting clock and other large numeric displays.
+
 - Keep a page-shaped loading layout when opening Dictation or Meetings, with a brief fade and reduced-motion support (KNEG-547).
 
 - Return to the original task or note when closing Settings, while protecting unsaved changes (KNEG-548).

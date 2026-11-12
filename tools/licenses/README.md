@@ -15,8 +15,10 @@ The Rust inventory uses the desktop manifest and tauri/custom-protocol feature.
 Original packaged license and notice files supplement cargo-about's detected texts.
 A missing original attribution fails generation unless a version-specific notice is
 recorded under overrides/. Those records include immutable upstream URLs and SHA-256,
-taken from each crate's packaged .cargo_vcs_info.json revision. Fonts retain their OFL
-texts. Silero's converted bytes are checked against the publisher's pinned model hash;
+taken from each crate's packaged .cargo_vcs_info.json revision. Font license and
+provenance texts in `apps/desktop/src/fonts/*.txt` are included verbatim; Ndot 57's
+notice records its restrictive embedded terms, not an open-source license grant.
+Silero's converted bytes are checked against the publisher's pinned model hash;
 assets/sources.json records upstream license and conversion-card provenance.
 
 The frontend build writes `apps/desktop/.notice-build/dependency-notices.json`
