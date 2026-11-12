@@ -508,10 +508,7 @@ impl FindSpeech for SpeechFinder {
             .await
             .map_err(|err| err.to_string())?;
         let staged = unique_wav_path(&self.temp_dir, "speech-input");
-        let _scratch = ScratchWav(staged.clone());
-        tokio::fs::write(&staged, wav)
-            .await
-            .map_err(|err| err.to_string())?;
+        let _scratch = ScratchWav::write(staged.clone(), wav).await?;
 
         let mut command = tokio::process::Command::new(&self.tool);
         command

@@ -23,13 +23,18 @@ export type Participant = { displayName: string | null; email: string | null };
  * leaves U+0085, so an address could be one person here and another there.
  */
 const SPACE = "\\t\\n\\v\\f\\r \\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000";
-const EDGE_SPACE = new RegExp(`^[${SPACE}]+|[${SPACE}]+$`, "g");
 /** Whitespace anywhere in a string, as `char::is_whitespace` finds it. */
 export const HAS_SPACE = new RegExp(`[${SPACE}]`);
 
 /** `value` without the whitespace Rust's `trim` strips from either end. */
 export function trimSpace(value: string): string {
-  return value.replace(EDGE_SPACE, "");
+  // Scan only the edges. An unanchored trailing-whitespace regex retries
+  // overlapping suffixes in a large imported name's interior whitespace.
+  let start = 0;
+  let end = value.length;
+  while (start < end && HAS_SPACE.test(value.charAt(start))) start += 1;
+  while (end > start && HAS_SPACE.test(value.charAt(end - 1))) end -= 1;
+  return value.slice(start, end);
 }
 
 /** `value` trimmed, when it is text with something left; `null` otherwise. */

@@ -25,7 +25,7 @@ reqwest.workspace = true
 # `sherpa-onnx-offline` is a one-shot CLI rather than a server: each
 # transcription spawns a fresh child and writes its input to a temp file,
 # which needs tokio's process and fs features outside of tests.
-tokio = { workspace = true, features = ["process", "fs"] }
+tokio = { workspace = true, features = ["process", "fs", "io-util"] }
 
 kw-network-policy.workspace = true
 kw-provider-registry.workspace = true

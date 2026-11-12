@@ -229,7 +229,7 @@ impl SherpaStream {
 
         let launch = Launch {
             executable,
-            args: build_args(&files, chosen, &log_path()),
+            args: build_args(&files, chosen, &log_path()?),
             port: chosen,
         };
 
@@ -398,8 +398,10 @@ fn help_supports_loopback_bind(help: &str) -> bool {
 }
 
 /// Where the server's own log goes.
-fn log_path() -> PathBuf {
-    paths::audio_temp_dir().join("sherpa-stream.log")
+fn log_path() -> Result<PathBuf, String> {
+    Ok(paths::audio_temp_dir()
+        .map_err(|e| e.to_string())?
+        .join("sherpa-stream.log"))
 }
 
 /// Find the streaming server, which lives in the `sherpa` sidecar's directory.

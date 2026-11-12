@@ -178,18 +178,57 @@ fn machine_wide_cache_dir() -> PathBuf {
 
 /// Scratch directory for in-flight audio.
 ///
+/// Creates or verifies a private directory, separated by user and profile.
+/// An ASCII user data directory is preferred; otherwise a private child of
+/// ProgramData or /var/tmp is used. The legacy shared audio directory is never
+/// reused. Refuses insecure preexisting paths before returning a writable path.
+///
 /// The other of the two things the rule applies to, and measured rather than
 /// assumed: `sherpa-onnx-offline` takes the wav as an argument and answers
 /// `Failed to read '...'` when its path holds a non-ASCII character, while the
 /// same file under a path with a space in it transcribes.
-#[must_use]
-pub fn audio_temp_dir() -> PathBuf {
-    let preferred = data_dir().join("audio");
-    if is_native_readable(&preferred) {
-        preferred
-    } else {
-        machine_wide_cache_dir().join("audio")
-    }
+pub fn audio_temp_dir() -> std::io::Result<PathBuf> {
+    // Keeping the guard for the process lifetime also pins Windows ancestors
+    // while ffmpeg, sherpa and cancellation cleanup use ordinary paths.
+    static ROOT: std::sync::OnceLock<
+        Result<kw_security::private_directory::PrivateDirectory, String>,
+    > = std::sync::OnceLock::new();
+    let result = ROOT.get_or_init(|| {
+        let profile = data_dir();
+        let parent = if is_native_readable(&profile) {
+            profile.clone()
+        } else {
+            #[cfg(windows)]
+            {
+                PathBuf::from(
+                    std::env::var_os("ProgramData").unwrap_or_else(|| "C:\\ProgramData".into()),
+                )
+            }
+            #[cfg(unix)]
+            {
+                PathBuf::from("/var/tmp")
+            }
+            #[cfg(not(any(windows, unix)))]
+            {
+                return Err("private audio scratch is unsupported on this platform".into());
+            }
+        };
+        if !is_native_readable(&parent) {
+            return Err("the private audio scratch location must have an ASCII path".into());
+        }
+        let name = if parent == profile {
+            // The containing profile already separates users and profiles.
+            // Keep the native tool's file arguments short for ordinary paths.
+            "audio-private-v1".to_owned()
+        } else {
+            kw_security::private_directory::scratch_name(&profile)?
+        };
+        kw_security::private_directory::PrivateDirectory::create(&parent, &name)
+    });
+    result
+        .as_ref()
+        .map(|root| root.path().to_owned())
+        .map_err(|e| std::io::Error::other(e.clone()))
 }
 
 #[cfg(test)]

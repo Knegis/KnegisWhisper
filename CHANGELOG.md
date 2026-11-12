@@ -7,6 +7,18 @@ version, supported platforms, installation requirements and known limitations.
 
 - Align settings labels and fields, use consistent control sizes and readable form values, keep company-account labels and hints visible, and show filled actions in the unsaved-settings dialog (KNEG-550).
 
+- Keep scratch audio in a verified private directory for each user and profile, including accounts whose names contain non-ASCII characters.
+
+- Bind custom server keys to their configured server addresses. Existing custom keys must be re-entered in Settings > Providers; changing a server address also requires re-entering the key.
+
+- Escape terminal control characters when displaying notes and transcripts in the CLI; preserve original content in pipes and exported files.
+
+- Reject import paths that were not selected in the file picker before accessing their filesystem.
+
+- Keep opening imported notes responsive when participant fields contain long runs of whitespace.
+
+- Reject malformed Corti environment settings before sending credentials or opening a connection.
+
 - Use Ndot-57 for compact labels and dates, keeping Doto for the meeting clock and other large numeric displays.
 
 - Keep a page-shaped loading layout when opening Dictation or Meetings, with a brief fade and reduced-motion support (KNEG-547).

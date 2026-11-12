@@ -709,6 +709,7 @@ async fn step(
             .await
     };
     let text = result.map_err(|error| match error {
+        kw_reasoning_core::ChatError::Credential(_) => "The custom key is not available for this server. Check the server addresses, then re-enter the key in Settings > Providers.".to_owned(),
         kw_reasoning_core::ChatError::MissingCredential { .. } => "The selected provider has no stored credential. Configure it in Providers and retry.".to_owned(),
         kw_reasoning_core::ChatError::NoContent { .. } => "The model returned no summary. Retry or choose a different model.".to_owned(),
         kw_reasoning_core::ChatError::ProviderRejected { status, .. } => format!("The summary provider rejected the request (HTTP {status}). Check the selected model and provider settings."),

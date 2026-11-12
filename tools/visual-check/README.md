@@ -16,6 +16,10 @@ so it takes `--boards` and `--runtime`. `screen-sweep.mjs` walks every screen at
 theme, and `floating-windows.mjs` every floating window state at its real size. Each leaves a
 contact sheet to look at.
 
+The comparison server rejects paths and symlinks outside the selected board and
+screenshot directories. The selected runtime is the only additional file it serves.
+Run its fixture checks with `node --test tools/visual-check/design-server.test.mjs`.
+
 ```powershell
 node tools/visual-check/design-compare.mjs --url http://127.0.0.1:5197/ --boards <folder> --runtime <dc-runtime.js> --out target/design-compare/run --only Dictation --sizes 1280x1400
 node tools/visual-check/screen-sweep.mjs http://127.0.0.1:5197/ target/sweep-720 720 520

@@ -761,23 +761,27 @@ pub fn credential_slots(state: State<'_, AppState>) -> CmdResult<Vec<CredentialS
 /// The value goes straight to the OS credential store and is never written to
 /// SQLite, a settings row, or a log line.
 #[tauri::command]
-pub fn provider_credential_set(
+pub async fn provider_credential_set(
     state: State<'_, AppState>,
     slot: String,
     value: String,
 ) -> CmdResult<()> {
+    store_provider_credential(&state, &slot, value).await
+}
+
+async fn store_provider_credential(state: &AppState, slot: &str, value: String) -> CmdResult<()> {
     let registry = kw_provider_registry::registry().map_err(|e| fail("provider registry", e))?;
 
     // A frontend may only write to a slot the registry declares. Otherwise the
     // command is an arbitrary write into the user's keychain namespace.
-    if !registry.credential_slots().contains(slot.as_str()) {
+    if !registry.credential_slots().contains(slot) {
         return Err(format!(
             "{slot:?} is not a credential slot this application uses"
         ));
     }
 
     let key =
-        kw_security::KeyRef::new(&slot).ok_or_else(|| format!("{slot:?} is not a valid slot"))?;
+        kw_security::KeyRef::new(slot).ok_or_else(|| format!("{slot:?} is not a valid slot"))?;
 
     if value.trim().is_empty() {
         return state
@@ -786,10 +790,149 @@ pub fn provider_credential_set(
             .map_err(|e| fail("could not remove the credential", e));
     }
 
+    let supplied = kw_security::Secret::new(value);
+    let stored = if slot == "custom" {
+        let endpoints = configured_custom_endpoints(state.db()).await?;
+        let refs: Vec<_> = endpoints.iter().map(String::as_str).collect();
+        kw_security::endpoint_credential::bind_custom(&supplied, &refs)
+            .map_err(|e| fail("could not authorize the custom key", e))?
+    } else {
+        supplied
+    };
     state
         .credentials()
-        .set(&key, &kw_security::Secret::new(value))
+        .set(&key, &stored)
         .map_err(|e| fail("could not store the credential", e))
+}
+
+/// Snapshot routing settings only while saving a fresh value supplied by the
+/// user. Neither a settings write nor a request may rebind an existing key.
+async fn configured_custom_endpoints(db: &kw_storage::Db) -> CmdResult<Vec<String>> {
+    let transcription: kw_transcription_core::RouteSettings = kw_storage::settings::get_or(
+        db.pool(),
+        crate::dictation::ROUTE_SETTINGS_KEY,
+        Default::default(),
+    )
+    .await
+    .map_err(|e| fail("could not read transcription settings", e))?;
+    let cleanup: crate::reasoning::CleanupSettings = kw_storage::settings::get_or(
+        db.pool(),
+        crate::reasoning::CLEANUP_SETTINGS_KEY,
+        Default::default(),
+    )
+    .await
+    .map_err(|e| fail("could not read cleanup settings", e))?;
+    let summaries: kw_notes_core::summary::SummarySettings = kw_storage::settings::get_or(
+        db.pool(),
+        crate::summaries::SUMMARY_SETTINGS_KEY,
+        Default::default(),
+    )
+    .await
+    .map_err(|e| fail("could not read summary settings", e))?;
+    let transcription_url = (transcription
+        .cloud_transcription_provider
+        .as_deref()
+        .map(str::trim)
+        == Some("custom"))
+    .then_some(transcription.cloud_transcription_base_url)
+    .flatten();
+    Ok([
+        transcription_url,
+        cleanup.self_hosted_url,
+        summaries.self_hosted_url,
+    ]
+    .into_iter()
+    .flatten()
+    .map(|url| url.trim().to_owned())
+    .filter(|url| !url.is_empty())
+    .collect())
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod custom_credential_tests {
+    use super::*;
+    use kw_security::{endpoint_credential::get_for_endpoint, KeyRef, Secret};
+
+    #[tokio::test]
+    async fn only_a_fresh_key_authorizes_the_configured_servers() {
+        let state = AppState::in_memory().await.unwrap();
+        let slot = KeyRef::new("custom").unwrap();
+        assert!(
+            store_provider_credential(&state, "custom", "fresh-key".into())
+                .await
+                .is_err()
+        );
+        let settings = [
+            (
+                crate::dictation::ROUTE_SETTINGS_KEY,
+                serde_json::json!({"cloudTranscriptionProvider":" custom ", "cloudTranscriptionBaseUrl":"https://speech.example/v1"}),
+            ),
+            (
+                crate::reasoning::CLEANUP_SETTINGS_KEY,
+                serde_json::json!({"selfHostedUrl":"https://cleanup.example/v1"}),
+            ),
+            (
+                crate::summaries::SUMMARY_SETTINGS_KEY,
+                serde_json::json!({"selfHostedUrl":"https://summaries.example/v1"}),
+            ),
+        ];
+        for (key, value) in &settings {
+            kw_storage::settings::set(state.db().pool(), key, value)
+                .await
+                .unwrap();
+        }
+        state
+            .credentials()
+            .set(&slot, &Secret::new("legacy".into()))
+            .unwrap();
+        assert!(
+            get_for_endpoint(state.credentials(), &slot, "https://cleanup.example/v1").is_err()
+        );
+        store_provider_credential(&state, "custom", "fresh-key".into())
+            .await
+            .unwrap();
+        for url in [
+            "https://speech.example/v1",
+            "https://cleanup.example/v2",
+            "https://summaries.example/v1",
+        ] {
+            assert_eq!(
+                get_for_endpoint(state.credentials(), &slot, url)
+                    .unwrap()
+                    .expose(),
+                "fresh-key"
+            );
+        }
+        // The generic settings store is writable by the renderer. It cannot
+        // extend the authority already saved in the vault.
+        kw_storage::settings::set(
+            state.db().pool(),
+            crate::reasoning::CLEANUP_SETTINGS_KEY,
+            &serde_json::json!({"selfHostedUrl":"https://changed.example/v1"}),
+        )
+        .await
+        .unwrap();
+        assert!(
+            get_for_endpoint(state.credentials(), &slot, "https://changed.example/v1").is_err()
+        );
+        store_provider_credential(&state, "custom", "replacement".into())
+            .await
+            .unwrap();
+        assert_eq!(
+            get_for_endpoint(state.credentials(), &slot, "https://changed.example/v1")
+                .unwrap()
+                .expose(),
+            "replacement"
+        );
+        assert!(
+            get_for_endpoint(state.credentials(), &slot, "https://cleanup.example/v1").is_err()
+        );
+        store_provider_credential(&state, "custom", "".into())
+            .await
+            .unwrap();
+        assert!(!state.credentials().contains(&slot));
+    }
 }
 
 /// Whether a credential exists for a slot. Never returns the value.
@@ -895,14 +1038,19 @@ const UNGRANTED_PATH: &str = "this file was not chosen through the import dialog
 /// comment; a time-tuned rule gets one of its two cases wrong whichever way it
 /// is set, and identity gets both right.
 ///
-/// **The key is a canonicalised [`PathBuf`], never the string that crossed the
-/// boundary.** [`pick_import_file`] hands back `path.display().to_string()`,
-/// which is lossy. The consequence, stated plainly: a path whose name does not
-/// survive `display()` cannot be imported. That is not a regression — today
-/// `media::check_importable_file`'s `is_file()` already fails on such a string
-/// — but it becomes a deliberate refusal rather than an accident.
+/// **An exact picker string is checked before any filesystem access.** Each
+/// selection also holds its canonical target; only a known string may be
+/// resolved again, and it must still resolve to that target. This prevents an
+/// ungranted UNC path from causing network access during canonicalization.
+/// Non-UTF-8 selections are refused rather than returning a lossy alias.
 #[derive(Debug, Default)]
-pub struct DialogGrants(std::sync::Mutex<VecDeque<PathBuf>>);
+pub struct DialogGrants(std::sync::Mutex<VecDeque<DialogGrant>>);
+
+#[derive(Debug)]
+struct DialogGrant {
+    selected: String,
+    canonical: PathBuf,
+}
 
 impl DialogGrants {
     /// The one canonical form both the grant and the check go through.
@@ -916,6 +1064,15 @@ impl DialogGrants {
 
     /// Remember `path` as dialog-returned, and answer with its canonical form.
     pub(crate) fn grant(&self, path: &Path) -> std::io::Result<PathBuf> {
+        let selected = path
+            .to_str()
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "the selected path is not valid UTF-8",
+                )
+            })?
+            .to_owned();
         let key = Self::key(path)?;
 
         let mut held = self
@@ -926,8 +1083,11 @@ impl DialogGrants {
         // Re-picking a path moves it to the newest end rather than leaving it
         // where it was. The file just chosen is the one about to be imported,
         // so it must not be the one the bound evicts.
-        held.retain(|existing| existing != &key);
-        held.push_back(key.clone());
+        held.retain(|existing| existing.selected != selected);
+        held.push_back(DialogGrant {
+            selected,
+            canonical: key.clone(),
+        });
         while held.len() > MAX_DIALOG_GRANTS {
             held.pop_front();
         }
@@ -937,32 +1097,115 @@ impl DialogGrants {
 
     /// The canonical path to import, or a refusal.
     ///
-    /// The whole decision, and pure apart from the filesystem lookup
-    /// `canonicalize` needs: it takes no `AppHandle`, so it is unit-testable on
-    /// its own. That is the same reason `media::check_importable_file` and
-    /// [`import_pick_dialog`] are separate functions rather than inline
-    /// branches. The exported command boundary is covered separately with
-    /// Tauri's mock webview runtime.
-    ///
-    /// A path that cannot be canonicalised and a path nobody granted get the
-    /// *same* refusal, deliberately. Telling them apart would answer "does this
-    /// file exist" for any path a compromised renderer cared to name, and a
-    /// path that will not canonicalise cannot be in the set in any case, since
-    /// every member of it came out of `canonicalize`.
+    /// Unknown strings are refused in memory, without filesystem resolution.
+    /// A selected path that disappeared or now resolves elsewhere gets the same
+    /// refusal. Repeat imports remain authorized for the lifetime of the grant.
     pub fn authorise(&self, path: &str) -> CmdResult<PathBuf> {
-        let Ok(key) = Self::key(Path::new(path)) else {
-            return Err(UNGRANTED_PATH.to_owned());
-        };
+        self.authorise_with(path, Self::key)
+    }
 
-        if self
+    fn authorise_with(
+        &self,
+        path: &str,
+        resolve: impl FnOnce(&Path) -> std::io::Result<PathBuf>,
+    ) -> CmdResult<PathBuf> {
+        let expected = self
             .0
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .contains(&key)
-        {
+            .iter()
+            .find(|grant| grant.selected == path)
+            .map(|grant| grant.canonical.clone())
+            .ok_or_else(|| UNGRANTED_PATH.to_owned())?;
+        let Ok(key) = resolve(Path::new(path)) else {
+            return Err(UNGRANTED_PATH.to_owned());
+        };
+
+        if key == expected {
             Ok(key)
         } else {
             Err(UNGRANTED_PATH.to_owned())
+        }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::panic)]
+mod dialog_grant_tests {
+    use super::*;
+
+    #[test]
+    fn selected_paths_are_rechecked_and_keep_each_explicitly_picked_alias() {
+        let dir = tempfile::tempdir().unwrap();
+        let selected = dir.path().join("picked.wav");
+        std::fs::write(&selected, b"synthetic audio").unwrap();
+        let alias = dir.path().join(".").join("picked.wav");
+        let grants = DialogGrants::default();
+        let canonical = grants.grant(&selected).unwrap();
+        grants.grant(&alias).unwrap();
+        for path in [&selected, &alias] {
+            assert_eq!(grants.authorise(path.to_str().unwrap()).unwrap(), canonical);
+        }
+        let mut calls = 0;
+        let changed = grants.authorise_with(selected.to_str().unwrap(), |_| {
+            calls += 1;
+            Ok(dir.path().join("different-target.wav"))
+        });
+        assert_eq!(calls, 1);
+        assert_eq!(changed.unwrap_err(), UNGRANTED_PATH);
+        std::fs::remove_file(&selected).unwrap();
+        assert_eq!(
+            grants.authorise(selected.to_str().unwrap()).unwrap_err(),
+            UNGRANTED_PATH
+        );
+    }
+
+    #[test]
+    fn repicking_refreshes_the_grant_without_consuming_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let grants = DialogGrants::default();
+        let first = dir.path().join("0");
+        for n in 0..MAX_DIALOG_GRANTS {
+            let path = dir.path().join(n.to_string());
+            std::fs::write(&path, b"fixture").unwrap();
+            grants.grant(&path).unwrap();
+        }
+        grants.grant(&first).unwrap();
+        let newest = dir.path().join("newest");
+        std::fs::write(&newest, b"fixture").unwrap();
+        grants.grant(&newest).unwrap();
+        assert!(grants.authorise(first.to_str().unwrap()).is_ok());
+        assert!(grants.authorise(first.to_str().unwrap()).is_ok());
+        assert!(grants
+            .authorise(dir.path().join("1").to_str().unwrap())
+            .is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_lossy_picker_name_is_not_granted() {
+        use std::os::unix::ffi::OsStringExt;
+        let path = PathBuf::from(std::ffi::OsString::from_vec(vec![b'/', 0xff]));
+        assert!(DialogGrants::default().grant(&path).is_err());
+    }
+
+    #[test]
+    fn ungranted_paths_never_reach_the_filesystem() {
+        let grants = DialogGrants::default();
+        for path in [
+            r"\\attacker.invalid\share\audio.wav",
+            "//attacker.invalid/share/audio.wav",
+            r"\\?\UNC\attacker.invalid\share\audio.wav",
+            r"\\.\pipe\untrusted",
+            r"C:\unselected\file.wav",
+            "/unselected/file.wav",
+        ] {
+            let err = grants
+                .authorise_with(path, |_| {
+                    panic!("ungranted input reached filesystem resolution");
+                })
+                .unwrap_err();
+            assert_eq!(err, UNGRANTED_PATH);
         }
     }
 }
@@ -1051,8 +1294,8 @@ fn import_pick_dialog(
 /// need, so this command still hands the chosen path *back* to the renderer,
 /// which holds it in state and passes it as a plain string to a separate
 /// command (`media_import_audio`, `media_import_video`, `import_openwhispr`)
-/// on a later click. What makes that safe is [`DialogGrants`]: the canonical
-/// form of every path this command returns is recorded, and those three
+/// on a later click. What makes that safe is [`DialogGrants`]: the exact
+/// returned string and its canonical target are recorded, and those three
 /// commands authorise against that set before reading anything. A path no
 /// dialog produced is refused.
 ///
@@ -1098,11 +1341,10 @@ pub async fn pick_import_file(
         .grant(&path)
         .map_err(|e| fail("could not resolve the chosen path", e))?;
 
-    // The *display* string, not the canonical one the grant is keyed on: the
+    // The display string is recorded alongside its canonical target: the
     // screen shows this path to the person who picked it and derives the note
     // title from its file name, and Windows' verbatim `\\?\C:\...` form is not
-    // something to put in front of anyone. `authorise` canonicalises again on
-    // the way back in, so the two still meet.
+    // something to put in front of anyone. `grant` already refused lossy names.
     Ok(Some(path.display().to_string()))
 }
 

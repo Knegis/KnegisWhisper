@@ -28,7 +28,9 @@
 
 use std::fmt;
 
+pub mod endpoint_credential;
 pub mod file_acl;
+pub mod private_directory;
 pub mod token;
 
 pub use file_acl::{PathKind, Permissions};
@@ -121,6 +123,12 @@ pub enum CredentialError {
 
     #[error("credential slot name is not valid")]
     InvalidSlot,
+
+    #[error("the custom key is not authorized for this server address. Configure the server addresses, then re-enter the key in Settings > Providers.")]
+    UnapprovedEndpoint,
+
+    #[error("configure a valid HTTP(S) server address without a username or password before saving the custom key")]
+    InvalidEndpoint,
 
     /// The platform has no usable credential store. On Linux this means no
     /// Secret Service provider is running; we say so rather than silently

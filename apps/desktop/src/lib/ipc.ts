@@ -1136,8 +1136,8 @@ export async function importOpenWhispr(path: string): Promise<ImportReport> {
  * The renderer has no independent way to obtain a path here -- there is no
  * filesystem or dialog capability, so the only path this screen can ever
  * hold is one a real OS dialog returned from this call. **And that is now
- * checked rather than assumed.** Rust records the canonical form of every
- * path it returns from here, for as long as the app runs, and the three
+ * checked rather than assumed.** Rust records each exact returned string and
+ * its canonical target for as long as the app runs, and the three
  * commands that take a path -- `importAudioFile`, `importVideoFile` and
  * `importOpenWhispr` -- refuse a path that is not in that set. So a path this
  * screen holds can be imported, re-imported after a failure, and imported
@@ -1145,7 +1145,7 @@ export async function importOpenWhispr(path: string): Promise<ImportReport> {
  *
  * Two consequences worth knowing on this side. The string returned is the
  * display form, which is what to show the user and what to derive a note
- * title from -- Rust canonicalises it again on the way back in, so do not
+ * title from -- Rust checks the exact string before resolving it, so do not
  * rewrite or normalise it here or it will stop matching. And a path whose
  * name does not survive lossy conversion cannot be imported at all; it is
  * refused rather than silently read.

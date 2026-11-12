@@ -144,6 +144,9 @@ jobs:
       - name: Dev-bundle audit self-tests
         run: node --test tools/dev-bundle-audit/scan.test.mjs
 
+      - name: Visual comparison server boundary
+        run: node --test tools/visual-check/design-server.test.mjs
+
       # The baseline is generated from an OpenWhispr checkout that CI does not
       # have, so --check cannot run here. Assert instead that it is valid JSON
       # and still pinned to the commit the manifest claims.

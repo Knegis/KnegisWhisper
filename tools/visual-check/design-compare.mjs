@@ -17,9 +17,9 @@
  * "measured in headless Edge against dev fixtures, not in the Tauri window".
  * It uses a spare port: never the running app's 5183.
  */
-import { createServer } from "node:http";
-import { readFile, mkdir } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { serve } from "./design-server.mjs";
 
 import { killBrowser, launchEdge } from "./browser.mjs";
 import { connectCdp } from "./cdp.mjs";
@@ -66,40 +66,6 @@ const SCREENS = {
   Diagnostics: SETTINGS("Diagnostics"),
 };
 
-/** Serves the boards, the runtime under the name a board asks for, and the shots. */
-function serve({ boards, runtime, out }) {
-  const types = { ".html": "text/html; charset=utf-8", ".js": "text/javascript", ".png": "image/png" };
-  const server = createServer(async (request, response) => {
-    try {
-      const path = decodeURIComponent(new URL(request.url, "http://x").pathname);
-      if (path === "/pair") {
-        const query = new URL(request.url, "http://x").searchParams;
-        response.writeHead(200, { "content-type": types[".html"] });
-        response.end(`<!doctype html><meta charset="utf-8"><style>
-          body{margin:0;background:#2a2a2e;color:#fff;font:14px Arial}
-          .p{display:flex;gap:16px;padding:12px;align-items:flex-start}
-          figure{margin:0}figcaption{padding:0 0 8px}img{display:block}
-        </style><div class="p">
-          <figure><figcaption>Approved design</figcaption><img src="/shots/${query.get("a")}"></figure>
-          <figure><figcaption>App</figcaption><img src="/shots/${query.get("b")}"></figure>
-        </div>`);
-        return;
-      }
-      let file;
-      if (path.endsWith("/support.js")) file = runtime;
-      else if (path.startsWith("/shots/")) file = join(out, path.slice("/shots/".length));
-      else file = join(boards, path);
-      const body = await readFile(file);
-      const type = types[file.slice(file.lastIndexOf("."))] ?? "application/octet-stream";
-      response.writeHead(200, { "content-type": type });
-      response.end(body);
-    } catch {
-      response.writeHead(404);
-      response.end("not found");
-    }
-  });
-  return new Promise((done) => server.listen(0, "127.0.0.1", () => done({ server, port: server.address().port })));
-}
 
 async function go(client, url, settle) {
   await client.send("Page.navigate", { url });
