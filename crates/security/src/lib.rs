@@ -30,6 +30,7 @@ use std::fmt;
 
 pub mod endpoint_credential;
 pub mod file_acl;
+pub mod private_directory;
 pub mod token;
 
 pub use file_acl::{PathKind, Permissions};

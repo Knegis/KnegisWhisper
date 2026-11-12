@@ -667,7 +667,10 @@ async fn run_cancellable_sidecar(
 /// A fresh, empty scratch directory for one import, under the same
 /// native-binary-safe root ffmpeg's model cache uses.
 fn new_scratch_dir(id: &str) -> Result<PathBuf, MediaImportError> {
-    let dir = kw_storage::paths::audio_temp_dir().join("import").join(id);
+    let root = kw_storage::paths::audio_temp_dir().map_err(|source| {
+        MediaImportError::io(std::path::Path::new("private audio scratch"), source)
+    })?;
+    let dir = root.join("import").join(id);
     std::fs::create_dir_all(&dir).map_err(|source| MediaImportError::io(&dir, source))?;
     Ok(dir)
 }

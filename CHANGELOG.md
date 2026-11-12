@@ -5,6 +5,8 @@ version, supported platforms, installation requirements and known limitations.
 
 ## Unreleased
 
+- Keep scratch audio in a verified private directory for each user and profile, including accounts whose names contain non-ASCII characters.
+
 - Bind custom server keys to their configured server addresses. Existing custom keys must be re-entered in Settings > Providers; changing a server address also requires re-entering the key.
 
 - Escape terminal control characters when displaying notes and transcripts in the CLI; preserve original content in pipes and exported files.

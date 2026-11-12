@@ -65,6 +65,17 @@ consent and refresh are unverified; see [the owner runbook](CALENDAR_PROVIDER_SE
 
 ## Network
 
+Scratch audio uses a private directory created with restrictive permissions:
+Unix mode 0700 and the current UID, or a protected Windows DACL for the current
+user, System and Administrators. Existing insecure directories and links are
+refused, never taken over. Windows ancestor handles remain pinned while native
+tools write audio and logs. WAV staging uses exclusive creation and Unix mode
+0600. The stable ASCII directory name separates users and profiles and supports
+restart cleanup. Non-ASCII profiles use a private child of ProgramData or
+/var/tmp; model caches are unchanged. Legacy shared scratch directories are not
+reused or recursively removed because they can contain other users' files.
+This protection does not retroactively remove recordings left there by older builds.
+
 Every request declares a purpose; there is no unlabelled path. The webview has no HTTP capability
 and no permission to reach arbitrary hosts. There is no startup request, no telemetry, and no
 hidden fallback: a provider failure fails the operation rather than quietly trying somewhere else.

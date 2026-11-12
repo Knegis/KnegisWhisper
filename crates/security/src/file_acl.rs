@@ -49,6 +49,11 @@
 
 use std::path::Path;
 
+#[cfg(windows)]
+pub(crate) use windows_impl::{
+    create_private_directory, current_user_sid, verify_private_directory_handle,
+};
+
 /// Whether the path being protected is a file or a directory holding one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PathKind {
@@ -571,6 +576,99 @@ mod windows_impl {
             let _ = CloseHandle(token);
         }
         outcome
+    }
+
+    pub(crate) fn current_user_sid() -> Result<String, String> {
+        sid_string(token_user()?.psid())
+    }
+
+    /// Supply a protected DACL at creation, before any external writer can
+    /// reach the directory. Existing paths are checked by the pinned handle.
+    pub(crate) fn create_private_directory(path: &Path) -> Result<(), String> {
+        use windows::Win32::Foundation::ERROR_ALREADY_EXISTS;
+        use windows::Win32::Security::Authorization::{
+            ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
+        };
+        use windows::Win32::Security::SECURITY_ATTRIBUTES;
+        use windows::Win32::Storage::FileSystem::CreateDirectoryW;
+        // The caller pins the parent first. Canonicalizing it here therefore
+        // cannot follow a swapped ancestor, and gives Win32 its extended-path
+        // form for long developer profiles and ordinary long account paths.
+        let api_path = path
+            .parent()
+            .ok_or("scratch directory has no parent")?
+            .canonicalize()
+            .map_err(|e| e.to_string())?
+            .join(path.file_name().ok_or("scratch directory has no name")?);
+        let wide = wide(&api_path);
+        let user = current_user_sid()?;
+        let sddl = format!("D:P(A;OICI;FA;;;{user})(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)");
+        let encoded: Vec<_> = sddl.encode_utf16().chain(std::iter::once(0)).collect();
+        let mut descriptor = PSECURITY_DESCRIPTOR::default();
+        // SAFETY: the SDDL string is terminated and the returned allocation is
+        // held until CreateDirectoryW completes, then freed exactly once.
+        unsafe {
+            ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                PCWSTR(encoded.as_ptr()),
+                SDDL_REVISION_1,
+                &mut descriptor,
+                None,
+            )
+        }
+        .map_err(|e| e.to_string())?;
+        let attributes = SECURITY_ATTRIBUTES {
+            nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+            lpSecurityDescriptor: descriptor.0,
+            bInheritHandle: false.into(),
+        };
+        // SAFETY: both the path and security attributes outlive this call.
+        let result = unsafe { CreateDirectoryW(PCWSTR(wide.as_ptr()), Some(&attributes)) };
+        // SAFETY: descriptor is the allocation returned above and is no longer used.
+        unsafe {
+            let _ = LocalFree(HLOCAL(descriptor.0));
+        }
+        match result {
+            Ok(()) => Ok(()),
+            Err(e) if e.code() == ERROR_ALREADY_EXISTS.to_hresult() => Ok(()),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
+    pub(crate) fn verify_private_directory_handle(file: &std::fs::File) -> Result<(), String> {
+        use std::os::windows::io::AsRawHandle as _;
+        use windows::Win32::Security::Authorization::GetSecurityInfo;
+        let mut owner = PSID::default();
+        let mut dacl: *mut ACL = std::ptr::null_mut();
+        let mut descriptor = PSECURITY_DESCRIPTOR::default();
+        // SAFETY: file remains open; every returned pointer is copied before
+        // freeing the descriptor. The caller has rejected reparse points.
+        let status = unsafe {
+            GetSecurityInfo(
+                HANDLE(file.as_raw_handle()),
+                SE_FILE_OBJECT,
+                OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+                Some(&mut owner),
+                None,
+                Some(&mut dacl),
+                None,
+                Some(&mut descriptor),
+            )
+        };
+        check(status, "GetSecurityInfo")?;
+        let facts = collect(owner, dacl, descriptor);
+        // SAFETY: the descriptor was allocated by GetSecurityInfo.
+        unsafe {
+            let _ = LocalFree(HLOCAL(descriptor.0));
+        }
+        let verdict = super::classify(&facts?, &requested(&grants()?, PathKind::Directory)?);
+        if verdict.is_confirmed() {
+            Ok(())
+        } else {
+            Err(format!(
+                "scratch directory permissions refused: {}",
+                verdict.explain()
+            ))
+        }
     }
 
     #[cfg(test)]

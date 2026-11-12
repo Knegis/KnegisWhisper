@@ -396,7 +396,7 @@ pub fn run() -> anyhow::Result<()> {
             tauri::async_runtime::block_on(kw_storage::jobs::interrupt_unfinished(db.pool()))?;
             tauri::async_runtime::block_on(media_import.recover_jobs())?;
             tauri::async_runtime::block_on(automation::clean_job_scratch(&db,
-                &kw_storage::paths::audio_temp_dir().join("import")))?;
+                &kw_storage::paths::audio_temp_dir()?.join("import")))?;
             let uploads = kw_storage::paths::database_path().with_file_name("api-uploads");
             automation::clean_uploads(&uploads)?;
             let api = std::sync::Arc::new(local_api::LocalApiRuntime::new(db)
