@@ -206,13 +206,18 @@ pub fn is_valid_corti_environment(environment: &str) -> bool {
 }
 
 /// Corti's token endpoint for one environment.
-#[must_use]
-pub fn corti_token_endpoint(environment: &str) -> String {
-    format!(
+pub fn corti_token_endpoint(environment: &str) -> Result<String, TranscriptionError> {
+    if !is_valid_corti_environment(environment) {
+        return Err(TranscriptionError::ClientNotImplemented {
+            provider: "corti".to_owned(),
+            reason: "the stored environment is not a DNS label".to_owned(),
+        });
+    }
+    Ok(format!(
         "https://auth.{}.corti.app/realms/{}/protocol/openid-connect/token",
         environment.trim(),
         environment.trim()
-    )
+    ))
 }
 
 /// The form body that exchanges client credentials for an access token.
@@ -479,12 +484,21 @@ mod tests {
     fn corti_refuses_environments_that_can_change_the_url_authority() {
         for environment in [
             "x@attacker%2ecom#",
+            "attacker.example/",
+            "eu\\path",
+            "eu?query",
+            "eu#fragment",
+            "eu%2fpath",
             "eu.corti.app",
             "-eu",
             "eu-",
             "eu/path",
             "eu:443",
         ] {
+            assert!(
+                corti_token_endpoint(environment).is_err(),
+                "{environment:?}"
+            );
             let config = CortiConfig {
                 environment: environment.to_owned(),
                 tenant: "tenant".to_owned(),
@@ -512,9 +526,20 @@ mod tests {
     #[test]
     fn the_corti_token_endpoint_is_scoped_to_the_environment() {
         assert_eq!(
-            corti_token_endpoint("eu"),
+            corti_token_endpoint("eu").unwrap(),
             "https://auth.eu.corti.app/realms/eu/protocol/openid-connect/token"
         );
+        for environment in [" eu ", "us-prod", "EU", &"a".repeat(63)] {
+            let endpoint = corti_token_endpoint(environment).unwrap();
+            let parsed = url::Url::parse(&endpoint).unwrap();
+            assert_eq!(
+                parsed.host_str().unwrap(),
+                format!("auth.{}.corti.app", environment.trim().to_ascii_lowercase())
+            );
+        }
+        for environment in ["", " ", "å", &"a".repeat(64)] {
+            assert!(corti_token_endpoint(environment).is_err());
+        }
     }
 
     /// The token form carries the client secret in the body, not a header.

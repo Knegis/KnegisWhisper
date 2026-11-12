@@ -456,7 +456,7 @@ impl<'a> Executor<'a> {
             .policy
             .post(
                 shaped.purpose,
-                &crate::clients::corti_token_endpoint(environment),
+                &crate::clients::corti_token_endpoint(environment)?,
             )?
             .header(
                 reqwest::header::CONTENT_TYPE,

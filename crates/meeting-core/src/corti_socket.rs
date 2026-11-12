@@ -169,17 +169,18 @@ impl CortiRealtime {
     /// Exchange the stored client secret for an access token.
     ///
     /// Called once, from `connect`, before either socket opens -- see the
-    /// module documentation. The client secret is resolved first and never
+    /// module documentation. The destination is validated before the client
+    /// secret is resolved. The secret is never
     /// bound to a variable that outlives this call; it is exposed exactly
     /// once, into the request body `corti::token_request` builds.
     async fn exchange_token(
         &self,
         config: &MeetingProviderConfig,
     ) -> Result<kw_security::Secret, MeetingError> {
+        let endpoint = corti::token_endpoint(&self.environment)?;
         let secret = corti::client_secret(&self.credentials, config.key_ref.as_ref())?;
         let form = corti::token_request(&self.tenant, &secret);
 
-        let endpoint = corti::token_endpoint(&self.environment);
         // The first of this client's two boundary crossings: an HTTPS POST
         // through `NetworkPolicy`, which validates `endpoint` against
         // `PURPOSE` before anything is sent.
@@ -461,6 +462,7 @@ async fn read(
 impl MeetingTranscriptionProvider for CortiRealtime {
     async fn connect(&mut self, config: MeetingProviderConfig) -> Result<(), MeetingError> {
         let caps = corti::prepare(&config)?;
+        (self.environment, self.tenant) = corti::scope(&self.environment, &self.tenant)?;
         self.caps = Some(caps);
 
         // Exchanged once, before either socket opens, and shared by both --
@@ -628,6 +630,52 @@ mod tests {
             keyterms: Vec::new(),
             key_ref: kw_security::KeyRef::new("corti"),
             sample_rate: 16_000,
+        }
+    }
+
+    #[derive(Debug)]
+    struct UnreadableStore;
+
+    impl CredentialStore for UnreadableStore {
+        fn get(
+            &self,
+            _: &kw_security::KeyRef,
+        ) -> Result<kw_security::Secret, kw_security::CredentialError> {
+            panic!("invalid scope must be rejected before reading credentials");
+        }
+        fn set(
+            &self,
+            _: &kw_security::KeyRef,
+            _: &kw_security::Secret,
+        ) -> Result<(), kw_security::CredentialError> {
+            panic!("the connector must not write credentials");
+        }
+        fn delete(&self, _: &kw_security::KeyRef) -> Result<(), kw_security::CredentialError> {
+            panic!("the connector must not delete credentials");
+        }
+    }
+
+    #[tokio::test]
+    async fn invalid_corti_scope_never_reads_credentials_or_connects() {
+        for (environment, tenant) in [
+            ("attacker.example/", "acme"),
+            ("eu\\path", "acme"),
+            ("eu?query", "acme"),
+            ("eu#fragment", "acme"),
+            ("eu@attacker.example", "acme"),
+            ("eu%2fpath", "acme"),
+            ("eu", " "),
+        ] {
+            let mut provider = CortiRealtime::new(
+                Arc::new(UnreadableStore),
+                NetworkPolicy::new().unwrap(),
+                environment.to_owned(),
+                tenant.to_owned(),
+            );
+            assert!(matches!(
+                provider.connect(config()).await,
+                Err(MeetingError::Rejected { .. })
+            ));
         }
     }
 

@@ -5,6 +5,8 @@ version, supported platforms, installation requirements and known limitations.
 
 ## Unreleased
 
+- Reject malformed Corti environment settings before sending credentials or opening a connection.
+
 - Use Ndot-57 for compact labels and dates, keeping Doto for the meeting clock and other large numeric displays.
 
 - Keep a page-shaped loading layout when opening Dictation or Meetings, with a brief fade and reduced-motion support (KNEG-547).
