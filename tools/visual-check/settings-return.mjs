@@ -19,7 +19,10 @@ const ready = () => waitFor(c, 'Boolean(document.querySelector(".task-grid"))');
 const sheet = () => click('.back-to-settings');
 const close = () => click('.sheet-close');
 const page = () => c.evaluate('document.querySelector("h1")?.textContent');
-const dialog = () => waitFor(c, 'Boolean(document.querySelector(".settings-drafts-dialog[open]"))');
+const dialog = async () => {
+  await waitFor(c, 'Boolean(document.querySelector(".settings-drafts-dialog[open]"))');
+  assert.equal(await c.evaluate('document.activeElement?.textContent'), 'Stay');
+};
 const returnCheck = async name => {
   await waitFor(c, `document.querySelector('button.nav-pill[aria-current="page"]')?.textContent.trim() === ${JSON.stringify(name)}`);
   await waitFor(c, 'document.activeElement?.tagName === "H1"');

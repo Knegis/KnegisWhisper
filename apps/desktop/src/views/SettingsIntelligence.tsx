@@ -150,18 +150,20 @@ function EnterpriseForm({
         ) : null}
 
         {fields.map((f) => (
+          <label className="company-field" key={f.key}>
+            <span className="company-field-label">{f.label}</span>
             <input
-              key={f.key}
               type={f.secret ? "password" : "text"}
               autoComplete="off"
               aria-label={`${status.name} ${f.label}`}
-              title={f.hint ? `${f.label} — ${f.hint}` : f.label}
-              placeholder={f.hint ? `${f.label} — ${f.hint}` : f.label}
+              aria-describedby={f.hint ? `company-${status.provider}-${f.key}-hint` : undefined}
               value={values[f.key] ?? ""}
               onChange={(e) =>
                 setValues((prev) => ({ ...prev, [f.key]: e.target.value }))
               }
             />
+            {f.hint ? <span className="company-field-hint" id={`company-${status.provider}-${f.key}-hint`}>{f.hint}</span> : null}
+          </label>
         ))}
 
         {companyDraft.feedback}

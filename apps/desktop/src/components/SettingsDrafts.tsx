@@ -16,6 +16,7 @@ export function SettingsDraftsProvider({ children }: { children: ReactNode }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const dialog = useRef<HTMLDialogElement>(null);
+  const stay = useRef<HTMLButtonElement>(null);
   const request = useCallback(async (action: () => void) => {
     if (held.current) return false;
     held.current = true;
@@ -25,7 +26,13 @@ export function SettingsDraftsProvider({ children }: { children: ReactNode }) {
     setError(null);
     return new Promise<boolean>(resolve => setPending({ action, resolve, origin }));
   }, [registry]);
-  useEffect(() => { if (pending && dialog.current && !dialog.current.open) dialog.current.showModal(); }, [pending]);
+  useEffect(() => {
+    if (pending && dialog.current && !dialog.current.open) {
+      dialog.current.showModal();
+      // showModal runs after React's autoFocus and otherwise focuses the first action.
+      stay.current?.focus();
+    }
+  }, [pending]);
   const finish = (leave: boolean) => {
     const current = pending;
     dialog.current?.close(); setPending(null); held.current = false;
@@ -42,14 +49,14 @@ export function SettingsDraftsProvider({ children }: { children: ReactNode }) {
   };
   return <Context.Provider value={{ registry, request }}>{children}
     {pending && <dialog ref={dialog} className="settings-drafts-dialog" aria-labelledby="settings-drafts-title" onCancel={event => { event.preventDefault(); if (!busy) finish(false); }}>
-      <h2 id="settings-drafts-title">Unsaved settings</h2>
-      <p>Save your changes before leaving, or discard the changes that haven't been saved.</p>
+      <h2 id="settings-drafts-title" className="confirm-dialog-title">Unsaved settings</h2>
+      <p className="confirm-dialog-detail">Save your changes before leaving, or discard the changes that haven't been saved.</p>
       <ul>{registry.dirty().map(entry => <li key={entry.label}>{entry.label}</li>)}</ul>
       {error && <p role="alert" className="error">{error}</p>}
-      <div className="controls">
-        <button type="button" disabled={busy} onClick={() => void decide(true)}>{busy ? "Saving…" : "Save changes"}</button>
+      <div className="confirm-dialog-actions">
+        <button type="button" className="primary" disabled={busy} onClick={() => void decide(true)}>{busy ? "Saving…" : "Save changes"}</button>
         <button type="button" disabled={busy} onClick={() => void decide(false)}>Discard changes</button>
-        <button type="button" disabled={busy} autoFocus onClick={() => finish(false)}>Stay</button>
+        <button type="button" ref={stay} disabled={busy} autoFocus onClick={() => finish(false)}>Stay</button>
       </div>
     </dialog>}
   </Context.Provider>;

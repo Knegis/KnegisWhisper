@@ -13,6 +13,37 @@ maintained in place rather than appended to, because its purpose is to be curren
 ---
 
 
+## 2026-11-12 — Feature-audit fixtures and consistent settings fields (KNEG-556, KNEG-550)
+
+The feature-audit self-tests reproduced four failures on base `d8dfe15`. Their negative cases
+removed one Tauri boundary-test command, but the newer uninstall test and lint commands still
+enabled `tauri-test`. The mutation fixtures now leave `windows-uninstall` enabled while isolating
+the boundary-test command before removing or commenting it. A positive regression verifies that
+the unmodified uninstall commands still enable `tauri-test` without the boundary command. The
+manifest assertion includes both declared features. The audit and CI workflow are unchanged.
+
+Settings fields use 44px for label/value rows and 36px for compact card controls, with the
+standalone Vocabulary add field and button both 44px. Row labels align with the first field,
+independently of explanations below it. Editable values use Geist; numeric fields use tabular
+numerals. Ndot display labels, Doto clocks and counts, playback controls, and checkbox semantics
+keep their existing styles and behavior. Company-account fields have persistent associated
+labels and wrapping, accessible hints; secret fields remain masked. The unsaved-settings
+dialog shares the confirmation dialog's filled actions. Its intended Stay focus is applied
+after `showModal`, which otherwise overrides React's earlier `autoFocus` and chooses Save.
+
+Validated in `codex/kneg-556-550`: all 15 feature-audit tests, all 186 contract/tool self-tests,
+580 frontend tests, typecheck and production build; domain/settings/bundle scans, integration
+parity and generated IPC freshness. A scratch headless Edge probe measured 172 visible fields
+over eight settings screens in light/dark at 720x520 and 1280x800, including field heights,
+row-label alignment, Geist form values, persistent company labels/hints, password masking,
+dialog focus, Stay/Discard and horizontal overflow. Before/after captures and measurements
+are in the worktree's ignored `.validation/`; representative screens were visually inspected.
+The committed `tools/visual-check/settings-return.mjs` probe checks initial Stay focus as well
+as its existing 13 navigation/draft scenarios, including Save and failed Save. These are browser
+fixtures with invented data, not native IPC, live account, recording or installer validation.
+
+---
+
 ## 2026-11-11 — One-click Google Calendar and Outlook, used by Meetings
 
 The reconciled calendar plan of 2026-11-11 (its file in `docs/plans/` is not committed) is implemented on `dev`. Calendars connect with
@@ -72,8 +103,9 @@ that no brief's verification compiled; the full gate run found it.
 
 Verified on the merged tree (`9678cd5`): every contract gate except the gate self-tests, `tsc`, 580 frontend tests,
 `vite build`, the built-asset scans, `cargo fmt`, and clippy with `-D warnings` on both the local 1.90 and 1.99
-toolchains. The gate self-tests fail on `feature-audit`'s fixtures, which predate this work: `windows-uninstall` was
-declared in `ba0b8b5`, before the base `956532c`. The workspace test run was stopped by the machine running low on
+toolchains. At that revision the gate self-tests failed on `feature-audit`'s fixtures: `windows-uninstall` was
+declared in `ba0b8b5`, before the base `956532c`. KNEG-556 corrects those fixtures (2026-11-12 entry above).
+The workspace test run was stopped by the machine running low on
 memory before it finished. The same Rust passed `cargo test --workspace` at `8808e2f`, and `tauri-test` (607 passed) in
 the final fix's slot. Three visual checks ran in headless Edge against dev fixtures: Settings > Calendar 24/24, Meetings
 calendar 78/78 (1280×800, 720×520, a dark pass) and the pre-existing meeting-plan 5/5. Not verified: any real consent,

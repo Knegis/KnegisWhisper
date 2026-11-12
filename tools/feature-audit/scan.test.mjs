@@ -51,6 +51,21 @@ const THE_STEP = "cargo test --profile ci -p knegiswhisper --lib --features taur
 
 const ciSource = () => readFileSync(join(REPO_ROOT, CI), "utf8");
 
+/** Keep the uninstall feature exercised while isolating the boundary-test step. */
+function boundaryOnlyCi() {
+  const source = ciSource().replaceAll(
+    "--features tauri-test,windows-uninstall",
+    "--features windows-uninstall"
+  );
+  assert.ok(source.includes(THE_STEP), "the boundary-test step is no longer in ci.yml");
+  assert.equal(
+    enablements(runLines(source)).filter((e) => enables(e, "tauri-test", "knegiswhisper")).length,
+    1,
+    "the fixture must leave exactly one tauri-test enablement before mutating it"
+  );
+  return source;
+}
+
 /** The real inputs, with the workflow text swapped for a mutated copy. */
 function withCi(source) {
   const real = collect(REPO_ROOT);
@@ -102,14 +117,20 @@ test("the real tree is clean, and not vacuously so", () => {
 });
 
 test("KNEG-147 reconstructed: the feature declared and named by no invocation", () => {
-  const source = ciSource();
-  assert.ok(source.includes(THE_STEP), "the step this test removes is not in ci.yml any more");
+  const source = boundaryOnlyCi();
 
   const found = violations(withCi(source.replace(THE_STEP, "cargo test --workspace")));
 
   assert.deepEqual(rules(found), ["A. declared and never enabled"]);
   assert.equal(found[0].subject, "knegiswhisper/tauri-test");
   assert.match(found[0].detail, /never compiled/);
+});
+
+test("KNEG-556: uninstall steps still enable tauri-test without the boundary-test step", () => {
+  const source = ciSource().replace(THE_STEP, "cargo test --workspace");
+  const real = withCi(source);
+  assert.ok(real.enabled.some((e) => e.features.includes("windows-uninstall") && enables(e, "tauri-test", "knegiswhisper")));
+  assert.deepEqual(violations(real), []);
 });
 
 test("a commented-out step enables nothing, in either spelling", () => {
@@ -121,13 +142,13 @@ test("a commented-out step enables nothing, in either spelling", () => {
   // Both spellings are checked because the first draft only handled the first,
   // and this test found it: `run: # cargo ...` left the flag on a line whose
   // leading character is `r`, so it still counted.
-  const wholeLine = ciSource().replace(`        run: ${THE_STEP}`, `        # run: ${THE_STEP}`);
+  const wholeLine = boundaryOnlyCi().replace(`        run: ${THE_STEP}`, `        # run: ${THE_STEP}`);
   assert.ok(wholeLine.includes(`# run: ${THE_STEP}`), "the whole-line mutation did not apply");
   const first = violations(withCi(wholeLine));
   assert.deepEqual(rules(first), ["A. declared and never enabled"]);
   assert.equal(first[0].subject, "knegiswhisper/tauri-test");
 
-  const trailing = ciSource().replace(THE_STEP, `# ${THE_STEP}`);
+  const trailing = boundaryOnlyCi().replace(THE_STEP, `# ${THE_STEP}`);
   assert.ok(trailing.includes(`run: # ${THE_STEP}`), "the trailing mutation did not apply");
   const second = violations(withCi(trailing));
   assert.deepEqual(rules(second), ["A. declared and never enabled"]);
@@ -151,7 +172,7 @@ test("stripComment leaves a `#` that is inside quotes alone", () => {
 });
 
 test("an exemption with a reason satisfies rule A, and is reported rather than hidden", () => {
-  const base = withCi(ciSource().replace(THE_STEP, "cargo test --workspace"));
+  const base = withCi(boundaryOnlyCi().replace(THE_STEP, "cargo test --workspace"));
   assert.equal(violations(base).length, 1, "the premise: unexempt, this is a violation");
 
   const exempt = { ...base.exempt, "tauri-test": "the mock runtime needs a Windows manifest CI cannot embed" };
@@ -234,7 +255,7 @@ test("declaredFeatures reads the package name and skips `default`", () => {
   const { name, features } = declaredFeatures(source);
 
   assert.equal(name, "knegiswhisper");
-  assert.deepEqual(features, ["tauri-test"]);
+  assert.deepEqual(features.sort(), ["tauri-test", "windows-uninstall"]);
 
   const synthetic = declaredFeatures(
     ['[package]', 'name = "demo"', "", "[features]", 'default = ["a"]', 'a = []', "", "[lib]"].join(

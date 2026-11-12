@@ -5,6 +5,8 @@ version, supported platforms, installation requirements and known limitations.
 
 ## Unreleased
 
+- Align settings labels and fields, use consistent control sizes and readable form values, keep company-account labels and hints visible, and show filled actions in the unsaved-settings dialog (KNEG-550).
+
 - Use Ndot-57 for compact labels and dates, keeping Doto for the meeting clock and other large numeric displays.
 
 - Keep a page-shaped loading layout when opening Dictation or Meetings, with a brief fade and reduced-motion support (KNEG-547).
