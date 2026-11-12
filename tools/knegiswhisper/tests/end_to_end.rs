@@ -84,6 +84,59 @@ async fn automation_commands_create_export_and_refuse_unavailable_runtime() {
     harness.stop().await;
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn redirected_notes_transcripts_and_export_files_preserve_control_bytes() {
+    let db = Db::open_in_memory().await.unwrap();
+    let content = "Åsa\n\ttext\u{1b}[2J\u{1b}]title\u{7}\u{9b}0m\r\u{8}\0\u{7f}";
+    let note = notes::create(
+        db.pool(),
+        &notes::NewNote {
+            title: "Synthetic".to_owned(),
+            content: content.to_owned(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let transcript = transcriptions::record(
+        db.pool(),
+        &transcriptions::NewTranscription {
+            text: content.to_owned(),
+            ..Default::default()
+        },
+        transcriptions::Status::Completed,
+    )
+    .await
+    .unwrap();
+    let harness = Harness::with_db(db).await;
+    let shown = harness.run(&["notes", "get", &note.to_string()]);
+    assert_eq!(code(&shown), 0);
+    assert!(stdout(&shown).ends_with(&format!("{content}\n")));
+    let history = harness.run(&["history", "get", &transcript.to_string()]);
+    assert_eq!(code(&history), 0);
+    assert_eq!(stdout(&history), format!("{content}\n"));
+    let json = harness.run(&["notes", "get", &note.to_string(), "--json"]);
+    assert_eq!(code(&json), 0);
+    let value: serde_json::Value = serde_json::from_str(&stdout(&json)).unwrap();
+    assert_eq!(value["data"]["content"], content);
+    let exported = harness.run(&["notes", "export", &note.to_string()]);
+    assert_eq!(code(&exported), 0);
+    assert!(stdout(&exported).contains(content));
+    let path = harness._dir.path().join("synthetic.md");
+    let saved = harness.run(&[
+        "notes",
+        "export",
+        &note.to_string(),
+        "--output",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code(&saved), 0);
+    let bytes = std::fs::read_to_string(path).unwrap();
+    assert!(bytes.contains(content));
+    assert_eq!(stdout(&exported), format!("{bytes}\n"));
+    harness.stop().await;
+}
+
 struct Harness {
     served: Served,
     discovery_path: PathBuf,

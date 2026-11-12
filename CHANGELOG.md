@@ -5,6 +5,8 @@ version, supported platforms, installation requirements and known limitations.
 
 ## Unreleased
 
+- Escape terminal control characters when displaying notes and transcripts in the CLI; preserve original content in pipes and exported files.
+
 - Reject import paths that were not selected in the file picker before accessing their filesystem.
 
 - Keep opening imported notes responsive when participant fields contain long runs of whitespace.

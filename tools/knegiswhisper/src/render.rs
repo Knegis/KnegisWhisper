@@ -11,6 +11,55 @@
 
 use serde_json::Value;
 
+/// Escape terminal instructions only at an interactive output boundary.
+/// The escape spelling is also valid inside JSON strings, including C1 controls
+/// that serde_json leaves literal. Pipes and explicit exports retain their bytes.
+pub fn terminal_output(value: &str, interactive: bool) -> std::borrow::Cow<'_, str> {
+    let instruction = |c: char| c.is_control() && c != '\n' && c != '\t';
+    if !interactive || !value.chars().any(instruction) {
+        return std::borrow::Cow::Borrowed(value);
+    }
+    let mut output = String::with_capacity(value.len());
+    for c in value.chars() {
+        if instruction(c) {
+            output.push_str(&format!(r"\u{:04x}", u32::from(c)));
+        } else {
+            output.push(c);
+        }
+    }
+    std::borrow::Cow::Owned(output)
+}
+
+#[cfg(test)]
+mod terminal_output_tests {
+    use super::*;
+
+    #[test]
+    fn interactive_output_escapes_controls_but_retains_text_layout() {
+        let text = "Åsa\n\ttext\u{1b}[2J\u{1b}]52;c;data\u{7}\u{1b}\\\u{9b}0m\u{9d}title\u{9c}\r\u{8}\0\u{7f}";
+        let shown = terminal_output(text, true);
+        assert!(shown.starts_with("Åsa\n\ttext"));
+        assert!(shown.contains(r"\u001b"));
+        assert!(shown.contains(r"\u009b"));
+        assert!(shown
+            .chars()
+            .all(|c| !c.is_control() || c == '\n' || c == '\t'));
+        assert_eq!(terminal_output(text, false), text);
+    }
+
+    #[test]
+    fn terminal_json_round_trips_c1_controls() {
+        let value = serde_json::json!({"text":"Å\u{9b}\u{9d}\u{9c}\u{7f}\r\n\t\u{1b}"});
+        let raw = as_json(&value);
+        let shown = terminal_output(&raw, true);
+        assert!(shown
+            .chars()
+            .all(|c| !c.is_control() || c == '\n' || c == '\t'));
+        assert_eq!(serde_json::from_str::<Value>(&shown).ok(), Some(value));
+        assert_eq!(terminal_output(&raw, false), raw);
+    }
+}
+
 /// How wide a text column may get before it is shortened.
 ///
 /// Chosen so a title and a snippet still fit an 80-column terminal side by side.
