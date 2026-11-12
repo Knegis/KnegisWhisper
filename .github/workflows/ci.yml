@@ -23,6 +23,7 @@ jobs:
     outputs:
       frontend: ${{ steps.paths.outputs.frontend }}
       windows: ${{ steps.paths.outputs.windows }}
+      notices: ${{ steps.paths.outputs.notices }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -53,6 +54,11 @@ jobs:
           python-version: "3.12"
       - name: Release-tool tests
         run: python -m unittest discover -s tools/release -p "test_*.py"
+
+      - name: Pinned Windows uninstall template
+        run: |
+          python tools/uninstall/generate.py --check
+          python -m unittest discover -s tools/uninstall -p "test_*.py"
 
       - name: CI selection and entry-point tests
         run: node --test tools/ci/changes.test.mjs tools/ci/entry.test.mjs
@@ -137,6 +143,9 @@ jobs:
 
       - name: Dev-bundle audit self-tests
         run: node --test tools/dev-bundle-audit/scan.test.mjs
+
+      - name: Visual comparison server boundary
+        run: node --test tools/visual-check/design-server.test.mjs
 
       # The baseline is generated from an OpenWhispr checkout that CI does not
       # have, so --check cannot run here. Assert instead that it is valid JSON
@@ -278,8 +287,42 @@ jobs:
       - name: Test (Tauri IPC boundary)
         run: cargo test --profile ci -p knegiswhisper --lib --features tauri-test
 
+      - name: Windows uninstall helper tests
+        if: runner.os == 'Windows'
+        run: cargo test --profile ci -p knegiswhisper --bin knegiswhisper-uninstall --features tauri-test,windows-uninstall
+
+      - name: Windows uninstall helper lint
+        if: runner.os == 'Windows'
+        run: cargo clippy --profile ci -p knegiswhisper --bin knegiswhisper-uninstall --tests --features tauri-test,windows-uninstall -- -D warnings
+
   whisper-macos:
     name: macOS Whisper packages
     needs: contracts
     if: github.event_name == 'workflow_dispatch'
     uses: ./.github/workflows/whisper-macos.yml
+
+
+  notices:
+    name: Bundled dependency notices
+    needs: [changes, contracts]
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.notices == 'true'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: Swatinem/rust-cache@v2
+      - run: npm ci
+        working-directory: apps/desktop
+      - run: npm run build
+        working-directory: apps/desktop
+      - run: cargo fetch --locked
+      - run: cargo install cargo-about --version 0.8.4 --locked
+      - run: node --test tools/licenses/frontend.test.mjs
+      - run: python -m unittest discover -s tools/licenses -p "test_*.py"
+      - run: python tools/licenses/generate.py --check

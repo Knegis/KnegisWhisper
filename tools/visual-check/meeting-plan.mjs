@@ -110,6 +110,8 @@ async function prepared(cdp, { name, folder }) {
   await waitFor(cdp, "Boolean(document.querySelector('.app-titlebar') && document.querySelector('.split-main, .content'))", "the fixture shell");
   await cdp.evaluate(snippets.removeFixtureBanner());
   await cdp.evaluate(snippets.installInvokeStub());
+  // Calendar linking is checked by meetings-calendar.mjs.
+  await cdp.evaluate(snippets.stubInvoke({ merge: { meeting_calendar_candidates: { events: [], auto: null } } }));
   await cdp.evaluate(snippets.clickText(NAV_PILL, "Meetings"));
   await waitFor(cdp, START_ENABLED, "Start recording to be enabled");
   await waitFor(cdp, snippets.chipState(FOLDER_CHIP), "the Folder chip");

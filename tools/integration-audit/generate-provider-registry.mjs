@@ -36,6 +36,20 @@ import { parseHfUrl } from "../model-pin/pin.mjs";
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const BASELINE = join(REPO_ROOT, "config/upstream-integration-baseline.json");
 const OUT = join(REPO_ROOT, "config/provider-registry.json");
+// KNEG-532: measured against each currently pinned archive, 2026-11-10.
+const MODEL_FILES = JSON.parse(readFileSync(join(REPO_ROOT, "config/model-file-pins.json"), "utf8"));
+for (const [id, files] of Object.entries(MODEL_FILES)) {
+  const paths = new Set();
+  for (const f of files) {
+    const parsed = parseHfUrl(f.url);
+    if (!parsed || !/^[0-9a-f]{40}$/.test(parsed.revision) ||
+        !/^[0-9a-f]{64}$/.test(f.sha256) || !Number.isSafeInteger(f.expectedSizeBytes) ||
+        f.expectedSizeBytes <= 0 || !/^[a-z0-9.-]+$/.test(f.path) ||
+        paths.has(f.path) || parsed.path !== f.path) throw new Error("Invalid model file pin: " + id);
+    paths.add(f.path);
+  }
+}
+
 
 /** 25 MiB — upstream's BYOK_FILE_SIZE_LIMIT and its proxied-path cap. */
 const BYOK_UPLOAD_CAP = 25 * 1024 * 1024;
@@ -1233,6 +1247,7 @@ const sherpa = Object.entries(R.parakeetModels).map(([id, m]) => ({
   id,
   name: m.name,
   downloadUrl: m.downloadUrl,
+  files: MODEL_FILES[id] ?? [],
   extractDir: m.extractDir,
   sizeMb: m.sizeMb ?? null,
   // Nulls rather than omitted keys, so the shape does not change between a
@@ -1305,6 +1320,7 @@ const DIARIZATION_PINS = {
 };
 
 const diarization = Object.entries(R.diarizationModels).map(([id, m]) => ({
+  files: MODEL_FILES[id] ?? [],
   id,
   name: m.name,
   downloadUrl: m.downloadUrl,
@@ -1323,6 +1339,10 @@ const diarization = Object.entries(R.diarizationModels).map(([id, m]) => ({
   expectedSizeBytes: DIARIZATION_PINS[id]?.expectedSizeBytes ?? null,
   maxExtractedSizeBytes: DIARIZATION_PINS[id]?.maxExtractedSizeBytes ?? null,
 }));
+
+for (const id of Object.keys(MODEL_FILES)) {
+  if (!(id in R.parakeetModels) && !(id in R.diarizationModels)) die("Unknown file-pin model " + id);
+}
 
 for (const id of Object.keys(DIARIZATION_PINS)) {
   if (!(id in R.diarizationModels)) {

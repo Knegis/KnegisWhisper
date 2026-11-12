@@ -767,7 +767,33 @@ deleteRecording: boolean,
  * The actual live provider selected at Start, never a caller's claim.
  * Older sidecars have no provider to disclose.
  */
-liveProviderId: string | null, };
+liveProviderId: string | null,
+/**
+ * Local event snapshot, retained even when the calendar cache changes.
+ */
+calendar: LinkedEvent | null, };
+
+/**
+ * The event and people captured locally for this recording. Saving and recovery
+ * use this snapshot rather than consulting a calendar that may have changed.
+ */
+export type LinkedEvent = { eventId: string, provider: CalendarProvider, title: string | null, titleFromEvent: boolean, omittedParticipants: number, };
+
+/**
+ * Missing Start input means Auto; explicit choices never fall back to Auto.
+ */
+export type CalendarLinkChoice = { "mode": "auto" } | { "mode": "none" } | { "mode": "event", eventId: string, };
+
+/**
+ * A live edit must express the person's choice, without automatic selection.
+ */
+export type CalendarSetChoice = { "mode": "none" } | { "mode": "event", eventId: string, };
+
+/**
+ * Start continues even when the calendar cannot be linked durably. These
+ * reasons belong to the live session, never to the recovery sidecar.
+ */
+export type CalendarLinkNotice = "overlap" | "choice-unavailable" | "calendar-unreadable" | "not-saved";
 
 /**
  * What became of a saved meeting's recording, when it was to be deleted.
@@ -787,7 +813,7 @@ export type FinalisationUpdate = { revision: number, progress: FinalisationProgr
 /**
  * What can be said about the meeting session.
  */
-export type MeetingStatus = { state: MeetingState, finalisation: FinalisationUpdate,
+export type MeetingStatus = { sessionId: string | null, calendarNotice: CalendarLinkNotice | null, calendarChoices: Array<CandidateEvent>, state: MeetingState, finalisation: FinalisationUpdate,
 /**
  * Why the live transcription stopped, when it has.
  *
@@ -2141,23 +2167,39 @@ export type UpdateCheckResult = { "state": "no-public-key-configured" } | { "sta
 export type CalendarProvider = "google" | "microsoft";
 
 /**
+ * Stable, allowlisted failure vocabulary. Provider prose and bodies never cross IPC.
+ */
+export type CalendarProblem = { "kind": "cancelled" } | { "kind": "timed-out" } | { "kind": "access-denied" } | { "kind": "admin-consent-required" } | { "kind": "app-blocked" } | { "kind": "client-misconfigured" } | { "kind": "client-rejected" } | { "kind": "reconnect-required" } | { "kind": "network" } | { "kind": "provider-unavailable" } | { "kind": "storage" } | { "kind": "invalid-response" };
+
+export type CalendarOperation = "idle" | "connecting" | "syncing";
+
+export type PendingSignIn = { authorizeUrl: string, browserOpened: boolean, };
+
+export type LeftoverOrigin = "openwhispr" | "earlier";
+
+export type LeftoverConnection = { email: string, origin: LeftoverOrigin, };
+
+/**
+ * Secret edits are explicit: an omitted edit must never erase a saved value.
+ * Debug intentionally omits Set's payload when callers inspect a pending edit.
+ */
+export type SecretChange = { "kind": "keep" } | { "kind": "set", value: string, } | { "kind": "clear" };
+
+export type ClientSource = "app" | "custom" | "missing";
+
+/**
  * What happened when someone clicked "Connect".
  *
- * Only the two outcomes that are not simply a refusal: a plain error (no
- * client ID configured, the loopback receiver could not bind, the token
- * exchange itself failed) crosses as `Err` the same as every other command,
- * because there is nothing more for the frontend to do with those than show
- * them. Being turned down at the consent screen is different -- an ordinary
- * outcome, not a bug -- so it gets its own state rather than the same
- * generic error text.
+ * A held operation guard is the only command-level refusal. Every consent,
+ * transport, provider and persistence failure has a stable classified outcome.
  */
-export type ConnectOutcome = { "state": "connected", accountEmail: string, calendars: number, } | { "state": "denied", reason: string, };
+export type ConnectOutcome = { "state": "connected", accountEmail: string, calendars: number, } | { "state": "denied", reason: string, } | { "state": "failed", problem: CalendarProblem, };
 
 /**
  * What one sync attempt found. Both the command's own return value and
- * what [`CalendarRuntime::record_sync`] persists to settings -- one shape
- * for both means the screen can never see a different answer from a sync
- * it just ran than from the record `calendar_status` reads back later.
+ * what [`CalendarRuntime::record_sync`] persists to settings use this shape.
+ * If recording fails, the command reports Storage and the previous durable
+ * record remains available; a successful fetch must not hide that failure.
  */
 export type SyncOutcome = { "state": "completed", eventsUpserted: number, eventsRemoved: number,
 /**
@@ -2165,7 +2207,7 @@ export type SyncOutcome = { "state": "completed", eventsUpserted: number, events
  * calendar list refresh can succeed while one calendar's events
  * fail, and reporting only the aggregate would hide which one.
  */
-calendarErrors: Array<string>, } | { "state": "token-unavailable", message: string, } | { "state": "failed", message: string, };
+calendarErrors: Array<string>, } | { "state": "token-unavailable", problem: CalendarProblem | null, message: string, } | { "state": "failed", problem: CalendarProblem | null, message: string, };
 
 /**
  * A sync outcome together with when it happened, persisted to settings so
@@ -2175,7 +2217,12 @@ export type SyncRecord = {
 /**
  * RFC 3339.
  */
-at: string, outcome: SyncOutcome, };
+at: string, outcome: SyncOutcome, account: string | null, snapshotVersion: number,
+/**
+ * Most recent complete success for this account; partial attempts for the
+ * same account preserve this timestamp.
+ */
+lastSuccessAt: string | null, };
 
 /**
  * Whether a token is on file and, if so, whether it is still within its
@@ -2185,8 +2232,8 @@ at: string, outcome: SyncOutcome, };
  * poll is exactly what `docs/NETWORK_BOUNDARY.md` rules out for a passive
  * status command. `Missing` covers both "never connected" and "the
  * credential is gone even though the database row is still there", which is
- * exactly the state [`CalendarRuntime::disconnect`] leaves behind -- see its
- * doc comment on why the row itself is not deleted. Checking the credential
+ * also possible after a credential-store reset. Disconnect removes its row.
+ * Checking the credential
  * store directly, rather than trusting the row's mere existence, is what
  * keeps that decision from ever reading back as "connected".
  *
@@ -2199,7 +2246,7 @@ at: string, outcome: SyncOutcome, };
  * automatically" in the same payload as a `SyncOutcome::TokenUnavailable`
  * telling the user to reconnect.
  */
-export type TokenStatus = { "state": "active" } | { "state": "needs-refresh" } | { "state": "missing" } | { "state": "refresh-failed", message: string, };
+export type TokenStatus = { "state": "active" } | { "state": "needs-refresh" } | { "state": "missing" } | { "state": "refresh-failed", message: string, } | { "state": "reconnect-required" };
 
 export type CalendarSummary = { id: string, summary: string, isPrimary: boolean, isSelected: boolean,
 /**
@@ -2210,17 +2257,47 @@ eventCount: number, };
 
 export type AccountStatus = { email: string, token: TokenStatus, calendars: Array<CalendarSummary>, lastSync: SyncRecord | null, };
 
-export type ProviderStatus = { clientIdConfigured: boolean,
+export type ProviderStatus = {
 /**
- * The client ID itself, shown back rather than only "configured" or
- * not. It is not a secret -- there is no client secret in this flow at
- * all, see `kw_calendar_core`'s module doc -- so there is nothing to
- * protect by hiding it, and showing it is what makes "you supplied
- * this" a fact on screen rather than a claim in a comment.
+ * Whether an effective client exists, from either a custom ID or this build.
  */
-clientId: string | null, account: AccountStatus | null, };
+clientIdConfigured: boolean,
+/**
+ * The saved custom client ID, shown back because a client ID is not a secret.
+ */
+customClientId: string | null,
+/**
+ * Whether the effective client comes from a custom override, this app, or is missing.
+ */
+clientSource: ClientSource,
+/**
+ * Whether the credential store contains a custom Google secret; false for Microsoft.
+ */
+customGoogleSecretConfigured: boolean,
+/**
+ * Whether this build provides an app-owned client for the provider.
+ */
+appClientAvailable: boolean, account: AccountStatus | null, operation: CalendarOperation, pendingSignIn: PendingSignIn | null, cleanupPending: number, leftover: Array<LeftoverConnection>, };
 
 export type CalendarStatus = { google: ProviderStatus, microsoft: ProviderStatus, apple: AppleCalendarSupport, };
+
+export type UpcomingMeetings = { events: Array<UpcomingEvent>, hasMore: boolean, providers: Array<ProviderFreshness>, };
+
+/**
+ * A small, local projection for the Meetings page. Times are copied exactly
+ * from the normalised snapshot; presenting them in local time belongs to UI.
+ */
+export type UpcomingEvent = { id: string, provider: CalendarProvider, calendarId: string, title: string | null, start: string, end: string, };
+
+export type ProviderFreshness = { provider: CalendarProvider, connected: boolean, selectedCalendars: number, lastAttemptAt: string | null, lastSuccessAt: string | null, lastOutcome: SyncOutcome | null, };
+
+export type CalendarCandidates = { events: Array<CandidateEvent>, auto: string | null, };
+
+export type CandidateEvent = { id: string, provider: CalendarProvider, calendarId: string, title: string | null, start: string, end: string, meetingLike: boolean, };
+
+export type ProviderSync = { provider: CalendarProvider, outcome: SyncOutcome | null, skipped: SyncSkip | null, };
+
+export type SyncSkip = "not-connected" | "fresh" | "busy" | "no-selected-calendars";
 
 /**
  * What this build can do about Apple Calendar, checked rather than assumed.

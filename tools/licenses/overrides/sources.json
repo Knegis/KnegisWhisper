@@ -1,0 +1,100 @@
+[
+  {
+    "name": "alloc-stdlib",
+    "version": "0.2.4",
+    "file": "alloc-stdlib-0.2.4.txt",
+    "url": "https://raw.githubusercontent.com/dropbox/rust-alloc-no-stdlib/ae42d22078b98549e987d2f03d12df7b984fde47/LICENSE",
+    "sha256": "c0c56f26d9c051cac4d200c34c84e7ae9aaa853e01a982a1df08b09931e518ae"
+  },
+  {
+    "name": "clipboard-win",
+    "version": "5.4.1",
+    "file": "clipboard-win-5.4.1.txt",
+    "url": "https://raw.githubusercontent.com/DoumanAsh/clipboard-win/3b27cf2bfd1adcfa6e0264eb51c1025ddaf0f342/LICENSE",
+    "sha256": "c9bff75738922193e67fa726fa225535870d2aa1059f91452c411736284ad566"
+  },
+  {
+    "name": "dasp_sample",
+    "version": "0.11.0",
+    "file": "dasp_sample-0.11.0.txt",
+    "url": "https://raw.githubusercontent.com/rustaudio/sample/97c3bb9b2363c0b46ac1633858bf1054fd02a980/LICENSE-MIT",
+    "sha256": "b1d6df41ed3aa96806e74c729444d7c121d90e6660a6aed01d298e03fde475a0"
+  },
+  {
+    "name": "tauri-plugin",
+    "version": "2.6.3",
+    "file": "tauri-plugin-2.6.3.txt",
+    "url": "https://raw.githubusercontent.com/tauri-apps/tauri/6f6ab1207bb3923c2721fbc67d2fdb1c8deb0c7a/LICENSE_MIT",
+    "sha256": "9dd42ea92cff2ede5cd477cbfcce051b2d0115c0ac7f368ee88cb545055dff1d"
+  },
+  {
+    "name": "ts-rs",
+    "version": "12.0.1",
+    "file": "ts-rs-12.0.1.txt",
+    "url": "https://raw.githubusercontent.com/Aleph-Alpha/ts-rs/7182ad8289596097235406b715fa04506443b4ad/LICENSE",
+    "sha256": "db7f7f8e7236a2d0b41b855b2501b7b913caebbcda6ce498637a304ad1706ce1"
+  },
+  {
+    "name": "ts-rs-macros",
+    "version": "12.0.1",
+    "file": "ts-rs-macros-12.0.1.txt",
+    "url": "https://raw.githubusercontent.com/Aleph-Alpha/ts-rs/7182ad8289596097235406b715fa04506443b4ad/LICENSE",
+    "sha256": "db7f7f8e7236a2d0b41b855b2501b7b913caebbcda6ce498637a304ad1706ce1"
+  },
+  {
+    "name": "unic-char-property",
+    "version": "0.9.0",
+    "file": "unic-char-property-0.9.0.txt",
+    "url": "https://raw.githubusercontent.com/open-i18n/rust-unic//5878605364af97a3358368a6eaef02104af2e016/LICENSE-MIT",
+    "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+  },
+  {
+    "name": "unic-char-range",
+    "version": "0.9.0",
+    "file": "unic-char-range-0.9.0.txt",
+    "url": "https://raw.githubusercontent.com/open-i18n/rust-unic//5878605364af97a3358368a6eaef02104af2e016/LICENSE-MIT",
+    "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+  },
+  {
+    "name": "unic-common",
+    "version": "0.9.0",
+    "file": "unic-common-0.9.0.txt",
+    "url": "https://raw.githubusercontent.com/open-i18n/rust-unic//5878605364af97a3358368a6eaef02104af2e016/LICENSE-MIT",
+    "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+  },
+  {
+    "name": "unic-ucd-ident",
+    "version": "0.9.0",
+    "file": "unic-ucd-ident-0.9.0.txt",
+    "url": "https://raw.githubusercontent.com/open-i18n/rust-unic//8a6ce83063d90b91ae2ce59eddb803edd393fca9/LICENSE-MIT",
+    "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+  },
+  {
+    "name": "unic-ucd-version",
+    "version": "0.9.0",
+    "file": "unic-ucd-version-0.9.0.txt",
+    "url": "https://raw.githubusercontent.com/open-i18n/rust-unic//5878605364af97a3358368a6eaef02104af2e016/LICENSE-MIT",
+    "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+  },
+  {
+    "name": "webview2-com",
+    "version": "0.38.2",
+    "file": "webview2-com-0.38.2.txt",
+    "url": "https://raw.githubusercontent.com/wravery/webview2-rs/b74dc5e2b394044bea5191052868ce7a106c202c/LICENSE",
+    "sha256": "0dcf41516e608bbcb6cdc5229feb7b86fe4a643b85e7df251133c93408fdac73"
+  },
+  {
+    "name": "webview2-com-macros",
+    "version": "0.8.1",
+    "file": "webview2-com-macros-0.8.1.txt",
+    "url": "https://raw.githubusercontent.com/wravery/webview2-rs/dffa41a8a46d3f5565eefbff2de57d38d399f158/LICENSE",
+    "sha256": "0dcf41516e608bbcb6cdc5229feb7b86fe4a643b85e7df251133c93408fdac73"
+  },
+  {
+    "name": "webview2-com-sys",
+    "version": "0.38.2",
+    "file": "webview2-com-sys-0.38.2.txt",
+    "url": "https://raw.githubusercontent.com/wravery/webview2-rs/b74dc5e2b394044bea5191052868ce7a106c202c/LICENSE",
+    "sha256": "0dcf41516e608bbcb6cdc5229feb7b86fe4a643b85e7df251133c93408fdac73"
+  }
+]

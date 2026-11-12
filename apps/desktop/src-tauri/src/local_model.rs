@@ -330,6 +330,18 @@ impl LocalTranscription {
         policy: kw_network_policy::NetworkPolicy,
         vad_model: Option<std::path::PathBuf>,
     ) -> Result<Self, String> {
+        Self::with_scratch(
+            policy,
+            vad_model,
+            paths::audio_temp_dir().map_err(|e| e.to_string())?,
+        )
+    }
+
+    fn with_scratch(
+        policy: kw_network_policy::NetworkPolicy,
+        vad_model: Option<std::path::PathBuf>,
+        scratch: std::path::PathBuf,
+    ) -> Result<Self, String> {
         let catalog = Catalog::shipped().map_err(|err| err.to_string())?;
         Ok(Self {
             operation: tokio::sync::Mutex::new(()),
@@ -341,11 +353,7 @@ impl LocalTranscription {
             running: tokio::sync::Mutex::new(None),
             port: Arc::new(RwLock::new(None)),
             model: Arc::new(RwLock::new(None)),
-            speech: SpeechTools::new(
-                vad_model,
-                &paths::sidecar_dir().path,
-                paths::audio_temp_dir(),
-            ),
+            speech: SpeechTools::new(vad_model, &paths::sidecar_dir().path, scratch),
             switching: RouteSwitch::default(),
             users: ServerUsers::default(),
         })
@@ -2022,9 +2030,12 @@ mod tests {
     fn local() -> LocalTranscription {
         static RECORDS: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
         let records = RECORDS.get_or_init(|| tempfile::tempdir().unwrap());
-        let mut local =
-            LocalTranscription::new(kw_network_policy::NetworkPolicy::new().unwrap(), None)
-                .unwrap();
+        let mut local = LocalTranscription::with_scratch(
+            kw_network_policy::NetworkPolicy::new().unwrap(),
+            None,
+            records.path().join("audio"),
+        )
+        .unwrap();
         local.pids = PidStore::new(records.path());
         local
     }

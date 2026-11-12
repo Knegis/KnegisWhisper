@@ -21,8 +21,8 @@
  *      recording tile, a live clock, words still being heard. Flat colour is
  *      kept for meaning: mint for what is fine, an update or an on chip,
  *      the pink signal dot for recording and for what has failed.
- *   4. Three faces with a job each. Geist sets everything people read. Tiny5,
- *      a pixel face, is the machine talking about itself -- dates, times,
+ *   4. Three faces with a job each. Geist sets everything people read. Ndot 57,
+ *      a dot-matrix face, is the machine talking about itself -- dates, times,
  *      small labels -- in the string's own case. Doto, round dot-matrix
  *      numerals, is reserved for big clocks and counts.
  *
@@ -44,9 +44,9 @@
  *
  * The production CSP is `font-src 'self'` (`src-tauri/tauri.conf.json`). A CDN
  * link would work in `npm run dev` and fail silently in the packaged build,
- * falling back to a system sans. So the three faces are committed, subset to
- * Latin, and served from the bundle. Attribution is in `NOTICE`; each licence
- * sits beside its file.
+ * falling back to a system sans. So the three faces are committed and served
+ * from the bundle. Geist and Doto are subset to Latin; Ndot 57 is unmodified.
+ * Attribution is in `NOTICE`; each license or source notice sits beside its file.
  */
 
 @font-face {
@@ -58,11 +58,11 @@
 }
 
 @font-face {
-  font-family: Tiny5;
+  font-family: "Ndot 57";
   font-style: normal;
   font-weight: 400;
   font-display: swap;
-  src: url("./fonts/tiny5-400.woff2") format("woff2");
+  src: url("./fonts/Ndot57-Regular.otf") format("opentype");
 }
 
 /* Round dots only: the file is pinned to ROND 100, so no `font-variation-settings` is needed. */
@@ -169,11 +169,13 @@
    * frames. Wider would only stretch prose past a readable measure.
    */
   --content-max: 808px;
+  --field-height: 44px;
+  --field-height-compact: 36px;
 
   --font-sans: Geist, "Helvetica Neue", Arial, sans-serif;
-  /* The pixel voice. The name is the old one's, so every label that used it follows. */
-  --font-mono: Tiny5, ui-monospace, Consolas, monospace;
-  /* Real monospace, for code and file bytes: a pixel face is no good for reading a path. */
+  /* Compact display text. Keep the existing token so its labels change together. */
+  --font-mono: "Ndot 57", ui-monospace, Consolas, monospace;
+  /* Real monospace for code and file bytes, independent of the display font. */
   --font-code: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, monospace;
   --font-dots: Doto, ui-monospace, monospace;
 
@@ -308,12 +310,12 @@ body {
 p { line-height: 1.5; }
 
 /*
- * The machine voice: Tiny5, the pixel face, in the string's own case -- never
+ * The machine voice: Ndot 57, the dot-matrix face, in the string's own case -- never
  * by `text-transform`, which is not reversible by eye: an uppercased path or
  * error string reads as shouting and hides its own casing. It is for the
- * machine talking about itself: times, counts, states, small labels. Never
- * below 15px, where its 5-pixel cap height stops reading as letters, and
- * never a heading people navigate by: those are Geist (`h2`, below).
+ * machine talking about itself: times, counts, states, small labels.
+ * Headings people navigate by use Geist (`h2`, below); large clocks and
+ * counts keep Doto (`--font-dots`).
  */
 .overlay {
   font-family: var(--font-mono);
@@ -1943,9 +1945,10 @@ label:has(> input[type="checkbox"]) {
  * inconsistency read as a rendering glitch rather than as a missing selector.
  * Naming what is *not* a text field cannot go stale the same way.
  *
- * A settings page's fields and selects are 36px pills with a 1px edge
- * instead, a field on `--panel` (`# Settings pages`, near the end); these
- * rules still hold everywhere else.
+ * A text field anywhere is the design's 36px pill (below). A settings page
+ * repeats it under `.content` and adds a lighter fill on focus; the selects
+ * that sit outside one -- a note's menu, the speaker form -- share that page's
+ * filled pill (`# The approved design's pieces`, near the end).
  */
 input:not([type="checkbox"]):not([type="radio"]),
 select {
@@ -1981,9 +1984,20 @@ select:hover {
  * no fill and no border is nothing at all until you find it by guessing. The
  * placeholder covers the empty case and not the filled one -- a stored Corti
  * tenant would render as bare text indistinguishable from the label beside it.
+ *
+ * The fill is the design's pill: 36px, `--field`, no edge, the focus ring
+ * following its curve. Before 2026-11-10 this was a square `--control` box,
+ * and only fields under `.content` were redrawn, so every field outside a
+ * settings page -- New folder, Add person, the sharing dialog -- stayed square.
+ * A field drawn differently (the title bar's search, the library filter, the
+ * meeting name) has its own rule. Ranges and file pickers are not text fields;
+ * the second `:not()` keeps the selector exactly as specific as the one above.
  */
-input:not([type="checkbox"]):not([type="radio"]) {
-  background: var(--control);
+input:not([type="checkbox"], [type="radio"]):not([type="range"], [type="file"]) {
+  height: 36px;
+  padding: 0 14px;
+  border-radius: var(--r-control);
+  background: var(--field);
 }
 
 /* Firefox ships a placeholder at less than full opacity, which lands under
@@ -2077,18 +2091,28 @@ option:checked:hover {
     gap: 8px;
   }
 
+  /*
+   * The list is the app's menu card, as the chip menus draw it: white, rounded,
+   * the card shadow, rows rounded inside it. Until 2026-11-10 it was a square
+   * slab with the selected row in solid grey, the one menu in the app that
+   * still looked like the platform's.
+   */
   select::picker(select) {
-    border: 0;
-    border-radius: 0;
-    padding: 0.25rem 0;
-    background: var(--bg);
     /*
-     * A shadow, not a border, and not decoration either: with no edge of any
-     * kind a white list over a white page is not visibly a separate surface.
-     * This is the one place in the interface that genuinely floats above
-     * something else, so it is the one place that says so.
+     * On the list as well as the button: Chromium draws the list in the page only when both
+     * opt in. With the button alone -- every select here until 2026-11-10 -- the list was still
+     * the platform's popup, and none of these rules reached it.
      */
-    box-shadow: 0 8px 28px rgb(0 0 0 / 22%);
+    appearance: base-select;
+    margin-block: 6px;
+    border: 0;
+    border-radius: var(--r-card);
+    padding: 8px;
+    background: var(--panel);
+    color: var(--text);
+    box-shadow: var(--card-shadow);
+    font-size: 14px;
+    line-height: 20px;
   }
 
   /*
@@ -2123,15 +2147,28 @@ option:checked:hover {
   }
 
   option {
-    padding: 0.4rem 0.75rem;
-    background: var(--bg);
+    padding: 7px 12px;
+    border: 0;
+    border-radius: var(--r-row);
+    background: transparent;
     color: var(--text);
-    /*
-     * Bordered in the page colour rather than not bordered at all. It draws
-     * nothing, and it means the rows are already the right shape if a visible
-     * edge is ever wanted -- changing one value rather than adding a box.
-     */
-    border: 1px solid var(--bg);
+  }
+
+  /* As a chip menu's rows: a tint under the pointer, `--selected` for the current choice. */
+  option:hover {
+    background-color: var(--panel-hover);
+  }
+
+  option:checked,
+  option:checked:hover {
+    background-color: var(--selected);
+    color: var(--text);
+  }
+
+  /* Inside the row, since the card clips anything outside it. */
+  option:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
   }
 
   /* The fill already says which one is selected; the tick would say it twice
@@ -2393,6 +2430,10 @@ button.microphone-language-toggle:hover:not(:disabled) { background: transparent
   mask: url('./assets/window/xmark.svg') center / contain no-repeat;
   cursor: pointer;
 }
+/* Hidden, the clear button still kept its 16px and gap, which left the placeholder 152px for
+ * its 164: "Search notes and meetings" stopped in the middle of the g. Out of the layout until
+ * there is something to clear. */
+.titlebar-search input:placeholder-shown::-webkit-search-cancel-button { display: none; }
 .titlebar-search-popup { position: absolute; top: calc(100% + 8px); left: 0; right: 0; max-height: min(420px, calc(100vh - 80px)); overflow-y: auto; padding: 8px; border-radius: var(--r-card); background: var(--panel); color: var(--text); box-shadow: var(--card-shadow); animation: kw-rise .4s var(--ease) both; }
 .titlebar-search-status { padding: 6px 10px; font-size: 12px; color: var(--muted); }
 .titlebar-search-popup button { display: flex; flex-direction: column; gap: 3px; width: 100%; margin: 0; padding: 9px 12px; text-align: left; border: 0; border-radius: var(--r-row); background: transparent; color: var(--text); font-size: 13px; }
@@ -2529,6 +2570,8 @@ button:is(.notes-person, .notes-trash)[aria-pressed="true"], button:is(.notes-pe
 .notes-context-menu > button { display: block; width: 100%; margin: 0; padding: 0.5rem 0.65rem; text-align: left; border-radius: var(--r-control); }
 .notes-context-menu .row { display: flex; flex-direction: column; gap: 0.35rem; padding: 0.5rem 0.65rem; }
 .notes-context-menu select { width: 100%; min-width: 0; }
+/* The menu's own items are its buttons; a select's label is a caption above its pill, not another item. */
+.notes-context-menu .row-label { font-size: 13px; color: var(--muted); }
 
 /*
  * Vocabulary: a compact add row, and a ruled list of the words themselves --
@@ -2636,10 +2679,14 @@ button.note-person-remove:hover:not(:disabled) { color: var(--text); }
 button.note-people-add { display: inline-flex; align-items: center; gap: 4px; height: 24px; margin: 0; padding: 0 6px; color: var(--muted); font-size: 13px; }
 button.note-people-add:hover:not(:disabled), button.note-people-add[aria-expanded="true"] { color: var(--text); }
 .note-people-form { flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; }
-.note-people-form label { display: flex; flex-direction: column; gap: 2px; flex: 1 1 12rem; min-width: 0; max-width: 18rem; font-size: 12.5px; }
-.note-people-form input { width: 100%; min-width: 0; height: 32px; }
-.note-people-form-actions { display: flex; gap: 4px; }
-.note-people-form button { height: 32px; margin: 0; padding: 0 12px; }
+/* The speaker form's pieces: a caption over each 36px field, a filled Cancel and an Iris Add. */
+.note-people-form label { display: flex; flex-direction: column; gap: 6px; flex: 1 1 12rem; min-width: 0; max-width: 18rem; font-size: 13px; color: var(--muted); }
+/* `:not()` to outrank the unscoped field rule's `font: inherit`, which would hand the field the caption's size. */
+.note-people-form input:not([type="checkbox"]) { width: 100%; min-width: 0; color: var(--text); font-size: 14px; }
+.note-people-form-actions { display: flex; gap: 6px; }
+.note-people-form button { height: 36px; margin: 0; padding: 0 16px; font-size: 13px; letter-spacing: .04em; white-space: nowrap; }
+.note-people-form button:not(.primary) { background: var(--control); }
+.note-people-form button:not(.primary):hover:not(:disabled) { background: var(--control-hover); }
 .note-people-error { flex-basis: 100%; margin: 0; overflow-wrap: anywhere; }
 /*
  * The note's tabs: the open one underlined in `--band` over a rule the width
@@ -2768,16 +2815,17 @@ button.note-people-add:hover:not(:disabled), button.note-people-add[aria-expande
 .content button.primary, .content button.secondary, .content button.marked { padding: 0 16px; min-height: 36px; font-size: 13px; letter-spacing: .04em; }
 
 .content input:not([type="checkbox"], [type="radio"], [type="range"]),
-.content select {
-  height: 36px;
+:is(.content, .notes-context-menu, .transcript-rename) select {
+  height: var(--field-height-compact);
   padding: 0 14px;
   border: 0;
   border-radius: var(--r-control);
   background: var(--field);
 }
+.content :is(input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"]), select, textarea) { font-family: var(--font-sans); font-size: 15px; font-variant-numeric: tabular-nums; }
 .content input:not([type="checkbox"], [type="radio"], [type="range"]) { transition: background-color .3s ease, box-shadow .3s ease; }
 .content input:not([type="checkbox"], [type="radio"], [type="range"]):focus { background: var(--panel); box-shadow: 0 1px 8px rgb(0 0 0 / 6%); }
-.content select:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+:is(.content, .notes-context-menu, .transcript-rename) select:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .content textarea { padding: 10px 14px; border: 0; border-radius: var(--r-row); background: var(--field); color: var(--text); }
 /* `flex: none`: beside a label long enough to wrap, a flex item's box shrank to 14px wide. */
 .content input[type="checkbox"] { flex: none; width: 16px; height: 16px; margin: 0; accent-color: var(--band); }
@@ -2862,7 +2910,7 @@ button.provider-link:hover:not(:disabled) { background: none; color: var(--band-
 .meeting-progress { display: flex; gap: 12px; flex-wrap: wrap; }
 .notify-detail .meeting-progress { gap: 6px; font-size: 12px; white-space: nowrap; }
 
-.settings-drafts-dialog { max-width: min(480px, calc(100vw - 40px)); border: 1px solid var(--rule); border-radius: var(--r-card); color: var(--text); background: var(--bg); padding: 24px; }
+.settings-drafts-dialog { max-width: min(480px, calc(100vw - 40px)); border: 0; border-radius: var(--r-card); color: var(--text); background: var(--panel); box-shadow: var(--card-shadow); padding: 24px; }
 .settings-drafts-dialog::backdrop { background: rgb(0 0 0 / 35%); }
 .settings-draft-status { display: block; font-size: 12px; margin-top: 6px; }
 .settings-draft-error { display: block; }
@@ -2878,7 +2926,7 @@ button.provider-link:hover:not(:disabled) { background: none; color: var(--band-
  * the corner. No photographs.
  */
 /* A frosted sheet with a 20px margin, over the ground and three slow patches of colour. */
-dialog.settings-sheet { position: fixed; inset: 20px; width: auto; height: auto; max-width: none; max-height: none; margin: 0; padding: 0; overflow-y: auto; border: 0; border-radius: var(--r-sheet); background: color-mix(in srgb, var(--bg) 66%, transparent); color: var(--text); box-shadow: inset 0 0 8px rgb(255 255 255 / 30%), 0 1px 8px rgb(0 0 0 / 5%); -webkit-backdrop-filter: blur(64px); backdrop-filter: blur(64px); scrollbar-width: thin; }
+dialog.settings-sheet { position: fixed; inset: 20px; width: auto; height: auto; max-width: none; max-height: none; margin: 0; padding: 0; overflow-y: auto; border: 0; border-radius: var(--r-sheet); background: color-mix(in srgb, var(--bg) 66%, transparent); color: var(--text); box-shadow: inset 0 0 8px rgb(255 255 255 / 30%), 0 1px 8px rgb(0 0 0 / 5%); -webkit-backdrop-filter: blur(64px); backdrop-filter: blur(64px); }
 dialog.settings-sheet[open] { display: flex; animation: kw-fade .35s var(--ease-out) both; }
 dialog.settings-sheet::backdrop { background: radial-gradient(ellipse 60% 62% at 21% 100%, #9fcdb4 0 45%, rgb(159 205 180 / 0) 100%), radial-gradient(ellipse 44% 46% at 88% 102%, #cfe0c8 0 45%, rgb(207 224 200 / 0) 100%), radial-gradient(ellipse 36% 34% at 74% 3%, #e9ddf6 0 45%, rgb(233 221 246 / 0) 100%), var(--bg); }
 .settings-sheet-body { display: flex; flex-direction: column; flex: 1; min-height: min-content; padding: 8px 20px 40px; }
@@ -2956,6 +3004,7 @@ dialog.confirm-dialog::backdrop { background: rgb(0 0 0 / 28%); }
 .confirm-dialog-actions button { margin: 0; min-height: 38px; padding: 0 18px; }
 .confirm-dialog-actions button:not(.danger):not(.primary) { background: var(--control); }
 .confirm-dialog-actions button:not(.danger):not(.primary):hover:not(:disabled) { background: var(--control-hover); }
+.settings-drafts-dialog .confirm-dialog-actions button { min-height: var(--field-height-compact); font-size: 15px; }
 button.danger { background: var(--error); color: var(--bg); }
 button.danger:hover:not(:disabled) { background: var(--error); color: var(--bg); filter: brightness(1.08); }
 
@@ -3673,9 +3722,18 @@ pre.code-panel { margin: 0; max-height: none; padding: 26px 30px; border-radius:
 
 @keyframes kw-spin { 0% { transform: rotate(0); } 100% { transform: rotate(360deg); } }
 
-/* A select on a settings screen: a filled pill with its own chevron. */
-.content select { appearance: none; -webkit-appearance: none; height: 36px; padding: 0 38px 0 16px; background-color: var(--field); background-image: linear-gradient(45deg, transparent 50%, currentcolor 50%, currentcolor 62%, transparent 62%), linear-gradient(-45deg, transparent 50%, currentcolor 50%, currentcolor 62%, transparent 62%); background-position: calc(100% - 20px) 50%, calc(100% - 15px) 50%; background-size: 5px 5px; background-repeat: no-repeat; font-size: 13px; cursor: pointer; }
-.content select:hover:not(:disabled), .content select:focus { background-color: var(--control); }
+/* A select on a settings screen, in a note's menu or in the speaker form: a filled pill with its own chevron. */
+:is(.content, .notes-context-menu, .transcript-rename) select { appearance: none; -webkit-appearance: none; height: 36px; padding: 0 38px 0 16px; background-color: var(--field); background-image: linear-gradient(45deg, transparent 50%, currentcolor 50%, currentcolor 62%, transparent 62%), linear-gradient(-45deg, transparent 50%, currentcolor 50%, currentcolor 62%, transparent 62%); background-position: calc(100% - 20px) 50%, calc(100% - 15px) 50%; background-size: 5px 5px; background-repeat: no-repeat; font-size: 13px; cursor: pointer; }
+:is(.content, .notes-context-menu, .transcript-rename) select:hover:not(:disabled), :is(.content, .notes-context-menu, .transcript-rename) select:focus { background-color: var(--control); }
+/*
+ * `appearance: none` above is what lets these draw their chevron as a background, and it also
+ * handed their list back to Windows: a grey slab with square corners. Where the styled list is
+ * available they take it back, with the platform's arrow off since the background draws one.
+ */
+@supports (appearance: base-select) {
+  :is(.content, .notes-context-menu, .transcript-rename) select { appearance: base-select; }
+  :is(.content, .notes-context-menu, .transcript-rename) select::picker-icon { display: none; }
+}
 
 /* A sentence a screen sets apart keeps the column's full width. */
 .content .view section p.caveat { max-width: none; }
@@ -3701,7 +3759,7 @@ pre.code-panel { margin: 0; max-height: none; padding: 26px 30px; border-radius:
 .shortcut-note .status-dot { margin-top: 5px; }
 .learn-more-hint { flex: none; margin-left: auto; font-size: 13px; color: var(--muted); white-space: nowrap; }
 .shortcut-editor { gap: 8px; }
-.content .shortcut-editor > input:not([type="checkbox"]) { flex: 1 1 200px; min-width: 0; height: 40px; padding: 0 20px; font: 13px/1.3 var(--font-code); }
+.content .shortcut-editor > input:not([type="checkbox"]) { flex: 1 1 200px; min-width: 0; height: var(--field-height-compact); padding: 0 14px; font: 15px/1.3 var(--font-sans); }
 .shortcut-recorder { padding: 0; }
 .shortcut-recorder > button { margin: 0; }
 .shortcut-card .row-detail { max-width: none; }
@@ -3723,12 +3781,12 @@ pre.code-panel { margin: 0; max-height: none; padding: 26px 30px; border-radius:
 .content .view section.vocabulary-intro > p { max-width: none; margin: 0; font-size: 15px; line-height: 1.45; }
 .content .view section.vocabulary-intro > p.muted { font-size: 13px; }
 .vocabulary-add { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding-top: 6px; }
-.content .vocabulary-add > input:not([type="checkbox"]) { flex: 1 1 320px; max-width: none; height: 48px; padding: 0 22px; font-size: 15px; }
-.content .vocabulary-add > button.action-iris { min-height: 48px; padding: 0 28px; font-size: 15px; }
+.content .vocabulary-add > input:not([type="checkbox"]) { flex: 1 1 320px; max-width: none; height: var(--field-height); padding: 0 20px; font-size: 15px; }
+.content .vocabulary-add > button.action-iris { min-height: var(--field-height); padding: 0 28px; font-size: 15px; }
 .content .view section.vocabulary-saved { display: flex; flex-direction: column; gap: 18px; }
 .vocabulary-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
 .content .vocabulary-head > h2.section-label { margin: 0; }
-.vocabulary-search { display: inline-flex; align-items: center; gap: 9px; width: 260px; max-width: 100%; height: 40px; padding: 0 16px; border-radius: var(--r-control); background: var(--field); }
+.vocabulary-search { display: inline-flex; align-items: center; gap: 9px; width: 260px; max-width: 100%; height: var(--field-height-compact); padding: 0 16px; border-radius: var(--r-control); background: var(--field); }
 .content .vocabulary-search > input:not([type="checkbox"]) { flex: 1; min-width: 0; height: auto; padding: 0; border: 0; background: none; box-shadow: none; font-size: 14px; }
 .content .vocabulary-search > input:not([type="checkbox"]):focus { background: none; box-shadow: none; }
 .vocabulary-search:focus-within { background: var(--panel); box-shadow: 0 1px 8px rgb(0 0 0 / 6%); }
@@ -3746,7 +3804,13 @@ pre.code-panel { margin: 0; max-height: none; padding: 26px 30px; border-radius:
 .vocabulary-support { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); gap: 14px; }
 .vocabulary-card { display: flex; flex-direction: column; gap: 12px; padding: 24px 26px; border-radius: 32px; background: var(--panel); }
 .vocabulary-card > label.section-label { color: var(--band-text); }
-.content .vocabulary-card > select { align-self: flex-start; height: 40px; margin: 0; padding: 0 38px 0 18px; font-size: 15px; }
+.content .vocabulary-card > select { align-self: flex-start; height: var(--field-height-compact); margin: 0; padding: 0 38px 0 18px; font-size: 15px; }
+/* Known voices: one row per remembered voice -- the name as a field, then its two pills -- and its note on the line under it. */
+.content .known-voice { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 10px; }
+.content .known-voice-name { display: flex; flex: 1 1 240px; min-width: 0; }
+.content .known-voice-name > input:not([type="checkbox"]) { width: 100%; min-width: 0; }
+.content .known-voice > button { margin: 0; }
+.content .view section p.known-voice-note { flex-basis: 100%; margin: 0; padding-left: 14px; color: var(--muted); font-size: 13px; }
 .content .vocabulary-usage .learn-more { border: 0; }
 .content .view section .vocabulary-card p { max-width: none; margin: 0; font-size: 15px; line-height: 1.3; }
 .content .view section .vocabulary-card p.muted { font-size: 13px; line-height: 1.45; }
@@ -3758,7 +3822,12 @@ pre.code-panel { margin: 0; max-height: none; padding: 26px 30px; border-radius:
 .vocabulary-usage ul { display: flex; flex-direction: column; gap: 4px; margin: 0 0 8px; padding-left: 18px; font-size: 13px; line-height: 1.45; color: var(--muted); }
 
 /* A field in a settings row takes the value column's width. */
-.content .row-value > input:not([type="checkbox"], [type="radio"], [type="range"]) { width: 100%; height: 44px; padding: 0 20px; font-size: 15px; }
+.content .row-value > input:not([type="checkbox"], [type="radio"], [type="range"]) { width: 100%; height: var(--field-height); padding: 0 20px; font-size: 15px; }
+/* Match the first field, not the height of its explanation or disclosure. */
+.content .row:has(> .row-value > :is(input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"]), select)) > .row-label { display: flex; align-items: center; min-height: var(--field-height); }
+@container main (width < 554.5px) {
+  .content .row:has(> .row-value > :is(input, select)) > .row-label { min-height: 0; }
+}
 .content .row-value > textarea { width: 100%; min-height: 84px; padding: 14px 20px; border-radius: var(--r-card); font-size: 14px; resize: vertical; }
 .content .row-value > .switch-row { align-self: stretch; font-size: 15px; }
 .content .row-value > button:not([class]) { margin: 0; }
@@ -3792,7 +3861,7 @@ pre.code-panel { margin: 0; max-height: none; padding: 26px 30px; border-radius:
 
 @media (prefers-reduced-motion: reduce) { .state-tag[data-tone="call"] .state-tag-dot { animation: none; } }
 
-.content .row-value > select { height: 40px; padding: 0 38px 0 18px; font-size: 15px; }
+.content .row-value > select { height: var(--field-height); padding: 0 38px 0 18px; font-size: 15px; }
 .content .row-value > textarea { font-family: inherit; }
 .content .model-cards + .learn-more { border-bottom: 1px solid color-mix(in srgb, var(--text) 12%, transparent); }
 
@@ -3831,7 +3900,7 @@ button.language-pill[aria-pressed="true"], button.language-pill[aria-pressed="tr
 .provider-card-name { font-size: 17px; line-height: 1.3; }
 .engine-card-chips { display: flex; flex-wrap: wrap; gap: 5px; }
 .content .provider-card .controls { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; }
-.content .provider-card .controls > input:not([type="checkbox"]) { flex: 1 1 200px; min-width: 0; height: 44px; margin: 0; padding: 0 20px; font-size: 15px; }
+.content .provider-card .controls > input:not([type="checkbox"]) { flex: 1 1 200px; min-width: 0; height: var(--field-height-compact); margin: 0; padding: 0 14px; font-size: 15px; }
 .content .provider-card .controls > select { flex: 0 1 auto; min-width: 0; margin: 0; }
 .content .provider-card .controls > button { margin: 0; }
 .content .provider-card .learn-more, .content .engine-card .learn-more { border: 0; }
@@ -3876,8 +3945,7 @@ button.language-pill[aria-pressed="true"], button.language-pill[aria-pressed="tr
 .content-intelligence .view section > p { max-width: none; margin: 0; }
 .content-intelligence .view section > p:not([class]) { font-size: 15px; line-height: 1.45; }
 .content-intelligence .view section > p.muted { font-size: 14px; line-height: 1.45; }
-.content .row-value > input[type="url"] { font: 13px/1.3 var(--font-code); }
-.content .row-value > input[type="number"] { width: 160px; font: 15px/1.3 var(--font-mono); }
+.content .row-value > input[type="number"] { width: 160px; }
 .summary-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding-top: 4px; }
 .summary-setup-help { flex: 1 1 260px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
 .content .view section .summary-setup-help > p { max-width: none; margin: 0; font-size: 14px; }
@@ -3891,7 +3959,10 @@ button.language-pill[aria-pressed="true"], button.language-pill[aria-pressed="tr
 .company-card { display: flex; flex-direction: column; gap: 10px; min-width: 0; padding: 20px 22px; border-radius: 32px; background: var(--panel); }
 .company-card-name { font-size: 16px; line-height: 1.3; }
 .company-card .provider-card-head { gap: 8px; }
-.content .company-card > input:not([type="checkbox"]) { width: 100%; height: 44px; margin: 0; padding: 0 20px; font-size: 15px; text-overflow: ellipsis; }
+.company-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.company-field-label { font-size: 14px; line-height: 1.3; }
+.company-field-hint { color: var(--muted); font-size: 13px; line-height: 1.4; overflow-wrap: anywhere; }
+.content .company-field > input { width: 100%; min-width: 0; height: var(--field-height-compact); margin: 0; padding: 0 14px; font-size: 15px; }
 .company-card-actions { margin-top: auto; flex-wrap: wrap; gap: 6px; }
 .content .company-card .learn-more { border: 0; }
 .content .company-card .learn-more > summary { min-height: 36px; font-size: 13px; color: var(--muted); }
@@ -3993,8 +4064,8 @@ button.language-pill[aria-pressed="true"], button.language-pill[aria-pressed="tr
 .content button.provider-change:hover:not(:disabled) { background: var(--control-hover); color: var(--text); }
 .content button.provider-link, .content button.provider-link:hover:not(:disabled) { min-height: 0; padding: 0; background: none; color: var(--muted); font-size: 13px; letter-spacing: 0; text-decoration: underline; text-underline-offset: 2px; }
 .provider-form { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding-top: 12px; }
-.content .provider-form > input:not([type="checkbox"]) { flex: 1 1 220px; min-width: 0; height: 44px; margin: 0; padding: 0 20px; font-size: 15px; }
-.content .provider-form > button { min-height: 44px; margin: 0; padding: 0 22px; font-size: 14px; }
+.content .provider-form > input:not([type="checkbox"]) { flex: 1 1 220px; min-width: 0; height: var(--field-height-compact); margin: 0; padding: 0 14px; font-size: 15px; }
+.content .provider-form > button { min-height: var(--field-height-compact); margin: 0; padding: 0 16px; font-size: 14px; }
 .content .provider-tech .learn-more { border: 0; }
 .content .provider-tech .learn-more > summary { min-height: 32px; font-size: 13px; color: var(--muted); }
 .content .providers > .learn-more { margin: 0; border-bottom: 1px solid color-mix(in srgb, var(--text) 12%, transparent); }
@@ -4144,3 +4215,62 @@ button.microphone-error-retry { align-self: flex-start; min-height: 32px; margin
  * sits at the window's left edge takes the left gutter back out of its 24px.
  */
 .page-back, .task-notice { padding-left: calc(24px + (100cqw - 100vw) / 2); }
+
+/* KNEG-515: leave the floating library toggle its own space in the inline transcript. */
+.split[data-list-collapsed="true"] .note-transcript-inline .transcript-head { padding-left: 44px; }
+
+/* KNEG-547: keep the task's layout while reading, without inventing its state. */
+.task-page.task-loading { animation: none; }
+.task-loading .task-hero { min-height: 176px; justify-content: center; }
+.task-loading .task-loading-card { min-height: 300px; justify-content: space-between; }
+.task-loading-art { min-height: 300px; border-radius: var(--r-sheet); background: var(--control); }
+.task-placeholder { display: block; width: 100%; height: 16px; border-radius: var(--r-control); background: var(--control); visibility: hidden; }
+.task-loading[data-details="true"] .task-placeholder { visibility: visible; }
+.task-placeholder-title { width: min(540px, 90%); height: 56px; }
+.task-placeholder-subtitle { width: min(420px, 75%); }
+
+/* Calendar cache rows and choices share the page tokens in both themes.
+   The recording tile uses its own opaque glass so small text stays legible
+   throughout the moving dusk background. */
+.upcoming { display: flex; flex-direction: column; gap: 12px; width: 100%; max-width: 1228px; margin: 0 auto; padding: 72px 24px 0; background: none; }
+.task-page-live .upcoming { padding-top: 56px; }
+.upcoming-rows { margin: 12px 0; padding: 0; list-style: none; }
+.upcoming-rows > li { display: grid; grid-template-columns: 170px minmax(0, 1fr) 140px; gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--rule); font-size: 14px; }
+.upcoming-time { font-family: var(--font-mono); color: var(--muted); }
+.upcoming-title { min-width: 0; overflow-wrap: anywhere; color: var(--text); }
+.upcoming-provider, .calendar-freshness { color: var(--muted); font-size: 13px; }
+.calendar-freshness p { margin: 8px 0; }
+.upcoming-loading { display: grid; gap: 14px; padding: 16px 0; }
+.upcoming-loading .task-placeholder { height: 24px; visibility: visible; }
+button.calendar-settings-link { height: auto; min-height: 0; padding: 0; border-radius: 0; background: none; color: var(--text); font: inherit; text-align: left; text-decoration: underline; text-underline-offset: 3px; white-space: normal; }
+.calendar-line { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.calendar-line > span { flex: 1 1 180px; min-width: 0; overflow-wrap: anywhere; }
+.calendar-line .pill { flex: none; }
+.calendar-choice { padding: 12px; border-radius: var(--r-row); background: rgb(255 255 255 / 92%); color: #17171b; font-size: 14px; }
+.calendar-choice .calendar-line > span { flex-basis: 100%; }
+.calendar-choice button.glass-plain, .calendar-choice-error button.glass-plain { height: 30px; min-height: 0; padding: 0 10px; font-size: 13px; }
+.calendar-choice-error { margin: 0; padding: 10px; border-radius: var(--r-control); color: #17171b; background: rgb(255 255 255 / 92%); font-size: 13px; overflow-wrap: anywhere; }
+.calendar-picker { display: flex; flex-direction: column; gap: 4px; max-height: 220px; overflow: auto; margin-top: 8px; padding: 6px; border-radius: var(--r-row); background: var(--panel); color: var(--text); }
+.content .calendar-picker > button, .calendar-picker > button { display: flex; flex: none; flex-direction: column; align-items: flex-start; gap: 3px; height: auto; min-height: 36px; margin: 0; padding: 8px 12px; border-radius: var(--r-row); background: var(--control); color: var(--text); font-size: 13px; line-height: 1.35; text-align: left; white-space: normal; overflow-wrap: anywhere; }
+.calendar-picker > button small { color: var(--muted); }
+.calendar-picker > button[aria-pressed="true"] { outline: 2px solid var(--band); outline-offset: -2px; }
+.recording-calendar { margin: 12px 0; color: var(--text); font-size: 14px; }
+.meeting-live > .recording-calendar { max-width: 1228px; margin: 12px auto; padding: 0 24px; }
+.recording-calendar .error { margin: 6px 0 0; overflow-wrap: anywhere; }
+.notify-panel > .recording-calendar { flex: none; margin: 0 16px 10px; font-size: 12px; }
+.notify-panel .recording-calendar .pill { height: 26px; min-height: 26px; padding: 0 8px; font-size: 12px; }
+/* One whole row fits at the panel's minimum size; only the list scrolls, so
+ * the surrounding calendar block cannot cut a second viewport through it. */
+.notify-panel .calendar-picker { max-height: 76px; scroll-snap-type: y mandatory; scroll-padding: 6px; }
+.notify-panel .calendar-picker > button { min-height: 64px; scroll-snap-align: start; }
+@media (max-width: 760px) {
+  .upcoming-rows > li { grid-template-columns: 145px minmax(0, 1fr); gap: 6px 12px; }
+  .upcoming-provider { grid-column: 2; }
+}
+.task-loading-lines { display: flex; flex-direction: column; gap: 18px; }
+.task-loading-lines > :last-child { width: 65%; }
+.task-page.task-arrival { animation: kw-fade 120ms ease-out both; }
+.task-arrival .notice { animation: none; }
+@media (prefers-reduced-motion: reduce) {
+  .task-page.task-arrival { animation: none; }
+}

@@ -490,10 +490,7 @@ impl LocalTranscriber for SherpaOffline {
             .map_err(|err| err.to_string())?;
         // `sherpa-onnx-offline` takes a file path, not stdin.
         let wav_path = unique_wav_path(&self.temp_dir, "sherpa-input");
-        let _scratch = ScratchWav(wav_path.clone());
-        tokio::fs::write(&wav_path, &wav)
-            .await
-            .map_err(|err| err.to_string())?;
+        let _scratch = ScratchWav::write(wav_path.clone(), &wav).await?;
 
         let args = build_args(&self.files, &wav_path, self.num_threads);
         let output = tokio::process::Command::new(&self.executable)

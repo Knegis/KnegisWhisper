@@ -33,12 +33,48 @@ Routes carry a **key reference**, not a key. Route resolution is a pure function
 to credentials at all; only `crates/security` can resolve a reference, and only
 `crates/network-policy` can transmit the result. A test never needs a real credential.
 
-Calendar OAuth refresh tokens go to the credential store too. Upstream keeps them in plaintext
-SQLite columns; the importer relocates them and leaves a reference behind. Google's flow moves to
-a **PKCE-only installed-app public client** — upstream ships a `client_secret` in the app
-environment, which is not a secret in a distributed binary.
+The shared `custom` key is a versioned vault record containing the secret and its
+authorized HTTP(S) origins (scheme, host and effective port). Saving a freshly
+entered key binds the currently configured Custom transcription, cleanup and
+summary server addresses. Settings writes never extend that authority. Both chat
+and batch transcription check the final request URL before sending anything.
+Existing unbound keys require re-entry; they are never migrated using mutable
+settings. A self-hosted chat server can still operate without a stored key, but a
+locked vault or an origin mismatch fails the request. Paths on an authorized
+origin may change without re-entry. Changing a scheme, host or port requires it.
+
+Calendar OAuth tokens go to the OS credential store. The importer relocates upstream's
+plaintext refresh tokens from SQLite and leaves only a slot reference. Google Calendar and
+Outlook use PKCE clients: Advanced custom configuration takes precedence over app-owned build
+values, then Missing. Microsoft's public client never carries a client secret.
+
+Google's desktop client secret is a **public build value**. Anyone with the binary can extract
+it, so it cannot authenticate an installation or protect user data. Rust sends it only on token
+and refresh grants, never in the authorization URL or to the frontend. The custom Google secret
+lives only in credential-store slot `calendar-google-custom-client`. The app-owned value is
+compiled into Rust, not stored in runtime settings or a `VITE_` variable.
+
+`TokenBundle.client_id` binds each grant to its issuing client. Unbound or mismatched grants
+require reconnecting. The durable `calendar.<provider>.cleanupRefs` list holds only credential
+slot names whose deletion failed, never tokens. Disconnect deletes the connected account's rows
+and slot, including imported slots; failed deletions remain retryable.
+
+The callback checks `state` before handling `error`. Only allowlisted `CalendarProblem`
+descriptions cross IPC; provider descriptions and HTTP bodies never leave Rust. Real-account
+consent and refresh are unverified; see [the owner runbook](CALENDAR_PROVIDER_SETUP.md).
 
 ## Network
+
+Scratch audio uses a private directory created with restrictive permissions:
+Unix mode 0700 and the current UID, or a protected Windows DACL for the current
+user, System and Administrators. Existing insecure directories and links are
+refused, never taken over. Windows ancestor handles remain pinned while native
+tools write audio and logs. WAV staging uses exclusive creation and Unix mode
+0600. The stable ASCII directory name separates users and profiles and supports
+restart cleanup. Non-ASCII profiles use a private child of ProgramData or
+/var/tmp; model caches are unchanged. Legacy shared scratch directories are not
+reused or recursively removed because they can contain other users' files.
+This protection does not retroactively remove recordings left there by older builds.
 
 Every request declares a purpose; there is no unlabelled path. The webview has no HTTP capability
 and no permission to reach arbitrary hosts. There is no startup request, no telemetry, and no
@@ -249,17 +285,17 @@ on a later click. That is not the shape `note_export_to_file` uses, which fuses 
 into one atomic command so the frontend never sees or supplies a path at all; fusing pick and
 import the same way would fight this screen's pick-then-review-then-confirm flow, which a
 single-click save does not need. So the path does cross the boundary, and what makes that safe is a
-capability rather than the shape: **`commands::DialogGrants` records the canonical form of every
-path `pick_import_file` returns, and those three commands — the only three in the application that
+capability rather than the shape: **`commands::DialogGrants` records every exact picker-returned
+string and its canonical target, and those three commands — the only three in the application that
 accept a path at all — refuse anything that set does not hold.** A compromised renderer calling
 `media_import_audio` directly with an arbitrary local path is refused before the file is opened,
 which is what stops that file's contents from reaching a configured cloud transcription provider.
 
-Four properties of that set, each a deliberate choice. It is keyed on `std::fs::canonicalize`
-output, not on the string the renderer sent, because `pick_import_file` returns
-`path.display().to_string()` and `display()` is lossy — the cost is that a path whose name does not
-survive lossy conversion cannot be imported, which was already true in practice and is now an
-explicit refusal. It lasts until the application exits, because single-use would break
+Four properties of that set, each a deliberate choice. Unknown strings are refused by exact
+in-memory lookup before any canonicalization or metadata access, including remote filesystem
+access. Known strings are resolved again and must still name the recorded canonical target.
+Non-UTF-8 picker names are refused before returning a lossy string. Each explicitly picked alias
+has its own bounded grant. It lasts until the application exits, because single-use would break
 retry-after-failure, which the screen relies on today. It is not time-bounded, because the review
 step can legitimately sit open across a sidecar install of tens of megabytes. And it is bounded by
 count (32) so a renderer calling the picker in a loop cannot grow it without limit.

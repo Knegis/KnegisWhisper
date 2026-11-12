@@ -1,45 +1,18 @@
-//! Google Calendar API v3: the calendar list and incremental event sync.
+//! Google Calendar API v3 calendar lists and bounded event snapshots.
 //!
-//! # What is verified and what is not
-//!
-//! There is no Google OAuth client id anywhere in this checkout -- the whole
-//! point of `crate::flow` is that this crate never has one of its own -- so
-//! nothing in this module has ever completed a real request. Every request
-//! shape and every response shape below is written against Google's public
-//! reference documentation
-//! (<https://developers.google.com/calendar/api/v3/reference>) and its sync
-//! guide (<https://developers.google.com/calendar/api/guides/sync>), and
-//! pinned by the fixture tests at the bottom of this file rather than by a
-//! live call. **UNVERIFIED**, specifically:
-//!
-//! * That `calendarList.list` really marks exactly one entry `primary: true`
-//!   for every account, and that its `id` is the account's email address.
-//!   [`primary_email`] depends on this to name the account a set of tokens
-//!   belongs to.
-//! * The exact 410 behaviour of `events.list` with an expired `syncToken` --
-//!   believed to be a bare 410 with no distinguishing body, so
-//!   [`fetch_events`] treats *any* 410 on this endpoint as
-//!   [`SyncError::SyncTokenExpired`] rather than inspecting the body for a
-//!   reason.
-//! * That a cancelled event surfaces during an incremental sync with only
-//!   `id` and `status: "cancelled"` populated, and is omitted entirely from a
-//!   full sync (no `syncToken`). [`normalize_event`] and [`plan_event_writes`]
-//!   are written to that description; nothing has exercised it against a
-//!   real calendar with a real deletion.
-//!
-//! # What this module does not do
-//!
-//! It does not write to the database. [`crate::calendars_repo`] and
-//! [`crate::events_repo`] do that; this module only talks to Google and
-//! turns what comes back into the shapes those repos take. Keeping the wire
-//! parsing and the SQL apart is what let the parsing be fixture-tested with
-//! no database in sight.
+//! Window requests expand recurring instances and repeat the same bounds on
+//! every page. These request shapes are fixture-tested; live provider access
+//! is not part of the offline test suite. Parsing never writes to storage, so
+//! an incomplete page chain cannot replace a calendar's cached snapshot.
 
 use kw_network_policy::{NetworkPolicy, RequestPurpose};
 use kw_security::Secret;
 use serde::Deserialize;
 
-use crate::sync_support::{percent_encode_path_segment, StoredAttendee, SyncError, MAX_PAGES};
+use crate::sync_support::{
+    collect_window, percent_encode_path_segment, to_utc, StoredAttendee, SyncError, WindowSnapshot,
+    MAX_PAGES,
+};
 
 const CALENDAR_LIST_URL: &str = "https://www.googleapis.com/calendar/v3/users/me/calendarList";
 
@@ -116,8 +89,8 @@ fn parse_calendar_list_page(
     Ok((items, raw.next_page_token))
 }
 
-/// The calendar whose id names the account, per the module doc's first
-/// UNVERIFIED item.
+/// The primary calendar id names the account in Google calendar-list responses.
+/// This assumption is fixture-tested and has not been checked against a live account.
 #[must_use]
 pub fn primary_email(calendars: &[CalendarListEntry]) -> Option<&str> {
     calendars
@@ -177,40 +150,12 @@ pub async fn fetch_calendar_list(
 
 /* ------------------------------------------------------------------ events */
 
-/// One event fetched from a Google calendar, or the fact that a previously
-/// seen one was cancelled and should be removed locally.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SyncedEvent {
-    Upsert(NormalizedEvent),
-    /// `status: "cancelled"` on an incremental sync -- Google's signal that
-    /// the client should delete this id. UNVERIFIED; see the module doc.
-    Removed {
-        id: String,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NormalizedEvent {
-    pub id: String,
-    pub summary: Option<String>,
-    pub start_time: String,
-    pub end_time: String,
-    pub is_all_day: bool,
-    pub status: String,
-    pub hangout_link: Option<String>,
-    pub conference_data: Option<String>,
-    pub organizer_email: Option<String>,
-    pub attendees: Vec<StoredAttendee>,
-}
-
 #[derive(Debug, Deserialize)]
 struct RawEventsPage {
     #[serde(default)]
     items: Vec<RawEvent>,
     #[serde(rename = "nextPageToken", default)]
     next_page_token: Option<String>,
-    #[serde(rename = "nextSyncToken", default)]
-    next_sync_token: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -218,17 +163,13 @@ struct RawEvent {
     id: String,
     #[serde(default = "confirmed")]
     status: String,
-    #[serde(default)]
     summary: Option<String>,
-    #[serde(default)]
     start: Option<RawEventTime>,
-    #[serde(default)]
     end: Option<RawEventTime>,
-    #[serde(rename = "hangoutLink", default)]
+    #[serde(rename = "hangoutLink")]
     hangout_link: Option<String>,
-    #[serde(rename = "conferenceData", default)]
+    #[serde(rename = "conferenceData")]
     conference_data: Option<serde_json::Value>,
-    #[serde(default)]
     organizer: Option<RawOrganizer>,
     #[serde(default)]
     attendees: Vec<RawAttendee>,
@@ -240,154 +181,143 @@ fn confirmed() -> String {
 
 #[derive(Debug, Deserialize)]
 struct RawEventTime {
-    #[serde(default)]
     date: Option<String>,
-    #[serde(rename = "dateTime", default)]
+    #[serde(rename = "dateTime")]
     date_time: Option<String>,
+    #[serde(rename = "timeZone")]
+    time_zone: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct RawOrganizer {
-    #[serde(default)]
     email: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct RawAttendee {
-    #[serde(default)]
     email: Option<String>,
-    #[serde(rename = "responseStatus", default)]
+    #[serde(rename = "responseStatus")]
     response_status: Option<String>,
+    #[serde(rename = "displayName")]
+    display_name: Option<String>,
+    #[serde(rename = "self", default)]
+    is_self: bool,
 }
 
-/// Turn one raw event into what gets written locally, or the fact that it
-/// should be removed. `None` for an event this cannot make sense of --
-/// missing both `date` and `dateTime` on an event that is not a removal --
-/// which is skipped rather than written with an invented time.
-fn normalize_event(raw: RawEvent) -> Option<SyncedEvent> {
-    if raw.status == "cancelled" {
-        return Some(SyncedEvent::Removed { id: raw.id });
-    }
-
-    let start = raw.start?;
-    let end = raw.end?;
-    let (start_time, start_all_day) = event_time(&start)?;
-    let (end_time, _) = event_time(&end)?;
-
-    Some(SyncedEvent::Upsert(NormalizedEvent {
-        id: raw.id,
-        summary: raw.summary,
-        start_time,
-        end_time,
-        is_all_day: start_all_day,
-        status: raw.status,
-        hangout_link: raw.hangout_link,
-        conference_data: raw
-            .conference_data
-            .and_then(|v| serde_json::to_string(&v).ok()),
-        organizer_email: raw.organizer.and_then(|o| o.email),
-        attendees: raw
-            .attendees
-            .into_iter()
-            .map(|a| StoredAttendee {
-                email: a.email,
-                name: None,
-                response_status: a.response_status,
-            })
-            .collect(),
-    }))
-}
-
-/// `(value, is_all_day)`, or `None` if neither `date` nor `dateTime` is set.
 fn event_time(time: &RawEventTime) -> Option<(String, bool)> {
     if let Some(date) = &time.date {
+        chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").ok()?;
         Some((date.clone(), true))
     } else {
-        time.date_time.clone().map(|dt| (dt, false))
+        Some((
+            to_utc(time.date_time.as_deref()?, time.time_zone.as_deref())?,
+            false,
+        ))
     }
 }
 
-/// One parsed page of `events.list`.
-struct EventsPage {
-    items: Vec<SyncedEvent>,
-    next_page_token: Option<String>,
-    next_sync_token: Option<String>,
-}
-
-/// Parse one page of `events.list`, pure so it can be fixture-tested.
-fn parse_events_page(body: &str) -> Result<EventsPage, SyncError> {
+fn parse_window_page(
+    body: &str,
+    calendar_id: &str,
+) -> Result<(WindowSnapshot, Option<String>), SyncError> {
+    use crate::events_repo::{row_id, EventRow};
     let raw: RawEventsPage =
-        serde_json::from_str(body).map_err(|_json_error| SyncError::MalformedResponse)?;
-    let items = raw.items.into_iter().filter_map(normalize_event).collect();
-    Ok(EventsPage {
-        items,
-        next_page_token: raw.next_page_token,
-        next_sync_token: raw.next_sync_token,
-    })
+        serde_json::from_str(body).map_err(|_| SyncError::MalformedResponse)?;
+    let mut snapshot = WindowSnapshot::default();
+    for event in raw.items {
+        if event.status == "cancelled"
+            || event
+                .attendees
+                .iter()
+                .any(|a| a.is_self && a.response_status.as_deref() == Some("declined"))
+        {
+            continue;
+        }
+        let id = row_id("google", calendar_id, &event.id);
+        let times = event
+            .start
+            .as_ref()
+            .and_then(event_time)
+            .zip(event.end.as_ref().and_then(event_time));
+        let Some(((start_time, is_all_day), (end_time, _))) = times else {
+            snapshot.keep_ids.push(id);
+            continue;
+        };
+        snapshot.rows.push(EventRow {
+            id,
+            calendar_id: calendar_id.to_owned(),
+            provider: "google",
+            summary: event.summary,
+            start_time,
+            end_time,
+            is_all_day,
+            status: event.status,
+            hangout_link: event.hangout_link,
+            conference_data: event
+                .conference_data
+                .and_then(|v| serde_json::to_string(&v).ok()),
+            organizer_email: event.organizer.and_then(|o| o.email),
+            attendees: event
+                .attendees
+                .into_iter()
+                .map(|a| StoredAttendee {
+                    email: a.email,
+                    name: a.display_name,
+                    response_status: a.response_status,
+                })
+                .collect(),
+        });
+    }
+    Ok((snapshot, raw.next_page_token))
 }
 
-/// What one calendar's fetch produced: every item seen, and the cursor to
-/// store for next time -- `None` when the provider never sent one, which
-/// [`crate::calendars_repo`] leaves the existing value alone rather than
-/// erasing it.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct EventsFetch {
-    pub events: Vec<SyncedEvent>,
-    pub next_sync_token: Option<String>,
+fn window_url(
+    calendar_id: &str,
+    start: &chrono::DateTime<chrono::Utc>,
+    end: &chrono::DateTime<chrono::Utc>,
+) -> String {
+    format!(
+        "{}?singleEvents=true&timeMin={}&timeMax={}&showDeleted=false&maxResults=2500",
+        events_url(calendar_id),
+        percent_encode_path_segment(&start.to_rfc3339()),
+        percent_encode_path_segment(&end.to_rfc3339())
+    )
 }
 
-/// Fetch events for `calendar_id`, following `sync_token` when there is one.
-///
-/// A 410 is reported as [`SyncError::SyncTokenExpired`] without inspecting the
-/// body -- see the module doc. The caller's answer to that is to retry with
-/// `sync_token: None`, which asks for a full list instead of a delta.
-///
-/// UNVERIFIED network path; [`parse_events_page`] is what is fixture-tested.
-pub async fn fetch_events(
+/// Fetch every expanded instance in the frozen window. Only a complete page
+/// chain is returned; callers must not commit an error as an empty snapshot.
+pub async fn fetch_window(
     policy: &NetworkPolicy,
     access_token: &Secret,
     calendar_id: &str,
-    sync_token: Option<&str>,
-) -> Result<EventsFetch, SyncError> {
-    let base = events_url(calendar_id);
-    let mut events = Vec::new();
-    let mut next_sync_token = None;
-    let mut page_token: Option<String> = None;
+    start: &chrono::DateTime<chrono::Utc>,
+    end: &chrono::DateTime<chrono::Utc>,
+) -> Result<WindowSnapshot, SyncError> {
+    fetch_window_with(calendar_id, start, end, |url| async move {
+        get(policy, access_token, &url).await
+    })
+    .await
+}
 
-    for _ in 0..MAX_PAGES {
-        let mut params = vec!["singleEvents=true".to_owned()];
-        if let Some(token) = &page_token {
-            params.push(format!("pageToken={}", percent_encode_path_segment(token)));
-        } else if let Some(token) = sync_token {
-            params.push(format!("syncToken={}", percent_encode_path_segment(token)));
-        }
-        let url = format!("{base}?{}", params.join("&"));
-
-        let (status, body) = get(policy, access_token, &url).await?;
-        if status == 410 {
-            return Err(SyncError::SyncTokenExpired);
-        }
-        if status != 200 {
-            return Err(SyncError::HttpStatus { status });
-        }
-
-        let page = parse_events_page(&body)?;
-        events.extend(page.items);
-        if page.next_sync_token.is_some() {
-            next_sync_token = page.next_sync_token;
-        }
-
-        match page.next_page_token {
-            Some(token) => page_token = Some(token),
-            None => {
-                return Ok(EventsFetch {
-                    events,
-                    next_sync_token,
-                })
-            }
-        }
-    }
-    Err(SyncError::TooManyPages)
+async fn fetch_window_with<F, Fut>(
+    calendar_id: &str,
+    start: &chrono::DateTime<chrono::Utc>,
+    end: &chrono::DateTime<chrono::Utc>,
+    fetch: F,
+) -> Result<WindowSnapshot, SyncError>
+where
+    F: FnMut(String) -> Fut,
+    Fut: std::future::Future<Output = Result<(u16, String), SyncError>>,
+{
+    let base = window_url(calendar_id, start, end);
+    collect_window(base.clone(), fetch, |body| {
+        let (page, next) = parse_window_page(body, calendar_id)?;
+        Ok((
+            page,
+            next.map(|token| format!("{base}&pageToken={}", percent_encode_path_segment(&token))),
+        ))
+    })
+    .await
 }
 
 #[cfg(test)]
@@ -399,6 +329,156 @@ pub async fn fetch_events(
 )]
 mod tests {
     use super::*;
+
+    fn timed_event(id: &str, response: &str, offset: &str) -> serde_json::Value {
+        serde_json::json!({"id": id, "start": {"dateTime": format!("2026-11-11T09:00:00{offset}")},
+            "end": {"dateTime": format!("2026-11-11T10:00:00{offset}")},
+            "attendees": [{"self": true, "displayName": "Connected User", "responseStatus": response}]})
+    }
+
+    #[test]
+    fn window_fixture_normalizes_offsets_dates_names_and_self_declines() {
+        let body = serde_json::json!({"items": [
+            timed_event("plus", "tentative", "+01:00"), timed_event("minus", "unknown", "-05:00"),
+            timed_event("utc", "accepted", "Z"), timed_event("declined", "declined", "Z"),
+            {"id": "day", "start": {"date": "2026-11-11"}, "end": {"date": "2026-11-12"}},
+            {"id": "bad", "start": {"dateTime": "garbage"}},
+            {"id": "cancelled", "status": "cancelled"}
+        ], "nextPageToken": "page two"})
+        .to_string();
+        let (snapshot, next) = parse_window_page(&body, "team").unwrap();
+        assert_eq!(next.as_deref(), Some("page two"));
+        assert_eq!(snapshot.rows.len(), 4);
+        assert_eq!(snapshot.rows[0].start_time, "2026-11-11T08:00:00Z");
+        assert_eq!(snapshot.rows[1].start_time, "2026-11-11T14:00:00Z");
+        assert_eq!(snapshot.rows[2].start_time, "2026-11-11T09:00:00Z");
+        assert!(snapshot.rows[3].is_all_day);
+        assert_eq!(snapshot.rows[3].end_time, "2026-11-12");
+        assert_eq!(
+            snapshot.rows[0].attendees[0].name.as_deref(),
+            Some("Connected User")
+        );
+        assert_eq!(snapshot.keep_ids, ["google:team:bad"]);
+        let body = serde_json::json!({"items": [{"id": "other", "start": {"date": "2026-11-11"}, "end": {"date": "2026-11-12"}, "attendees": [{"self": false, "responseStatus": "declined"}]}]}).to_string();
+        assert_eq!(parse_window_page(&body, "team").unwrap().0.rows.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn every_window_page_repeats_the_frozen_query() {
+        let start = crate::events_repo::parse_row_instant("2026-11-10T12:00:00Z").unwrap();
+        let end = start + chrono::Duration::days(31);
+        let mut urls = Vec::new();
+        let snapshot = fetch_window_with("team@example.com", &start, &end, |url| {
+            urls.push(url);
+            let body = if urls.len() == 1 {
+                r#"{"items":[],"nextPageToken":"page two"}"#
+            } else {
+                r#"{"items":[]}"#
+            };
+            std::future::ready(Ok((200, body.to_owned())))
+        })
+        .await
+        .unwrap();
+        assert!(snapshot.rows.is_empty());
+        assert_eq!(urls.len(), 2);
+        assert_eq!(urls[1], format!("{}&pageToken=page%20two", urls[0]));
+        let url = url::Url::parse(&urls[0]).unwrap();
+        let params: std::collections::HashMap<_, _> = url.query_pairs().into_owned().collect();
+        assert_eq!(params["timeMin"], start.to_rfc3339());
+        assert_eq!(params["timeMax"], end.to_rfc3339());
+        assert_eq!(params["maxResults"], "2500");
+        assert_eq!(params["singleEvents"], "true");
+        assert_eq!(params["showDeleted"], "false");
+    }
+
+    #[tokio::test]
+    async fn incomplete_pages_preserve_cache_while_another_calendar_commits() {
+        use crate::events_repo::{count_events, replace_window};
+        let db = kw_storage::Db::open_in_memory().await.unwrap();
+        let start = crate::events_repo::parse_row_instant("2026-11-10T00:00:00Z").unwrap();
+        let end = start + chrono::Duration::days(31);
+        let body = serde_json::json!({"items": [timed_event("old", "accepted", "Z")]}).to_string();
+        let cached = parse_window_page(&body, "bad-calendar").unwrap().0;
+        replace_window(
+            db.pool(),
+            "google",
+            "bad-calendar",
+            &start,
+            &end,
+            &cached.rows,
+            &[],
+        )
+        .await
+        .unwrap();
+        for failure in ["http", "parse", "overflow"] {
+            let mut calls = 0;
+            let result = fetch_window_with("bad-calendar", &start, &end, |_| {
+                calls += 1;
+                let response = if calls == 2 && failure == "http" {
+                    (503, String::new())
+                } else if calls == 2 && failure == "parse" {
+                    (200, "invalid json".to_owned())
+                } else {
+                    (200, r#"{"items":[],"nextPageToken":"more"}"#.to_owned())
+                };
+                std::future::ready(Ok(response))
+            })
+            .await;
+            assert!(result.is_err());
+            if failure == "overflow" {
+                assert!(matches!(result, Err(SyncError::TooManyPages)));
+                assert_eq!(calls, 25);
+            }
+            if let Ok(snapshot) = result {
+                replace_window(
+                    db.pool(),
+                    "google",
+                    "bad-calendar",
+                    &start,
+                    &end,
+                    &snapshot.rows,
+                    &snapshot.keep_ids,
+                )
+                .await
+                .unwrap();
+            }
+            let stored: String = sqlx::query_scalar(
+                "SELECT start_time FROM calendar_events WHERE id = 'google:bad-calendar:old'",
+            )
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+            assert_eq!(stored, cached.rows[0].start_time);
+        }
+        let good = fetch_window_with("good-calendar", &start, &end, |_| {
+            std::future::ready(Ok((200, body.clone())))
+        })
+        .await
+        .unwrap();
+        replace_window(
+            db.pool(),
+            "google",
+            "good-calendar",
+            &start,
+            &end,
+            &good.rows,
+            &good.keep_ids,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            count_events(db.pool(), "google", "good-calendar")
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            count_events(db.pool(), "google", "bad-calendar")
+                .await
+                .unwrap(),
+            1
+        );
+    }
 
     /// Modelled on the shape documented at
     /// <https://developers.google.com/calendar/api/v3/reference/calendarList/list>.
@@ -466,101 +546,5 @@ mod tests {
             parse_calendar_list_page("not json"),
             Err(SyncError::MalformedResponse)
         ));
-    }
-
-    /// Modelled on
-    /// <https://developers.google.com/calendar/api/v3/reference/events/list>.
-    /// UNVERIFIED against a real response -- see the module doc.
-    const EVENTS_FIXTURE: &str = r#"{
-        "items": [
-            {
-                "id": "evt1",
-                "status": "confirmed",
-                "summary": "Standup",
-                "start": {"dateTime": "2026-01-05T09:00:00Z"},
-                "end": {"dateTime": "2026-01-05T09:15:00Z"},
-                "hangoutLink": "https://meet.google.com/abc-defg-hij",
-                "organizer": {"email": "lead@example.com"},
-                "attendees": [
-                    {"email": "a@example.com", "responseStatus": "accepted"},
-                    {"email": "b@example.com", "responseStatus": "needsAction"}
-                ]
-            },
-            {
-                "id": "evt2",
-                "status": "confirmed",
-                "summary": "All-day offsite",
-                "start": {"date": "2026-02-01"},
-                "end": {"date": "2026-02-02"}
-            },
-            {
-                "id": "evt3",
-                "status": "cancelled"
-            }
-        ],
-        "nextSyncToken": "sync-cursor-1"
-    }"#;
-
-    #[test]
-    fn a_timed_event_is_normalised_with_its_attendees() {
-        let page = parse_events_page(EVENTS_FIXTURE).unwrap();
-        assert_eq!(page.next_sync_token, Some("sync-cursor-1".to_owned()));
-        let SyncedEvent::Upsert(evt) = &page.items[0] else {
-            panic!("expected an upsert");
-        };
-        assert_eq!(evt.id, "evt1");
-        assert!(!evt.is_all_day);
-        assert_eq!(evt.start_time, "2026-01-05T09:00:00Z");
-        assert_eq!(
-            evt.hangout_link.as_deref(),
-            Some("https://meet.google.com/abc-defg-hij")
-        );
-        assert_eq!(evt.organizer_email.as_deref(), Some("lead@example.com"));
-        assert_eq!(evt.attendees.len(), 2);
-    }
-
-    #[test]
-    fn an_all_day_event_is_marked_as_such() {
-        let page = parse_events_page(EVENTS_FIXTURE).unwrap();
-        let SyncedEvent::Upsert(evt) = &page.items[1] else {
-            panic!("expected an upsert");
-        };
-        assert!(evt.is_all_day);
-        assert_eq!(evt.start_time, "2026-02-01");
-    }
-
-    #[test]
-    fn a_cancelled_event_is_a_removal_not_an_upsert() {
-        let page = parse_events_page(EVENTS_FIXTURE).unwrap();
-        assert_eq!(
-            page.items[2],
-            SyncedEvent::Removed {
-                id: "evt3".to_owned()
-            }
-        );
-    }
-
-    #[test]
-    fn an_event_with_neither_date_nor_datetime_is_skipped_not_invented() {
-        let body = r#"{"items":[{"id":"broken","status":"confirmed"}]}"#;
-        let page = parse_events_page(body).unwrap();
-        assert!(page.items.is_empty());
-    }
-
-    #[test]
-    fn conference_data_round_trips_as_a_json_string() {
-        let body = r#"{"items":[{
-            "id":"evt-conf",
-            "status":"confirmed",
-            "start":{"dateTime":"2026-01-05T09:00:00Z"},
-            "end":{"dateTime":"2026-01-05T09:15:00Z"},
-            "conferenceData":{"conferenceId":"abc123"}
-        }]}"#;
-        let page = parse_events_page(body).unwrap();
-        let SyncedEvent::Upsert(evt) = &page.items[0] else {
-            panic!("expected an upsert");
-        };
-        let stored = evt.conference_data.as_deref().unwrap();
-        assert!(stored.contains("abc123"));
     }
 }

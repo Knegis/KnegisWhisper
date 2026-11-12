@@ -236,6 +236,8 @@ pub struct SherpaModel {
     pub id: String,
     pub name: String,
     pub download_url: String,
+    #[serde(default)]
+    pub files: Vec<ModelFile>,
     pub extract_dir: String,
     pub size_mb: Option<f64>,
     /// SHA-256 of the compressed archive, required before installation.
@@ -248,6 +250,16 @@ pub struct SherpaModel {
     pub supported_languages: Option<Vec<String>>,
     /// True for the Nemotron streaming runtimes; the Parakeet models are batch.
     pub streaming: bool,
+}
+
+/// One immutable, size- and digest-pinned model file.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelFile {
+    pub path: String,
+    pub url: String,
+    pub sha256: String,
+    pub expected_size_bytes: u64,
 }
 
 /// Which half of a diarization run a model does.
@@ -275,6 +287,8 @@ pub struct DiarizationModel {
     pub id: String,
     pub name: String,
     pub download_url: String,
+    #[serde(default)]
+    pub files: Vec<ModelFile>,
     /// `None` for the embedding model, which is a single `.onnx` file with
     /// nothing to extract.
     pub extract_dir: Option<String>,

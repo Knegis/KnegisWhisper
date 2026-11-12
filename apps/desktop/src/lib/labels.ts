@@ -60,6 +60,7 @@ import type {
 
 import type { DiarizationRole } from "../generated/providers.js";
 import { meetingRecordingWarning } from "./meetingRecordingWarning.js";
+import { calendarProblemLabel } from "./calendarLabels.js";
 
 /**
  * A state and, where there is one, what backs it up.
@@ -1446,6 +1447,8 @@ export function tokenStatusLabel(status: TokenStatus): { text: string; detail: s
       };
     case "missing":
       return { text: "Not connected", detail: "", more: null };
+    case "reconnect-required":
+      return { text: "Not connected", detail: "Reconnect the account.", more: null };
     case "refresh-failed":
       return {
         text: "Not connected",
@@ -1465,6 +1468,13 @@ export function connectOutcomeLabel(outcome: ConnectOutcome): Plain {
       };
     case "denied":
       return { text: "Not connected: access was declined.", more: outcome.reason };
+    case "failed":
+      return {
+        text: outcome.problem.kind === "reconnect-required"
+          ? "The previous connection could not be kept. Reconnect the account."
+          : calendarProblemLabel(outcome.problem),
+        more: null,
+      };
   }
 }
 
@@ -1489,9 +1499,13 @@ export function syncOutcomeLabel(outcome: SyncOutcome): Plain {
       };
     }
     case "token-unavailable":
-      return { text: "Couldn't sync. Reconnect the account.", more: outcome.message };
+      return {
+        text: outcome.problem && outcome.problem.kind !== "reconnect-required"
+          ? calendarProblemLabel(outcome.problem) : "Couldn't sync. Reconnect the account.",
+        more: outcome.problem ? null : outcome.message,
+      };
     case "failed":
-      return { text: "Couldn't sync.", more: outcome.message };
+      return { text: outcome.problem ? calendarProblemLabel(outcome.problem) : "Couldn't sync.", more: outcome.problem ? null : outcome.message };
   }
 }
 

@@ -1,0 +1,20 @@
+Ndot 57 Regular
+
+Source: https://github.com/xeji01/nothingfont
+Revision: 9d8b51d2e89fcf4d71f4d31e346a2b0ee4350716
+File: fonts/Ndot57-Regular.otf (unmodified)
+Download: https://raw.githubusercontent.com/xeji01/nothingfont/9d8b51d2e89fcf4d71f4d31e346a2b0ee4350716/fonts/Ndot57-Regular.otf
+SHA-256: 8f99a991d2cab1010eaf79520a7ba9bb17d287b4757ba99ae9ff99c4db44367c
+
+Embedded copyright: Copyright © Nothing. All rights reserved.
+Designer/manufacturer: Colophon Foundry
+Embedded license URL: https://nothing.tech/
+
+Embedded license text (name table, ID 13):
+By using Ndot, you agree to their use solely on the Nothing brand materials and will not use them for any other purpose whatsoever.
+You must not modify, adapt, alter, convert, translate or otherwise change the Ndot font software.
+You must not send or share the Ndot font software, with any persons or organisation, or any third party who is not commissioned by, or directly associated with, Nothing, either as a supplier, partner, franchisee, contractor or otherwise.
+
+The source repository credits NOTHING Tech. All Rights Reserved.
+Permission to distribute this font with KnegisWhisper has not been established.
+This notice preserves the source terms; it does not grant additional rights.

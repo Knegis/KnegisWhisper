@@ -381,7 +381,7 @@ test("the committed registry still carries pins for all eleven whisper models", 
     assert.equal(source.path, "ggml-model-q5_0.bin");
     assert.match(source.revision, /^[0-9a-f]{40}$/, `${id} is not pinned to a commit`);
   }
-  assert.equal(sherpa.length, 4, "both Parakeet archives and both Nemotron archives are pinned");
+  assert.equal(sherpa.length, 16, "four immutable runtime files for each of four speech models");
   for (const t of targets) {
     assert.match(t.sha256, /^[0-9a-f]{64}$/, `${t.id} has no usable digest`);
     assert.ok(t.url?.startsWith("https://"), `${t.id} has no https URL`);
@@ -489,7 +489,7 @@ test("the committed registry still carries a digest for all 39 GGUF objects", ()
   // The same argument as the whisper assertion above: a pin dropped from
   // LOCAL_LLM_PINS would otherwise make --verify-stated quietly check 38
   // objects and pass. 35 models plus 4 drafters.
-  const targets = statedTargets();
+  const targets = statedTargets().filter(t => t.file.endsWith(".gguf"));
   assert.equal(targets.length, 39, "every model and drafter is pinned");
   for (const target of targets) {
     assert.match(target.sha256, /^[0-9a-f]{64}$/, `${target.id} has no usable digest`);
@@ -582,7 +582,8 @@ test("hfRepos reads every repository the committed registry downloads from", () 
   // the reason the 39-object count is: a repository silently dropping out of
   // the registry would make --revisions read fewer and still report success.
   const repos = hfRepos();
-  assert.equal(repos.length, 42);
+  assert.equal(repos.length, 47);
+  assert.equal(repos.filter(r => r.repo.startsWith("csukuangfj")).length, 5);
   assert.ok(repos.some((r) => r.repo === "ggerganov/whisper.cpp"));
   assert.deepEqual(
     repos.filter((r) => r.repo.startsWith("KBLab/")),
@@ -688,46 +689,17 @@ test("compareAsset fails an asset that is no longer in its release", () => {
   });
 });
 
-test("the committed registry still carries every k2-fsa asset as a GitHub asset", () => {
-  // The same argument as the 39-object and six-whisper counts: a pin dropped
-  // from its table would otherwise make --verify-stated check one asset, or
-  // none, and report success.
-  //
-  // By id rather than by count, since 2026-09-01. It asserted `length === 4`
-  // and there are six; bumping the literal would have kept it green and
-  // stopped it saying anything, because a count cannot tell a model that was
-  // replaced from one that is still there. The four sherpa ASR archives were
-  // measured earlier that day (KNEG-84 needed a streaming model to measure the
-  // protocol against, KNEG-118 because somebody tried to install the other
-  // one); the two diarization models were measured the same day for KNEG-73a.
-  const targets = githubAssetTargets();
-  assert.deepEqual(
-    targets.map((t) => t.id).sort(),
-    [
-      "3dspeaker-campplus-en",
-      "nemotron-3.5-asr-streaming-0.6b",
-      "nemotron-speech-streaming-en-0.6b",
-      "parakeet-tdt-0.6b-v3",
-      "parakeet-unified-en-0.6b",
-      "sherpa-onnx-pyannote-segmentation-3-0",
-    ],
-    "every pinned k2-fsa model is re-readable from its release"
-  );
-  for (const target of targets) {
-    assert.match(target.sha256, /^[0-9a-f]{64}$/, `${target.id} has no usable digest`);
-    assert.ok(target.sizeBytes > 0, `${target.id} has no measured size`);
-    assert.equal(target.repo, "k2-fsa/sherpa-onnx");
-  }
-
-  // Not every asset is an archive any more, and that is a real difference
-  // rather than an exception: the speaker embedding model is a single `.onnx`
-  // that nothing extracts, which is why it carries no extraction ceiling.
-  const embedding = targets.find((t) => t.id === "3dspeaker-campplus-en");
-  assert.ok(embedding.name.endsWith(".onnx"), embedding.name);
-  for (const target of targets.filter((t) => t.id !== "3dspeaker-campplus-en")) {
-    assert.ok(target.name.endsWith(".tar.bz2"), `${target.id} does not name an archive`);
+test("only the unmirrored embedding model remains on GitHub", () => {
+  assert.deepEqual(githubAssetTargets().map(t => t.id), ["3dspeaker-campplus-en"]);
+  const files = statedTargets().filter(t => !t.file.endsWith(".gguf"));
+  assert.equal(files.length, 17);
+  for (const f of files) {
+    assert.match(f.revision, /^[0-9a-f]{40}$/);
+    assert.match(f.sha256, /^[0-9a-f]{64}$/);
+    assert.ok(f.sizeBytes > 0);
   }
 });
+
 
 test("the two diarization models are one segmentation and one embedding", () => {
   // A run passes one of each, so two of the same kind is a registry that

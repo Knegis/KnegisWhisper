@@ -365,7 +365,7 @@ fn resolve_id(id: &str) -> Result<SherpaOffline, String> {
         executable,
         files,
         Some(model.id),
-        kw_storage::paths::audio_temp_dir(),
+        kw_storage::paths::audio_temp_dir().map_err(|e| e.to_string())?,
         None,
     ))
 }

@@ -43,7 +43,21 @@ import type {
   BinaryLocation,
   Binding,
   CalendarProvider,
+  CalendarProblem,
+  CalendarOperation,
+  PendingSignIn,
+  LeftoverConnection,
+  LeftoverOrigin,
+  SecretChange,
+  ClientSource,
   CalendarStatus,
+  UpcomingMeetings,
+  UpcomingEvent,
+  ProviderFreshness,
+  CalendarCandidates,
+  CandidateEvent,
+  ProviderSync,
+  SyncSkip,
   CalendarSummary,
   CaptureExclusion,
   CleanupRoute,
@@ -101,6 +115,10 @@ import type {
   MediaSidecar,
   MeetingOutcome,
   MeetingPlan,
+  CalendarLinkChoice,
+  CalendarSetChoice,
+  CalendarLinkNotice,
+  LinkedEvent,
   RecoverableRecording,
   MeetingProviderSummary,
   MeetingState,
@@ -178,7 +196,21 @@ export type {
   BinaryLocation,
   Binding,
   CalendarProvider,
+  CalendarProblem,
+  CalendarOperation,
+  PendingSignIn,
+  LeftoverConnection,
+  LeftoverOrigin,
+  SecretChange,
+  ClientSource,
   CalendarStatus,
+  UpcomingMeetings,
+  UpcomingEvent,
+  ProviderFreshness,
+  CalendarCandidates,
+  CandidateEvent,
+  ProviderSync,
+  SyncSkip,
   CalendarSummary,
   CaptureExclusion,
   CleanupRoute,
@@ -235,6 +267,10 @@ export type {
   MediaSidecar,
   MeetingOutcome,
   MeetingPlan,
+  CalendarLinkChoice,
+  CalendarSetChoice,
+  CalendarLinkNotice,
+  LinkedEvent,
   RecoverableRecording,
   MeetingProviderSummary,
   MeetingState,
@@ -395,11 +431,18 @@ export async function recoverMeetingRecording(storageKey: string): Promise<Meeti
 export async function saveMeetingNotificationPlacement(): Promise<void> { return invoke("meeting_notification_placement_save"); }
 export async function resetMeetingNotificationPlacement(): Promise<void> { return invoke("meeting_notification_placement_reset"); }
 
+export type MeetingStartOptions = {
+  title?: string | null;
+  folderId?: number | null;
+  calendar?: CalendarLinkChoice;
+};
+
 /**
- * Start recording a meeting, saved under `plan`'s name in its folder
- * (KNEG-365). Rust keeps the plan with the meeting, so it applies however the
- * meeting ends; without one, the meeting is unnamed and in no folder. Whether
- * its recording is deleted once saved is not sent: Rust reads Settings ›
+ * Start recording with the person's title, folder and local calendar choice.
+ * Rust captures the trusted plan at Start and keeps it for every save path.
+ * A blank title can take the linked event's name; an absent calendar choice
+ * means Auto. Whether its recording is deleted once saved is not sent:
+ * Rust reads Settings ›
  * Meetings' choice at Start (KNEG-409).
  *
  * Returns which captures actually started: a meeting works microphone-only, and
@@ -408,9 +451,20 @@ export async function resetMeetingNotificationPlacement(): Promise<void> { retur
 export async function startMeeting(
   provider: string,
   systemAudio: boolean,
-  plan: Omit<MeetingPlan, "deleteRecording" | "liveProviderId"> = { title: null, folderId: null },
+  options: MeetingStartOptions = {},
 ): Promise<Sources> {
-  return invoke<Sources>("meeting_start", { provider, systemAudio, title: plan.title, folderId: plan.folderId });
+  return invoke<Sources>("meeting_start", {
+    provider, systemAudio, title: options.title, folderId: options.folderId,
+    ...(options.calendar === undefined ? {} : { calendar: options.calendar }),
+  });
+}
+
+export async function setMeetingCalendar(sessionId: string, choice: CalendarSetChoice): Promise<void> {
+  return invoke("meeting_set_calendar", { sessionId, choice });
+}
+
+export async function onMeetingPlanChanged(handler: () => void): Promise<UnlistenFn> {
+  return listen("meeting-plan-changed", () => handler());
 }
 
 export async function stopMeeting(): Promise<MeetingOutcome> {
@@ -1082,8 +1136,8 @@ export async function importOpenWhispr(path: string): Promise<ImportReport> {
  * The renderer has no independent way to obtain a path here -- there is no
  * filesystem or dialog capability, so the only path this screen can ever
  * hold is one a real OS dialog returned from this call. **And that is now
- * checked rather than assumed.** Rust records the canonical form of every
- * path it returns from here, for as long as the app runs, and the three
+ * checked rather than assumed.** Rust records each exact returned string and
+ * its canonical target for as long as the app runs, and the three
  * commands that take a path -- `importAudioFile`, `importVideoFile` and
  * `importOpenWhispr` -- refuse a path that is not in that set. So a path this
  * screen holds can be imported, re-imported after a failure, and imported
@@ -1091,7 +1145,7 @@ export async function importOpenWhispr(path: string): Promise<ImportReport> {
  *
  * Two consequences worth knowing on this side. The string returned is the
  * display form, which is what to show the user and what to derive a note
- * title from -- Rust canonicalises it again on the way back in, so do not
+ * title from -- Rust checks the exact string before resolving it, so do not
  * rewrite or normalise it here or it will stop matching. And a path whose
  * name does not survive lossy conversion cannot be imported at all; it is
  * refused rather than silently read.
@@ -1487,16 +1541,43 @@ export async function getCalendarStatus(): Promise<CalendarStatus> {
   return invoke<CalendarStatus>("calendar_status");
 }
 
+/** Cached calendar projections never refresh tokens or make network requests. */
+export async function getUpcomingMeetings(limit: number): Promise<UpcomingMeetings> {
+  return invoke<UpcomingMeetings>("calendar_upcoming", { limit });
+}
+
+export async function getMeetingCalendarCandidates(): Promise<CalendarCandidates> {
+  return invoke<CalendarCandidates>("meeting_calendar_candidates");
+}
+
+/** Called when Meetings opens; Rust applies the per-provider five-minute throttle. */
+export async function syncCalendarsIfStale(): Promise<ProviderSync[]> {
+  return invoke<ProviderSync[]>("calendar_sync_if_stale");
+}
+
+export async function onCalendarChanged(handler: () => void): Promise<UnlistenFn> {
+  return listen<void>("calendar-changed", () => handler());
+}
+
 /**
  * Save (or, given a blank string, clear) the OAuth client ID for `provider`.
- * Never a secret — there is no client secret in this flow at all — so this
- * is a plain settings write, not a credential-store one.
+ * The ID is a public setting. Replacing or clearing it also clears the saved
+ * custom Google secret so credentials cannot carry over to a different client.
  */
 export async function setCalendarClientId(
   provider: CalendarProvider,
   clientId: string,
 ): Promise<void> {
   return invoke("calendar_set_client_id", { provider, clientId });
+}
+
+/** Save an Advanced custom client. Secret changes stay in the Rust credential store. */
+export async function setCustomCalendarClient(
+  provider: CalendarProvider,
+  clientId: string | null,
+  googleSecret: SecretChange,
+): Promise<void> {
+  return invoke("calendar_set_custom_client", { provider, clientId, googleSecret });
 }
 
 /**
@@ -1510,6 +1591,21 @@ export async function connectCalendar(
   provider: CalendarProvider,
 ): Promise<ConnectOutcome> {
   return invoke<ConnectOutcome>("calendar_connect", { provider });
+}
+
+/** Stop waiting for browser sign-in; a no-op when no redirect is pending. */
+export async function cancelCalendarConnect(provider: CalendarProvider): Promise<void> {
+  return invoke("calendar_cancel_connect", { provider });
+}
+
+/** Remove a leftover account and queue its stored credential for cleanup. */
+export async function removeLeftoverCalendar(provider: CalendarProvider, email: string): Promise<void> {
+  return invoke("calendar_remove_leftover", { provider, email });
+}
+
+/** Retry pending credential deletions without contacting a provider. */
+export async function retryCalendarCleanup(provider: CalendarProvider): Promise<void> {
+  return invoke("calendar_retry_cleanup", { provider });
 }
 
 /** Disconnect whichever account is connected for `provider`, if any. */

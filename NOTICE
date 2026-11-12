@@ -59,18 +59,24 @@ apps/desktop/src-tauri/tauri.conf.json, so a hosted font would load during
                       apps/desktop/src/fonts/geist-variable.woff2
                       apps/desktop/src/fonts/OFL-Geist.txt
 
-    Tiny5             The Tiny5 Project Authors — SIL OFL 1.1
-                      apps/desktop/src/fonts/tiny5-400.woff2
-                      apps/desktop/src/fonts/OFL-Tiny5.txt
+    Ndot 57           Nothing; Colophon Foundry — restricted proprietary terms
+                      apps/desktop/src/fonts/Ndot57-Regular.otf
+                      apps/desktop/src/fonts/NOTICE-Ndot57.txt
 
     Doto              The Doto Project Authors — SIL OFL 1.1
                       apps/desktop/src/fonts/doto-round-variable.woff2
                       apps/desktop/src/fonts/OFL-Doto.txt
 
-Taken from the Google Fonts repository (github.com/google/fonts, ofl/) and
-modified only by subsetting to Latin and converting to WOFF2. Tiny5 is pinned
-to its default instance and Doto to round dots (ROND 100); Geist and Doto keep
-their weight axis. Each retains its license, which sits beside the file.
+Geist and Doto are taken from the Google Fonts repository (github.com/google/fonts,
+ofl/) and modified only by subsetting to Latin and converting to WOFF2. Doto is
+pinned to round dots (ROND 100); both keep their weight axis and OFL license.
+
+Ndot 57 is an unmodified OpenType file from xeji01/nothingfont, pinned by revision
+and SHA-256 in its accompanying notice. Its embedded terms restrict use to Nothing
+brand materials and restrict modification and sharing. It is not covered by this
+project's MIT license or the other fonts' OFL licenses. Permission to distribute
+it with KnegisWhisper has not been established; the source and embedded terms are
+preserved in NOTICE-Ndot57.txt and the generated third-party notices.
 
 
 ================================================================================
@@ -104,6 +110,37 @@ Model weights are downloaded at the user's request and are covered by their own
 licenses. config/provider-registry.json records each model's source repository.
 
 The Rust crates and npm packages compiled into the application retain their own
-licenses, recorded in Cargo.lock and apps/desktop/package-lock.json. No combined
-third-party license list is generated or shipped with the installer yet
-(KNEG-533).
+licenses, recorded in Cargo.lock and apps/desktop/package-lock.json. The
+installer includes THIRD_PARTY_NOTICES.txt, generated from the target Rust
+dependency graph, production interface bundle, bundled fonts and Silero VAD
+attribution.
+Regeneration and CI verification are documented in tools/licenses/README.md.
+
+================================================================================
+Tauri Windows installer template
+================================================================================
+
+The Windows installer uses a modified Tauri CLI 2.11.4 NSIS template.
+Source and reproducible patch: tools/uninstall/README.md.
+
+MIT License
+
+Copyright (c) 2017 - Present Tauri Apps Contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

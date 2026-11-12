@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { initialHistory, navigationHistory as reduce, type NavigationHistory, type Destination } from "../src/lib/navigationHistory.js";
+import { initialHistory, navigationHistory as reduce, type NavigationHistory, type Destination, settingsReturnDestination } from "../src/lib/navigationHistory.js";
 const visit = (state: NavigationHistory, destination: Destination) => reduce(state, { type: "visit", destination });
 test("back and forward retain destinations and stop at each boundary", () => {
   assert.equal(reduce(initialHistory, { type: "back" }), initialHistory);
@@ -48,4 +48,26 @@ test("a row in another note is a new entry, and Back returns to the row", () => 
   const away = visit(row, { view: "dictation" });
   const back = reduce(away, { type: "back" });
   assert.deepEqual(back.entries[back.index], { view: "notes", noteId: 2, transcriptRow: 0 });
+});
+
+// KNEG-548: return must follow the current branch, not a later task in Forward.
+test("settings returns preserve task destinations through multiple settings screens", () => {
+  for (const destination of [
+    { view: "dictation" }, { view: "meetings" }, { view: "notes-upload" },
+    { view: "notes", noteId: 42, transcriptRow: 7, summaryFocus: true },
+  ] satisfies Destination[]) {
+    const task = visit(initialHistory, destination);
+    const settings = visit(visit(task, { view: "intelligence" }), { view: "local-llm" });
+    assert.deepEqual(settingsReturnDestination(settings), destination);
+    const returned = visit(settings, settingsReturnDestination(settings));
+    assert.deepEqual(returned.entries[returned.index], destination);
+    assert.equal(reduce(returned, { type: "back" }).entries[returned.index - 1]?.view, "local-llm");
+    assert.deepEqual(settingsReturnDestination(task), destination);
+  }
+});
+test("settings return ignores forward entries and falls back when history has no task", () => {
+  const settings = visit(initialHistory, { view: "providers" });
+  const later = visit(settings, { view: "meetings" });
+  assert.deepEqual(settingsReturnDestination(reduce(later, { type: "back" })), { view: "dictation" });
+  assert.deepEqual(settingsReturnDestination({ entries: [{ view: "diagnostics" }], index: 0 }), { view: "dictation" });
 });

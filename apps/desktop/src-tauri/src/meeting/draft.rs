@@ -261,6 +261,7 @@ mod tests {
             folder_id: Some(3),
             delete_recording: true,
             live_provider_id: Some("openai-realtime".into()),
+            calendar: None,
         };
         write_plan(&wav, &plan).unwrap();
         assert_eq!(read_plan(&wav), Some(plan));
@@ -299,6 +300,7 @@ mod tests {
                 folder_id: Some(4),
                 delete_recording: false,
                 live_provider_id: None,
+                calendar: None,
             })
         );
         std::fs::write(plan_path(&wav), b"{}").unwrap();

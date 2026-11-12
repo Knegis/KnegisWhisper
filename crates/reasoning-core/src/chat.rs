@@ -37,6 +37,9 @@ pub enum ChatError {
     #[error("no credential is stored for {slot}. Add one in settings.")]
     MissingCredential { slot: String },
 
+    #[error("{0}")]
+    Credential(#[from] kw_security::CredentialError),
+
     #[error("{provider} returned HTTP {status}: {body}")]
     ProviderRejected {
         provider: String,
@@ -242,15 +245,25 @@ impl<'a> Chat<'a> {
             }
         };
 
+        let endpoint = format!("{}/chat/completions", base_url.trim_end_matches('/'));
         let credential = match (route, &self.local, &key_ref) {
             // The key this application started its own server with. Matched on
             // the route, so no other destination can ever be sent it.
             (ChatRoute::Local, Some(server), _) => Some(server.key.clone()),
-            (_, _, Some(slot)) => match self.credentials.get(slot) {
+            (_, _, Some(slot)) => match kw_security::endpoint_credential::get_for_endpoint(
+                self.credentials,
+                slot,
+                &endpoint,
+            ) {
                 Ok(secret) if !secret.is_empty() => Some(secret),
                 // A self-hosted server legitimately needs none; a cloud
                 // provider does not.
-                _ if matches!(route, ChatRoute::SelfHosted { .. } | ChatRoute::Local) => None,
+                Err(kw_security::CredentialError::NotFound(_))
+                    if matches!(route, ChatRoute::SelfHosted { .. }) =>
+                {
+                    None
+                }
+                Err(err) if slot.slot() == "custom" => return Err(err.into()),
                 _ => {
                     return Err(ChatError::MissingCredential {
                         slot: slot.slot().to_owned(),
@@ -261,7 +274,6 @@ impl<'a> Chat<'a> {
         };
 
         let body = build_body(&shape, model, messages, options);
-        let endpoint = format!("{}/chat/completions", base_url.trim_end_matches('/'));
 
         self.post(&provider, &endpoint, purpose, credential.as_ref(), &body)
             .await
@@ -855,7 +867,12 @@ mod tests {
         creds
             .set(
                 &KeyRef::new("custom").unwrap(),
-                &Secret::new("sk-x".to_owned()),
+                &kw_security::endpoint_credential::bind_custom(
+                    &Secret::new("sk-x".to_owned()),
+                    // domain-scanner:allow-next-line a bound fixture must still be refused by network policy
+                    &["https://api.openwhispr.com"],
+                )
+                .unwrap(),
             )
             .unwrap();
         let chat = Chat::new(&policy, &creds);
@@ -880,7 +897,87 @@ mod tests {
 
     /* ------------------------------------------------- the local server's key */
 
+    #[tokio::test]
+    async fn an_unbound_custom_key_cannot_reach_a_changed_endpoint() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let policy = NetworkPolicy::new().unwrap();
+        let creds = MemoryCredentialStore::new();
+        creds
+            .set(
+                &KeyRef::new("custom").unwrap(),
+                &Secret::new("synthetic-legacy-key".into()),
+            )
+            .unwrap();
+        let route = ChatRoute::SelfHosted {
+            base_url: format!("http://{}/v1", listener.local_addr().unwrap()),
+            key_ref: KeyRef::new("custom"),
+        };
+        let chat = Chat::new(&policy, &creds);
+        let options = RequestOptions::default();
+        tokio::select! {
+            biased;
+            _ = listener.accept() => panic!("unbound custom key reached the endpoint"),
+            result = chat.complete(registry(), &route, "m", vec![json!({"role":"user","content":"synthetic"})], &options) => assert!(result.is_err()),
+        }
+    }
+
     const LOCAL_KEY: &str = "0123456789abcdef-local-server-key";
+
+    #[tokio::test]
+    async fn custom_keys_follow_authorized_origins_for_cleanup_and_summaries() {
+        let policy = NetworkPolicy::new().unwrap();
+        let creds = MemoryCredentialStore::new();
+        let slot = KeyRef::new("custom").unwrap();
+        for summary in [false, true] {
+            let (port, request) = answer_once("200 OK", A_REPLY);
+            let allowed = format!("http://127.0.0.1:{port}/v1");
+            creds
+                .set(
+                    &slot,
+                    &kw_security::endpoint_credential::bind_custom(
+                        &Secret::new("synthetic-key".into()),
+                        &[&allowed],
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+            let chat = Chat::new(&policy, &creds);
+            let chat = if summary { chat.for_summary() } else { chat };
+            let route = ChatRoute::SelfHosted {
+                base_url: allowed,
+                key_ref: Some(slot.clone()),
+            };
+            assert_eq!(
+                chat.complete(
+                    registry(),
+                    &route,
+                    "m",
+                    vec![json!({"role":"user","content":"synthetic"})],
+                    &RequestOptions::default()
+                )
+                .await
+                .unwrap(),
+                "a reply"
+            );
+            assert!(request.join().unwrap().contains("Bearer synthetic-key"));
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let changed = ChatRoute::SelfHosted {
+                base_url: format!("http://{}/v1", listener.local_addr().unwrap()),
+                key_ref: Some(slot.clone()),
+            };
+            let options = RequestOptions::default();
+            tokio::select! {
+                biased;
+                _ = listener.accept() => panic!("custom key reached an unapproved origin"),
+                result = chat.complete(registry(), &changed, "m", vec![json!({"role":"user","content":"synthetic"})], &options) => assert!(matches!(result, Err(ChatError::Credential(kw_security::CredentialError::UnapprovedEndpoint)))),
+            }
+            assert_eq!(
+                chat.cleanup(registry(), &changed, "m", "keep this transcript")
+                    .await,
+                "keep this transcript"
+            );
+        }
+    }
     const A_REPLY: &str =
         r#"{"choices":[{"finish_reason":"stop","message":{"content":"a reply"}}]}"#;
 

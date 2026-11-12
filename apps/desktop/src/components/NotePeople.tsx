@@ -98,7 +98,7 @@ export function NotePeople({ noteId, participants, onSaved, disabled = false }: 
           <label>Email<input ref={emailField} type="email" autoComplete="off" value={email} onChange={event => setEmail(event.target.value)} /></label>
           <label>Name (optional)<input type="text" autoComplete="off" value={name} onChange={event => setName(event.target.value)} /></label>
           <span className="note-people-form-actions">
-            <button type="submit" className="secondary" disabled={disabled || busy || !email.trim() || list.length >= 200}>Add</button>
+            <button type="submit" className="primary" disabled={disabled || busy || !email.trim() || list.length >= 200}>Add</button>
             <button type="button" onClick={close}>Cancel</button>
           </span>
         </form>

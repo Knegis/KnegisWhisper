@@ -319,6 +319,43 @@ export async function runSpeakerRenameForm(options) {
       return { measured, matches: Object.values(measured).every(good), screenshots };
     });
 
+
+    await check({
+      id: "7",
+      claim: "The collapsed library toggle and transcript label have separate hit areas, and keyboard toggling preserves focus.",
+      expectation: "No overlap or horizontal overflow in both themes at 720x520; pointer hits the toggle; Enter expands and Space collapses with focus transferred",
+    }, async () => {
+      const measured = [];
+      for (const scheme of ["light", "dark"]) {
+        await openNote(cdp, SMALL);
+        await cdp.evaluate(snippets.markColorScheme(scheme));
+        await cdp.evaluate(snippets.clickText('.note-detail [role="tab"]', "Transcript"));
+        await delay(200);
+        const geometry = await cdp.evaluate(`(() => {
+          const toggle = document.querySelector('.list-toggle[data-collapsed="true"]');
+          const label = document.querySelector('.note-transcript-inline .transcript-label');
+          const a = toggle.getBoundingClientRect(), b = label.getBoundingClientRect();
+          const hit = document.elementFromPoint(a.x + a.width / 2, a.y + a.height / 2);
+          toggle.focus();
+          return { overlap: a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top,
+            hit: toggle.contains(hit), overflow: document.documentElement.scrollWidth > innerWidth };
+        })()`);
+        await pressKey(cdp, "Enter", "Enter", 13);
+        await delay(200);
+        const expanded = await cdp.evaluate('document.activeElement?.getAttribute("aria-label") === "Hide list" && document.querySelector("#list-panel").hidden === false');
+        await pressKey(cdp, " ", "Space", 32);
+        await delay(200);
+        const collapsed = await cdp.evaluate('document.activeElement?.getAttribute("aria-label") === "Show list" && document.querySelector("#list-panel").hidden === true');
+        const point = await cdp.evaluate(`(() => { const r = document.activeElement.getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2}; })()`);
+        await cdp.send("Input.dispatchMouseEvent", {type:"mousePressed", ...point, button:"left", clickCount:1});
+        await cdp.send("Input.dispatchMouseEvent", {type:"mouseReleased", ...point, button:"left", clickCount:1});
+        await delay(200);
+        const pointerExpanded = await cdp.evaluate('document.querySelector("#list-panel").hidden === false');
+        measured.push({ scheme, ...geometry, expanded, collapsed, pointerExpanded });
+      }
+      return { measured, matches: measured.every(m => !m.overlap && m.hit && !m.overflow && m.expanded && m.collapsed && m.pointerExpanded) };
+    });
+
     const markdown = renderMarkdown(report);
     await writeFile(resolve(out, "report.json"), `${JSON.stringify(report, null, 2)}\n`);
     await writeFile(resolve(out, "report.md"), markdown);

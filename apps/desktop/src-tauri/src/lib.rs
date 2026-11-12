@@ -15,6 +15,7 @@ mod audio_level;
 mod automation;
 mod binary_locator;
 mod calendar;
+mod calendar_clients;
 mod commands;
 mod diagnostics;
 mod diarization;
@@ -378,20 +379,24 @@ pub fn run() -> anyhow::Result<()> {
             app.manage(std::sync::Arc::clone(&stream));
 
             // Calendars. Nothing here reaches the network either: connecting an
-            // account and syncing one are both explicit clicks on
-            // `Integrations > Calendar` -- see calendar.rs's module doc.
+            // account and manual sync are explicit clicks; Meetings opening can
+            // request a throttled sync. Construction starts no calendar work.
+            let calendar_handle = app.handle().clone();
             let calendars = std::sync::Arc::new(calendar::CalendarRuntime::new(
                 db.clone(),
                 calendar_credentials,
                 calendar_policy,
-            ));
+            ).with_notifier(std::sync::Arc::new(move || {
+                use tauri::Emitter;
+                let _ = calendar_handle.emit(calendar::CHANGED_EVENT, ());
+            })));
             app.manage(calendars);
 
             // Off unless the user has switched it on. See local_api.rs.
             tauri::async_runtime::block_on(kw_storage::jobs::interrupt_unfinished(db.pool()))?;
             tauri::async_runtime::block_on(media_import.recover_jobs())?;
             tauri::async_runtime::block_on(automation::clean_job_scratch(&db,
-                &kw_storage::paths::audio_temp_dir().join("import")))?;
+                &kw_storage::paths::audio_temp_dir()?.join("import")))?;
             let uploads = kw_storage::paths::database_path().with_file_name("api-uploads");
             automation::clean_uploads(&uploads)?;
             let api = std::sync::Arc::new(local_api::LocalApiRuntime::new(db)
@@ -597,6 +602,7 @@ pub fn run() -> anyhow::Result<()> {
             meeting_window::meeting_notification_placement_save,
             meeting_window::meeting_notification_placement_reset,
             meeting::meeting_start,
+            meeting::meeting_set_calendar,
             meeting::meeting_stop,
             meeting::meeting_cancel,
             meeting::meeting_dismiss,
@@ -624,8 +630,15 @@ pub fn run() -> anyhow::Result<()> {
             updater::update_check_last,
             updater::update_dismiss,
             calendar::calendar_status,
+            calendar::calendar_upcoming,
+            calendar::meeting_calendar_candidates,
+            calendar::calendar_sync_if_stale,
             calendar::calendar_set_client_id,
+            calendar::calendar_set_custom_client,
             calendar::calendar_connect,
+            calendar::calendar_cancel_connect,
+            calendar::calendar_remove_leftover,
+            calendar::calendar_retry_cleanup,
             calendar::calendar_disconnect,
             calendar::calendar_sync,
             calendar::calendar_set_selected,

@@ -434,6 +434,11 @@ export function pinnedTargets(reg = registry()) {
     ["diarization", reg.localAsr?.diarization ?? []],
   ]) {
     for (const model of models) {
+      if (model.files?.length) {
+        targets.push(...model.files.map(f => ({kind, id: model.id + "/" + f.path, url: f.url,
+          sha256: f.sha256, sizeBytes: f.expectedSizeBytes, from: "config/model-file-pins.json"})));
+        continue;
+      }
       if (!model.sha256) continue;
       if (typeof model.expectedSizeBytes !== "number") {
         die(
@@ -475,7 +480,7 @@ export function pinnedTargets(reg = registry()) {
  * it went unchecked that week (KNEG-413).
  */
 export async function verify(only) {
-  const targets = pinnedTargets().filter((t) => !only || t.id === only);
+  const targets = pinnedTargets().filter((t) => !only || t.id === only || t.id.startsWith(only + "/"));
 
   if (targets.length === 0) {
     die(
@@ -587,6 +592,14 @@ export function statedTargets(reg = registry()) {
     }
   }
 
+  for (const models of [reg.localAsr?.sherpa ?? [], reg.localAsr?.diarization ?? []]) {
+    for (const model of models) for (const f of model.files ?? []) {
+      const parsed = parseHfUrl(f.url);
+      if (!parsed) die("Invalid pinned model URL " + f.url);
+      add(model.id + "/" + f.path, {hfRepo: parsed.repo, revision: parsed.revision,
+        fileName: f.path, sha256: f.sha256, sizeBytes: f.expectedSizeBytes, sha256Measured: true});
+    }
+  }
   return targets;
 }
 
@@ -663,7 +676,7 @@ export function githubAssetTargets(reg = registry()) {
     ["diarization", reg.localAsr?.diarization ?? []],
   ]) {
     for (const model of models) {
-      if (!model.sha256) continue;
+      if (model.files?.length || !model.sha256) continue;
       const parsed = parseGithubAssetUrl(model.downloadUrl);
       if (!parsed) {
         die(
@@ -805,7 +818,7 @@ async function modelInfo(repo) {
  * and is reported as news.
  */
 export async function verifyStated(only) {
-  const targets = statedTargets().filter((t) => !only || t.id === only);
+  const targets = statedTargets().filter((t) => !only || t.id === only || t.id.startsWith(only + "/"));
 
   if (targets.length === 0) {
     die(
@@ -844,7 +857,12 @@ export async function verifyStated(only) {
     // `lfs.oid` is the object's SHA-256, because git-lfs is content-addressed
     // on it. No `lfs` block at all on a multi-gigabyte GGUF would itself be
     // the news, so it is reported rather than skipped.
-    const oid = entry.lfs?.oid;
+    // Small Git-tracked token files have no LFS digest; measure their bytes.
+    const small = !entry.lfs && target.file === "tokens.txt"
+      ? await download("https://huggingface.co/" + target.repo + "/resolve/" + target.revision + "/" + target.file, target.id)
+      : null;
+    const oid = entry.lfs?.oid ?? small?.sha256;
+    if (small && small.sizeBytes !== target.sizeBytes) wrong.push(target.id + ": token file size differs");
     if (!oid) {
       wrong.push(`${target.id}: no lfs.oid in its tree entry — it may no longer be an LFS object`);
     } else if (oid.toLowerCase() !== target.sha256) {
@@ -928,7 +946,7 @@ export async function verifyStated(only) {
   console.log(
     `model-pin --verify-stated: ${targets.length} object(s) still match their committed ` +
       `digest and length at the commit they are pinned to (${trees.size} tree request(s); ` +
-      `${measured} pinned to bytes hashed here, which this mode does not re-hash).`
+      `${measured} pinned to bytes hashed here, ONNX/GGUF metadata checked; small Git token files re-hashed).`
   );
   if (assets.length > 0) {
     console.log(
@@ -1006,6 +1024,12 @@ export function hfRepos(reg = registry()) {
   for (const model of reg.localAsr?.whisper ?? []) {
     const parsed = parseHfUrl(model.downloadUrl);
     if (parsed) add(parsed.repo, `whisper/${model.id}`);
+  }
+  for (const models of [reg.localAsr?.sherpa ?? [], reg.localAsr?.diarization ?? []]) {
+    for (const model of models) for (const file of model.files ?? []) {
+      const parsed = parseHfUrl(file.url);
+      if (parsed) add(parsed.repo, model.id);
+    }
   }
   for (const provider of reg.localLlm ?? []) {
     for (const model of provider.models ?? []) {

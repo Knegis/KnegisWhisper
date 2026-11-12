@@ -38,6 +38,9 @@ import type {
   AudioLevel,
   Binding,
   CalendarStatus,
+  UpcomingMeetings,
+  CalendarCandidates,
+  ProviderSync,
   CleanupRoute,
   CleanupSettings,
   CliStatus,
@@ -633,6 +636,9 @@ let meetingStatus: MeetingStatus = {
   transcriptFailure: null,
   provider: null,
   plan: null,
+  sessionId: null,
+  calendarNotice: null,
+  calendarChoices: [],
   elapsedSeconds: 0,
   sources: null,
   systemAudio: DIAGNOSTICS.systemAudio,
@@ -716,6 +722,9 @@ function fixtureStop(): MeetingOutcome {
     state: "idle",
     provider: null,
     plan: null,
+    sessionId: null,
+    calendarNotice: null,
+    calendarChoices: [],
     elapsedSeconds: 0,
     sources: null,
     offer: null,
@@ -1299,12 +1308,53 @@ const SIDECARS: SidecarStatus[] = [
   },
 ];
 
+/** Compute at invocation time so a long-running browser session stays useful. */
+function upcomingCalendarFixture(): UpcomingMeetings {
+  const now = Date.now();
+  const midnight = new Date(now);
+  midnight.setHours(24, 0, 0, 0);
+  const laterToday = now + Math.floor((midnight.getTime() - now) / 2);
+  const tomorrow = new Date(now);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  tomorrow.setHours(10, 0, 0, 0);
+  const event = (id: string, provider: "google" | "microsoft", title: string, start: number) => ({
+    id, provider, calendarId: `${provider}-primary`, title,
+    start: new Date(start).toISOString(), end: new Date(start + 30 * 60_000).toISOString(),
+  });
+  return {
+    events: [
+      event("google:primary:running", "google", "Platform standup", now - 10 * 60_000),
+      event("microsoft:primary:later", "microsoft", "Project review", laterToday),
+      event("google:primary:tomorrow", "google", "Planning", tomorrow.getTime()),
+    ],
+    hasMore: false,
+    providers: (["google", "microsoft"] as const).map(provider => ({
+      provider, connected: true, selectedCalendars: 1,
+      lastAttemptAt: new Date(now - 60_000).toISOString(),
+      lastSuccessAt: new Date(now - 60_000).toISOString(),
+      lastOutcome: { state: "completed", eventsUpserted: 3, eventsRemoved: 0, calendarErrors: [] },
+    })),
+  };
+}
+
+function calendarCandidatesFixture(): CalendarCandidates {
+  const event = upcomingCalendarFixture().events[0]!;
+  return { events: [{ ...event, meetingLike: true }], auto: event.id };
+}
+
 /* ---------------------------------------------------------------- calendars */
 
 const CALENDAR: CalendarStatus = {
   google: {
+    operation: "idle",
+    pendingSignIn: null,
+    cleanupPending: 1,
+    leftover: [{ email: "imported@example.com", origin: "openwhispr" }],
     clientIdConfigured: true,
-    clientId: "918273645-abcdef.apps.googleusercontent.com",
+    customClientId: "918273645-abcdef.apps.googleusercontent.com",
+    clientSource: "custom",
+    customGoogleSecretConfigured: false,
+    appClientAvailable: false,
     account: {
       email: "axel@example.com",
       token: { state: "active" },
@@ -1332,6 +1382,9 @@ const CALENDAR: CalendarStatus = {
         },
       ],
       lastSync: {
+        account: "axel@example.com",
+        snapshotVersion: 1,
+        lastSuccessAt: null,
         at: "2026-08-27T07:12:00Z",
         outcome: {
           state: "completed",
@@ -1345,8 +1398,15 @@ const CALENDAR: CalendarStatus = {
     },
   },
   microsoft: {
+    operation: "idle",
+    pendingSignIn: null,
+    cleanupPending: 0,
+    leftover: [],
     clientIdConfigured: false,
-    clientId: null,
+    customClientId: null,
+    clientSource: "missing",
+    customGoogleSecretConfigured: false,
+    appClientAvailable: false,
     account: null,
   },
   apple: {
@@ -2479,6 +2539,7 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
   /* meetings */
   meeting_providers: () => MEETING_PROVIDERS,
   meeting_status: () => meetingStatus,
+  meeting_set_calendar: () => null,
   meeting_notes_get: () => meetingNotes,
   meeting_notes_update: (a) => {
     meetingNotes = arg<string>(a, "markdown") ?? meetingNotes;
@@ -2527,12 +2588,16 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
     meetingStatus = {
       ...meetingStatus,
       state: "recording",
+      sessionId: "20261111-120000-00000000-0000-0000-0000-000000000001",
+      calendarNotice: null,
+      calendarChoices: [],
       provider: arg<string>(a, "provider") ?? "meeting:deepgram",
       plan: {
         title: fixtureMeetingTitle(arg<string | null>(a, "title")),
         folderId: arg<number | null>(a, "folderId") ?? null,
         deleteRecording: meetingDeleteRecordings,
         liveProviderId: arg<string>(a, "provider") ?? "meeting:deepgram",
+        calendar: null,
       },
       elapsedSeconds: 0,
       sources,
@@ -2560,6 +2625,9 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
       state: "idle",
       provider: null,
       plan: null,
+      sessionId: null,
+      calendarNotice: null,
+      calendarChoices: [],
       elapsedSeconds: 0,
       sources: null,
       offer: null,
@@ -2736,9 +2804,19 @@ A fixture summary of "${note.title}", written without a model.
     }),
   /* calendars */
   calendar_status: () => CALENDAR,
+  calendar_upcoming: () => upcomingCalendarFixture(),
+  meeting_calendar_candidates: () => calendarCandidatesFixture(),
+  calendar_sync_if_stale: () => ([
+    { provider: "google", outcome: null, skipped: "fresh" },
+    { provider: "microsoft", outcome: null, skipped: "fresh" },
+  ] satisfies ProviderSync[]),
   calendar_set_client_id: () => null,
+  calendar_set_custom_client: () => null,
   calendar_set_selected: () => null,
   calendar_disconnect: () => null,
+  calendar_cancel_connect: () => null,
+  calendar_remove_leftover: () => null,
+  calendar_retry_cleanup: () => null,
   calendar_connect: () =>
     ({
       state: "connected",

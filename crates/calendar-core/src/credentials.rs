@@ -61,6 +61,8 @@ pub enum BundleError {
 pub(crate) struct TokenBundle {
     pub(crate) access_token: String,
     pub(crate) refresh_token: String,
+    #[serde(default)]
+    pub(crate) client_id: Option<String>,
 }
 
 impl fmt::Debug for TokenBundle {
@@ -80,6 +82,33 @@ pub(crate) fn encode_bundle(bundle: &TokenBundle) -> Result<Secret, BundleError>
 
 pub(crate) fn decode_bundle(secret: &Secret) -> Result<TokenBundle, BundleError> {
     serde_json::from_str(secret.expose()).map_err(BundleError::Decode)
+}
+
+/// Read only the OAuth client binding. Bundle decoding stays inside calendar-core;
+/// callers performing status reads never receive access or refresh tokens.
+pub fn bundle_client_id(
+    store: &dyn kw_security::CredentialStore,
+    slot: &KeyRef,
+) -> Result<Option<String>, crate::CalendarError> {
+    Ok(decode_bundle(&store.get(slot)?)?.client_id)
+}
+
+/// Encode a newly exchanged grant without touching SQLite or the credential store.
+/// This lets the command layer compensate the credential write around its one
+/// database commit, while keeping the bundle representation private to this crate.
+pub fn grant_secret(
+    tokens: &crate::TokenSet,
+    client_id: &str,
+) -> Result<Secret, crate::CalendarError> {
+    let refresh = tokens
+        .refresh_token
+        .as_ref()
+        .ok_or(crate::CalendarError::NoRefreshToken)?;
+    Ok(encode_bundle(&TokenBundle {
+        access_token: tokens.access_token.expose().to_owned(),
+        refresh_token: refresh.expose().to_owned(),
+        client_id: Some(client_id.to_owned()),
+    })?)
 }
 
 #[cfg(test)]
@@ -139,11 +168,13 @@ mod tests {
         let bundle = TokenBundle {
             access_token: "access-xyz".to_owned(),
             refresh_token: "refresh-xyz".to_owned(),
+            client_id: Some("client-123".to_owned()),
         };
         let secret = encode_bundle(&bundle).unwrap();
         let decoded = decode_bundle(&secret).unwrap();
         assert_eq!(decoded.access_token, "access-xyz");
         assert_eq!(decoded.refresh_token, "refresh-xyz");
+        assert_eq!(decoded.client_id.as_deref(), Some("client-123"));
     }
 
     #[test]
@@ -151,6 +182,7 @@ mod tests {
         let bundle = TokenBundle {
             access_token: "access-xyz".to_owned(),
             refresh_token: "refresh-xyz".to_owned(),
+            client_id: Some("client-123".to_owned()),
         };
         let rendered = format!("{bundle:?}");
         assert!(!rendered.contains("access-xyz"));
@@ -162,5 +194,14 @@ mod tests {
     fn decoding_garbage_is_an_error_not_a_panic() {
         let secret = Secret::new("not json".to_owned());
         assert!(decode_bundle(&secret).is_err());
+    }
+
+    #[test]
+    fn legacy_bundle_decodes_without_client_binding() {
+        let bundle = decode_bundle(&Secret::new(
+            r#"{"access_token":"access","refresh_token":"refresh"}"#.into(),
+        ))
+        .unwrap();
+        assert!(bundle.client_id.is_none());
     }
 }

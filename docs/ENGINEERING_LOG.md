@@ -12,6 +12,146 @@ maintained in place rather than appended to, because its purpose is to be curren
 
 ---
 
+
+## 2026-11-12 — Feature-audit fixtures and consistent settings fields (KNEG-556, KNEG-550)
+
+The feature-audit self-tests reproduced four failures on base `d8dfe15`. Their negative cases
+removed one Tauri boundary-test command, but the newer uninstall test and lint commands still
+enabled `tauri-test`. The mutation fixtures now leave `windows-uninstall` enabled while isolating
+the boundary-test command before removing or commenting it. A positive regression verifies that
+the unmodified uninstall commands still enable `tauri-test` without the boundary command. The
+manifest assertion includes both declared features. The audit and CI workflow are unchanged.
+
+Settings fields use 44px for label/value rows and 36px for compact card controls, with the
+standalone Vocabulary add field and button both 44px. Row labels align with the first field,
+independently of explanations below it. Editable values use Geist; numeric fields use tabular
+numerals. Ndot display labels, Doto clocks and counts, playback controls, and checkbox semantics
+keep their existing styles and behavior. Company-account fields have persistent associated
+labels and wrapping, accessible hints; secret fields remain masked. The unsaved-settings
+dialog shares the confirmation dialog's filled actions. Its intended Stay focus is applied
+after `showModal`, which otherwise overrides React's earlier `autoFocus` and chooses Save.
+
+Validated in `codex/kneg-556-550`: all 15 feature-audit tests, all 186 contract/tool self-tests,
+580 frontend tests, typecheck and production build; domain/settings/bundle scans, integration
+parity and generated IPC freshness. A scratch headless Edge probe measured 172 visible fields
+over eight settings screens in light/dark at 720x520 and 1280x800, including field heights,
+row-label alignment, Geist form values, persistent company labels/hints, password masking,
+dialog focus, Stay/Discard and horizontal overflow. Before/after captures and measurements
+are in the worktree's ignored `.validation/`; representative screens were visually inspected.
+The committed `tools/visual-check/settings-return.mjs` probe checks initial Stay focus as well
+as its existing 13 navigation/draft scenarios, including Save and failed Save. These are browser
+fixtures with invented data, not native IPC, live account, recording or installer validation.
+
+---
+
+## 2026-11-11 — One-click Google Calendar and Outlook, used by Meetings
+
+The reconciled calendar plan of 2026-11-11 (its file in `docs/plans/` is not committed) is implemented on `dev`. Calendars connect with
+KnegisWhisper's own OAuth clients, compiled into release builds from three environment values. Meetings shows what is
+coming up, and a recording made during a calendar event carries that event. Nothing here has met a real account: no
+client is registered yet, and that and the real-account checklist are the owner's next steps
+(`docs/CALENDAR_PROVIDER_SETUP.md`).
+
+**Google's desktop secret ships in the binary.** The owner chose it. Google's token endpoint requires the secret for
+Desktop clients even with PKCE (community-reported, not measured here), and Google documents it as not confidential.
+So `exchange.rs` sends it on the code and refresh grants only, never in the authorize URL, and the frontend never
+receives it. A hosted token exchange was rejected (KNEG-328). Committed values were rejected because every fork would
+sign people in under the owner's consent screen. Microsoft is a public client and carries no secret.
+
+**Grants remember which client issued them** (`TokenBundle.client_id`). An unbound grant, which is every grant imported
+from OpenWhispr and every grant from a custom client since cleared, reads "reconnect required" before any refresh is
+tried. Without the binding, a refresh would send OpenWhispr's grant to our client and fail in a way nobody could
+diagnose.
+
+**Outlook left the beta endpoint, and both providers sync snapshots.** Per-calendar `events/delta` is beta-only
+(KNEG-552), `/me/calendarView/delta` covers only the default calendar, and Google's unbounded `syncToken` sync can't take
+a `timeMin`. Each sync now fetches [now − 24 h, now + 30 days) through Graph v1.0 `calendarView` and Google `events.list`,
+both expanding recurring meetings. Times are normalised to UTC (KNEG-553) and declined events left out. Each calendar
+commits in one transaction that prunes only rows overlapping the window. A migration for the user's own response was
+rejected because sqlx refuses unknown applied migrations on downgrade; declined events are simply not stored. Rows an
+older build cached are kept out of every reader by a snapshot version in the existing `lastSync` record, so no settings
+key was added for it.
+
+**Connecting has one commit point.** SQLite and the credential store can't share a transaction, so the order is: write
+the new grant to `token_ref_for(email)`, then one transaction for rows, calendars, cleared cache, account and the
+cleanup list, then delete superseded credentials. Names whose deletion fails stay on a durable cleanup list until a
+retry succeeds; a slot a token row still references is never deleted. Disconnect now deletes the slot its row names,
+so slots imported from OpenWhispr no longer survive it (KNEG-554), and leftover rows are listed with Remove. Two review
+rounds found the one-commit design sound but Cancel incomplete: it couldn't stop a hanging token exchange, and could be
+lost while the browser was spawning. Both are fixed.
+
+**A browser that fails to open no longer ends the sign-in.** The plan returned `BrowserDidNotOpen { url }`, but
+returning closes the loopback listener, so the URL could never complete. Connect keeps waiting and status carries the
+sign-in link; Settings offers Copy sign-in link.
+
+**Sync happens when Meetings opens**, at most once per 5 minutes per provider, measured from the later of an in-memory
+attempt clock and the persisted `lastSync.at`. Never at launch, on focus or on a timer. Throttling in the frontend was
+rejected: it can't coordinate two windows or protect Microsoft's rotating refresh tokens.
+
+**A recording links at Start, never later.** Looking the event up at Stop or Recover could attach a different event to
+a long or recovered meeting. So `plan_at_start` snapshots the event into the plan beside the recording, and every start
+path shares it: Meetings, the offer's Record and the local API. Auto links only a single meeting-like event (invitees or
+conferencing). Overlaps are offered and never guessed; an explicit choice is revalidated at Start and, if invalid, the
+recording starts unlinked with a notice rather than a substitute. A plan that can't be written leaves the recording
+unlinked in memory too, so Stop never saves a link Recover couldn't find. The local API's request is unchanged, and its
+status response drops the new fields to keep its shape.
+
+**Two contract slips, both caught by a worker stopping.** The meeting-link enums serialised `event_id` while every other
+tagged enum is camelCase. The brief had left out `rename_all_fields`, and the frontend worker refused to build against
+it. The IPC types test now fails on any generated snake_case field. The `tauri-test` build also broke on a stale caller
+that no brief's verification compiled; the full gate run found it.
+
+Verified on the merged tree (`9678cd5`): every contract gate except the gate self-tests, `tsc`, 580 frontend tests,
+`vite build`, the built-asset scans, `cargo fmt`, and clippy with `-D warnings` on both the local 1.90 and 1.99
+toolchains. At that revision the gate self-tests failed on `feature-audit`'s fixtures: `windows-uninstall` was
+declared in `ba0b8b5`, before the base `956532c`. KNEG-556 corrects those fixtures (2026-11-12 entry above).
+The workspace test run was stopped by the machine running low on
+memory before it finished. The same Rust passed `cargo test --workspace` at `8808e2f`, and `tauri-test` (607 passed) in
+the final fix's slot. Three visual checks ran in headless Edge against dev fixtures: Settings > Calendar 24/24, Meetings
+calendar 78/78 (1280×800, 720×520, a dark pass) and the pre-existing meeting-plan 5/5. Not verified: any real consent,
+refresh, sync or recording against a real account; the floating panel and event delivery in the real Tauri window; and
+a downgrade on a copy of a profile.
+
+---
+
+## 2026-11-10 — Fields, dropdown lists and dialogs outside the settings column, in the new style
+
+The owner said some input fields didn't match the new design. A field-by-field sweep of every screen and pop-up found the
+mismatched ones all sat outside the settings column. The pill style was attached to `.content`, and the Notes screen and
+its dialogs aren't under it, so New folder, Add person and the sharing dialog's name fell back to the old square box.
+The default text field is now the pill itself, at the old rule's specificity, so a field either has its own rule or is
+the pill. Scoping more selectors under `.content` was the alternative, rejected because the next field outside it would
+be square again. The note menu's dropdowns, the Share folder dialog and the Known voices rows were redrawn to match
+(KNEG-549).
+
+Every open dropdown list in the app was Windows' own, not only the settings ones. Chromium draws the list in the page only
+when `appearance: base-select` is on the `::picker(select)` as well as the select, and the stylesheet set only the
+select. The settings dropdowns also turned it off to paint their chevron as a background. With both fixed, lists are
+the app's menu card. Two behaviours follow. A dropdown is now as wide as its current choice, not its longest option.
+And an open list's Escape reaches the page, so the note menu and the speaker form, which closed on any Escape, now ask
+`lib/openList.ts` first and leave themselves open.
+
+The title bar's "Search notes and meetings" was clipped in the g by the search field's clear button, which keeps its
+20px while hidden; it's now out of the layout while the field is empty. The Settings sheet's scrollbar is in the entry of
+2026-11-05.
+
+Checked in the real window on a throwaway profile (the open list, the search text, the sheet's scrollbar, and the same
+field measurements as the browser), and against fixtures in headless Edge: every field before and after, a real pick
+through the note menu's list, and Escape. Dark, 720×520 and the import side of sharing with a real file weren't looked
+at. The inconsistencies the sweep found between fields that were already pills are KNEG-550.
+
+---
+
+## 2026-11-10 - Checksums, transcript header, notices and immutable model files
+
+KNEG-536, KNEG-515 and KNEG-533 are implemented and locally validated; KNEG-532
+switches the four speech models and segmentation to verified publisher commits.
+The embedding model keeps its original verified URL because a matching publisher
+mirror has not been established. See [the validation record](KNEG_FOUR_FIXES_VALIDATION.md)
+for automated checks, real download/inference evidence, installer resource evidence,
+and remaining platform/release limits.
+
+
 ## 2026-11-09 — k2-fsa replaced the Parakeet TDT archive, and it's re-pinned to the new upload
 
 The weekly pin check failed on 2026-11-09 after passing on 2026-11-02. `parakeet-tdt-0.6b-v3` hashed to `1495e91b…`
@@ -60,7 +200,9 @@ touches code the follow-along scrolling may rely on. Hiding the bar altogether w
 note's length.
 
 It's `::-webkit-scrollbar` and not the standard properties, because setting `scrollbar-color` or `scrollbar-width`
-makes Chromium ignore those pseudo-elements, so both are gone. Forced colors still get the system's own bar. The notes
+makes Chromium ignore those pseudo-elements, so both are gone. One survived until 2026-11-10: `scrollbar-width: thin`
+on the Settings sheet's own rule, so the sheet kept Windows' bar, arrows and all, until the owner saw it in the real
+window. It was removed then and checked there (KNEG-520). Forced colors still get the system's own bar. The notes
 list keeps a 10px track, since its 290 of content has only that much gutter beside it. Each track is 16px against
 Windows' 15px, so pages lose 1px per gutter.
 

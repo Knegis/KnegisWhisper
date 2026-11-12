@@ -239,7 +239,15 @@ export interface WhisperModel {
   readonly recommended: boolean;
 }
 
+export interface ModelFile {
+  readonly path: string;
+  readonly url: string;
+  readonly sha256: string;
+  readonly expectedSizeBytes: number;
+}
+
 export interface SherpaModel {
+  readonly files: readonly ModelFile[];
   readonly id: SherpaModelId;
   readonly name: string;
   readonly downloadUrl: string;
@@ -274,6 +282,7 @@ export type DiarizationRole = "segmentation" | "embedding";
  * neither is streaming.
  */
 export interface DiarizationModel {
+  readonly files: readonly ModelFile[];
   readonly id: DiarizationModelId;
   readonly name: string;
   readonly downloadUrl: string;

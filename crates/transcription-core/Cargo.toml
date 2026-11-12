@@ -12,6 +12,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+tempfile.workspace = true
 kw-transcript-text.workspace = true
 ts-rs.workspace = true
 async-trait.workspace = true
@@ -24,7 +25,7 @@ reqwest.workspace = true
 # `sherpa-onnx-offline` is a one-shot CLI rather than a server: each
 # transcription spawns a fresh child and writes its input to a temp file,
 # which needs tokio's process and fs features outside of tests.
-tokio = { workspace = true, features = ["process", "fs"] }
+tokio = { workspace = true, features = ["process", "fs", "io-util"] }
 
 kw-network-policy.workspace = true
 kw-provider-registry.workspace = true
@@ -35,7 +36,6 @@ kw-sidecar.workspace = true
 kw-audio-core.workspace = true
 
 [dev-dependencies]
-tempfile.workspace = true
 # For `tests/subtitle_export.rs` only, which proves a real recording's
 # timings survive all the way out to a subtitle file. Dev-only and no cycle:
 # it does not depend on this crate.

@@ -1,20 +1,26 @@
-//! Installing a local sherpa model archive.
+//! Installing local sherpa models without changing their runtime layout.
 //!
-//! A sherpa model is a `.tar.bz2` of a whole directory -- encoder, decoder,
-//! joiner, tokens, plus a `test_wavs/` sample folder -- not the single file a
-//! whisper model is, so this cannot reuse `models::install` directly. What it
-//! *does* reuse is `kw_sidecar::extract`: the same tar.bz2 reader
-//! `ArchiveKind::TarBz2` gave the sherpa-onnx CLI sidecar in Task 17, called
-//! here with an empty payload directory so the archive's own internal layout
-//! survives extraction untouched -- which is the layout `sherpa::
-//! discover_transducer_files` was measured against.
+//! A transducer needs an encoder, decoder, joiner and tokens. The registry's
+//! per-file manifest names only those four files at immutable Hugging Face
+//! commits; test audio and other archive extras are not installed. Each transfer
+//! is bounded by its exact pinned length and checked against SHA-256 before any
+//! payload is published. `sizeMb` remains a display estimate, not an integrity
+//! check. Model IDs and `extract_dir` remain compatible with archive installs.
 //!
-//! `sizeMb` is only a display estimate; installation instead checks an exact
-//! compressed byte count and SHA-256 pinned in the registry.
-//! The download is bounded by that compressed size before it reaches disk,
-//! verified before extraction, and extraction has a separate output ceiling.
-//! The final layout check remains useful for diagnosing a valid archive whose
-//! contents no longer match the runtime's argument contract.
+//! One OS lock per model protects download, recovery and publication. A fixed
+//! model-specific staging directory is removed on cancellation and reclaimed on
+//! the next install if process termination skipped destructors. It never grows
+//! into a new abandoned directory for every retry. Other models' staging paths
+//! are left alone. Recovery also restores a retained backup after an interrupted
+//! publication, or removes it when the complete new layout is already present.
+//! Complete existing layouts are reused without re-downloading or re-hashing.
+//!
+//! Legacy registry entries without file manifests still use the `.tar.bz2`
+//! installer. It verifies the compressed size and digest, then reuses
+//! `kw_sidecar::extract_with_limit` with an empty payload directory to retain
+//! the archive's internal layout. Its separate extraction ceiling bounds the
+//! decompressed bytes; loose-file installs need no decompression ceiling.
+//! Final layout discovery checks the runtime's argument contract in both cases.
 
 use std::path::{Path, PathBuf};
 
@@ -24,6 +30,8 @@ use kw_provider_registry::SherpaModel;
 /// Why a sherpa model install failed.
 #[derive(Debug, thiserror::Error)]
 pub enum SherpaModelError {
+    #[error("invalid model file manifest: {0}")]
+    Manifest(String),
     #[error(transparent)]
     Network(#[from] kw_network_policy::PolicyError),
 
@@ -115,6 +123,10 @@ pub async fn install(
         source,
     })?;
 
+    if !model.files.is_empty() {
+        return install_files(policy, model, dir, progress).await;
+    }
+
     // Downloaded beside the destination, so an interrupted download never
     // looks like a partial model directory.
     let archive = dir.join(format!("{}.tar.bz2.partial", model.id));
@@ -205,6 +217,288 @@ pub async fn install(
     })
 }
 
+fn io_error(action: &'static str, path: &Path, source: std::io::Error) -> SherpaModelError {
+    SherpaModelError::Io {
+        action,
+        path: path.to_owned(),
+        source,
+    }
+}
+
+fn validate_files(
+    files: &[kw_provider_registry::ModelFile],
+    required: &[&str],
+) -> Result<u64, SherpaModelError> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut total = 0_u64;
+    for file in files {
+        // Only the measured runtime's four flat filenames are accepted.
+        if !required.contains(&file.path.as_str())
+            || !seen.insert(&file.path)
+            || file.expected_size_bytes == 0
+            || kw_sidecar::Sha256Digest::parse(&file.sha256).is_err()
+        {
+            return Err(SherpaModelError::Manifest(file.path.clone()));
+        }
+        let url =
+            url::Url::parse(&file.url).map_err(|_| SherpaModelError::Manifest(file.url.clone()))?;
+        let segments: Vec<_> = url.path().split('/').collect();
+        if url.scheme() != "https"
+            || url.host_str() != Some("huggingface.co")
+            || segments.len() != 6
+            || segments.get(3) != Some(&"resolve")
+            || !segments.get(4).is_some_and(|s| {
+                s.len() == 40
+                    && s.bytes()
+                        .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+            })
+            || segments.get(5) != Some(&file.path.as_str())
+            || url.query().is_some()
+            || url.fragment().is_some()
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.port().is_some()
+        {
+            return Err(SherpaModelError::Manifest(file.url.clone()));
+        }
+        total = total
+            .checked_add(file.expected_size_bytes)
+            .ok_or_else(|| SherpaModelError::Manifest("size overflow".into()))?;
+    }
+    if seen.len() != required.len() {
+        return Err(SherpaModelError::Manifest(
+            "required runtime files missing".into(),
+        ));
+    }
+    Ok(total)
+}
+
+async fn install_files(
+    policy: &NetworkPolicy,
+    model: &SherpaModel,
+    dir: &Path,
+    progress: &mut (dyn FnMut(Progress) + Send),
+) -> Result<InstalledSherpaModel, SherpaModelError> {
+    let bytes = install_verified_files(
+        policy,
+        &model.id,
+        &model.files,
+        dir,
+        &model.extract_dir,
+        &[
+            "encoder.int8.onnx",
+            "decoder.int8.onnx",
+            "joiner.int8.onnx",
+            "tokens.txt",
+        ],
+        progress,
+    )
+    .await?;
+    let target = model_dir(dir, model);
+    let files = crate::sherpa::discover_transducer_files(&target).map_err(|source| {
+        SherpaModelError::Layout {
+            model: model.id.clone(),
+            source,
+        }
+    })?;
+    Ok(InstalledSherpaModel {
+        id: model.id.clone(),
+        dir: target,
+        files,
+        bytes,
+    })
+}
+
+/// Install a flat, immutable model payload without modifying an existing complete layout.
+/// The same transaction is used for speech and segmentation model files.
+pub async fn install_verified_files(
+    policy: &NetworkPolicy,
+    id: &str,
+    files: &[kw_provider_registry::ModelFile],
+    dir: &Path,
+    folder: &str,
+    required: &[&str],
+    progress: &mut (dyn FnMut(Progress) + Send),
+) -> Result<u64, SherpaModelError> {
+    install_files_with(
+        &PolicyDownload(policy),
+        id,
+        files,
+        dir,
+        folder,
+        required,
+        progress,
+    )
+    .await
+}
+
+#[async_trait::async_trait]
+trait FileDownload: Send + Sync {
+    async fn fetch(
+        &self,
+        file: &kw_provider_registry::ModelFile,
+        path: &Path,
+        progress: &mut (dyn FnMut(u64) + Send),
+    ) -> Result<(), SherpaModelError>;
+}
+
+struct PolicyDownload<'a>(&'a NetworkPolicy);
+#[async_trait::async_trait]
+impl FileDownload for PolicyDownload<'_> {
+    async fn fetch(
+        &self,
+        file: &kw_provider_registry::ModelFile,
+        path: &Path,
+        progress: &mut (dyn FnMut(u64) + Send),
+    ) -> Result<(), SherpaModelError> {
+        self.0
+            .download_to_file_bounded(
+                RequestPurpose::UserTriggeredModelDownload,
+                &file.url,
+                path,
+                file.expected_size_bytes,
+                &mut |written, _| progress(written),
+            )
+            .await?;
+        Ok(())
+    }
+}
+
+// The OS lock protects this model's fixed staging path. Drop handles cancellation;
+// the next install removes the same path if process termination skipped Drop.
+struct StagingDirectory(PathBuf);
+
+impl Drop for StagingDirectory {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn remove_install_directory(path: &Path, action: &'static str) -> Result<(), SherpaModelError> {
+    match std::fs::remove_dir_all(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(io_error(action, path, e)),
+    }
+}
+
+fn recover_install(
+    target: &Path,
+    backup: &Path,
+    staging: &Path,
+    required: &[&str],
+) -> Result<(), SherpaModelError> {
+    remove_install_directory(staging, "remove interrupted model download")?;
+    if !backup.exists() {
+        return Ok(());
+    }
+    if required.iter().all(|name| target.join(name).is_file()) {
+        // Publication succeeded, but the process exited before backup cleanup.
+        return remove_install_directory(backup, "remove retained model backup");
+    }
+
+    // Restore the retained layout before attempting another download. If an
+    // incomplete target also exists, retain it until restoration has succeeded.
+    let had_target = target.exists();
+    if had_target {
+        std::fs::rename(target, staging)
+            .map_err(|e| io_error("retain incomplete target for recovery", target, e))?;
+    }
+    if let Err(e) = std::fs::rename(backup, target) {
+        if had_target {
+            let _ = std::fs::rename(staging, target);
+        }
+        return Err(io_error("restore retained model backup", backup, e));
+    }
+    remove_install_directory(staging, "remove superseded incomplete model")
+}
+
+async fn install_files_with(
+    download: &dyn FileDownload,
+    id: &str,
+    files: &[kw_provider_registry::ModelFile],
+    dir: &Path,
+    folder: &str,
+    required: &[&str],
+    progress: &mut (dyn FnMut(Progress) + Send),
+) -> Result<u64, SherpaModelError> {
+    let total = validate_files(files, required)?;
+    for name in [id, folder] {
+        if name.is_empty()
+            || !name
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
+            || name == "."
+            || name == ".."
+        {
+            return Err(SherpaModelError::Manifest(name.to_owned()));
+        }
+    }
+    std::fs::create_dir_all(dir).map_err(|e| io_error("create model root", dir, e))?;
+    // OS lock releases on cancellation or process death. Never unlink the lock file:
+    // another installer may already have opened that same inode.
+    let target = dir.join(folder);
+    let lock_path = dir.join(format!("{id}.install.lock"));
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&lock_path)
+        .map_err(|e| io_error("open install lock", &lock_path, e))?;
+    lock.try_lock().map_err(|e| {
+        io_error(
+            "lock model (another install may be running)",
+            &lock_path,
+            e.into(),
+        )
+    })?;
+    let staging = dir.join(format!(".{id}.model-install"));
+    let backup = dir.join(format!("{id}.incomplete-backup"));
+    recover_install(&target, &backup, &staging, required)?;
+    if required.iter().all(|name| target.join(name).is_file()) {
+        return Ok(0);
+    }
+    std::fs::create_dir(&staging).map_err(|e| io_error("create staging directory", &staging, e))?;
+    let stage = StagingDirectory(staging);
+    let payload = stage.0.join("payload");
+    std::fs::create_dir(&payload).map_err(|e| io_error("create payload", &payload, e))?;
+    let mut completed = 0;
+    for file in files {
+        let path = payload.join(&file.path);
+        download
+            .fetch(file, &path, &mut |written| {
+                progress(Progress::Downloading {
+                    written: completed + written,
+                    total: Some(total),
+                })
+            })
+            .await?;
+        let digest = kw_sidecar::Sha256Digest::parse(&file.sha256)
+            .map_err(|_| SherpaModelError::Manifest(file.path.clone()))?;
+        kw_sidecar::integrity::verify(&path, file.expected_size_bytes, &digest)?;
+        completed += file.expected_size_bytes;
+    }
+
+    // No await between moving the old incomplete layout and publishing the new one.
+    // The backup lives outside the temporary directory so failed rollback cannot delete it.
+    let had_old = target.exists();
+    if had_old {
+        std::fs::rename(&target, &backup)
+            .map_err(|e| io_error("retain previous layout", &target, e))?;
+    }
+    if let Err(e) = std::fs::rename(&payload, &target) {
+        if had_old {
+            let _ = std::fs::rename(&backup, &target);
+        }
+        return Err(io_error("publish verified model", &target, e));
+    }
+    if had_old {
+        // A locked backup can be retried by recover_install on the next attempt.
+        let _ = std::fs::remove_dir_all(&backup);
+    }
+    Ok(completed)
+}
+
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
@@ -226,6 +520,435 @@ mod tests {
             .iter()
             .find(|m| m.id == id)
             .unwrap_or_else(|| panic!("{id} is in the shipped registry"))
+    }
+
+    fn pinned_fixture() -> SherpaModel {
+        let mut m = model("parakeet-unified-en-0.6b").clone();
+        m.files = [
+            "encoder.int8.onnx",
+            "decoder.int8.onnx",
+            "joiner.int8.onnx",
+            "tokens.txt",
+        ]
+        .into_iter()
+        .map(|name| kw_provider_registry::ModelFile {
+            path: name.to_owned(),
+            url: format!(
+                "https://huggingface.co/owner/model/resolve/{}/{name}",
+                "a".repeat(40)
+            ),
+            sha256: "ab".repeat(32),
+            expected_size_bytes: 5,
+        })
+        .collect();
+        m
+    }
+
+    #[test]
+    fn manifests_reject_unsafe_paths_missing_duplicates_and_moving_urls() {
+        let good = pinned_fixture();
+        let names = [
+            "encoder.int8.onnx",
+            "decoder.int8.onnx",
+            "joiner.int8.onnx",
+            "tokens.txt",
+        ];
+        assert_eq!(validate_files(&good.files, &names).unwrap(), 20);
+        for path in [
+            "../tokens.txt",
+            "C:/tokens.txt",
+            "tokens.txt:stream",
+            "tokens.txt/extra",
+        ] {
+            let mut m = good.clone();
+            m.files[0].path = path.into();
+            assert!(validate_files(&m.files, &names).is_err());
+        }
+        let mut m = good.clone();
+        m.files.pop();
+        assert!(validate_files(&m.files, &names).is_err());
+        let mut m = good.clone();
+        m.files[0] = m.files[1].clone();
+        assert!(validate_files(&m.files, &names).is_err());
+        for url in [
+            "http://huggingface.co/o/m/resolve/main/tokens.txt",
+            "https://example.com/tokens.txt",
+            "https://huggingface.co/o/m/resolve/main/tokens.txt",
+        ] {
+            let mut m = good.clone();
+            m.files[3].url = url.into();
+            assert!(validate_files(&m.files, &names).is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn existing_models_are_preserved_and_concurrent_installs_are_refused() {
+        let root = tempfile::tempdir().unwrap();
+        let m = pinned_fixture();
+        let target = model_dir(root.path(), &m);
+        std::fs::create_dir(&target).unwrap();
+        for f in &m.files {
+            std::fs::write(target.join(&f.path), b"existing").unwrap();
+        }
+        let policy = NetworkPolicy::new().unwrap();
+        let installed = install(&policy, &m, root.path(), &mut |_| {
+            panic!("must not download")
+        })
+        .await
+        .unwrap();
+        assert_eq!(installed.bytes, 0);
+        for f in &m.files {
+            assert_eq!(std::fs::read(target.join(&f.path)).unwrap(), b"existing");
+        }
+        let lock_path = root.path().join(format!("{}.install.lock", m.id));
+        let staging = root.path().join(format!(".{}.model-install", m.id));
+        std::fs::create_dir(&staging).unwrap();
+        std::fs::write(staging.join("active"), b"leave alone").unwrap();
+        let lock = std::fs::OpenOptions::new()
+            .write(true)
+            .open(lock_path)
+            .unwrap();
+        lock.try_lock().unwrap();
+        assert!(install(&policy, &m, root.path(), &mut |_| {})
+            .await
+            .is_err());
+        assert!(staging.join("active").exists(), "lock precedes cleanup");
+        drop(lock);
+        assert!(install(&policy, &m, root.path(), &mut |_| {}).await.is_ok());
+        assert!(
+            !staging.exists(),
+            "clean stale data even for complete models"
+        );
+    }
+
+    struct FakeDownload(&'static [u8], bool);
+    #[async_trait::async_trait]
+    impl FileDownload for FakeDownload {
+        async fn fetch(
+            &self,
+            _file: &kw_provider_registry::ModelFile,
+            path: &Path,
+            progress: &mut (dyn FnMut(u64) + Send),
+        ) -> Result<(), SherpaModelError> {
+            std::fs::write(path, self.0).unwrap();
+            if self.1 {
+                std::future::pending::<()>().await;
+            }
+            progress(self.0.len() as u64);
+            Ok(())
+        }
+    }
+
+    fn tiny_file() -> kw_provider_registry::ModelFile {
+        kw_provider_registry::ModelFile {
+            path: "model.onnx".into(),
+            url: format!(
+                "https://huggingface.co/owner/model/resolve/{}/model.onnx",
+                "a".repeat(40)
+            ),
+            // SHA-256 of "hello".
+            sha256: "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824".into(),
+            expected_size_bytes: 5,
+        }
+    }
+
+    struct ExitDuringDownload;
+    #[async_trait::async_trait]
+    impl FileDownload for ExitDuringDownload {
+        async fn fetch(
+            &self,
+            _file: &kw_provider_registry::ModelFile,
+            path: &Path,
+            _progress: &mut (dyn FnMut(u64) + Send),
+        ) -> Result<(), SherpaModelError> {
+            std::fs::write(path, b"partial").unwrap();
+            // Simulate quitting/crashing: no future, lock or staging destructor runs.
+            std::process::exit(71);
+        }
+    }
+
+    #[tokio::test]
+    async fn interrupted_install_child() {
+        let Some(root) = std::env::var_os("KW_MODEL_INSTALL_CRASH_TEST_ROOT") else {
+            return;
+        };
+        install_files_with(
+            &ExitDuringDownload,
+            "test",
+            &[tiny_file()],
+            Path::new(&root),
+            "model",
+            &["model.onnx"],
+            &mut |_| {},
+        )
+        .await
+        .unwrap();
+        panic!("download should terminate the child process");
+    }
+
+    #[tokio::test]
+    async fn process_exit_staging_is_reclaimed_without_touching_other_installs() {
+        let root = tempfile::tempdir().unwrap();
+        let staging = root.path().join(".test.model-install");
+        let other = root.path().join(".other.model-install");
+        std::fs::create_dir(&other).unwrap();
+        std::fs::write(other.join("active"), b"leave alone").unwrap();
+        for _ in 0..2 {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "sherpa_models::tests::interrupted_install_child",
+                    "--nocapture",
+                ])
+                .env("KW_MODEL_INSTALL_CRASH_TEST_ROOT", root.path())
+                .status()
+                .unwrap();
+            assert_eq!(status.code(), Some(71));
+            assert!(staging.join("payload/model.onnx").exists());
+            assert!(!staging.join("previous-attempt").exists());
+            std::fs::write(staging.join("previous-attempt"), b"stale").unwrap();
+        }
+        assert_eq!(
+            install_files_with(
+                &FakeDownload(b"hello", false),
+                "test",
+                &[tiny_file()],
+                root.path(),
+                "model",
+                &["model.onnx"],
+                &mut |_| {},
+            )
+            .await
+            .unwrap(),
+            5
+        );
+        assert!(!staging.exists());
+        assert_eq!(std::fs::read(other.join("active")).unwrap(), b"leave alone");
+        assert_eq!(
+            std::fs::read(root.path().join("model/model.onnx")).unwrap(),
+            b"hello"
+        );
+    }
+
+    #[tokio::test]
+    async fn retained_backups_recover_at_each_publication_boundary() {
+        for state in ["target-missing", "target-incomplete", "target-complete"] {
+            let root = tempfile::tempdir().unwrap();
+            let target = root.path().join("model");
+            let backup = root.path().join("test.incomplete-backup");
+            std::fs::create_dir(&backup).unwrap();
+            std::fs::write(backup.join("model.onnx"), b"previous model").unwrap();
+            if state != "target-missing" {
+                std::fs::create_dir(&target).unwrap();
+                let name = if state == "target-complete" {
+                    "model.onnx"
+                } else {
+                    "partial"
+                };
+                std::fs::write(target.join(name), b"new model").unwrap();
+            }
+            let staging = root.path().join(".test.model-install");
+            std::fs::create_dir(&staging).unwrap();
+            std::fs::write(staging.join("partial"), b"abandoned").unwrap();
+            // Wrong bytes would fail verification if recovery tried to download.
+            assert_eq!(
+                install_files_with(
+                    &FakeDownload(b"wrong", false),
+                    "test",
+                    &[tiny_file()],
+                    root.path(),
+                    "model",
+                    &["model.onnx"],
+                    &mut |_| {},
+                )
+                .await
+                .unwrap(),
+                0
+            );
+            let expected = if state == "target-complete" {
+                b"new model".as_slice()
+            } else {
+                b"previous model".as_slice()
+            };
+            assert_eq!(std::fs::read(target.join("model.onnx")).unwrap(), expected);
+            assert!(!backup.exists());
+            assert!(!staging.exists());
+        }
+    }
+
+    #[tokio::test]
+    async fn incomplete_backup_survives_failed_retry_then_installs_successfully() {
+        let root = tempfile::tempdir().unwrap();
+        let backup = root.path().join("test.incomplete-backup");
+        std::fs::create_dir(&backup).unwrap();
+        std::fs::write(backup.join("old.txt"), b"retained").unwrap();
+        assert!(install_files_with(
+            &FakeDownload(b"wrong", false),
+            "test",
+            &[tiny_file()],
+            root.path(),
+            "model",
+            &["model.onnx"],
+            &mut |_| {},
+        )
+        .await
+        .is_err());
+        assert_eq!(
+            std::fs::read(root.path().join("model/old.txt")).unwrap(),
+            b"retained"
+        );
+        assert_eq!(
+            install_files_with(
+                &FakeDownload(b"hello", false),
+                "test",
+                &[tiny_file()],
+                root.path(),
+                "model",
+                &["model.onnx"],
+                &mut |_| {},
+            )
+            .await
+            .unwrap(),
+            5
+        );
+        assert!(!backup.exists());
+    }
+
+    #[tokio::test]
+    async fn failed_and_cancelled_downloads_keep_previous_data_and_release_lock() {
+        let root = tempfile::tempdir().unwrap();
+        let old = root.path().join("model");
+        std::fs::create_dir(&old).unwrap();
+        std::fs::write(old.join("old.txt"), b"retained").unwrap();
+        let files = [tiny_file()];
+        for bytes in [
+            b"hell".as_slice(),
+            b"hello!".as_slice(),
+            b"wrong".as_slice(),
+        ] {
+            assert!(install_files_with(
+                &FakeDownload(bytes, false),
+                "test",
+                &files,
+                root.path(),
+                "model",
+                &["model.onnx"],
+                &mut |_| {}
+            )
+            .await
+            .is_err());
+            assert_eq!(std::fs::read(old.join("old.txt")).unwrap(), b"retained");
+            assert!(!old.join("model.onnx").exists());
+        }
+        let mut progress = |_| {};
+        let job = install_files_with(
+            &FakeDownload(b"hello", true),
+            "test",
+            &files,
+            root.path(),
+            "model",
+            &["model.onnx"],
+            &mut progress,
+        );
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), job)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            std::fs::read_dir(root.path()).unwrap().count(),
+            2,
+            "old directory and lock only"
+        );
+        assert_eq!(
+            install_files_with(
+                &FakeDownload(b"hello", false),
+                "test",
+                &files,
+                root.path(),
+                "model",
+                &["model.onnx"],
+                &mut |_| {}
+            )
+            .await
+            .unwrap(),
+            5
+        );
+        assert_eq!(std::fs::read(old.join("model.onnx")).unwrap(), b"hello");
+        assert!(!old.join("old.txt").exists());
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn locked_backup_reports_recovery_error_and_can_be_retried() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let backup = root.path().join("test.incomplete-backup");
+        std::fs::create_dir(&backup).unwrap();
+        std::fs::write(backup.join("old.txt"), b"retained").unwrap();
+        let handle = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(backup.join("old.txt"))
+            .unwrap();
+        let error = install_files_with(
+            &FakeDownload(b"hello", false),
+            "test",
+            &[tiny_file()],
+            root.path(),
+            "model",
+            &["model.onnx"],
+            &mut |_| {},
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("restore retained model backup"));
+        assert!(!error.to_string().contains("invalid model file manifest"));
+        assert!(backup.join("old.txt").exists());
+        drop(handle);
+        assert_eq!(
+            install_files_with(
+                &FakeDownload(b"hello", false),
+                "test",
+                &[tiny_file()],
+                root.path(),
+                "model",
+                &["model.onnx"],
+                &mut |_| {},
+            )
+            .await
+            .unwrap(),
+            5
+        );
+        assert!(!backup.exists());
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn locked_previous_directory_is_not_deleted() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let old = root.path().join("model");
+        std::fs::create_dir(&old).unwrap();
+        std::fs::write(old.join("old.txt"), b"retained").unwrap();
+        let _handle = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(old.join("old.txt"))
+            .unwrap();
+        assert!(install_files_with(
+            &FakeDownload(b"hello", false),
+            "test",
+            &[tiny_file()],
+            root.path(),
+            "model",
+            &["model.onnx"],
+            &mut |_| {}
+        )
+        .await
+        .is_err());
+        assert!(old.join("old.txt").exists());
+        assert!(!old.join("model.onnx").exists());
     }
 
     #[test]

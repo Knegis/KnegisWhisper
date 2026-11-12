@@ -30,6 +30,7 @@ import { fileURLToPath } from "node:url";
 
 import {
   violations,
+  callSites,
   backendSources,
   resolveKey,
   normalise,
@@ -313,4 +314,18 @@ test("the IPC wrapper for a command is found by its invoke, not by its name", ()
   assert.equal(ipcWrapper("history_set_enabled", ipc), "setHistoryEnabled");
   assert.equal(ipcWrapper("meeting_set_detect_lists", ipc), "setMeetingDetectLists");
   assert.equal(ipcWrapper("no_such_command", ipc), null);
+});
+
+
+test("transaction settings writes count as ordinary set and remove", () => {
+  const sites = callSites({ "calendar.rs": `
+#[tauri::command]
+async fn write() {
+    settings::set_on(&mut *tx, "calendar.google.account", &email).await?;
+    settings::remove_on(&mut *tx, "calendar.google.lastSync").await?;
+}` });
+  assert.deepEqual(sites.map(({ op, expression, isCommand }) => ({ op, expression, isCommand })), [
+    { op: "set", expression: '"calendar.google.account"', isCommand: true },
+    { op: "remove", expression: '"calendar.google.lastSync"', isCommand: true },
+  ]);
 });

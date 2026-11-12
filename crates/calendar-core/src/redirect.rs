@@ -74,6 +74,8 @@ pub struct CallbackParams {
     /// The OAuth2 `error` parameter -- set when the user denied consent, or
     /// the provider otherwise refused to issue a code.
     pub error: Option<String>,
+    /// Retained only in Rust; never echoed to the callback page or diagnostics.
+    pub error_description: Option<String>,
 }
 
 impl std::fmt::Debug for CallbackParams {
@@ -86,6 +88,7 @@ impl std::fmt::Debug for CallbackParams {
             .field("code", &self.code.as_ref().map(|_| "<redacted>"))
             .field("state", &self.state.as_ref().map(|_| "<redacted>"))
             .field("error", &self.error)
+            .field("error_description", &self.error_description.is_some())
             .finish()
     }
 }
@@ -262,16 +265,23 @@ fn parse_callback(request_line: &str) -> Result<CallbackParams, RedirectError> {
     let mut code = None;
     let mut state = None;
     let mut error = None;
+    let mut error_description = None;
     for (key, value) in url.query_pairs() {
         match key.as_ref() {
             "code" => code = Some(value.into_owned()),
             "state" => state = Some(value.into_owned()),
             "error" => error = Some(value.into_owned()),
+            "error_description" => error_description = Some(value.into_owned()),
             _ => {}
         }
     }
 
-    Ok(CallbackParams { code, state, error })
+    Ok(CallbackParams {
+        code,
+        state,
+        error,
+        error_description,
+    })
 }
 
 #[cfg(test)]
@@ -290,6 +300,7 @@ mod tests {
             code: Some("super-secret-code".to_owned()),
             state: Some("the-state-value".to_owned()),
             error: None,
+            error_description: Some("private description".to_owned()),
         };
         let rendered = format!("{params:?}");
         assert!(!rendered.contains("super-secret-code"));
@@ -512,5 +523,16 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(params.code.as_deref(), Some("saved"));
+    }
+
+    #[test]
+    fn error_description_is_retained_but_not_displayed_or_echoed() {
+        let callback = parse_callback("GET /callback?error=access_denied&error_description=private-description&state=state HTTP/1.1").unwrap();
+        assert_eq!(
+            callback.error_description.as_deref(),
+            Some("private-description")
+        );
+        assert!(!format!("{callback:?}").contains("private-description"));
+        assert!(!RESPONSE_BODY.contains("private-description"));
     }
 }

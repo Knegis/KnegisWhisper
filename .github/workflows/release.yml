@@ -8,6 +8,11 @@ on:
         description: "Existing main-branch tag, e.g. v0.1.0"
         required: true
         type: string
+      require_calendar_clients:
+        description: "Require built-in Google and Outlook calendar clients"
+        required: false
+        type: boolean
+        default: false
       validate_other_platforms:
         description: "Also build experimental macOS/Linux bundles as workflow artifacts"
         required: false
@@ -58,11 +63,17 @@ jobs:
         run: git checkout --detach "refs/tags/$env:RELEASE_TAG"
       - name: Preflight and release-tool tests
         env:
+          KW_GOOGLE_CALENDAR_CLIENT_ID: ${{ vars.KW_GOOGLE_CALENDAR_CLIENT_ID }}
+          KW_GOOGLE_CALENDAR_CLIENT_SECRET: ${{ secrets.KW_GOOGLE_CALENDAR_CLIENT_SECRET }}
+          KW_MICROSOFT_CALENDAR_CLIENT_ID: ${{ vars.KW_MICROSOFT_CALENDAR_CLIENT_ID }}
+          REQUIRE_CALENDAR_CLIENTS: ${{ inputs.require_calendar_clients }}
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
           python -m unittest discover -s tools/release -p "test_*.py"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/release/release.py preflight --tag $env:RELEASE_TAG
+          $calendarArgs = @()
+          if ($env:REQUIRE_CALENDAR_CLIENTS -eq "true") { $calendarArgs += "--require-calendar-clients" }
+          python tools/release/release.py preflight --tag $env:RELEASE_TAG @calendarArgs
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
@@ -93,12 +104,30 @@ jobs:
           cargo test --workspace --profile ci --locked
           cargo clippy -p knegiswhisper --lib --tests --features tauri-test --profile ci --locked -- -D warnings
           cargo test -p knegiswhisper --lib --features tauri-test --profile ci --locked
+          cargo test -p knegiswhisper --bin knegiswhisper-uninstall --features tauri-test,windows-uninstall --profile ci --locked
+          cargo clippy -p knegiswhisper --bin knegiswhisper-uninstall --tests --features tauri-test,windows-uninstall --profile ci --locked -- -D warnings
+          python tools/uninstall/generate.py --check
+      - name: Install pinned notice generator
+        run: cargo install cargo-about --version 0.8.4 --locked
+      - name: Verify bundled notices
+        run: python tools/licenses/generate.py --check
       - name: Build unsigned installer
+        env:
+          KW_GOOGLE_CALENDAR_CLIENT_ID: ${{ vars.KW_GOOGLE_CALENDAR_CLIENT_ID }}
+          KW_GOOGLE_CALENDAR_CLIENT_SECRET: ${{ secrets.KW_GOOGLE_CALENDAR_CLIENT_SECRET }}
+          KW_MICROSOFT_CALENDAR_CLIENT_ID: ${{ vars.KW_MICROSOFT_CALENDAR_CLIENT_ID }}
         working-directory: apps/desktop
         shell: bash
         run: npm run tauri:build -- --target x86_64-pc-windows-msvc --bundles nsis --config ../../tools/release/unsigned.json
+      - name: Verify built uninstall entry point
+        run: python tools/uninstall/verify_build.py target/x86_64-pc-windows-msvc/release
+      - name: Native uninstall entry-point recovery
+        run: python tools/uninstall/test_windows.py -v
       - name: Prepare installer, checksums and notes
         env:
+          KW_GOOGLE_CALENDAR_CLIENT_ID: ${{ vars.KW_GOOGLE_CALENDAR_CLIENT_ID }}
+          KW_GOOGLE_CALENDAR_CLIENT_SECRET: ${{ secrets.KW_GOOGLE_CALENDAR_CLIENT_SECRET }}
+          KW_MICROSOFT_CALENDAR_CLIENT_ID: ${{ vars.KW_MICROSOFT_CALENDAR_CLIENT_ID }}
           RELEASE_TAG: ${{ inputs.tag }}
         run: python tools/release/release.py prepare --tag $env:RELEASE_TAG
       - uses: actions/upload-artifact@v4
@@ -118,6 +147,9 @@ jobs:
         with:
           name: windows-preview
           path: release-assets
+      - name: Verify downloaded installer checksum
+        working-directory: release-assets
+        run: sha256sum -c SHA256SUMS.txt
       - name: Refuse published release replacement
         uses: actions/github-script@v7
         env:
@@ -163,6 +195,11 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: apps/desktop/package-lock.json
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install pinned notice generator
+        run: cargo install cargo-about --version 0.8.4 --locked
       - name: Linux dependencies
         if: runner.os == 'Linux'
         run: |
@@ -170,7 +207,18 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libssl-dev libglib2.0-dev libgtk-3-dev libasound2-dev patchelf
       - run: npm ci
         working-directory: apps/desktop
+      - name: Generate target notices
+        shell: bash
+        run: |
+          npm --prefix apps/desktop run build
+          cargo fetch --locked
+          target=$(rustc -vV | sed -n 's/^host: //p')
+          python tools/licenses/generate.py --target "$target"
       - name: Build experimental unsigned bundles
+        env:
+          KW_GOOGLE_CALENDAR_CLIENT_ID: ${{ vars.KW_GOOGLE_CALENDAR_CLIENT_ID }}
+          KW_GOOGLE_CALENDAR_CLIENT_SECRET: ${{ secrets.KW_GOOGLE_CALENDAR_CLIENT_SECRET }}
+          KW_MICROSOFT_CALENDAR_CLIENT_ID: ${{ vars.KW_MICROSOFT_CALENDAR_CLIENT_ID }}
         working-directory: apps/desktop
         run: npm run tauri:build -- --config ../../tools/release/unsigned.json
       - uses: actions/upload-artifact@v4

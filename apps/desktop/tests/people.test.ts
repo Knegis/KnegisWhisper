@@ -1,6 +1,36 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { addParticipant, emailKey, noteCount, participantLabel, personLabel, readParticipants, removeParticipant } from "../src/lib/people.js";
+import { spawnSync } from "node:child_process";
+import { addParticipant, emailKey, noteCount, participantLabel, personLabel, readParticipants, removeParticipant, trimSpace } from "../src/lib/people.js";
+
+test("trimming agrees with Rust whitespace without changing interior text", () => {
+  const spaces = "\t\n\v\f\r \u0085\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000";
+  for (const space of spaces) {
+    assert.equal(trimSpace(space + "Åsa" + space + "Berg" + space), "Åsa" + space + "Berg");
+    assert.equal(trimSpace(space.repeat(100)), "");
+  }
+  for (const retained of ["\ufeff", "\u180e", "\u200b", "😀"]) {
+    assert.equal(trimSpace(" " + retained + " " + retained + " "), retained + " " + retained);
+  }
+  assert.equal(trimSpace(""), "");
+});
+
+test("imported participants with large interior whitespace finish without backtracking", () => {
+  // A subprocess deadline can stop a synchronous regex; a test timeout cannot.
+  const moduleUrl = new URL("../src/lib/people.js", import.meta.url).href;
+  const script = [
+    "import assert from 'node:assert/strict';",
+    "import { readParticipants, trimSpace } from " + JSON.stringify(moduleUrl) + ";",
+    "for (const length of [10000, 200000, 1000000]) {",
+    " const text = 'A' + ' '.repeat(length) + 'B';",
+    " assert.equal(trimSpace(' ' + text + '\\t'), text);",
+    " assert.deepEqual(readParticipants(JSON.stringify([{displayName:text,email:text}])), [{displayName:text,email:text}]);",
+    "}",
+  ].join("\n");
+  const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], { encoding: "utf8", timeout: 5000 });
+  assert.equal(result.error, undefined, String(result.error));
+  assert.equal(result.status, 0, result.stderr);
+});
 
 // Fixture 101's participants, exactly as `lib/devFixtures.ts` stores them.
 const FIXTURE_101 = JSON.stringify([

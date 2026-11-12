@@ -22,6 +22,10 @@ knegiswhisper recording stop
 
 Use `--json` for automation. Export returns content on stdout unless `--output`
 is supplied; an existing output file is refused unless `--force` is explicit.
+Interactive terminal output escapes control characters that could change the terminal
+display or state, retaining line breaks and tabs. Pipes, redirection and files saved
+with `--output` retain the original content. Interactive JSON remains valid JSON.
+
 Markdown exports the current editable note and its title by default. `--transcript`
 exports immutable timed transcript segments. Text, JSON, SRT and VTT exports use
 those segments and report a validation error when they are unavailable.

@@ -141,6 +141,8 @@ pub struct NewNote {
     pub folder_id: Option<i64>,
     pub transcript: Option<String>,
     pub participants: Option<String>,
+    /// Snapshot identity, without a foreign key into the replaceable calendar cache.
+    pub calendar_event_id: Option<String>,
     pub audio_duration_seconds: Option<f64>,
     /// [`TranscribedBy`] as JSON, for a note saved with a transcript.
     pub transcribed_by: Option<String>,
@@ -217,8 +219,8 @@ async fn create_on<'e, E: sqlx::Executor<'e, Database = sqlx::Sqlite>>(
     let id: i64 = sqlx::query_scalar(
         "INSERT INTO notes
             (title, content, note_type, folder_id, transcript, participants,
-             audio_duration_seconds, recording_details, transcribed_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             audio_duration_seconds, recording_details, transcribed_by, calendar_event_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          RETURNING id",
     )
     .bind(&title)
@@ -230,6 +232,7 @@ async fn create_on<'e, E: sqlx::Executor<'e, Database = sqlx::Sqlite>>(
     .bind(note.audio_duration_seconds)
     .bind(&note.recording_details)
     .bind(&note.transcribed_by)
+    .bind(&note.calendar_event_id)
     .fetch_one(pool)
     .await?;
 

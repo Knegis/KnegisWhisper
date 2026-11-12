@@ -3,9 +3,17 @@
 // exempt from that, and it does not need to be: cargo prints the error and
 // fails the build on an `Err` from main exactly as it would on a panic.
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    for name in [
+        "KW_GOOGLE_CALENDAR_CLIENT_ID",
+        "KW_GOOGLE_CALENDAR_CLIENT_SECRET",
+        "KW_MICROSOFT_CALENDAR_CLIENT_ID",
+    ] {
+        println!("cargo:rerun-if-env-changed={name}");
+    }
     // Icon assets are embedded in the executable and generated Tauri context.
     // Rebuild them even when only the artwork changes.
     println!("cargo:rerun-if-changed=icons");
+    println!("cargo:rerun-if-changed=windows-app-manifest.xml");
 
     // `tauri_build` embeds the Common Controls v6 manifest in the application
     // binary, but Rust's unit-test harness is a separate executable and does
@@ -28,6 +36,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    tauri_build::build();
+    // Both shipped binaries start as the invoking user. Without an explicit
+    // level, Windows' installer filename heuristics can elevate the uninstall
+    // helper before it has established whose personal data was selected.
+    let attributes = tauri_build::Attributes::new().windows_attributes(
+        tauri_build::WindowsAttributes::new()
+            .app_manifest(include_str!("windows-app-manifest.xml")),
+    );
+    tauri_build::try_build(attributes)?;
     Ok(())
 }

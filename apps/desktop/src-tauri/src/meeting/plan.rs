@@ -66,11 +66,18 @@ pub(super) fn recording_start(
 /// name. Whether the recording is deleted once saved is read from the setting
 /// now (KNEG-409), never taken from the caller, and a change to the setting
 /// after this is the next meeting's.
-pub(super) async fn plan_at_start(db: &Db, plan: MeetingPlan, provider_id: &str) -> MeetingPlan {
-    MeetingPlan {
+pub(super) async fn plan_at_start(
+    db: &Db,
+    plan: MeetingPlan,
+    provider_id: &str,
+    choice: CalendarLinkChoice,
+) -> calendar_link::StartPlan {
+    let plan = MeetingPlan {
         title: plan.title.as_deref().and_then(clean_title),
         folder_id: plan.folder_id,
         delete_recording: delete_recordings(db).await,
         live_provider_id: Some(provider_id.to_owned()),
-    }
+        calendar: None,
+    };
+    calendar_link::resolve(db, plan, choice, chrono::Utc::now()).await
 }

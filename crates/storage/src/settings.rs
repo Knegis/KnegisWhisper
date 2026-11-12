@@ -102,6 +102,17 @@ pub async fn set<T: Serialize>(
     key: &str,
     value: &T,
 ) -> Result<(), StorageError> {
+    set_on(pool, key, value).await
+}
+
+/// Write using a pool or a transaction's SQLite connection. The same key and
+/// serialization checks apply inside transactions, so callers cannot bypass
+/// the credential boundary by choosing a different executor.
+pub async fn set_on<'e, T: Serialize, E: sqlx::Executor<'e, Database = sqlx::Sqlite>>(
+    executor: E,
+    key: &str,
+    value: &T,
+) -> Result<(), StorageError> {
     check_key(key).map_err(|e| StorageError::Import(e.to_string()))?;
 
     let encoded = serde_json::to_string(value)
@@ -113,7 +124,7 @@ pub async fn set<T: Serialize>(
     )
     .bind(key)
     .bind(encoded)
-    .execute(pool)
+    .execute(executor)
     .await?;
 
     Ok(())
@@ -121,9 +132,17 @@ pub async fn set<T: Serialize>(
 
 /// Remove a setting. Absent keys are not an error.
 pub async fn remove(pool: &SqlitePool, key: &str) -> Result<(), StorageError> {
+    remove_on(pool, key).await
+}
+
+/// Remove using a pool or a transaction connection; absent keys remain a no-op.
+pub async fn remove_on<'e, E: sqlx::Executor<'e, Database = sqlx::Sqlite>>(
+    executor: E,
+    key: &str,
+) -> Result<(), StorageError> {
     sqlx::query("DELETE FROM settings WHERE key = ?")
         .bind(key)
-        .execute(pool)
+        .execute(executor)
         .await?;
     Ok(())
 }
@@ -256,5 +275,36 @@ mod tests {
         set(db.pool(), "there", &true).await.unwrap();
         remove(db.pool(), "there").await.unwrap();
         assert_eq!(get::<bool>(db.pool(), "there").await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn settings_executor_writes_follow_transaction_commit_and_rollback() {
+        let db = db().await;
+        set(db.pool(), "transaction.original", &1).await.unwrap();
+        let mut tx = db.pool().begin().await.unwrap();
+        set_on(&mut *tx, "transaction.new", &2).await.unwrap();
+        remove_on(&mut *tx, "transaction.original").await.unwrap();
+        assert!(set_on(&mut *tx, "auth.token", &"blocked").await.is_err());
+        tx.rollback().await.unwrap();
+        assert_eq!(
+            get::<i32>(db.pool(), "transaction.original").await.unwrap(),
+            Some(1)
+        );
+        assert_eq!(
+            get::<i32>(db.pool(), "transaction.new").await.unwrap(),
+            None
+        );
+        let mut tx = db.pool().begin().await.unwrap();
+        set_on(&mut *tx, "transaction.new", &2).await.unwrap();
+        remove_on(&mut *tx, "transaction.original").await.unwrap();
+        tx.commit().await.unwrap();
+        assert_eq!(
+            get::<i32>(db.pool(), "transaction.original").await.unwrap(),
+            None
+        );
+        assert_eq!(
+            get::<i32>(db.pool(), "transaction.new").await.unwrap(),
+            Some(2)
+        );
     }
 }

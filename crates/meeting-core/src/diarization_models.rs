@@ -1,39 +1,30 @@
 //! Installing the two models a diarization run needs.
 //!
-//! Two models, two shapes, and the difference is not cosmetic: the pyannote
-//! segmentation model is a `.tar.bz2` of a directory and the CAM++ embedding
-//! model is a single `.onnx` file. So this is neither
-//! `kw_transcription_core::sherpa_models::install` (archive only) nor
-//! `kw_transcription_core::models::install` (single file only) — it is the
-//! two of them behind one call, chosen by which of `extract_dir` and
-//! `file_name` the registry entry carries. The generator refuses to emit an
-//! entry declaring both or neither, so [`install`] never has to guess.
+//! Pyannote segmentation is discovered as `model.onnx` inside `extract_dir`;
+//! CAM++ speaker embedding is a single ONNX file at `file_name`. The registry
+//! generator rejects entries declaring both or neither, so discovery and install
+//! agree on what must exist. A directory alone never counts as installed.
 //!
-//! ## What is reused rather than rewritten
+//! Segmentation now uses an immutable per-file manifest and the shared
+//! `kw_transcription_core::sherpa_models::install_verified_files` installer.
+//! It bounds and hashes the transfer, stages beside the destination, serializes
+//! competing installs with an OS lock, and recovers interrupted staging/backup
+//! directories on retry. The old archive layout is preserved for existing users.
 //!
-//! Everything that matters. `NetworkPolicy::download_to_file_bounded` bounds
-//! the transfer by the pinned compressed size before it reaches disk;
-//! `kw_sidecar::integrity::verify` checks the length and the digest before
-//! anything is extracted or renamed into place; `kw_sidecar::extract_with_limit`
-//! applies the decompression ceiling KNEG-100 and KNEG-102 exist for. A model
-//! with no pin cannot be installed at all — the same refusal
-//! `sherpa_models::install` makes, and for the same reason: a placeholder
-//! digest is a lie that only fails at the worst moment.
+//! The English CAM++ embedding has no verified equivalent immutable mirror yet.
+//! Its existing GitHub download writes a fixed `.partial` file, checks the exact
+//! pinned size and digest, and renames only verified bytes into place. Archive
+//! fallback entries also use `kw_sidecar::extract_with_limit` to enforce a
+//! separate decompression ceiling. Missing pins refuse installation; display
+//! size estimates do not replace integrity checks.
 //!
-//! ## Downloaded beside the destination, never onto it
+//! These staging rules matter because [`installed`] discovers models by path:
+//! a half-written ONNX file at its final location could otherwise appear ready.
+//! Downloads go through `NetworkPolicy` as user-triggered model requests.
 //!
-//! Both paths write a `.partial` and only move it into place after
-//! verification, so an interrupted download can never look like an installed
-//! model. That rule is worth more here than usual: [`installed`] answers by
-//! looking at file paths, and a half-written `.onnx` at the right path would
-//! satisfy it.
-//!
-//! ## The English limit belongs on the screen, not only here
-//!
-//! Measured 2026-09-01: the segmentation model is language-independent and the
-//! embedding model is not. Only the English CAM++ model is pinned. See
-//! [`crate::diarization`] for the measurement. Anything that offers this
-//! install has to say so.
+//! Measured 2026-09-01: segmentation is language-independent, but only the
+//! English CAM++ embedding is pinned. Anything offering this install must show
+//! that language limit; see [`crate::diarization`] for the measurement.
 
 use std::path::{Path, PathBuf};
 
@@ -43,6 +34,8 @@ use kw_provider_registry::{DiarizationModel, DiarizationRole};
 /// Why installing a diarization model failed.
 #[derive(Debug, thiserror::Error)]
 pub enum InstallError {
+    #[error(transparent)]
+    Files(#[from] kw_transcription_core::sherpa_models::SherpaModelError),
     #[error(transparent)]
     Network(#[from] kw_network_policy::PolicyError),
 
@@ -156,6 +149,33 @@ pub async fn install(
         model: model.id.clone(),
     })?;
 
+    if !model.files.is_empty() {
+        let folder = model
+            .extract_dir
+            .as_deref()
+            .ok_or_else(|| InstallError::Shapeless {
+                model: model.id.clone(),
+            })?;
+        kw_transcription_core::sherpa_models::install_verified_files(
+            policy,
+            &model.id,
+            &model.files,
+            root,
+            folder,
+            &[crate::diarization::SEGMENTATION_MODEL_FILE],
+            &mut |p| match p {
+                kw_transcription_core::sherpa_models::Progress::Downloading { written, total } => {
+                    progress(Progress::Downloading { written, total })
+                }
+                kw_transcription_core::sherpa_models::Progress::Extracting => {
+                    progress(Progress::Extracting)
+                }
+            },
+        )
+        .await?;
+        return Ok(destination);
+    }
+
     let expected_size = model
         .expected_size_bytes
         .ok_or_else(|| InstallError::MissingPin {
@@ -256,6 +276,24 @@ mod tests {
             .expect("the shipped registry loads")
             .local_asr
             .diarization
+    }
+
+    #[tokio::test]
+    #[ignore = "Downloads the pinned 6 MB segmentation model"]
+    async fn pinned_segmentation_installs_from_immutable_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let model = model(DiarizationRole::Segmentation);
+        assert!(!model.files.is_empty());
+        let policy = NetworkPolicy::new().unwrap();
+        let path = install(&policy, model, dir.path(), &mut |p| {
+            assert!(!matches!(p, Progress::Extracting));
+        })
+        .await
+        .unwrap();
+        assert!(path
+            .join(crate::diarization::SEGMENTATION_MODEL_FILE)
+            .is_file());
+        assert!(is_installed(dir.path(), model));
     }
 
     fn model(role: DiarizationRole) -> &'static DiarizationModel {

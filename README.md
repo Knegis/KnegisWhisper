@@ -9,11 +9,11 @@
 Dictate into your apps, transcribe meetings, and turn recordings into searchable notes.
 Run speech models locally or connect your own provider.
 
-[**Get started**](docs/GETTING_STARTED.md) · [Documentation](docs/README.md) · [Contribute](CONTRIBUTING.md) · [Report a bug](https://github.com/Knegis/KnegisWhisper/issues/new/choose)
+[**Get started**](https://github.com/Knegis/KnegisWhisper/releases/tag/v0.1.1) · [Documentation](docs/README.md) · [Contribute](CONTRIBUTING.md) · [Report a bug](https://github.com/Knegis/KnegisWhisper/issues/new/choose)
 
 </div>
 
-![KnegisWhisper product introduction: dictation, meetings and notes](docs/assets/intro-preview.gif)
+[![KnegisWhisper product introduction: dictation, meetings and notes](docs/assets/intro-preview.gif)](https://github.com/Knegis/KnegisWhisper/releases/download/v0.1.1/knegiswhisper-intro.mp4)
 
 *Native Windows development build, with fictional example content.
 [Intro video and production notes](docs/INTRO_VIDEO.md).*
@@ -21,7 +21,7 @@ Run speech models locally or connect your own provider.
 ## Speak. Capture. Keep.
 
 - **Dictate into your apps.** Use a configurable shortcut to turn speech into text where your cursor is.
-- **Capture meetings.** Keep a recording, follow its transcript and revisit what was said.
+- **Capture meetings.** Each meeting is saved with its recording and transcript, ready to replay and search later.
 - **Make notes your own.** Edit Markdown, organize folders, search transcripts and export what you need.
 - **Choose your processing.** Use local Whisper/Parakeet models or your own cloud-provider credentials.
 
@@ -29,8 +29,9 @@ Run speech models locally or connect your own provider.
 
 ## Get started
 
-**Early development. The first Windows preview installer is being prepared.**
-Until its installation checks are complete and it is published, [run from source](docs/DEVELOPMENT.md#development).
+**Early development.** The first Windows release, [v0.1.1](https://github.com/Knegis/KnegisWhisper/releases/tag/v0.1.1),
+is unsigned. It has not yet been through the installation checks on a clean machine.
+You can also [run from source](docs/DEVELOPMENT.md#development).
 
 For your first dictation:
 
@@ -42,18 +43,27 @@ For your first dictation:
 
 | Platform | Availability |
 | --- | --- |
-| Windows x64 | Primary development platform; preview installer in preparation |
+| Windows x64 | Primary development platform; unsigned [installer](https://github.com/Knegis/KnegisWhisper/releases/tag/v0.1.1) |
 | macOS | Source builds; capability-specific limitations |
 | Linux | Source builds; capability-specific limitations |
 
 See [platform support](docs/PLATFORM_SUPPORT.md) and [known limitations](docs/KNOWN_LIMITATIONS.md).
-The first preview targets Windows 11 x64 and will be unsigned. Models are downloaded separately.
+The installer targets Windows 11 x64 and is unsigned. Models are downloaded separately.
 
 ## From a conversation to a useful note
 
-Record a meeting or import a local audio/video file. Review its transcript, write your
-own notes and replay the recording. Search brings you back to the relevant conversation;
-exports let you take the result elsewhere.
+Record a meeting or import a local audio/video file. It becomes a note that keeps the
+recording, so you can replay it whenever you come back: press any line of the transcript to
+hear it from there, or play only the lines you select. Write your own notes beside it, and
+export the result when you need it elsewhere.
+
+Turn on speaker labels in **Settings > Meetings** and the transcript shows who is speaking.
+Name a speaker once and the name stays with that note. Add the people who were there, and
+the **People** list in Notes shows every note each of them is on. Search covers every
+transcript, so it brings you back to what was said in any earlier conversation.
+
+In this version, search finds words, not who said them. Recognising the same voice across
+meetings (Known voices) is built but can't be switched on yet.
 
 <img src="docs/assets/meetings.png" width="100%" alt="The Meetings screen in the native Windows app" />
 

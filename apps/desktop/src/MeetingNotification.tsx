@@ -42,10 +42,12 @@ import {
   onMeetingOffer,
   onMeetingOutcome,
   onMeetingState,
+  onMeetingPlanChanged,
   onMeetingTranscript,
   saveMeetingNotificationPlacement,
   startMeeting,
   type MeetingState,
+  type MeetingStatus,
   type Offer,
   type Sources,
 } from "./lib/ipc";
@@ -64,6 +66,7 @@ const RECORD_WITH = "local";
 export function MeetingNotification() {
   const finalisation = useFinalisationProgress();
   const [state, setState] = useState<MeetingState | null>(null);
+  const [calendarStatus, setCalendarStatus] = useState<MeetingStatus | null>(null);
   const [offer, setOffer] = useState<Offer | null>(null);
   const [sources, setSources] = useState<Sources | null>(null);
   // When the running meeting started, from Rust's `elapsedSeconds`; `null` with none running.
@@ -125,6 +128,7 @@ export function MeetingNotification() {
         .then((status) => {
           if (disposed || requested !== revision) return;
           enterState(status.state);
+          setCalendarStatus(status);
           if (meetingIsLive(status.state) && !notesReady) {
             void getMeetingNotes().then((draft) => {
               if (disposed || requested !== revision || !currentState || !meetingIsLive(currentState)) return;
@@ -148,6 +152,7 @@ export function MeetingNotification() {
     };
 
     const subscriptions = [
+      onMeetingPlanChanged(refresh).then(keepListener),
       onMeetingState((next) => {
         enterState(next);
         if (!meetingIsLive(next)) {
@@ -214,7 +219,7 @@ export function MeetingNotification() {
     return <MeetingPanel session={session} elapsed={elapsed}
       detail={stalled ? "recording stopped — press Stop to keep what was captured" : transcriptEnded ? "live transcript stopped — still recording" : whoIsRecorded(sources)}
       alert={transcriptEnded || stalled} transcriptAllowed={notificationCaptureExcluded}
-      rows={rows} initialNotes={notes} onProblem={setProblem} />;
+      rows={rows} initialNotes={notes} onProblem={setProblem} calendarStatus={calendarStatus} />;
   }
 
   if (state === "finishing") {

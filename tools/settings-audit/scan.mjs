@@ -223,12 +223,12 @@ export function keyHelpers(sources) {
   return out;
 }
 
-/** Every `settings::{get,get_or,set,remove}` call in the backend sources. */
+/** Every `settings::{get,get_or,set,set_on,remove,remove_on}` call in the backend sources. */
 export function callSites(sources) {
   const sites = [];
   for (const [file, source] of Object.entries(sources)) {
     const fns = functions(source);
-    const re = /(?:kw_storage::)?settings::(get_or|get|set|remove)\s*(?:::<[^>]*>)?\s*\(/g;
+    const re = /(?:kw_storage::)?settings::(get_or|get|set_on|set|remove_on|remove)\s*(?:::<[^>]*>)?\s*\(/g;
     let m;
     while ((m = re.exec(source)) !== null) {
       // `settings::get` is a prefix of `settings::get_or`; the alternation is
@@ -246,7 +246,7 @@ export function callSites(sources) {
       sites.push({
         file,
         line: source.slice(0, m.index).split("\n").length,
-        op: m[1],
+        op: m[1].replace(/_on$/, ""),
         expression: (args[1] ?? "").replace(/\s+/g, " ").trim(),
         fn: owner?.name ?? "(top level)",
         isCommand: owner?.isCommand ?? false,

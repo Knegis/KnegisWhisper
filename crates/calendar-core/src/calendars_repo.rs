@@ -4,7 +4,7 @@
 //!
 //! A calendar refresh must never clobber two things a user or an earlier
 //! sync already decided: whether the calendar is selected for sync
-//! (`is_selected`), and where the delta cursor was left (`sync_token`). Every
+//! (`is_selected`), and the legacy cursor (`sync_token`). Every
 //! `upsert_*` function here writes only the columns the provider's own
 //! calendar list describes and leaves both alone; [`set_selected`] and
 //! [`set_sync_token`] are the only ways either one changes.
@@ -14,7 +14,7 @@
 //! compile-time constants rather than caller-supplied strings, which is what
 //! keeps interpolating them into a query free of an injection path.
 
-use sqlx::{Row as _, SqlitePool};
+use sqlx::{Executor, Row as _, Sqlite, SqlitePool};
 
 use crate::google::CalendarListEntry as GoogleCalendarListEntry;
 use crate::microsoft::CalendarListEntry as MicrosoftCalendarListEntry;
@@ -50,6 +50,15 @@ pub async fn upsert_google_calendar(
     account_email: &str,
     entry: &GoogleCalendarListEntry,
 ) -> Result<(), sqlx::Error> {
+    upsert_google_calendar_on(pool, account_email, entry).await
+}
+
+/// Executor variant for atomic grant installation.
+pub async fn upsert_google_calendar_on<'e>(
+    executor: impl Executor<'e, Database = Sqlite>,
+    account_email: &str,
+    entry: &GoogleCalendarListEntry,
+) -> Result<(), sqlx::Error> {
     sqlx::query(
         "INSERT INTO google_calendars \
             (id, summary, description, background_color, is_selected, is_primary, account_email) \
@@ -66,7 +75,7 @@ pub async fn upsert_google_calendar(
     .bind(entry.selected)
     .bind(entry.is_primary)
     .bind(account_email)
-    .execute(pool)
+    .execute(executor)
     .await?;
     Ok(())
 }
@@ -76,6 +85,15 @@ pub async fn upsert_google_calendar(
 /// schema's own default (`is_selected = 1`) rather than this binding it.
 pub async fn upsert_microsoft_calendar(
     pool: &SqlitePool,
+    account_email: &str,
+    entry: &MicrosoftCalendarListEntry,
+) -> Result<(), sqlx::Error> {
+    upsert_microsoft_calendar_on(pool, account_email, entry).await
+}
+
+/// Executor variant for atomic grant installation.
+pub async fn upsert_microsoft_calendar_on<'e>(
+    executor: impl Executor<'e, Database = Sqlite>,
     account_email: &str,
     entry: &MicrosoftCalendarListEntry,
 ) -> Result<(), sqlx::Error> {
@@ -91,26 +109,40 @@ pub async fn upsert_microsoft_calendar(
     .bind(&entry.background_color)
     .bind(entry.is_primary)
     .bind(account_email)
-    .execute(pool)
+    .execute(executor)
     .await?;
     Ok(())
 }
 
-/// Remove every calendar of `kind` for `account_email` whose id is not in
-/// `keep_ids`, returning the ids removed so the caller can also drop their
-/// events (`crate::events_repo::delete_all_for_calendar`) -- a calendar the
-/// provider no longer lists should not leave orphaned events behind.
+/// Remove calendars absent from the provider list and their cached events in
+/// the same transaction, so a failed prune cannot leave orphaned event rows.
 pub async fn prune_calendars(
     pool: &SqlitePool,
     kind: CalendarProviderKind,
     account_email: &str,
     keep_ids: &[String],
 ) -> Result<Vec<String>, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    let removed = prune_calendars_on(&mut *tx, kind, account_email, keep_ids).await?;
+    tx.commit().await?;
+    Ok(removed)
+}
+
+/// Use the caller's transaction for both calendar and event removal.
+pub async fn prune_calendars_on<C: Send>(
+    connection: &mut C,
+    kind: CalendarProviderKind,
+    account_email: &str,
+    keep_ids: &[String],
+) -> Result<Vec<String>, sqlx::Error>
+where
+    for<'c> &'c mut C: Executor<'c, Database = Sqlite>,
+{
     let table = table(kind);
     let select = format!("SELECT id FROM {table} WHERE account_email = ?");
     let rows = sqlx::query(&select)
         .bind(account_email)
-        .fetch_all(pool)
+        .fetch_all(&mut *connection)
         .await?;
 
     let mut removed = Vec::new();
@@ -122,8 +154,19 @@ pub async fn prune_calendars(
     }
 
     for id in &removed {
+        sqlx::query("DELETE FROM calendar_events WHERE provider = ? AND calendar_id = ?")
+            .bind(match kind {
+                CalendarProviderKind::Google => "google",
+                CalendarProviderKind::Microsoft => "microsoft",
+            })
+            .bind(id)
+            .execute(&mut *connection)
+            .await?;
         let delete = format!("DELETE FROM {table} WHERE id = ?");
-        sqlx::query(&delete).bind(id).execute(pool).await?;
+        sqlx::query(&delete)
+            .bind(id)
+            .execute(&mut *connection)
+            .await?;
     }
 
     Ok(removed)
@@ -186,19 +229,23 @@ pub async fn set_selected(
     Ok(())
 }
 
-/// Store the delta cursor for one calendar, or clear it (`None`) after a
-/// sync token expired and a full resync ran.
-///
-/// `sync_token_expires_at` (Microsoft's table only) is never written here --
-/// see `crate::microsoft`'s module doc on why inventing a value for it would
-/// be a fabricated fact rather than a documented one.
+/// Retain the legacy cursor columns for downgrade compatibility. Snapshot
+/// sync clears both fields rather than retaining an unusable incremental cursor.
 pub async fn set_sync_token(
     pool: &SqlitePool,
     kind: CalendarProviderKind,
     calendar_id: &str,
     token: Option<&str>,
 ) -> Result<(), sqlx::Error> {
-    let query = format!("UPDATE {} SET sync_token = ? WHERE id = ?", table(kind));
+    let expiry = if matches!(kind, CalendarProviderKind::Microsoft) {
+        ", sync_token_expires_at = NULL"
+    } else {
+        ""
+    };
+    let query = format!(
+        "UPDATE {} SET sync_token = ?{expiry} WHERE id = ?",
+        table(kind)
+    );
     sqlx::query(&query)
         .bind(token)
         .bind(calendar_id)
@@ -217,6 +264,64 @@ pub async fn set_sync_token(
 mod tests {
     use super::*;
     use kw_storage::Db;
+
+    #[tokio::test]
+    async fn prune_removes_events_atomically_with_their_calendars() {
+        let db = Db::open_in_memory().await.unwrap();
+        for id in ["keep", "remove"] {
+            upsert_google_calendar(
+                db.pool(),
+                "user@example.com",
+                &google_entry(id, true, false),
+            )
+            .await
+            .unwrap();
+            sqlx::query("INSERT INTO calendar_events (id, provider, calendar_id, start_time, end_time) VALUES (?, 'google', ?, '2026-11-11', '2026-11-12')")
+                .bind(format!("google:{id}:event")).bind(id).execute(db.pool()).await.unwrap();
+        }
+        sqlx::query("CREATE TRIGGER refuse_calendar_delete BEFORE DELETE ON google_calendars BEGIN SELECT RAISE(ABORT, 'fixture'); END").execute(db.pool()).await.unwrap();
+        assert!(prune_calendars(
+            db.pool(),
+            CalendarProviderKind::Google,
+            "user@example.com",
+            &["keep".to_owned()]
+        )
+        .await
+        .is_err());
+        assert_eq!(
+            crate::events_repo::count_events(db.pool(), "google", "remove")
+                .await
+                .unwrap(),
+            1
+        );
+        sqlx::query("DROP TRIGGER refuse_calendar_delete")
+            .execute(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(
+            prune_calendars(
+                db.pool(),
+                CalendarProviderKind::Google,
+                "user@example.com",
+                &["keep".to_owned()]
+            )
+            .await
+            .unwrap(),
+            ["remove"]
+        );
+        assert_eq!(
+            crate::events_repo::count_events(db.pool(), "google", "remove")
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            crate::events_repo::count_events(db.pool(), "google", "keep")
+                .await
+                .unwrap(),
+            1
+        );
+    }
 
     fn google_entry(id: &str, selected: bool, primary: bool) -> GoogleCalendarListEntry {
         GoogleCalendarListEntry {
@@ -291,7 +396,7 @@ mod tests {
         assert_eq!(
             rows[0].sync_token.as_deref(),
             Some("cursor-1"),
-            "the delta cursor must survive a refresh"
+            "the legacy cursor must survive a refresh"
         );
     }
 

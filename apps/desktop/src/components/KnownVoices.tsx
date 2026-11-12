@@ -20,14 +20,17 @@ export function KnownVoices({ refreshKey }: { refreshKey: string }) {
       <label className="switch-row"><span>Recognize returning participants</span><input type="checkbox" role="switch" checked={data.enabled} disabled={busy || (!data.ready && !data.enabled)} onChange={e => { void run(() => setKnownVoicesEnabled(e.target.checked)); }} /></label>
       {data.reason ? <p>{data.reason}</p> : null}
       {data.ready || data.reason?.startsWith("Install") ? <button disabled={busy} onClick={() => { void run(repairKnownVoices); }}>{data.ready ? "Repair Known voices runtime" : "Install Known voices runtime"}</button> : null}
-      {data.voices.map(voice => <form key={`${voice.id}:${voice.displayName}`} onSubmit={e => {
+      {/* One row per voice: the name is the field, so its label is for screen
+          readers only; repeating "Voice name" before every field said nothing
+          the field doesn't. The sample note sits under the row, not inside it. */}
+      {data.voices.map(voice => <form key={`${voice.id}:${voice.displayName}`} className="known-voice" onSubmit={e => {
         e.preventDefault(); const name = String(new FormData(e.currentTarget).get("name") ?? "");
         void run(() => renameKnownVoice(voice.id, name));
       }}>
-        <label>Voice name <input name="name" defaultValue={voice.displayName} required maxLength={100} disabled={busy} /></label>
-        {!voice.compatible ? <span>Needs a new voice sample</span> : null}
+        <label className="known-voice-name"><span className="sr-only">Voice name</span><input name="name" defaultValue={voice.displayName} required maxLength={100} disabled={busy} /></label>
         <button disabled={busy} type="submit">Rename</button>
         <button disabled={busy} type="button" onClick={() => { void run(() => deleteKnownVoice(voice.id)); }}>Forget voice</button>
+        {!voice.compatible ? <p className="known-voice-note">Needs a new voice sample</p> : null}
       </form>)}
       <p>Turning this off keeps remembered voices. Forgetting a voice removes its recognition data; names already saved in notes remain.</p>
     </>}

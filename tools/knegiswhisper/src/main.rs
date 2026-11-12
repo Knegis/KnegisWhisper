@@ -10,6 +10,7 @@ use clap::{Parser, Subcommand};
 use kw_cli::{render, CliError, Client, Exit};
 use reqwest::Method;
 use serde_json::{json, Value};
+use std::io::IsTerminal as _;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -209,12 +210,18 @@ fn main() -> std::process::ExitCode {
     match runtime.block_on(run(&cli)) {
         Ok(output) => {
             if !output.is_empty() {
-                println!("{output}");
+                println!(
+                    "{}",
+                    render::terminal_output(&output, std::io::stdout().is_terminal())
+                );
             }
             std::process::ExitCode::SUCCESS
         }
         Err(err) => {
-            eprintln!("knegiswhisper: {err}");
+            eprintln!(
+                "knegiswhisper: {}",
+                render::terminal_output(&err.to_string(), std::io::stderr().is_terminal())
+            );
             std::process::ExitCode::from(err.exit().code() as u8)
         }
     }

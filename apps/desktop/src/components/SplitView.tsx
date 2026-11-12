@@ -56,7 +56,7 @@ export function ListToggle() {
 export function SplitView({ label, panel, children }: { label: string; panel: ReactNode; children: ReactNode }) {
   const { collapsed } = useContext(PanelCollapsed);
   return (
-    <div className="split">
+    <div className="split" data-list-collapsed={collapsed}>
       {collapsed ? <ListToggle /> : null}
       <aside id="list-panel" className="list-panel" aria-label={label} hidden={collapsed}>
         {panel}

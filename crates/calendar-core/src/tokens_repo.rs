@@ -14,7 +14,7 @@
 //! stays decoupled from that wrapper; whoever holds the open database (the
 //! Tauri command layer, in the application) passes its pool straight through.
 
-use sqlx::{Row as _, SqlitePool};
+use sqlx::{Executor, Row as _, Sqlite, SqlitePool};
 
 use crate::provider::CalendarProviderKind;
 
@@ -29,6 +29,18 @@ pub struct TokenRow {
 /// Insert or update the row for `account_email`.
 pub async fn upsert(
     pool: &SqlitePool,
+    kind: CalendarProviderKind,
+    account_email: &str,
+    token_ref: &str,
+    expires_at: i64,
+    scope: &str,
+) -> Result<(), sqlx::Error> {
+    upsert_on(pool, kind, account_email, token_ref, expires_at, scope).await
+}
+
+/// Executor variant for a caller-owned transaction.
+pub async fn upsert_on<'e>(
+    executor: impl Executor<'e, Database = Sqlite>,
     kind: CalendarProviderKind,
     account_email: &str,
     token_ref: &str,
@@ -56,7 +68,7 @@ pub async fn upsert(
         .bind(token_ref)
         .bind(expires_at)
         .bind(scope)
-        .execute(pool)
+        .execute(executor)
         .await?;
     Ok(())
 }
@@ -64,6 +76,15 @@ pub async fn upsert(
 /// Read the row for `account_email`, if any.
 pub async fn read(
     pool: &SqlitePool,
+    kind: CalendarProviderKind,
+    account_email: &str,
+) -> Result<Option<TokenRow>, sqlx::Error> {
+    read_on(pool, kind, account_email).await
+}
+
+/// Executor variant for a caller-owned transaction.
+pub async fn read_on<'e>(
+    executor: impl Executor<'e, Database = Sqlite>,
     kind: CalendarProviderKind,
     account_email: &str,
 ) -> Result<Option<TokenRow>, sqlx::Error> {
@@ -79,7 +100,7 @@ pub async fn read(
     );
     let row = sqlx::query(&query)
         .bind(account_email)
-        .fetch_optional(pool)
+        .fetch_optional(executor)
         .await?;
     let Some(row) = row else {
         return Ok(None);
@@ -93,11 +114,22 @@ pub async fn read(
 
 /// Update the expiry and scope after a refresh.
 ///
-/// `token_ref` is left unchanged: it is derived from the account, not from
-/// the token (`crate::credentials::token_ref_for`), so a refresh never needs
-/// to move a row to a different credential slot.
+/// `token_ref` is left unchanged: native grants use the account-derived slot,
+/// while imported grants may still use a positional slot. Refresh writes back
+/// to the row's actual reference; only a new consent moves an imported grant.
 pub async fn update_after_refresh(
     pool: &SqlitePool,
+    kind: CalendarProviderKind,
+    account_email: &str,
+    expires_at: i64,
+    scope: &str,
+) -> Result<(), sqlx::Error> {
+    update_after_refresh_on(pool, kind, account_email, expires_at, scope).await
+}
+
+/// Executor variant for a caller-owned transaction.
+pub async fn update_after_refresh_on<'e>(
+    executor: impl Executor<'e, Database = Sqlite>,
     kind: CalendarProviderKind,
     account_email: &str,
     expires_at: i64,
@@ -117,8 +149,60 @@ pub async fn update_after_refresh(
         .bind(expires_at)
         .bind(scope)
         .bind(account_email)
-        .execute(pool)
+        .execute(executor)
         .await?;
+    Ok(())
+}
+
+/// List account identities and slot references, never credential values.
+pub async fn list(
+    pool: &SqlitePool,
+    kind: CalendarProviderKind,
+) -> Result<Vec<(String, TokenRow)>, sqlx::Error> {
+    let query = format!(
+        "SELECT {} AS email, token_ref, expires_at, scope FROM {} ORDER BY {}",
+        kind.email_column(),
+        kind.token_table(),
+        kind.email_column()
+    );
+    sqlx::query(&query)
+        .fetch_all(pool)
+        .await?
+        .into_iter()
+        .map(|row| {
+            Ok((
+                row.try_get("email")?,
+                TokenRow {
+                    token_ref: row.try_get("token_ref")?,
+                    expires_at: row.try_get("expires_at")?,
+                    scope: row.try_get("scope")?,
+                },
+            ))
+        })
+        .collect()
+}
+
+/// Delete only this account's metadata. The caller durably queues its slot.
+pub async fn delete(
+    pool: &SqlitePool,
+    kind: CalendarProviderKind,
+    email: &str,
+) -> Result<(), sqlx::Error> {
+    delete_on(pool, kind, email).await
+}
+
+/// Executor variant for the atomic disconnect or replacement commit.
+pub async fn delete_on<'e>(
+    executor: impl Executor<'e, Database = Sqlite>,
+    kind: CalendarProviderKind,
+    email: &str,
+) -> Result<(), sqlx::Error> {
+    let query = format!(
+        "DELETE FROM {} WHERE {} = ?",
+        kind.token_table(),
+        kind.email_column()
+    );
+    sqlx::query(&query).bind(email).execute(executor).await?;
     Ok(())
 }
 

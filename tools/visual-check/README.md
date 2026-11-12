@@ -1,5 +1,13 @@
 # Visual checks
 
+## Settings return and task loading
+
+`settings-return.mjs` checks Settings dismissal, saved-note return, unsaved drafts
+and title-bar click-through. `task-loading.mjs` checks delayed and failed reads,
+rapid navigation, background refresh, both themes/sizes and reduced motion. Both
+use invented browser fixtures. Commands and native validation limits are recorded
+in [KNEG-548/547 validation](../../docs/KNEG_548_547_VALIDATION.md).
+
 ## The approved design (2026-11-04)
 
 `design-compare.mjs` renders a board from the approved canvas beside the fixture screen it
@@ -7,6 +15,10 @@ draws, at the same size, into `target/design-compare/`. The boards aren't in thi
 so it takes `--boards` and `--runtime`. `screen-sweep.mjs` walks every screen at one size and
 theme, and `floating-windows.mjs` every floating window state at its real size. Each leaves a
 contact sheet to look at.
+
+The comparison server rejects paths and symlinks outside the selected board and
+screenshot directories. The selected runtime is the only additional file it serves.
+Run its fixture checks with `node --test tools/visual-check/design-server.test.mjs`.
 
 ```powershell
 node tools/visual-check/design-compare.mjs --url http://127.0.0.1:5197/ --boards <folder> --runtime <dc-runtime.js> --out target/design-compare/run --only Dictation --sizes 1280x1400
@@ -861,6 +873,22 @@ recording, recovery's name and folder, and a folder deleted between Rust's
 lookup and its insert -- is covered by `cargo test`, not here. Not measured:
 the notification window's Record, which starts an unnamed meeting.
 
+## Calendar settings
+
+```powershell
+node tools/visual-check/calendar-settings.mjs --url http://127.0.0.1:5191/ --out tools/visual-check/out/calendar-settings
+```
+
+Captures both providers at 1280x800 and 720x520 using the invoke stub over dev
+fixtures: app, custom and missing clients; browser sign-in (including a browser
+that did not open), Cancel and Copy sign-in link; timeout Retry; Reconnect from
+token, connect and sync failures; imported connections and Remove; credential
+cleanup and Retry; Advanced save, discard, secret removal and return to the
+built-in client; and connected controls during sync. Key wording and wrapper
+calls are asserted, with a false check exiting 1. Generated test passwords are
+never included in reports. Real OAuth and credential-store behavior are outside
+this browser check.
+
 ## Meeting recordings
 
 ```
@@ -1068,6 +1096,10 @@ false check makes it exit 1. Which model a row reads as in use is
 Whisper model's languages are derived from its id, held to the registry
 there. Not measured: a real install, and Rust's refusals of a model that
 can't be chosen.
+
+## Meetings calendar
+
+Run `node tools/visual-check/meetings-calendar.mjs --url http://127.0.0.1:5183/ --out tools/visual-check/out/meetings-calendar` against the fixture dev server. It writes screenshots and JSON/Markdown assertions for upcoming states, freshness, event pickers, Start arguments and live calendar edits at 1280x800 and 720x520 in light theme and 1280x800 in dark theme. Recording panels use `#meeting` at 440x560, with a 392x280 fit check. These browser fixtures do not validate native windows or provider sync.
 
 ## Running application windows
 

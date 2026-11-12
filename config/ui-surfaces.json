@@ -72,7 +72,7 @@
       "surfaceId": "integrations.calendar",
       "component": "apps/desktop/src/views/IntegrationsCalendar.tsx",
       "built": true,
-      "note": "Google and Microsoft: register your own OAuth client and paste the client ID in on this screen, then connect and sync -- the screen says why there is no embedded client. Apple shows kw_calendar_core::apple::support()'s reason rather than an empty calendar list."
+      "note": "Settings > Calendar: Google Calendar and Outlook (personal and Microsoft 365) offer app-owned one-click Connect, Cancel, Copy sign-in link, Reconnect, Advanced custom client, leftovers with Remove, and cleanup Retry. Bounded snapshots use Google events.list and Graph v1.0 calendarView. No client is registered, no build has carried the values and no real account has connected; evidence is unit tests and dev-fixture screenshots. Meetings Upcoming/event picker and recording links are built and fixture-tested, still unverified against real accounts. Apple reports Unsupported with its EventKit reason."
     },
     "Integrations > API": {
       "surfaceId": "integrations.api",

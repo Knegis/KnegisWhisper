@@ -72,7 +72,7 @@ import { ConfirmHost } from "./components/ConfirmDialog";
 import { PanelCollapsed } from "./components/SplitView";
 import { getDiagnostics, getMeetingStatus, onMeetingState, type Diagnostics, type MeetingState } from "./lib/ipc";
 import { eyebrowOf, railOf, type ViewId } from "./lib/navigation";
-import { defaultDestination, initialHistory, navigationHistory } from "./lib/navigationHistory";
+import { defaultDestination, initialHistory, navigationHistory, settingsReturnDestination } from "./lib/navigationHistory";
 import { PAGES } from "./lib/pages";
 import { currentSurface } from "./lib/surface";
 import { installIdleScrollbars } from "./lib/idleScrollbars";
@@ -224,7 +224,16 @@ function Shell() {
   // until the screen you last used is the one that failed.
   const [history, dispatchNavigate] = useReducer(navigationHistory, initialHistory);
   const requestNavigation = useSettingsNavigation();
-  const navigate = useCallback((action: Parameters<typeof navigationHistory>[1]) => { void requestNavigation(() => dispatchNavigate(action)); }, [requestNavigation]);
+  const [headingRequest, setHeadingRequest] = useState(0);
+  const focusHeading = useRef(false);
+  const navigate = useCallback((action: Parameters<typeof navigationHistory>[1], focus = false) => {
+    void requestNavigation(() => {
+      focusHeading.current = focus;
+      setHeadingRequest(value => value + 1);
+      if (action.type === "visit" && railOf(action.destination.view) !== "settings") setSummarySetup(null);
+      dispatchNavigate(action);
+    });
+  }, [requestNavigation]);
   const [summarySetup, setSummarySetup] = useState<{ noteId: number; nonce: number } | null>(null);
   const destination = history.entries[history.index] ?? defaultDestination;
   const view = destination.view;
@@ -245,11 +254,8 @@ function Shell() {
    * sheet's are both derived from `view`.
    */
   const select = useCallback((id: ViewId) => {
-    void requestNavigation(() => {
-      if (railOf(id) !== "settings") setSummarySetup(null);
-      dispatchNavigate({ type: "visit", destination: { view: id } });
-    });
-  }, [requestNavigation]);
+    navigate({ type: "visit", destination: { view: id } }, true);
+  }, [navigate]);
   const openSummarySetup = useCallback((noteId: number, _target: SummarySetupTarget) => {
     void requestNavigation(() => {
       setSummarySetup({ noteId, nonce: Date.now() });
@@ -269,26 +275,38 @@ function Shell() {
   const [sheetOpen, setSheetOpen] = useState(false);
   const openSheet = useCallback(() => setSheetOpen(true), []);
 
-  // A screen chosen from the sheet takes focus on its title. Closing the
-  // dialog hands focus back to whatever opened it -- the Settings pill, or a
-  // settings screen's "Settings" pill that the new screen is about to replace
-  // -- so without this a keyboard or screen-reader user arrives on the new
-  // screen with focus behind them, or on nothing. A timestamp rather than a
-  // flag, so a navigation the unsaved-changes guard refused cannot leave a
-  // stale request to fire on some later, unrelated screen change.
-  const headingFocusAt = useRef(0);
   const selectFromSheet = useCallback((id: ViewId) => {
-    headingFocusAt.current = Date.now();
-    select(id);
-  }, [select]);
+    navigate({ type: "visit", destination: { view: id } }, true);
+  }, [navigate]);
+  const dismissSheet = () => {
+    setSheetOpen(false);
+    if (railOf(view) === "settings") {
+      navigate({ type: "visit", destination: settingsReturnDestination(history) }, true);
+    }
+  };
   useEffect(() => {
-    if (Date.now() - headingFocusAt.current > 2000) return;
-    headingFocusAt.current = 0;
-    const heading = document.querySelector<HTMLElement>(".split-main h1");
-    if (!heading) return;
-    heading.tabIndex = -1;
-    heading.focus({ preventScroll: true });
-  }, [view]);
+    if (!focusHeading.current) return;
+    focusHeading.current = false;
+    // Notes may still be loading. Wait for the actual heading, but stop if
+    // the person acts or another destination replaces this one.
+    const stop = () => {
+      observer.disconnect();
+      document.removeEventListener("pointerdown", stop, true);
+      document.removeEventListener("keydown", stop, true);
+    };
+    const focus = () => {
+      const heading = document.querySelector<HTMLElement>(".split-main h1");
+      if (!heading || heading.closest('[aria-busy="true"]')) return;
+      heading.tabIndex = -1;
+      if (document.activeElement !== heading) heading.focus({ preventScroll: true });
+    };
+    const observer = new MutationObserver(focus);
+    observer.observe(document.querySelector("main.card") ?? document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["aria-busy"] });
+    document.addEventListener("pointerdown", stop, true);
+    document.addEventListener("keydown", stop, true);
+    focus();
+    return stop;
+  }, [destination, diagnostics, headingRequest]);
 
   const ownsPanel = view === "dictation" || view === "meetings" || view === "notes";
 
@@ -318,7 +336,7 @@ function Shell() {
     <>{titlebar}<div className="frame">
       <main className="card">{card}</main>
     </div>
-    <SettingsSheet open={sheetOpen} view={view} version={diagnostics?.appVersion ?? null} onSelect={selectFromSheet} onClose={() => setSheetOpen(false)} /></>
+    <SettingsSheet open={sheetOpen} view={view} version={diagnostics?.appVersion ?? null} onSelect={selectFromSheet} onHide={() => setSheetOpen(false)} onDismiss={dismissSheet} /></>
   );
 
   if (!diagnostics) {
