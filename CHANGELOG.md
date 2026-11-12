@@ -5,6 +5,8 @@ version, supported platforms, installation requirements and known limitations.
 
 ## Unreleased
 
+- Keep opening imported notes responsive when participant fields contain long runs of whitespace.
+
 - Reject malformed Corti environment settings before sending credentials or opening a connection.
 
 - Use Ndot-57 for compact labels and dates, keeping Doto for the meeting clock and other large numeric displays.
