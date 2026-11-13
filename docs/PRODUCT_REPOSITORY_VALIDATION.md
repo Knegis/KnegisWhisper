@@ -42,6 +42,32 @@ so its releases are visible only to people with access. GitHub private vulnerabi
 reporting returned 404 for this private repository; the security policy uses a private
 maintainer channel instead of advertising an unavailable reporting form.
 
+## v0.2.0, published 13 November 2026
+
+- Tag `v0.2.0` is `ac6212b`, the merge of PR #69 into `main`.
+- The first Release run, 43432303057, failed at "Verify bundled notices": the notice
+  generator works offline, and the release workflow had never fetched `aes`, a crate only
+  the Linux credential store uses (KNEG-533). `0f04001` added the `cargo fetch --locked`
+  step CI already had, and reached `main` through PR #70, merged without waiting for CI
+  because it changes only the workflow file. The tag did not move: the workflow comes from
+  `main` and builds the tag.
+- Run [43437664044](https://github.com/Knegis/KnegisWhisper/actions/runs/43437664044) passed
+  every step and created the draft. It reported `calendar: google=included
+  microsoft=included`, and the notes say both one-click calendars are included.
+- Published as a prerelease, not marked latest, at 15:56 UTC. "Latest" stays on v0.1.1.
+  No intro video is attached, because the only one is v0.1.1's, with its outdated closing
+  caption (KNEG-537).
+- The repository was still private at publication.
+
+| Asset | Size | SHA-256 |
+| --- | --- | --- |
+| `KnegisWhisper_0.2.0_windows_x64_setup.exe` | 5772277 bytes | `754ebd284d7b6f098a9ccb63b029fd07d22acc16374dc0b396865b6c4d17ca42` |
+
+The installer was downloaded from the draft and again after publication, and both copies
+matched `SHA256SUMS.txt`. Its version resource reads 0.2.0, and it is not signed.
+`SHA256SUMS.txt` now has LF line endings (KNEG-536), and `sha256sum -c` passes in Git Bash.
+No installed-app acceptance has been run on this installer.
+
 ## v0.1.1, published 9 November 2026
 
 - Tag `v0.1.1` is `c87b31c`, the merge of PR #66 into `main`.

@@ -2,15 +2,16 @@
 
 ## Install or run from source
 
-The first Windows release, [v0.1.1](https://github.com/Knegis/KnegisWhisper/releases/tag/v0.1.1),
-is unsigned. It has not yet been through the installation checks on a clean machine. To build the app yourself instead, follow
+The newest Windows release, [v0.2.0](https://github.com/Knegis/KnegisWhisper/releases/tag/v0.2.0), is an unsigned preview.
+GitHub labels it Pre-release, and its "Latest" badge stays on v0.1.1, so open v0.2.0
+from that link or the Releases list. It has not yet been through the installation checks on a clean machine. To build the app yourself instead, follow
 [the source-build instructions](DEVELOPMENT.md#development).
 
-From that release page, download `KnegisWhisper_0.1.1_windows_x64_setup.exe` and its
+From that release page, download `KnegisWhisper_0.2.0_windows_x64_setup.exe` and its
 `SHA256SUMS.txt`. In PowerShell:
 
 ```powershell
-Get-FileHash .\KnegisWhisper_0.1.1_windows_x64_setup.exe -Algorithm SHA256
+Get-FileHash .\KnegisWhisper_0.2.0_windows_x64_setup.exe -Algorithm SHA256
 ```
 
 Compare the hash with the checksum file from the same release. The installer

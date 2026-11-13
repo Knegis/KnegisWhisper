@@ -9,7 +9,7 @@
 Dictate into your apps, transcribe meetings, and turn recordings into searchable notes.
 Run speech models locally or connect your own provider.
 
-[**Get started**](https://github.com/Knegis/KnegisWhisper/releases/tag/v0.1.1) · [Documentation](docs/README.md) · [Contribute](CONTRIBUTING.md) · [Report a bug](https://github.com/Knegis/KnegisWhisper/issues/new/choose)
+[**Get started**](https://github.com/Knegis/KnegisWhisper/releases/tag/v0.2.0) · [Documentation](docs/README.md) · [Contribute](CONTRIBUTING.md) · [Report a bug](https://github.com/Knegis/KnegisWhisper/issues/new/choose)
 
 </div>
 
@@ -29,8 +29,8 @@ Run speech models locally or connect your own provider.
 
 ## Get started
 
-**Early development.** The first Windows release, [v0.1.1](https://github.com/Knegis/KnegisWhisper/releases/tag/v0.1.1),
-is unsigned. It has not yet been through the installation checks on a clean machine.
+**Early development.** The newest Windows release, [v0.2.0](https://github.com/Knegis/KnegisWhisper/releases/tag/v0.2.0), is an unsigned
+preview. It has not yet been through the installation checks on a clean machine.
 You can also [run from source](docs/DEVELOPMENT.md#development).
 
 For your first dictation:
@@ -43,7 +43,7 @@ For your first dictation:
 
 | Platform | Availability |
 | --- | --- |
-| Windows x64 | Primary development platform; unsigned [installer](https://github.com/Knegis/KnegisWhisper/releases/tag/v0.1.1) |
+| Windows x64 | Primary development platform; unsigned [installer](https://github.com/Knegis/KnegisWhisper/releases/tag/v0.2.0) |
 | macOS | Source builds; capability-specific limitations |
 | Linux | Source builds; capability-specific limitations |
 

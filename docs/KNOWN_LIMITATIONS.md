@@ -9,8 +9,8 @@ The installer targets Windows 11 x64. It is unsigned and may display an
 unknown-publisher or Windows reputation warning. Verify the published SHA-256
 checksum before running it. The current installer requires administrator rights.
 Transcription binaries and models are downloaded separately through the app.
-v0.1.1 was published before its installation and upgrade checks on a clean machine
-were run, so those checks are still to come.
+v0.1.1 and v0.2.0 were both published before their installation and upgrade checks on a
+clean machine were run, so those checks are still to come.
 
 There is no automatic update installation and no updater signing. v0.2.0 and later
 run an automatic check once a day and link to a newer release page. The switch is
