@@ -183,7 +183,7 @@ and URL building. **Never run:** the app's list request and the notice for a rea
 The check needs a public repository; while private it reports "No public release could be found".
 v0.1.1 retains its key gate and must be upgraded to v0.2.0 by hand. By-hand acceptance
 remains open in `docs/BENCH_CHECK.md` and `docs/RELEASING.md`.
-The release workflow has published v0.1.1. A build with updater artifacts enabled and
+The release workflow has published v0.1.1 and, on 2026-11-13, v0.2.0 (`docs/PRODUCT_REPOSITORY_VALIDATION.md`). A build with updater artifacts enabled and
 no signing key remains untested; release builds disable artifacts instead.
 
 **Phase 10 — agents.** Chat agent, voice agent and translation: the window role, the dispatch, the

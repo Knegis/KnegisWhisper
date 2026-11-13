@@ -371,9 +371,9 @@ checks:
    anywhere in `.note-side`. Over `.note-side .transcript` and everything in
    it, every element but a control (`button`, `input`, `select`, `textarea`,
    `mark`, `.transcript-word`) is no heavier than 400.
-2. The player is a picture card at the column's foot: `.note-side-player` flush
-   (±0.5) with the column's left, right and bottom edges, no border, a 40px
-   radius and its picture's `#cfcbb8` behind it. It holds
+2. The player is a solid card at the column's foot: `.note-side-player` flush
+   (±0.5) with the column's left, right and bottom edges, no border, a 30px
+   radius and a solid `#3b3628` card (`.recording-player`) with no picture behind it. It holds
    a 44x44 `button[aria-label="Play"]` centred on its controls row (±0.5px),
    Back and Forward 15 seconds, a clock reading `m:ss / m:ss`, one `select`,
    and exactly two `.recording-mark` ticks centred within 1px of where the
