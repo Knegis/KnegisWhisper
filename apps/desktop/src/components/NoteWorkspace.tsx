@@ -689,7 +689,7 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
       className={wide ? "note-side" : "note-transcript-inline"} hidden={!wide && tab !== "transcript"}>
       {!wide && <>{recordingDetails}{disposition}</>}
       <div className="note-side-body">{transcriptShown ? null : <TranscriptHeading />}{transcriptBody}</div>
-      {player && playerSlot === "side" ? <div ref={holdObservedPlayer} className="note-side-player" data-playing={playing} /> : null}
+      {player && playerSlot === "side" ? <div ref={holdObservedPlayer} className="note-side-player" /> : null}
     </div>
     {player && playerSlot === "inline" ? <div className="note-inline-player" hidden={tab === "notes" && !playbackStarted}>
       <div ref={holdObservedPlayer} className="note-mini-player" hidden={tab === "notes" && !playbackStarted} />

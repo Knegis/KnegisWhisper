@@ -58,9 +58,9 @@ const SECTION_STARTS = [300, 600];
 const INSET = 0;
 const INSET_TOLERANCE = 0.5;
 const PLAY_SIZE = 44;
-/** The card's corners and its picture's base colour (`.note-side-player`), the same in both schemes. */
-const CARD_RADIUS = "40px";
-const CARD_PICTURE = "rgb(207, 203, 184)";
+/** The card's corners (`.note-side-player`) and its solid fill (`.recording-player`, #3b3628), the same in both schemes. */
+const CARD_RADIUS = "30px";
+const CARD_FILL = "rgb(59, 54, 40)";
 /** How far a tick's centre may sit from where the thumb would at that time. */
 const MARK_TOLERANCE = 1;
 const SKIP_FROM = 100;
@@ -504,7 +504,7 @@ function judgeCard(state) {
     inset: near(state.inset.left, INSET, INSET_TOLERANCE) && near(state.inset.right, INSET, INSET_TOLERANCE) && near(state.inset.bottom, INSET, INSET_TOLERANCE),
     border: state.borderWidths.every((width) => width === "0px"),
     radius: state.radii.every((radius) => radius === CARD_RADIUS),
-    background: state.background === CARD_PICTURE,
+    background: state.fill === CARD_FILL,
     play: state.play !== null && near(state.play.width, PLAY_SIZE, 0.5) && near(state.play.height, PLAY_SIZE, 0.5),
     playCentred: near(playCentre, rowCentre ?? Number.NaN, 0.5),
     skips: state.back && state.forward,
@@ -620,11 +620,11 @@ export async function runTranscriptColumn(options) {
     // 2. The player is a card floating in the column.
     await check({
       id: "2",
-      claim: "The player in the transcript column is a picture card at the column's foot.",
+      claim: "The player in the transcript column is a solid card at the column's foot.",
       expectation: [
         `in each scheme: .note-side-player flush (±${INSET_TOLERANCE}) with .note-side's left, right and bottom edges,`,
         `no border, a ${CARD_RADIUS} radius`,
-        `on all four corners and its picture's ${CARD_PICTURE} behind it; inside it a ${PLAY_SIZE}x${PLAY_SIZE} button[aria-label="Play"] whose centre is`,
+        `on all four corners and a solid ${CARD_FILL} fill; inside it a ${PLAY_SIZE}x${PLAY_SIZE} button[aria-label="Play"] whose centre is`,
         "within 0.5px of its .recording-controls row's, button[aria-label=\"Back 15 seconds\"] and button[aria-label=\"Forward 15 seconds\"],",
         "a .recording-clock reading m:ss / m:ss, exactly one select, and exactly 2 .recording-mark whose centres sit within",
         `${MARK_TOLERANCE}px of 5px + (range width - 10px) x 300/690 and x 600/690 from the range input's left; the recording ${DURATION}s long;`,

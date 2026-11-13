@@ -1438,6 +1438,7 @@ export function playerCardState() {
       borderColors: sides.map((name) => style['border' + name + 'Color']),
       radii: corners.map((name) => style['border' + name + 'Radius']),
       background: style.backgroundColor,
+      fill: getComputedStyle(card.querySelector('.recording-player') ?? card).backgroundColor,
       tokens: { rule: raw('--rule'), bg: raw('--bg') },
       resolved: { rule: resolve(raw('--rule')), bg: resolve(raw('--bg')) },
       play: box(play),

@@ -8,10 +8,11 @@
  * press and what a row or chip is about.
  *
  * `FILLED` are soft solids, for what *is* the thing rather than a control for
- * it: `stop`, `play` and `pause` mark a state, and `folder` and `trash` are
- * places in a list. So the two bins differ on purpose -- `trash` is where
- * deleted notes are, the line `discard` is the action -- and `folderPlus`
- * stays line, because it makes a folder rather than being one.
+ * it: `stop`, `play` and `pause` mark a state, and `trash` is a place in a
+ * list. So the two bins differ on purpose -- `trash` is where deleted notes
+ * are, the line `discard` is the action. `folder` was solid on the same
+ * reasoning until the owner asked for it in line (2026-11-13); it is now
+ * `folderPlus`'s outline without the plus.
  *
  * The glyphs began as the Kit's (the design before this one) and took their
  * rounding with oem.care's language; `git log` on this file has that history.
@@ -44,6 +45,7 @@ export type LineIconName =
   | "textModel"
   | "key"
   | "calendar"
+  | "folder"
   | "folderPlus"
   | "import"
   | "newNote"
@@ -108,6 +110,8 @@ export const ICONS: Record<LineIconName, string> = {
   key: "M11.75 15.5a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0zM10.75 12.75l8.5-8.5M16.25 7.25l2.5 2.5M13.75 9.75l2 2",
   calendar:
     "M7.25 5.75h9.5a2.5 2.5 0 0 1 2.5 2.5v8.5a2.5 2.5 0 0 1-2.5 2.5h-9.5a2.5 2.5 0 0 1-2.5-2.5v-8.5a2.5 2.5 0 0 1 2.5-2.5zM4.75 9.75h14.5M8.5 3.5v4M15.5 3.5v4",
+  folder:
+    "M3.75 7.75a2 2 0 0 1 2-2h3.4a2 2 0 0 1 1.5.7l1 1.1a2 2 0 0 0 1.5.7h5.1a2 2 0 0 1 2 2v6.5a2 2 0 0 1-2 2H5.75a2 2 0 0 1-2-2z",
   folderPlus:
     "M3.75 7.75a2 2 0 0 1 2-2h3.4a2 2 0 0 1 1.5.7l1 1.1a2 2 0 0 0 1.5.7h5.1a2 2 0 0 1 2 2v6.5a2 2 0 0 1-2 2H5.75a2 2 0 0 1-2-2zM12 10.75v5M9.5 13.25h5",
   import:
@@ -153,15 +157,13 @@ export const ICONS: Record<LineIconName, string> = {
  * Filled marks: `fill: currentColor; stroke: none` (`.icon-filled` in
  * `styles.css`), for what is a solid shape rather than a stroked control -- a
  * playing transport is a solid triangle and the pause that replaces it two
- * solid bars, and a folder or Trash is a place, muted in its row.
+ * solid bars, and Trash is a place, muted in its row.
  */
 export const FILLED = {
   stop: "M8.5 5h7a3.5 3.5 0 0 1 3.5 3.5v7a3.5 3.5 0 0 1-3.5 3.5h-7a3.5 3.5 0 0 1-3.5-3.5v-7a3.5 3.5 0 0 1 3.5-3.5z",
   play: "M9.01 5.83L17.3 10.71A1.5 1.5 0 0 1 17.3 13.29L9.01 18.17A1.5 1.5 0 0 1 6.75 16.88L6.75 7.12A1.5 1.5 0 0 1 9.01 5.83z",
   pause:
     "M8.75 5a1.75 1.75 0 0 1 1.75 1.75v10.5a1.75 1.75 0 0 1-3.5 0V6.75A1.75 1.75 0 0 1 8.75 5zM15.25 5A1.75 1.75 0 0 1 17 6.75v10.5a1.75 1.75 0 0 1-3.5 0V6.75A1.75 1.75 0 0 1 15.25 5z",
-  folder:
-    "M3 7.5a2.5 2.5 0 0 1 2.5-2.5h3.6a2.5 2.5 0 0 1 1.9.9l.9 1.1a1.5 1.5 0 0 0 1.15.5H18.5A2.5 2.5 0 0 1 21 10v6.5A2.5 2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5z",
   trash:
     "M9 3.5h6A1.5 1.5 0 0 1 16.5 5v1H20a1 1 0 1 1 0 2h-.6l-.9 11.1a2 2 0 0 1-2 1.9h-9a2 2 0 0 1-2-1.9L4.6 8H4a1 1 0 1 1 0-2h3.5V5A1.5 1.5 0 0 1 9 3.5z",
 } as const;

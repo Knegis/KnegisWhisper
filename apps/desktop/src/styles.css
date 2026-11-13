@@ -2540,7 +2540,8 @@ button.panel-tool[aria-expanded="true"]:hover:not(:disabled) { background: var(-
 button.notes-folder-toggle { display: flex; align-items: center; gap: 7px; width: 100%; height: 32px; margin: 0; padding: 0 10px; border-radius: var(--r-control); text-align: left; font-size: 14px; line-height: 20px; }
 /* A folder is never current, so its hover is a panel row's hover, not the current row's fill. */
 button.notes-folder-toggle:hover:not(:disabled) { background: var(--panel-hover); }
-.notes-folder-toggle > :is(.icon:first-child, .icon-filled) { color: var(--muted); }
+/* The folder's own icon, muted in its row as a person's is; the chevron sits in its own span. */
+.notes-folder-toggle > .icon { color: var(--muted); }
 .notes-folder-name { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .notes-folder-count { flex: none; font-size: 12.5px; color: var(--muted); }
 .notes-folder-notes { display: flex; flex-direction: column; gap: 1px; }
@@ -3027,7 +3028,6 @@ button.danger:hover:not(:disabled) { background: var(--error); color: var(--bg);
  * its first frame would leave what it was bringing in invisible.
  */
 :root[data-window-active="false"] :is(.local-hero-shadow, .local-hero-sphere, .state-tag[data-tone="call"] .state-tag-dot, .art-weather, .art-orb, .art-cursor, .art-bars > span, .art-streak, .terminal-line, .terminal-cursor, .mcp-wire > span, .api-hero-dot > span, .server-banner-bars > span, .tile-orb, .tile-weather, .title-ink, .notice-dot, .nav-pill-dot, .tile-label-dot, .level-segment-lit, .tile-cta, .call-card-dot, .live-finishing-pill, .live-text, .live-caret, .notes-empty-art > span, .tile-streak-art) { animation-play-state: paused; }
-:root[data-window-active="false"] .note-side-player::before { animation-play-state: paused; }
 
 /* A title in the big statement voice. */
 .page-title { margin: 0; font-family: var(--font-sans); font-size: clamp(40px, 5.6vw, 72px); font-weight: 400; line-height: 1.05; letter-spacing: .04em; color: var(--text); }
@@ -3333,15 +3333,20 @@ div.recent-pill-interrupted { padding: 0 6px 0 18px; background: none; box-shado
  * # Notes (`views/Notes.tsx`, `components/NoteWorkspace.tsx`)
  *
  * The library, bare on the ground; the note on a white sheet; the transcript, bare
- * again, with the player on a picture under it. The library, the note and the
+ * again, with the player card under it. The library, the note and the
  * column each scroll on their own, unlike the design's one tall page: a transcript
  * follows the playing line and a player has to stay in reach, which a canvas never
  * has to show.
  */
 .split { position: relative; gap: 20px; min-height: 0; padding: 6px 24px 24px; }
 .split > .split-main { overflow: hidden; scrollbar-gutter: auto; }
-/* 290 of content, as the design draws it, with its narrower scrollbar's room beside it that the gap to the note takes back. */
-.list-panel { flex: 0 1 300px; width: 300px; min-width: 0; gap: 18px; margin: 0 -10px 0 0; padding: 0; border-radius: 0; background: none; box-shadow: none; scrollbar-gutter: stable; }
+/*
+ * 290 of content, as the design draws it, with its narrower scrollbar's room beside it that the
+ * gap to the note takes back. The scroller clips what it holds, so it keeps 5px on every side
+ * for a focus ring (2px outside a 3px offset), and its margins take that back: the content
+ * stays where the design puts it, and the filter's ring is no longer cut off at both ends.
+ */
+.list-panel { flex: 0 1 310px; width: 310px; min-width: 0; gap: 18px; margin: -5px -15px -5px -5px; padding: 5px; border-radius: 0; background: none; box-shadow: none; scrollbar-gutter: stable; }
 .list-panel > .panel-surface { width: 290px; max-width: 100%; }
 .panel-surface { gap: 18px; }
 .notes-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
@@ -3501,11 +3506,7 @@ button.transcript-find:hover:not(:disabled) { background: var(--control-hover); 
 .transcript .transcript-rename .error { margin: 0; }
 .note-transcript-inline, .note-inline-player { max-width: none; padding-right: 0; padding-left: 0; }
 
-/*
- * The player: a dark glass card wherever a note draws it. Beside the note it sits
- * on the streak picture, which moves only while the recording plays; the layer
- * slides instead of repainting its background, ten changes a second.
- */
+/* The player: a dark card wherever a note draws it. */
 .recording-player { position: relative; gap: 12px; padding: 16px 16px 14px; border-radius: 30px; background: rgb(40 36 24 / 92%); color: #fff; }
 .recording-player :focus-visible { outline-color: #fff; }
 .recording-player .error { color: #ffc2cc; }
@@ -3539,16 +3540,15 @@ button.recording-skip:hover:not(:disabled) { background: rgb(255 255 255 / 28%);
 .recording-speed select, .recording-speed select:hover, .recording-speed select:focus { height: 36px; padding: 0 12px; background: rgb(255 255 255 / 16%); color: #fff; font: 13px/1.3 var(--font-mono); letter-spacing: 0; }
 .recording-speed select:focus-visible { outline: 2px solid #fff; outline-offset: 3px; }
 @supports (appearance: base-select) { .recording-speed select::picker-icon { border-color: #fff; } }
-.note-side-player { position: relative; left: auto; right: auto; bottom: auto; flex: none; display: flex; flex-direction: column; justify-content: flex-end; min-height: 250px; margin-top: 8px; padding: 12px; overflow: hidden; border-radius: var(--r-sheet); background: #cfcbb8; box-shadow: none; }
-.note-side-player::before { content: ""; position: absolute; left: 0; right: 0; top: 0; height: calc(100% + 220px); background-color: #cfcbb8; background-image: repeating-linear-gradient(180deg, rgb(255 255 255 / 0) 0, rgb(255 255 255 / 78%) 18px, rgb(255 214 170 / 55%) 30px, rgb(150 150 120 / 25%) 52px, rgb(255 255 255 / 0) 70px); background-size: 100% 220px; will-change: transform; animation: kw-streak 14s steps(140) infinite; animation-play-state: paused; }
-.note-side-player[data-playing="true"]::before { animation-play-state: running; }
+/* The slide of the streak pictures (the Settings tile and the import tile). */
 @keyframes kw-streak { to { transform: translateY(-220px); } }
-/* The glow in the picture, which stays where it is while the streak passes behind it. */
-.note-side-player::after { content: ""; position: absolute; inset: 0; background: radial-gradient(circle at 30% 34%, rgb(255 255 240 / 95%) 0 7%, rgb(255 255 240 / 0) 26%); pointer-events: none; }
-.note-side-player .recording-player { z-index: 1; }
-.note-side-player .recording-player { background: rgb(40 36 24 / 50%); -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px); }
-/* Under the note it has no picture behind it, and the transcript passes under the mini card, so it is solid. */
-.note-full-player .recording-player, .note-mini-player .recording-player { background: #3b3628; }
+/*
+ * Every slot draws the same solid card, the full width of where it sits. Beside the note it
+ * used to sit on the streak picture; the owner asked for the card alone (2026-11-13), and with
+ * nothing behind it a glass card would only show the ground, so it is solid everywhere.
+ */
+.note-side-player .recording-player, .note-full-player .recording-player, .note-mini-player .recording-player { background: #3b3628; }
+.note-side-player { position: relative; left: auto; right: auto; bottom: auto; flex: none; margin-top: 8px; padding: 0; border-radius: 30px; background: none; box-shadow: none; }
 .note-mini-player { padding: 0; border-radius: 30px; background: none; box-shadow: none; }
 
 /* Notes with no note open: the writing space, on a sheet of slow colour. */
