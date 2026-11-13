@@ -46,8 +46,11 @@ use your chosen provider directly; provider charges may apply.
 - v0.2.0 and later check GitHub once a day and link to a newer release, with a switch
   in Settings > Diagnostics, but never download or install anything. v0.1.1 cannot,
   so install this version by hand.
-- No real calendar account has connected to a build yet, so treat calendars as
-  unverified.
+- Calendars have connected with a personal Google account and a personal Outlook.com
+  account in a development build, not yet in a release build. While the Google sign-in is
+  in testing, only accounts the owner has added as testers can connect Google, and Google
+  ends their sign-in after 7 days. Work or school Microsoft accounts may need an
+  administrator to approve KnegisWhisper first.
 - The new uninstall helper hasn't been through its acceptance run on a disposable
   machine. Read what is kept before uninstalling.
 - Provider, calendar and speaker-identification validation varies by capability.

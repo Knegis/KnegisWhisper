@@ -23,8 +23,23 @@ not hide from them.
 ## Credentials
 
 Secrets live in the OS credential store — macOS Keychain, Windows Credential Manager, Linux
-Secret Service — one entry per key under the service name `com.knegis.knegiswhisper`. Never in
+Secret Service — under the service name `com.knegis.knegiswhisper`. Never in
 SQLite, never in `localStorage`, never in a `.env` file.
+
+A secret that fits takes one entry per key. A Windows entry holds at most 1,280 characters
+(2,560 bytes of UTF-16). On 2026-11-13 the first real Outlook.com connect was refused at that
+limit, because a Microsoft grant holds two long tokens. So a longer secret is split
+(`crates/security/src/split.rs`):
+- its parts go in entries named `kw-part-…`;
+- the key's own entry holds a manifest with the part count and a SHA-256 of the whole;
+- parts are written first and the manifest last, so a failed write leaves the previous
+  secret readable;
+- a read joins the parts and checks the digest, so a missing or altered part is an error,
+  never a different secret;
+- a delete removes the parts before the manifest.
+
+Part names stay inside the pattern the Windows uninstaller already cleans up. The split is
+unit-tested against an in-memory store that enforces Windows' limit.
 
 On Linux without a Secret Service provider, the app reports the limitation and requires the user
 to opt into a documented fallback rather than silently degrading to a weaker store.

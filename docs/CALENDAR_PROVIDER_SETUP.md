@@ -1,17 +1,28 @@
 # Calendar provider setup
 
 Owner runbook for app-owned one-click Connect in Settings > Calendar, dated 2026-11-11.
-No client has been registered, no real account has connected and no build has carried these
-values. Evidence so far is unit tests and dev-fixture screenshots. Registration and a real
-consent round trip remain owner work; do not mark R1/R2 verified before a bundled build
-completes real consent.
+On 2026-11-13 the owner registered both clients. A development build carrying their values
+connected a personal Google account and a personal Outlook.com account and synced them; the
+runs are recorded under [R12](#r12-owner-real-account-checklist). No release build has carried
+the values yet. Do not mark R1/R2 verified before a bundled build completes real consent.
 
 ## Portal instructions and evidence
 
 The portal steps below were taken from the providers' documentation read during planning on
-2026-11-11. The orchestrator confirmed that all 13 linked pages resolved that day. None of these
-steps has been exercised against a real portal or account. The owner should re-check the linked
-pages before registering.
+2026-11-11. The orchestrator confirmed that all 13 linked pages resolved that day. The owner
+should re-check the linked pages before registering.
+
+The owner followed these steps in both portals on 2026-11-13. What the portals did that the
+steps below don't say:
+
+- **Google:** Data Access lists a scope only once its API is enabled, so enable the Calendar API
+  first. The desktop client secret is shown only when the client is created; download the JSON
+  then. The app was left in Testing with the owner as a test user, so steps 3 and 6 are not done.
+- **Microsoft:** The Web platform rejects an `http://127.0.0.1` redirect; use Mobile and desktop
+  applications. The supported-account option that includes personal accounts is labelled "Any
+  Entra ID Tenant + Personal Microsoft accounts"; "Multiple Entra ID tenants" excludes them.
+  The portal also offers `Calendars.Read` as an Application permission, which must not be added.
+  Publisher verification (step 4) is not done.
 
 ## Google Cloud
 
@@ -141,8 +152,8 @@ Custom. Changing any issuing client ID requires reconnecting its grants.
 ## Rollout and compatibility
 
 With all three values a build carries both one-click providers; without them it uses Advanced.
-Partial configuration carries only the available provider. Owner registration and R12 are the
-remaining gates for real-account claims. The connection lifecycle, snapshot sync, local readers
+Partial configuration carries only the available provider. Both clients are registered
+(2026-11-13), so R12 is the remaining gate for real-account claims. The connection lifecycle, snapshot sync, local readers
 and Settings > Calendar are built and fixture-tested. Meetings Upcoming/event picker and the
 recording link are also built and fixture-tested, still unverified against real accounts. R12
 checks cover these features as well.
@@ -184,8 +195,8 @@ Reverting code or installing an older binary is a separate operation:
 Pending for each of **Google**, **personal Outlook.com**, and **Microsoft 365 work** accounts.
 Extends KNEG-82 after provider registration. Record **build, date, account kind and result** for
 each check, including failed, blocked and untested outcomes. Never record addresses, tokens,
-authorization codes, PKCE verifiers or transcript text. The following blank template is not run
-evidence:
+authorization codes, PKCE verifiers or transcript text. Runs so far are under
+[Recorded runs](#recorded-runs). The following blank template is not run evidence:
 
 | Build | Date | Account kind | Check | Result |
 | --- | --- | --- | --- | --- |
@@ -210,3 +221,19 @@ evidence:
 8. [ ] Deny, cancel, time out and exercise any reachable policy screen. Record an untested
    tenant-policy case explicitly as untested.
 9. [ ] Confirm the Apple Calendar row still reads Unsupported.
+
+### Recorded runs
+
+Each build was `npm run tauri:dev` (debug) at the named `dev` commit, with the app-owned values
+set in the shell, on the owner's Windows 11 machine. Event counts were read from the local
+database as counts only. A check with no row is untested.
+
+| Build | Date | Account kind | Check | Result |
+| --- | --- | --- | --- | --- |
+| dev `8d7ed4a` | 2026-11-13 | Microsoft 365 work | 8 | Blocked: the tenant requires administrator approval, which wasn't given, so no grant was issued. |
+| dev `8d7ed4a` | 2026-11-13 | Personal Outlook | 1 | Failed twice: consent completed, but the grant was too long for one Windows credential entry and wasn't stored. The second attempt ran with a temporary log line that named the cause (KNEG-559). |
+| dev `ef4d7fa` | 2026-11-13 | Personal Outlook | 1 | Connected; 3 calendars listed. The owner didn't compare the list with the account. |
+| dev `ef4d7fa` | 2026-11-13 | Personal Outlook | 2 | Partial: sync stored 1 upcoming event. A recurring occurrence on a non-default calendar wasn't checked. |
+| dev `ef4d7fa` | 2026-11-13 | Personal Outlook | 3 | Partial: after an app restart, Sync now read the stored split grant back and completed with no calendar errors. The access token was still valid, so no refresh happened; throttling and idle requests weren't checked. |
+| dev `ef4d7fa` | 2026-11-13 | Google | 1 | Connected through the unverified-app warning (Testing, owner as test user); 9 calendars listed. The owner didn't compare the list with the account. |
+| dev `ef4d7fa` | 2026-11-13 | Google | 2 | Partial: sync stored 8 upcoming events. A recurring occurrence on a non-default calendar wasn't checked. |

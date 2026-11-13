@@ -978,7 +978,7 @@
       "backend": "crates/calendar-core",
       "ui": "Integrations > Calendar",
       "reachable": true,
-      "note": "Reachable: Settings > Calendar offers Google Calendar one-click Connect using an app-owned desktop PKCE client or Advanced custom override. The Google desktop secret is public and sent only on token and refresh grants; custom secrets and OAuth tokens live in the OS credential store. Calendar v3 calendarList and expanded events.list use snapshots over [now - 24 hours, now + 30 days), committed per calendar; failed pages keep its cache. No client has been registered, no build has carried the values and no real account has connected. Evidence is unit tests and dev-fixture screenshots. Local Upcoming readers, Meetings Upcoming/event picker and recording links are built and fixture-tested, still unverified against real accounts. See docs/CALENDAR_PROVIDER_SETUP.md, R12."
+      "note": "Reachable: Settings > Calendar offers Google Calendar one-click Connect using an app-owned desktop PKCE client or Advanced custom override. The Google desktop secret is public and sent only on token and refresh grants; custom secrets and OAuth tokens live in the OS credential store. Calendar v3 calendarList and expanded events.list use snapshots over [now - 24 hours, now + 30 days), committed per calendar; failed pages keep its cache. The client was registered on 2026-11-13, and a development build carrying it connected a personal Google account and synced it; no release build has carried it. Other evidence is unit tests and dev-fixture screenshots. Local Upcoming readers, Meetings Upcoming/event picker and recording links are built and fixture-tested, still unverified against real accounts. See docs/CALENDAR_PROVIDER_SETUP.md, R12."
     },
     "calendar:microsoft": {
       "status": "ported-with-new-rust-implementation",
@@ -990,7 +990,7 @@
       "backend": "crates/calendar-core",
       "ui": "Integrations > Calendar",
       "reachable": true,
-      "note": "Reachable: Settings > Calendar offers Outlook (Outlook.com, Hotmail and Microsoft 365) one-click Connect using an app-owned public PKCE client or Advanced custom client, never a client secret. Requests use login.microsoftonline.com and graph.microsoft.com v1.0 me/calendars and me/calendars/{id}/calendarView, with UTC snapshots over [now - 24 hours, now + 30 days). A page failure keeps that calendar cache. No client has been registered, no build has carried the values and no real account has connected. Evidence is unit tests and dev-fixture screenshots. See docs/CALENDAR_PROVIDER_SETUP.md, R12."
+      "note": "Reachable: Settings > Calendar offers Outlook (Outlook.com, Hotmail and Microsoft 365) one-click Connect using an app-owned public PKCE client or Advanced custom client, never a client secret. Requests use login.microsoftonline.com and graph.microsoft.com v1.0 me/calendars and me/calendars/{id}/calendarView, with UTC snapshots over [now - 24 hours, now + 30 days). A page failure keeps that calendar cache. The client was registered on 2026-11-13, and a development build carrying it connected a personal Outlook.com account and synced it; a Microsoft 365 work account stopped at its tenant's administrator-approval screen, and no release build has carried it. Other evidence is unit tests and dev-fixture screenshots. See docs/CALENDAR_PROVIDER_SETUP.md, R12."
     },
     "calendar:apple": {
       "status": "temporarily-deferred",

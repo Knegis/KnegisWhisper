@@ -783,9 +783,15 @@ impl CalendarRuntime {
         cleanup.retain(|name| name != slot.slot());
         let secret = credentials::grant_secret(tokens, client_id)
             .map_err(|e| classify(&e, provider, false))?;
-        self.credentials
-            .set(&slot, &secret)
-            .map_err(|_| CalendarProblem::Storage)?;
+        self.credentials.set(&slot, &secret).map_err(|error| {
+            // The one failure here a person can't diagnose from the screen:
+            // "Could not save or read calendar data" covers every storage
+            // step. The credential error names the store's reason (a size
+            // limit, a locked store), never the secret. A grant too long for
+            // one Windows entry was exactly this, until kw_security split it.
+            tracing::warn!(provider = provider.wire_str(), error = %error, "could not store the calendar grant");
+            CalendarProblem::Storage
+        })?;
         let commit = async {
             let mut tx = self
                 .db
