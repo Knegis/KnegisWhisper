@@ -234,5 +234,6 @@ database as counts only. A check with no row is untested.
 | dev `8d7ed4a` | 2026-11-13 | Personal Outlook | 1 | Failed twice: consent completed, but the grant was too long for one Windows credential entry and wasn't stored. The second attempt ran with a temporary log line that named the cause (KNEG-559). |
 | dev `ef4d7fa` | 2026-11-13 | Personal Outlook | 1 | Connected; 3 calendars listed. The owner didn't compare the list with the account. |
 | dev `ef4d7fa` | 2026-11-13 | Personal Outlook | 2 | Partial: sync stored 1 upcoming event. A recurring occurrence on a non-default calendar wasn't checked. |
+| dev `ef4d7fa` | 2026-11-13 | Personal Outlook | 3 | Partial: after an app restart, Sync now read the stored split grant back and completed with no calendar errors. The access token was still valid, so no refresh happened; throttling and idle requests weren't checked. |
 | dev `ef4d7fa` | 2026-11-13 | Google | 1 | Connected through the unverified-app warning (Testing, owner as test user); 9 calendars listed. The owner didn't compare the list with the account. |
 | dev `ef4d7fa` | 2026-11-13 | Google | 2 | Partial: sync stored 8 upcoming events. A recurring occurrence on a non-default calendar wasn't checked. |
