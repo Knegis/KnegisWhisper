@@ -1,8 +1,10 @@
 //! Credential storage and secret hygiene.
 //!
 //! Secrets live in the operating system's credential store — macOS Keychain,
-//! Windows Credential Manager, Linux Secret Service — one entry per key. Never
-//! in SQLite, never in `localStorage`, never in a `.env` file.
+//! Windows Credential Manager, Linux Secret Service — one entry per key, or,
+//! for a secret too long for one Windows entry such as a Microsoft OAuth grant,
+//! a few entries joined and checked on read (`split`). Never in SQLite, never
+//! in `localStorage`, never in a `.env` file.
 //!
 //! **One secret cannot live there**, and [`file_acl`] is about that one. The
 //! local API's bearer token has to be readable by a separate process — the CLI,
@@ -31,6 +33,7 @@ use std::fmt;
 pub mod endpoint_credential;
 pub mod file_acl;
 pub mod private_directory;
+mod split;
 pub mod token;
 
 pub use file_acl::{PathKind, Permissions};
@@ -156,6 +159,10 @@ pub trait CredentialStore: Send + Sync + fmt::Debug {
 }
 
 /// The real store, backed by the OS keychain.
+///
+/// A secret too long for one Windows Credential Manager entry is split across
+/// several; see `split.rs` for the format and why writes and deletes are
+/// ordered as they are. A secret that fits is one entry, exactly as before.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct OsCredentialStore;
 
@@ -164,7 +171,28 @@ impl OsCredentialStore {
     pub const fn new() -> Self {
         Self
     }
+}
 
+impl CredentialStore for OsCredentialStore {
+    fn get(&self, key: &KeyRef) -> Result<Secret, CredentialError> {
+        split::get(&KeyringEntries, key)
+    }
+
+    fn set(&self, key: &KeyRef, secret: &Secret) -> Result<(), CredentialError> {
+        split::set(&KeyringEntries, key, secret)
+    }
+
+    fn delete(&self, key: &KeyRef) -> Result<(), CredentialError> {
+        split::delete(&KeyringEntries, key)
+    }
+}
+
+/// One keychain entry per slot, with the platform's own size limit. Only
+/// [`OsCredentialStore`] uses it, through [`split`].
+#[derive(Debug, Clone, Copy)]
+struct KeyringEntries;
+
+impl KeyringEntries {
     fn entry(key: &KeyRef) -> Result<keyring::Entry, CredentialError> {
         keyring::Entry::new(SERVICE, key.slot()).map_err(|e| match e {
             keyring::Error::PlatformFailure(inner) => CredentialError::NoBackend {
@@ -175,7 +203,7 @@ impl OsCredentialStore {
     }
 }
 
-impl CredentialStore for OsCredentialStore {
+impl CredentialStore for KeyringEntries {
     fn get(&self, key: &KeyRef) -> Result<Secret, CredentialError> {
         match Self::entry(key)?.get_password() {
             Ok(value) => Ok(Secret::new(value)),
