@@ -4,8 +4,12 @@
 
 This engineering snapshot was moved from the previous README. Its September 8 status date predates subsequent UI work; use the current release notes and platform guide for release-specific support.
 Local tests and Windows observations are separate from hosted CI and release validation.
-The release workflow exists, but the checked-in updater public key is empty: secure update
-checking and an update popup are not available merely because the app builds.
+The v0.2.0 update check needs no key. It runs once a day automatically by default or through
+"Check for updates", and the notice links to a newer release without downloading or installing.
+The check needs a public repository; while private, it reports "No public release could be found".
+v0.1.1 users must download v0.2.0 by hand. Release selection, 404 mapping, the once-a-day rule
+and URL building are unit-tested with invented data. The app's list request and the notice for
+a real release have never run. Updater signing remains future work; see `PLATFORM_SUPPORT.md`.
 
 | Area | Implemented and remaining limits |
 | --- | --- |
