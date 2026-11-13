@@ -42,7 +42,9 @@ use your chosen provider directly; provider charges may apply.
 
 - Use Whisper for long recordings; long Parakeet imports have crashed the runtime.
 - macOS/Linux installers are not included in this preview.
-- Automatic updates are unavailable. Download later previews from Releases.
+- v0.2.0 and later check GitHub once a day and link to a newer release, with a switch
+  in Settings > Diagnostics, but never download or install anything. v0.1.1 cannot,
+  so install this version by hand.
 - Provider, calendar and speaker-identification validation varies by capability.
 
 See [Getting started](https://github.com/Knegis/KnegisWhisper/blob/{{TAG}}/docs/GETTING_STARTED.md)

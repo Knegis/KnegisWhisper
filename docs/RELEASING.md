@@ -4,7 +4,8 @@ The first channel is an unsigned Windows 11 x64 preview. Releases are built from
 existing version tag contained in `main` and always prepared as draft prereleases.
 Optional macOS/Linux bundle builds upload experimental workflow artifacts only;
 they are not attached to the Windows preview. Repository visibility and access
-remain unchanged. Release readiness is tracked in [KNEG-43](https://linear.app/axelalbertkarlsson/issue/KNEG-43).
+remain unchanged. The in-app update check needs a public repository.
+Release readiness is tracked in [KNEG-43](https://linear.app/axelalbertkarlsson/issue/KNEG-43).
 
 ## Prepare a version
 
@@ -50,7 +51,9 @@ Record the machine, commit, installer hash, date and result for each check:
 - Install a subsequent test version over the preview and verify data preservation.
 - Run the [Windows uninstall acceptance matrix](#windows-uninstall-acceptance)
   against the [documented retention behaviour](GETTING_STARTED.md#uninstall-on-windows).
-- Confirm update checking reports that it is not securely configured.
+- Confirm Settings > Diagnostics shows "Check for updates automatically" switched on.
+- Confirm "Check for updates" reports "Up to date" against the newest published release,
+  or "No public release could be found" while the repository is private.
 
 A debug app, browser fixtures or a successful packaging job does not substitute
 for these installed-app checks. Keep all test data fictional.
@@ -66,8 +69,11 @@ Only after the draft assets and installed-app evidence have been reviewed:
    release page. Link the video preview to its public MP4 asset.
 5. Update the getting-started installation status and verify every public link.
 
-Do not use `/releases/latest` to locate the preview. Future stable promotion,
-Windows code signing, updater signing and macOS/Linux installers are separate
+The app's update check counts prereleases, so publishing as a prerelease does not
+hide a release from installed apps. GitHub's "Latest" label stays on the release
+last marked latest, which is v0.1.1 today. Locate the preview by its tag or release
+page. Future stable promotion, Windows code signing, updater signing and macOS/Linux
+installers are separate
 release decisions. The current app does not install updates automatically.
 
 ## Repeat or withdraw

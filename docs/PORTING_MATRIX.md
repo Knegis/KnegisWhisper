@@ -107,14 +107,15 @@ second piece of code in the workspace opening its own connections outside
 `kw_network_policy::NetworkPolicy` — the crate whose module doc and the
 brief's network-boundary section both say is *the* egress point, not one of
 several. `apps/desktop/src-tauri/src/updater.rs` gets the same outcome
-(checking this project's own GitHub releases, never at startup, never
-without a person asking) by calling `NetworkPolicy::get_text` under
-`RequestPurpose::OwnGithubReleasesUpdater` directly. `bundle.createUpdaterArtifacts`
-in `tauri.conf.json` is still turned on, because producing signed artifacts is
-the bundler's job and has nothing to do with which client later checks for
-them; `plugins.updater.pubkey` is still read from the location that plugin
-would use, so a keypair generated the standard way (`docs/SECURITY.md`) needs
-no translation if this project adopts the plugin later.
+(checking this project's own GitHub releases) by calling `NetworkPolicy::get_text` under
+`RequestPurpose::OwnGithubReleasesUpdater` directly. In v0.2.0 the update check runs
+manually or automatically once a day, on by default. "Check for updates automatically"
+on Settings > Diagnostics controls the automatic check. Local due decisions run 15 seconds
+after launch and hourly thereafter. The attempt time must be saved before sending.
+Release builds use `tools/release/unsigned.json` to disable `bundle.createUpdaterArtifacts`.
+The app no longer reads `plugins.updater.pubkey`. The keypair procedure in `docs/SECURITY.md`
+is preparation for a future signed download. The check and the notice download and install
+nothing. The app's list request and the notice for a real release have never run.
 
 ### Window roles
 
@@ -132,7 +133,7 @@ All `frame: false`.
 | Agent overlay | 420×300 | `transparent`, **`focusable: true`** |
 | Transcription preview | 460×132 | `focusable: false` |
 | Meeting notification | 392×102 compact for offers and the transcribing strip; 440×560 recording panel, minimum 392×280 | **content-protected** — "visible to user but out of screen shares". **Built.** `apps/desktop/src-tauri/src/meeting_window.rs` reuses `overlay::apply_treatments` for capture-exclusion read-back. Non-activating while idle and offering; activatable from meeting start through recording and the transcribing strip, revoked only after the window is hidden on return to idle. The recording panel hosts the note editor, so its Rust builder disables Tauri's drag-and-drop handler. Movable and resizable; saved monitor-relative placement applies to the panel only and can be reset on Settings > Meetings. |
-| Update notification | 392×104 | **content-protected** — same rule as the meeting notification. **Built.** `apps/desktop/src-tauri/src/update_window.rs`, the same builder and `overlay::apply_treatments` unchanged, so it reports the same read-back evidence. Shown only once `updater.rs`'s explicit, user-triggered check finds a newer release; never on its own |
+| Update notification | 392×104 | **content-protected** — same rule as the meeting notification. **Built.** `apps/desktop/src-tauri/src/update_window.rs`, the same builder and `overlay::apply_treatments` unchanged, so it reports the same read-back evidence. The notice is shown only when `updater.rs` finds a newer release, through a manual or automatic check. A version opened or dismissed in this session is not shown again automatically; a manual check always shows it. "Open release page" opens the URL built by Rust from the repository field and tag; "Dismiss" closes the notice |
 
 Per-platform z-order policy from `setupAlwaysOnTop()`, worth copying exactly: macOS
 `("floating", 1)` plus `setVisibleOnAllWorkspaces({visibleOnFullScreen, skipTransformProcessType})`;

@@ -12,9 +12,13 @@ Transcription binaries and models are downloaded separately through the app.
 v0.1.1 was published before its installation and upgrade checks on a clean machine
 were run, so those checks are still to come.
 
-There is no automatic update installation. Update checking is not securely
-configured while the embedded updater public key is empty. Download a later
-version from the repository's Releases page.
+There is no automatic update installation and no updater signing. v0.2.0 and later
+run an automatic check once a day and link to a newer release page. The switch is
+"Check for updates automatically" on Settings > Diagnostics, on by default.
+The check downloads and installs nothing. It needs a public repository; while the
+repository is private, every check reports "No public release could be found".
+v0.1.1 still reports "Update checking is not securely configured". Those users
+must download v0.2.0 by hand.
 
 The published v0.1.1 uninstaller's **Delete app data** checkbox misses the main
 notes/recordings folder and saved credentials. Source builds now implement separate

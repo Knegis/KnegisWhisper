@@ -1,8 +1,9 @@
 # Network Boundary
 
 KnegisWhisper is local-first. It has no hosted backend, no account, no license check, no
-telemetry, and no vendor API key. **Nothing is sent anywhere unless the user configured it or
-asked for it.**
+telemetry, and no vendor API key. **Apart from the once-a-day update check, on by default
+with a switch in Settings > Diagnostics,
+nothing is sent anywhere unless the user configured it or asked for it.**
 
 ## The rule
 
@@ -16,7 +17,7 @@ path.
 | `user-configured-calendar-provider` | Google Calendar or Outlook, with the user's OAuth grant issued to the app-owned client or an Advanced custom client. |
 | `user-triggered-model-download` | Fetching a GGUF or GGML the user chose to install. |
 | `user-triggered-media-import` | yt-dlp fetching a URL the user pasted. **No live caller** — see "SSRF guards for URL import". |
-| `own-github-releases-updater` | Optional update check against this project's own releases. |
+| `own-github-releases-updater` | Update check against this project's own releases, automatic by default or manual. |
 | `explicitly-configured-self-hosted-endpoint` | A self-hosted transcription or inference server the user pointed us at. |
 
 The list is mirrored in `config/forbidden-domains.json` under `allowedEgressPurposes` and in the
@@ -33,8 +34,16 @@ capability file, and a strict CSP. React components cannot make outbound request
 which decides. This is a deliberate inversion of Pluely, which ships `"csp": null` and a
 capability granting `http:default` over `http://**` and `https://**`.
 
-**No startup request.** Launching the application performs no network I/O. The update check, if
-enabled, is user-initiated or scheduled — never a condition of starting.
+**Startup requests.** There are two exceptions to launching without network I/O: a summary
+still queued when the app last closed, sent to the provider the person chose for summaries,
+and the once-a-day update check. The summary worker claims queued jobs when it starts;
+only in-flight jobs are marked interrupted (`summaries::start`, read from code under KNEG-343).
+"Check for updates automatically" on Settings > Diagnostics is on by default.
+The app checks whether it is due 15 seconds after launch and then once an hour. That decision
+reads local settings and sends nothing; only a due automatic check sends a request.
+With the switch off, only "Check for updates" sends that request. The update check is never
+a condition of starting. Nothing else is sent just because the app started or gained focus.
+The hourly due evaluation sends nothing; a due automatic update check sends at most daily.
 
 **No hidden fallback.** If a provider fails, the operation fails. Nothing is silently retried
 against a different provider, and no local failure escalates to a remote service. Ambiguous
@@ -65,8 +74,8 @@ removed is not the same as depending on it.
 
 ## Third-party hosts we do talk to
 
-Only with the user's own credentials, and only for the purposes above. Grouped as the audit found
-them:
+Only for the purposes above. The update check sends no credentials; provider requests use the
+user's own credentials. Grouped as the audit found them:
 
 **Inference and transcription** — `api.openai.com`, `api.anthropic.com`,
 `generativelanguage.googleapis.com`, `api.groq.com`, `api.berget.ai`, `openrouter.ai`,
@@ -76,9 +85,19 @@ AWS Bedrock, and Google Vertex AI.
 
 **Model and binary downloads** — `huggingface.co`, `github.com` release assets.
 
-**Update check** — `api.github.com`, for this project's own release listing
-only, and only when a person explicitly asks (`updater.rs`). Never on
-startup, never on a timer.
+**Update check** — `GET https://api.github.com/repos/Knegis/KnegisWhisper/releases?per_page=30`,
+through `NetworkPolicy` under `own-github-releases-updater`
+(`apps/desktop/src-tauri/src/updater.rs`). It sends no credentials. GitHub learns the network
+address and the app version in `User-Agent: KnegisWhisper/<version>`; nothing else is sent.
+It runs when someone presses "Check for updates", or at most once a day automatically.
+"Check for updates automatically" on Settings > Diagnostics is on by default
+(`updates.automatic`). The app decides whether a check is due 15 seconds after launch
+and then once an hour.
+The decision reads `updates.automatic` and `updates.lastAutomaticCheck` locally. A missing,
+future, or at least 24-hour-old attempt is due. The attempt time must be saved before the request;
+if saving fails, nothing is sent. With the switch off, only the button sends a request.
+The check needs a public repository. While it is private, every check reports
+"No public release could be found". The check downloads and installs nothing.
 
 **Calendars** — `accounts.google.com`, `oauth2.googleapis.com`, `www.googleapis.com`,
 `login.microsoftonline.com`, `graph.microsoft.com`. Google uses the authorization and token
