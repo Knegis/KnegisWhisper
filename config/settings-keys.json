@@ -342,6 +342,16 @@
       ],
       "ui": "Settings > Intelligence > Summaries",
       "reachable": true
+    },
+    "updates.automatic": {
+      "what": "Check GitHub for a newer release once a day automatically; defaults to on when absent. Nothing is downloaded or installed.",
+      "writtenBy": ["update_set_automatic"],
+      "ui": "Settings > Diagnostics",
+      "reachable": true
+    },
+    "updates.lastAutomaticCheck": {
+      "what": "RFC 3339 UTC time of the last automatic update attempt, including unsuccessful requests.",
+      "internal": "Bookkeeping written by the automatic check before each request. A person editing it would be recording a check that did not happen."
     }
   }
 }

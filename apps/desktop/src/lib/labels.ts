@@ -1377,21 +1377,18 @@ export function meetingStateLabel(state: MeetingState): string {
 
 /* ------------------------------------------------------------------ updater */
 
-/**
- * What a check for an update found, honestly.
- *
- * `no-public-key-configured` gets its own sentence rather than being folded
- * into "up to date" or left silent: this build has no updater public key set,
- * so a downloaded update's authenticity could never be checked, and that is a
- * different fact from "nothing new was published". See `docs/SECURITY.md`.
- */
+/** An unreadable or private release list is never called "up to date". */
 export function updateCheckLabel(result: UpdateCheckResult): Stated {
   switch (result.state) {
-    case "no-public-key-configured":
+    case "releases-not-public":
       return {
-        text: "Update checking is not securely configured",
-        detail:
-          "no updater public key is set, so a downloaded update's authenticity could never be checked. See docs/SECURITY.md for how to generate one.",
+        text: "No public release could be found",
+        detail: "GitHub answered 404: the repository is private, renamed or removed, so its releases can't be read without signing in.",
+      };
+    case "no-published-release":
+      return {
+        text: "No release has been published yet",
+        detail: "GitHub lists no release whose tag reads as a version.",
       };
     case "check-failed":
       return { text: "Could not check for an update", detail: result.error };
@@ -1400,17 +1397,12 @@ export function updateCheckLabel(result: UpdateCheckResult): Stated {
         text: "This build's own version could not be read",
         detail: `unparseable version: ${result.version}`,
       };
-    case "latest-version-unparseable":
-      return {
-        text: "The published release could not be read",
-        detail: `unparseable tag: ${result.tag}`,
-      };
     case "up-to-date":
-      return { text: "Up to date", detail: `version ${result.current}` };
+      return { text: "Up to date", detail: `You have v${result.current}, the newest published release.` };
     case "update-available":
       return {
         text: `Update available: v${result.latest}`,
-        detail: `you have v${result.current} — ${result.url}`,
+        detail: `You have v${result.current}.`,
       };
   }
 }

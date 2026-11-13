@@ -1,18 +1,15 @@
 //! The update notification window.
 //!
-//! 392×92, content-protected, bottom-right — the same role and the same size
-//! `docs/PORTING_MATRIX.md` settled for the meeting notification, and built the
-//! same way: [`crate::meeting_window`] is the pattern this file copies, not
-//! reinvents.
+//! At 392×104, content-protected and bottom-right, it uses the same width,
+//! treatment and placement that `docs/PORTING_MATRIX.md` settled on for the
+//! meeting notification, and is built the same way: [`crate::meeting_window`]
+//! is the pattern this file copies, not reinvents.
 //!
-//! It says one thing: that a newer release of this project exists, once
-//! [`crate::updater::update_check`] has found one. It never checks on its own —
-//! nothing in this module reaches the network, and nothing calls
-//! [`crate::updater::update_check`] from application startup. "Opt-in, and
-//! never a check at startup" is the constraint on the check itself
-//! (`updater.rs`); this window is downstream of that check and inherits the
-//! property structurally, by having no timer and no caller but a person's own
-//! request.
+//! It says one thing: that a newer release of this project exists. Both the
+//! Settings button and the daily automatic check in [`crate::updater`] can
+//! show it. The automatic check starts after a 15-second delay, respects the
+//! Settings switch and session dismissal, and never shows failures here.
+//! This module itself only manages the window; it makes no network requests.
 //!
 //! "Content-protected" means out of screen shares and **never** hidden from the
 //! person at the keyboard — the rule at the top of `Overlay.tsx`, and it holds
@@ -123,7 +120,7 @@ mod tests {
     #[test]
     fn the_size_matches_the_meeting_notifications_role() {
         // The porting matrix's window-role table says 392x104: the meeting
-        // offer's width, and the height its wrapped link needs.
+        // offer's width, and enough height for the release page and dismiss buttons.
         assert!((WIDTH - 392.0).abs() < f64::EPSILON);
         assert!((HEIGHT - 104.0).abs() < f64::EPSILON);
     }

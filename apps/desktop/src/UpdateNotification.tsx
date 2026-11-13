@@ -1,21 +1,15 @@
 /**
  * The update notification window's contents.
  *
- * 392×92, content-protected, bottom-right — the same size and the same rule as
+ * 392×104, content-protected, bottom-right — the same rule as
  * `MeetingNotification.tsx`: "content-protected" means out of screen shares
  * and never hidden from the person at the keyboard, the rule at the top of
  * `Overlay.tsx`.
  *
- * Says one thing: that a newer release of this project has been found. It
- * never checks on its own — the check is an explicit action on
- * Settings > Diagnostics, and this window only renders what that check found,
- * the same way the overlay renders Rust's dictation state rather than
- * guessing at it.
- *
- * There is no download button here, and there will not be one from this
- * window. Notifying that an update exists is what this surface is for;
- * fetching and installing one is a different, larger claim this project does
- * not make yet.
+ * Renders the result of Rust's manual or daily automatic check. Rust owns
+ * the schedule and session dismissal; this component only displays its state.
+ * The Open release page button asks Rust to open the URL it built. There is
+ * still no download button: nothing here downloads or installs an update.
  */
 
 import { useEffect, useState } from "react";
@@ -24,6 +18,7 @@ import {
   dismissUpdateNotification,
   getLastUpdateCheck,
   onUpdateCheckResult,
+  openUpdateReleasePage,
   type UpdateCheckResult,
 } from "./lib/ipc";
 import { updateCheckLabel } from "./lib/labels";
@@ -31,6 +26,8 @@ import { updateCheckLabel } from "./lib/labels";
 export function UpdateNotification() {
   const [result, setResult] = useState<UpdateCheckResult | null>(null);
   const [stateReadProblem, setStateReadProblem] = useState<string | null>(null);
+
+  const [openProblem, setOpenProblem] = useState<string | null>(null);
 
   useEffect(() => {
     // Read once as well as subscribing: this window is created hidden at
@@ -40,11 +37,16 @@ export function UpdateNotification() {
       .then(setResult)
       .catch((err: unknown) => setStateReadProblem(String(err)));
 
+    let disposed = false;
     let unlisten: (() => void) | undefined;
-    void onUpdateCheckResult(setResult).then((fn) => {
-      unlisten = fn;
-    });
-    return () => unlisten?.();
+    void onUpdateCheckResult((next) => {
+      setResult(next);
+      setOpenProblem(null);
+    }).then((fn) => {
+      if (disposed) fn();
+      else unlisten = fn;
+    }).catch((err: unknown) => setStateReadProblem(String(err)));
+    return () => { disposed = true; unlisten?.(); };
   }, []);
 
   // Nothing was readable and no event has arrived since, so this window cannot
@@ -76,16 +78,28 @@ export function UpdateNotification() {
       <span className="indicator" aria-hidden="true" />
       <span className="notify-body">
         <strong>{label.text}</strong>
-        <span className="notify-detail">{label.detail}</span>
+        <span className={`notify-detail${openProblem ? " notify-alert" : ""}`}>{openProblem ?? label.detail}</span>
       </span>
-      <button
-        type="button"
-        onClick={() => {
-          void dismissUpdateNotification();
-        }}
-      >
-        Dismiss
-      </button>
+      <div className="notify-actions">
+        <button
+          type="button"
+          className="primary"
+          onClick={() => {
+            setOpenProblem(null);
+            void openUpdateReleasePage().catch((err: unknown) => setOpenProblem(String(err)));
+          }}
+        >
+          Open release page
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            void dismissUpdateNotification();
+          }}
+        >
+          Dismiss
+        </button>
+      </div>
     </div>
   );
 }

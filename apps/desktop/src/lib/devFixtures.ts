@@ -2835,17 +2835,15 @@ A fixture summary of "${note.title}", written without a model.
   update_check: () =>
     ({
       state: "update-available",
-      current: "0.1.0-dev",
-      latest: "0.2.0",
-      url: "https://github.com/axelalbertkarlsson/KnegisWhisper/releases/tag/v0.2.0",
+      current: "0.2.0",
+      latest: "0.2.1",
+      url: "https://github.com/Knegis/KnegisWhisper/releases/tag/v0.2.1",
     }) satisfies UpdateCheckResult,
-  update_check_last: () =>
-    ({
-      state: "up-to-date",
-      current: "0.1.0-dev",
-      latest: "0.1.0-dev",
-    }) satisfies UpdateCheckResult,
+  update_check_last: () => null,
   update_dismiss: () => null,
+  update_open_release: () => null,
+  update_preferences: () => ({ automatic: true, lastAutomaticCheckAt: "2026-11-13T07:30:00Z" }),
+  update_set_automatic: () => null,
 
   diarization_status: () => diarization,
   diarization_set_enabled: (a) => {

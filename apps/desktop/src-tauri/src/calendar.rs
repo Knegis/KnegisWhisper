@@ -1807,7 +1807,7 @@ fn browser_command(url: &str) -> (&'static str, Vec<String>) {
     }
 }
 
-fn open_in_browser(url: &str) -> std::io::Result<()> {
+pub(crate) fn open_in_browser(url: &str) -> std::io::Result<()> {
     let (program, args) = browser_command(url);
     std::process::Command::new(program).args(args).spawn()?;
     Ok(())

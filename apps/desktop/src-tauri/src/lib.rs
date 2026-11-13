@@ -6,9 +6,10 @@
 //! 10,678 lines holding 478 IPC handlers, which is the outcome this split exists
 //! to avoid.
 //!
-//! Nothing in `setup` touches the network. The database is opened, the tray and
-//! overlay are created, and hotkeys are registered — all local. Provider
-//! connection tests are explicitly invoked by the user, never run at startup.
+//! Setup opens the database, creates the tray and overlay, and registers
+//! hotkeys locally. The automatic update check is the one network exception:
+//! it starts 15 seconds after setup unless switched off. Provider connection
+//! tests are explicitly invoked by the user, never run at startup.
 //! See `docs/NETWORK_BOUNDARY.md`.
 
 mod audio_level;
@@ -326,12 +327,10 @@ pub fn run() -> anyhow::Result<()> {
                 ),
             }
 
-            // The update notification, hidden. Created here for the same
-            // reason as the meeting window: one built at the moment a check
-            // found something would appear a beat late and could steal focus
-            // while its webview initialised. Nothing here reaches the
-            // network -- see updater.rs's module doc for why creating this
-            // window is not a startup check.
+            // Create the update notice hidden so showing it later neither lags
+            // nor steals focus while a webview initialises. Window creation is
+            // local; the automatic checker below waits 15 seconds and sends
+            // only when enabled and due. See updater.rs for its daily schedule.
             match update_window::create(&handle) {
                 Ok(window) => {
                     let status = update_window::apply_treatments(&window);
@@ -347,6 +346,7 @@ pub fn run() -> anyhow::Result<()> {
                 ),
             }
             app.manage(updater::LastCheck::default());
+            updater::start_automatic(handle.clone(), state.clone());
 
             // Empty at startup, and only `pick_import_file` ever adds to it:
             // the three commands that take a file path refuse anything this
@@ -629,6 +629,9 @@ pub fn run() -> anyhow::Result<()> {
             updater::update_check,
             updater::update_check_last,
             updater::update_dismiss,
+            updater::update_open_release,
+            updater::update_preferences,
+            updater::update_set_automatic,
             calendar::calendar_status,
             calendar::calendar_upcoming,
             calendar::meeting_calendar_candidates,
