@@ -127,10 +127,21 @@ try {
 
   // The update card.
   await open("#update", 392, 104);
-  await emit("update-check-result", { state: "update-available", current: "0.1.0-dev", latest: "0.2.0", url: "https://github.com/Knegis/KnegisWhisper/releases/tag/v0.2.0" });
+  await emit("update-check-result", { state: "update-available", current: "0.2.0", latest: "0.2.1", url: "https://github.com/Knegis/KnegisWhisper/releases/tag/v0.2.1" });
   await shot("update", 392, 104);
   const updateFit = await c.evaluate(`(() => { const n = document.querySelector('.notify'); return { sh: n.scrollHeight, ch: n.clientHeight }; })()`);
   check("the update card fits its window", updateFit.sh <= updateFit.ch, JSON.stringify(updateFit));
+  const updateButtons = await c.evaluate(`(() => {
+    const n = document.querySelector('.notify');
+    const card = n.getBoundingClientRect();
+    return [...n.querySelectorAll('button')].map(button => {
+      const b = button.getBoundingClientRect();
+      const style = getComputedStyle(button);
+      return { text: button.textContent.trim(), visible: b.width > 0 && b.height > 0 && style.visibility === 'visible' && style.display !== 'none' && Number(style.opacity) > 0,
+        inside: b.left >= card.left && b.top >= card.top && b.right <= card.right && b.bottom <= card.bottom };
+    });
+  })()`);
+  check("both update buttons are visible inside the card", updateButtons.length === 2 && ["Open release page", "Dismiss"].every(text => updateButtons.some(b => b.text === text && b.visible && b.inside)), JSON.stringify(updateButtons));
 
   // The languages window.
   await open("#dictation-languages", 280, 272);

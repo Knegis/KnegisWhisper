@@ -295,6 +295,7 @@ fn render() -> String {
         ],
         "updater" => [
             crate::updater::UpdateCheckResult,
+            crate::updater::UpdatePreferences,
         ],
         "calendars" => [
             crate::calendar::CalendarProvider,

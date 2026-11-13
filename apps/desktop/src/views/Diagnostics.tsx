@@ -18,10 +18,15 @@ import { Row, type RowTone } from "../components/Row";
 import {
   checkForUpdate,
   getLastUpdateCheck,
+  getUpdatePreferences,
+  onUpdateCheckResult,
+  openUpdateReleasePage,
+  setAutomaticUpdateCheck,
   isCaptureExclusionConfirmed,
   type Diagnostics,
   type SystemAudioSupport,
   type UpdateCheckResult,
+  type UpdatePreferences,
 } from "../lib/ipc";
 import { systemAudioValue } from "../lib/labels";
 import {
@@ -38,7 +43,7 @@ function systemAudioTone(s: SystemAudioSupport): RowTone | undefined {
 
 function updateTone(result: UpdateCheckResult): RowTone | undefined {
   if (result.state === "up-to-date") return "ok";
-  return result.state === "update-available" ? undefined : "bad";
+  return result.state === "check-failed" || result.state === "current-version-unparseable" ? "bad" : undefined;
 }
 
 function systemAudioDetail(s: SystemAudioSupport): string {
@@ -64,18 +69,38 @@ export function DiagnosticsView({ diagnostics }: { diagnostics: Diagnostics }) {
   );
   const [checkingForUpdate, setCheckingForUpdate] = useState(false);
 
+  const [preferences, setPreferences] = useState<UpdatePreferences | null>(null);
+  const [savingAutomatic, setSavingAutomatic] = useState(false);
+  const [updateProblem, setUpdateProblem] = useState<string | null>(null);
+  const [openProblem, setOpenProblem] = useState<string | null>(null);
+
   useEffect(() => {
-    // Reads what a previous check already found. This itself never triggers
-    // one — "opt-in, and never a check at startup" holds for this screen too;
-    // the only thing that starts a check is the button below.
-    void getLastUpdateCheck().then(setUpdateResult);
+    // These are local reads. Rust owns the automatic schedule and reports
+    // its results through the same event as the manual check.
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    const problem = (err: unknown) => { if (!disposed) setUpdateProblem(String(err)); };
+    const reloadPreferences = () => getUpdatePreferences().then((next) => {
+      if (!disposed) setPreferences(next);
+    }).catch(problem);
+    void onUpdateCheckResult((next) => {
+      if (disposed) return;
+      setUpdateResult(next);
+      setOpenProblem(null);
+      void reloadPreferences();
+    }).then((fn) => {
+      if (disposed) fn();
+      else unlisten = fn;
+    }).catch(problem);
+    void getLastUpdateCheck().then((next) => {
+      if (!disposed) setUpdateResult(next);
+    }).catch(problem);
+    void reloadPreferences();
+    return () => { disposed = true; unlisten?.(); };
   }, []);
 
   return (
-    // No `data-surface` marker: config/ui-surfaces.json declares surfaces that
-    // config/integration-manifest.json entries name, and no entry names this
-    // screen. A marker for an undeclared surface would be a claim about nothing.
-    <div className="view">
+    <div className="view" data-surface="settings.diagnostics">
       <LocalServerHealth />
       <section>
         <h2>runtime</h2>
@@ -207,18 +232,48 @@ export function DiagnosticsView({ diagnostics }: { diagnostics: Diagnostics }) {
 
       <section>
         <h2>software update</h2>
+        <label className="switch-row">
+          <span>Check for updates automatically</span>
+          <input
+            type="checkbox"
+            role="switch"
+            checked={preferences?.automatic ?? true}
+            disabled={preferences === null || savingAutomatic}
+            onChange={(event) => {
+              if (!preferences) return;
+              const previous = preferences;
+              const enabled = event.currentTarget.checked;
+              setPreferences({ ...previous, automatic: enabled });
+              setSavingAutomatic(true);
+              setUpdateProblem(null);
+              void setAutomaticUpdateCheck(enabled)
+                .catch((err: unknown) => {
+                  setPreferences(previous);
+                  setUpdateProblem(String(err));
+                })
+                .finally(() => setSavingAutomatic(false));
+            }}
+          />
+        </label>
         <p className="muted">
-          Checked only when the button below is pressed. Nothing here runs at
-          startup, on a timer, or without this click.
+          Once a day, KnegisWhisper asks GitHub whether a newer version has been published. GitHub sees your network address and which version you have. Nothing is downloaded or installed. With this off, it checks only when you press the button.
         </p>
+        <Row
+          label="Last automatic check"
+          value={preferences?.lastAutomaticCheckAt ? new Date(preferences.lastAutomaticCheckAt).toLocaleString() : "Never"}
+        />
+        {updateProblem ? <p className="caveat warn" role="alert">{updateProblem}</p> : null}
         <button
           type="button"
           className="action-iris"
           disabled={checkingForUpdate}
           onClick={() => {
             setCheckingForUpdate(true);
+            setUpdateProblem(null);
+            setOpenProblem(null);
             void checkForUpdate()
               .then(setUpdateResult)
+              .catch((err: unknown) => setUpdateProblem(String(err)))
               .finally(() => setCheckingForUpdate(false));
           }}
         >
@@ -231,7 +286,17 @@ export function DiagnosticsView({ diagnostics }: { diagnostics: Diagnostics }) {
             tone={updateTone(updateResult)}
             value={updateCheckLabel(updateResult).text}
             detail={updateCheckLabel(updateResult).detail}
-          />
+          >
+            {updateResult.state === "update-available" ? (
+              <div className="diagnostics-update-actions">
+                <button type="button" onClick={() => {
+                  setOpenProblem(null);
+                  void openUpdateReleasePage().catch((err: unknown) => setOpenProblem(String(err)));
+                }}>Open release page</button>
+                {openProblem ? <span className="caveat warn" role="alert">{openProblem}</span> : null}
+              </div>
+            ) : null}
+          </Row>
         ) : (
           <p className="muted">Never checked.</p>
         )}
@@ -247,6 +312,9 @@ export function DiagnosticsView({ diagnostics }: { diagnostics: Diagnostics }) {
           app closed is claimed by the worker as it starts again
           (`summaries::start`, which marks only in-flight jobs interrupted).
           Read from code (KNEG-343).
+          The once-a-day update check, evaluated after 15 seconds with each
+          attempt persisted before sending (including failures), is another
+          exception that the switch above turns off (KNEG-558).
         */}
         <p>
           Outbound requests are permitted only for these purposes, and each one
@@ -255,7 +323,7 @@ export function DiagnosticsView({ diagnostics }: { diagnostics: Diagnostics }) {
           install; a calendar you connected; a connection test on the Providers
           page; an update check here. Nothing is sent just because the app
           started, except a summary that was still waiting when the app last
-          closed.
+          closed, and the once-a-day update check unless you switch it off above.
         </p>
         <ul className="purposes">
           {diagnostics.allowedEgressPurposes.map((p) => (
