@@ -35,9 +35,13 @@ fixture tests and a new installer build do not establish that result.
 - Replay seeks use available segment timings. Recordings without those timings
   can have only a whole-recording playback cue.
 - Google Calendar and Outlook offer app-owned one-click Connect or an Advanced custom client
-  and bounded snapshot sync. Owner registration and real-account validation are pending; no
-  build has carried the values. Meetings Upcoming/event picker and recording links are built
-  and fixture-tested, still unverified against real accounts.
+  and bounded snapshot sync. On 2026-11-13 a development build carrying the app-owned values
+  connected a personal Google account and a personal Outlook.com account and synced them; no
+  release build has been tried. While the Google sign-in is in testing, only accounts added as
+  test users can connect Google, and Google ends their sign-in after 7 days. A Microsoft 365
+  work account may need its administrator's approval: the owner's work tenant required it.
+  Meetings Upcoming/event picker and recording links are built and fixture-tested, still
+  unverified against real accounts.
   See [the owner runbook](CALENDAR_PROVIDER_SETUP.md).
 - Cloud providers, speaker identification and meeting
   detection have different validation coverage. See [platform support](PLATFORM_SUPPORT.md)

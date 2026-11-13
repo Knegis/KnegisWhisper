@@ -21,7 +21,11 @@ The second Windows x64 preview.
   linked to the calendar event it was made in. The link is chosen at Start and can be
   changed or removed while recording. Overlapping events are offered, never guessed
   (KNEG-366).
-- No real calendar account has connected to a build yet. See the known limitations.
+- A personal Google account and a personal Outlook.com account have connected and synced
+  in a development build. Outlook sign-ins are longer than one Windows credential entry can
+  hold, so they are split across several entries; before this, Outlook Connect failed with
+  "Could not save or read calendar data" (KNEG-559). Work or school Microsoft accounts may
+  need an administrator to approve KnegisWhisper first. See the known limitations.
 - Check GitHub once a day for a newer KnegisWhisper release and offer to open its release page. Turn it off with Check for updates automatically in Settings > Diagnostics. Nothing is downloaded or installed, prereleases count, and the check no longer needs an updater signing key (KNEG-558).
 - A new Windows uninstall helper offers two choices, both unchecked: delete your own
   KnegisWhisper data, and delete shared downloads and temporary audio for all users.

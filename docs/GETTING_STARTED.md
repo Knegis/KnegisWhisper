@@ -59,8 +59,9 @@ text, Markdown, JSON or subtitle formats. See [Notes workspace](NOTES_WORKSPACE.
 
 Settings > Calendar offers Google Calendar and Outlook (Outlook.com, Hotmail and Microsoft 365).
 Builds carrying app-owned client values support one-click Connect; Advanced accepts a custom
-client, including for forks without those values. No client has been registered, no build has
-carried the values and no real account has connected. See [provider setup and R12](CALENDAR_PROVIDER_SETUP.md).
+client, including for forks without those values. A development build carrying the app-owned
+values has connected a personal Google account and a personal Outlook.com account; no release
+build has yet. See [provider setup and R12](CALENDAR_PROVIDER_SETUP.md).
 Sync now requests a bounded snapshot. Meetings opening requests one at most once per 5 minutes
 per provider; never launch, focus or timer. Meetings Upcoming/event picker and recording links
 are built and fixture-tested, still unverified against real accounts.

@@ -13,6 +13,45 @@ maintained in place rather than appended to, because its purpose is to be curren
 ---
 
 
+## 2026-11-13 — First real calendar accounts, and Outlook grants that didn't fit (KNEG-559, KNEG-82)
+
+**What happened.** The owner registered both app-owned clients and connected real accounts to
+a development build for the first time. Google worked on the first try. The first Outlook
+Connect, a personal account, finished Microsoft's consent and the token exchange, and then
+showed "Could not save or read calendar data".
+
+**The cause.** The grant is saved as one Windows Credential Manager entry. `keyring` 3.6.3 stores
+it as UTF-16 and refuses more than 2,560 bytes, so one entry holds 1,280 characters. A
+Microsoft grant is longer than that. The tests used an in-memory store with no size limit, so
+nothing caught it before a real account. The app also reported every storage error as the same
+generic sentence, so the cause wasn't visible either. A temporary log line confirmed it on the
+second attempt: "longer than platform limit of 2560 chars".
+
+**The owner chose to split long secrets across several entries (`1112bad`, merged `ef4d7fa`).**
+The alternatives were:
+- Keeping only the refresh token in the entry. That shrinks it, but a Microsoft refresh token
+  alone isn't guaranteed to fit, so it wasn't a fix on its own.
+- Keeping the grant in a file encrypted with Windows' per-user encryption. That's what
+  Microsoft's own sign-in library does, but it is a bigger change to the security model.
+
+Splitting keeps the current model: every byte of the secret still lives in Credential Manager.
+A secret that fits is stored as before. A longer one is written as parts first, then a manifest
+in the original entry that names the parts and their SHA-256 digest. A reader that finds a
+missing part or a digest mismatch reports an error and never returns a different secret. A
+failed write removes the parts it added, and superseded parts are deleted only after the new
+manifest is in place. The storage failure is now logged (`could not store the calendar grant`)
+with the error but no secret. The design is in `docs/SECURITY.md` § Credentials.
+
+**What the runs prove, and what they don't.** On the fixed build both personal accounts
+connected, listed their calendars and synced events into the local copy. The runs are recorded
+under R12 in `CALENDAR_PROVIDER_SETUP.md`. The Microsoft 365 work account stopped at its
+tenant's administrator-approval screen. The Microsoft client has no publisher verification, but
+whether verification would change that depends on the tenant's consent policy. Token refresh, reconnect, denial, the recording link and any release build are
+still untested. The Google app is still in Testing, so only listed test users can connect it, and
+their sign-in ends after 7 days.
+
+---
+
 ## 2026-11-13 — The app tells people about a new release, once a day (KNEG-558)
 
 **What was wrong.** The update check could never find a release, for three reasons:

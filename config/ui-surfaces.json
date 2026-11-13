@@ -78,7 +78,7 @@
       "surfaceId": "integrations.calendar",
       "component": "apps/desktop/src/views/IntegrationsCalendar.tsx",
       "built": true,
-      "note": "Settings > Calendar: Google Calendar and Outlook (personal and Microsoft 365) offer app-owned one-click Connect, Cancel, Copy sign-in link, Reconnect, Advanced custom client, leftovers with Remove, and cleanup Retry. Bounded snapshots use Google events.list and Graph v1.0 calendarView. No client is registered, no build has carried the values and no real account has connected; evidence is unit tests and dev-fixture screenshots. Meetings Upcoming/event picker and recording links are built and fixture-tested, still unverified against real accounts. Apple reports Unsupported with its EventKit reason."
+      "note": "Settings > Calendar: Google Calendar and Outlook (personal and Microsoft 365) offer app-owned one-click Connect, Cancel, Copy sign-in link, Reconnect, Advanced custom client, leftovers with Remove, and cleanup Retry. Bounded snapshots use Google events.list and Graph v1.0 calendarView. On 2026-11-13 a development build carrying registered clients connected a personal Google account and a personal Outlook.com account; no release build has yet, and other evidence is unit tests and dev-fixture screenshots. Meetings Upcoming/event picker and recording links are built and fixture-tested, still unverified against real accounts. Apple reports Unsupported with its EventKit reason."
     },
     "Integrations > API": {
       "surfaceId": "integrations.api",

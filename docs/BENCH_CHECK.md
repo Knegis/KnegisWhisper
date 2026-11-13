@@ -1077,12 +1077,18 @@ person at the machine.
 
 ### Added by chunk F (calendars), and unchecked
 
-Calendar evidence so far is unit tests and dev-fixture screenshots, not real accounts.
+On 2026-11-13 a development build carrying the app-owned values connected a personal Google
+account and a personal Outlook.com account and synced them. The rest of the calendar evidence is
+unit tests and dev-fixture screenshots.
 [R12 in the provider runbook](CALENDAR_PROVIDER_SETUP.md#r12-owner-real-account-checklist)
-is the full owner procedure and evidence format. All checks below remain unchecked.
+is the full owner procedure and evidence format, and records those runs. All checks below
+remain unchecked, because each covers more than has been run.
 
 - [ ] One-click Connect in Settings > Calendar with no Advanced values: Google Calendar,
-  personal Outlook.com and Microsoft 365 work accounts (R12.1, 4, 7, 8).
+  personal Outlook.com and Microsoft 365 work accounts (R12.1, 4, 7, 8). Google and personal
+  Outlook.com connected in a development build on 2026-11-13. The work account stopped at its
+  tenant's administrator-approval screen. Refresh, reconnect, denial and a release build are
+  untested.
 - [ ] Selected-calendar snapshots over [now - 24 hours, now + 30 days): Google expanded
   `events.list` and Outlook Graph v1.0 `calendarView`, including a recurring occurrence on a
   non-default calendar; interrupted paging keeps that calendar's cache (R12.2, 6).

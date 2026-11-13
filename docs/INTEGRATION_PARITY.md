@@ -129,12 +129,14 @@ still needs a live call. Calendar Connect now resolves an app-owned or Advanced 
 for Google Calendar and Outlook (personal and Microsoft 365), with bounded snapshots through
 Google `events.list` and Graph v1.0 `calendarView`. Local Upcoming readers exist; Meetings
 Upcoming/event picker and recording links are built and fixture-tested, still unverified against
-real accounts. No calendar client has been registered,
-no build has carried the values and no real account has connected. Calendar evidence is unit
+real accounts. Both app-owned calendar clients were registered on 2026-11-13, and a development
+build carrying them connected a personal Google account and a personal Outlook.com account and
+synced them; no release build has carried them yet. The rest of the calendar evidence is unit
 tests and dev-fixture screenshots; [R12](CALENDAR_PROVIDER_SETUP.md#r12-owner-real-account-checklist)
-tracks the owner's pending round trips. `docs/PLATFORM_SUPPORT.md` and
-`docs/BENCH_CHECK.md` keep that distinction per provider and per capability; **none of chunks E
-onward has been exercised by a person at all**, only by tests and code review.
+records those runs and tracks the owner's pending round trips. `docs/PLATFORM_SUPPORT.md` and
+`docs/BENCH_CHECK.md` keep that distinction per provider and per capability. **Apart from that
+calendar Connect and sync, none of chunks E onward has been exercised by a person**, only by
+tests and code review.
 
 The jump from 45 to 59 came from five chunks and no shared subsystem: three new meeting clients plus
 the one that already existed, a calendar crate, two new sidecars for media import, an MCP server,
