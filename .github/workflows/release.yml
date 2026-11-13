@@ -109,6 +109,10 @@ jobs:
           python tools/uninstall/generate.py --check
       - name: Install pinned notice generator
         run: cargo install cargo-about --version 0.8.4 --locked
+      # The generator runs cargo metadata --offline, which needs every crate in the lockfile,
+      # including ones the Windows build above never downloads (CI's notices job does the same).
+      - name: Fetch every locked crate for the notice generator
+        run: cargo fetch --locked
       - name: Verify bundled notices
         run: python tools/licenses/generate.py --check
       - name: Build unsigned installer
