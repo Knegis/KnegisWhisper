@@ -21,7 +21,7 @@ v0.1.1 still reports "Update checking is not securely configured". Those users
 must download v0.2.0 by hand.
 
 The published v0.1.1 uninstaller's **Delete app data** checkbox misses the main
-notes/recordings folder and saved credentials. Source builds now implement separate
+notes/recordings folder and saved credentials. v0.2.0 implements separate
 personal and shared cleanup options, but their disposable-machine acceptance
 matrix is pending ([KNEG-545](https://linear.app/axelalbertkarlsson/issue/KNEG-545)). Read
 [what is retained and how to remove it](GETTING_STARTED.md#uninstall-on-windows)
