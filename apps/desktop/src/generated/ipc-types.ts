@@ -2153,9 +2153,11 @@ export type ImportSnapshot = { operationId: string, stage: ImportStage, elapsedS
 
 /* ---------------------------------------------------------------- updater */
 /**
- * What checking for an update found.
+ * Failure to read releases is distinct from finding no newer version.
  */
-export type UpdateCheckResult = { "state": "no-public-key-configured" } | { "state": "check-failed", error: string, } | { "state": "current-version-unparseable", version: string, } | { "state": "latest-version-unparseable", tag: string, } | { "state": "up-to-date", current: string, latest: string, } | { "state": "update-available", current: string, latest: string, url: string, };
+export type UpdateCheckResult = { "state": "releases-not-public" } | { "state": "no-published-release" } | { "state": "check-failed", error: string, } | { "state": "current-version-unparseable", version: string, } | { "state": "up-to-date", current: string, latest: string, } | { "state": "update-available", current: string, latest: string, url: string, };
+
+export type UpdatePreferences = { automatic: boolean, lastAutomaticCheckAt: string | null, };
 
 /* -------------------------------------------------------------- calendars */
 /**

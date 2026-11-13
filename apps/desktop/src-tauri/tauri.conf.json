@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "KnegisWhisper",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "identifier": "com.knegis.knegiswhisper",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -45,7 +45,7 @@
   },
   "plugins": {
     "updater": {
-      "$comment": "pubkey is the public half of a Tauri updater keypair -- see docs/SECURITY.md for how a maintainer generates one. Empty until that has happened. The private half must never appear in this file or anywhere else in this repository. This project does not depend on the tauri-plugin-updater crate at runtime -- see updater.rs's module doc -- so this key is read directly from this file by that module, in the same place the plugin itself would look.",
+      "$comment": "pubkey is retained as the public half of a future Tauri updater keypair, unused by the app. Notices only open release pages and need no key. A verified signature is required before any future code downloads or installs an update. See docs/SECURITY.md for key generation. The private half must never appear in this file or anywhere else in this repository.",
       "pubkey": ""
     }
   },

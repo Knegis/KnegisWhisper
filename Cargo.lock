@@ -2693,7 +2693,7 @@ dependencies = [
 
 [[package]]
 name = "knegiswhisper"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2743,7 +2743,7 @@ dependencies = [
 
 [[package]]
 name = "kw-app-core"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "kw-audio-core",
@@ -2759,7 +2759,7 @@ dependencies = [
 
 [[package]]
 name = "kw-audio-core"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "cpal",
  "serde",
@@ -2773,7 +2773,7 @@ dependencies = [
 
 [[package]]
 name = "kw-calendar-core"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -2796,7 +2796,7 @@ dependencies = [
 
 [[package]]
 name = "kw-cli"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "clap",
  "kw-local-api",
@@ -2813,7 +2813,7 @@ dependencies = [
 
 [[package]]
 name = "kw-local-api"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -2834,7 +2834,7 @@ dependencies = [
 
 [[package]]
 name = "kw-mcp"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "kw-cli",
  "kw-local-api",
@@ -2852,7 +2852,7 @@ dependencies = [
 
 [[package]]
 name = "kw-meeting-core"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -2876,7 +2876,7 @@ dependencies = [
 
 [[package]]
 name = "kw-network-policy"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "reqwest 0.12.28",
  "serde",
@@ -2890,7 +2890,7 @@ dependencies = [
 
 [[package]]
 name = "kw-notes-core"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "hound",
@@ -2912,7 +2912,7 @@ dependencies = [
 
 [[package]]
 name = "kw-overlay"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -2923,7 +2923,7 @@ dependencies = [
 
 [[package]]
 name = "kw-platform"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "arboard",
  "kw-audio-core",
@@ -2942,7 +2942,7 @@ dependencies = [
 
 [[package]]
 name = "kw-provider-probe"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "kw-network-policy",
@@ -2960,7 +2960,7 @@ dependencies = [
 
 [[package]]
 name = "kw-provider-registry"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "kw-security",
  "serde",
@@ -2971,7 +2971,7 @@ dependencies = [
 
 [[package]]
 name = "kw-reasoning-core"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -2994,7 +2994,7 @@ dependencies = [
 
 [[package]]
 name = "kw-security"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "getrandom 0.2.17",
  "keyring",
@@ -3012,7 +3012,7 @@ dependencies = [
 
 [[package]]
 name = "kw-sidecar"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "bzip2-rs",
@@ -3035,7 +3035,7 @@ dependencies = [
 
 [[package]]
 name = "kw-storage"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "dirs 5.0.1",
@@ -3052,11 +3052,11 @@ dependencies = [
 
 [[package]]
 name = "kw-transcript-text"
-version = "0.1.1"
+version = "0.2.0"
 
 [[package]]
 name = "kw-transcription-core"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "kw-audio-core",

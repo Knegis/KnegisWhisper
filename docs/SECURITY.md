@@ -77,7 +77,12 @@ reused or recursively removed because they can contain other users' files.
 This protection does not retroactively remove recordings left there by older builds.
 
 Every request declares a purpose; there is no unlabelled path. The webview has no HTTP capability
-and no permission to reach arbitrary hosts. There is no startup request, no telemetry, and no
+and no permission to reach arbitrary hosts. Startup requests have two exceptions: a summary
+still queued when the app last closed, sent to the provider the person chose for summaries,
+and the default-on, once-a-day automatic update check, due no earlier than 15 seconds after launch.
+The summary worker claims queued jobs at startup and marks only in-flight jobs interrupted
+(`summaries::start`, read from code under KNEG-343). The update check's switch is
+"Check for updates automatically" on Settings > Diagnostics. There is no telemetry and no
 hidden fallback: a provider failure fails the operation rather than quietly trying somewhere else.
 See `NETWORK_BOUNDARY.md`.
 
@@ -95,15 +100,27 @@ Webview section below describes. The full accounting, and what re-opening it req
 
 ## Updates
 
-Optional and user-initiated only. No check runs at startup or on a timer;
-`updater.rs`'s only caller is the "Check for updates" button on
-Settings > Diagnostics. See `docs/NETWORK_BOUNDARY.md`.
+The update check needs no key. `apps/desktop/src-tauri/src/updater.rs` sends an
+unauthenticated request for this project's published releases, including prereleases.
+"Check for updates" runs it manually. "Check for updates automatically" on
+Settings > Diagnostics is on by default. A local due decision runs 15 seconds after
+launch and hourly thereafter. It sends nothing until an automatic attempt is due
+(at least 24 hours old, missing or in the future). The attempt time must be saved
+before sending; a failed save sends nothing. See `docs/NETWORK_BOUNDARY.md`.
 
-The bundler can produce signed update artifacts
-(`bundle.createUpdaterArtifacts` in `apps/desktop/src-tauri/tauri.conf.json`,
-turned on), but this repository ships no keypair and generates none as part
-of its own tooling or CI. A maintainer who wants signed, verifiable updates
-makes one themselves:
+The check and the notice download and install nothing. Rust builds the release URL
+from the repository field and tag, rather than trusting a URL from the response.
+"Open release page" opens that URL in the default browser. A verified signature
+is still required before any future code downloads or installs an update.
+The app no longer reads `plugins.updater.pubkey`.
+
+The bundler can produce signed update artifacts (`bundle.createUpdaterArtifacts`
+in `apps/desktop/src-tauri/tauri.conf.json` is on), but release builds use
+`tools/release/unsigned.json` to turn it off. No updater artifacts are produced.
+This repository ships no keypair and generates none in its tooling or CI.
+The following keypair procedure prepares for a future signed download. It is not
+a precondition for the update check; a future download path must implement signature
+verification and enable signed artifacts before using it:
 
 1. From `apps/desktop`, run
    `npx tauri signer generate -w ~/.tauri/knegiswhisper.key` (any path
@@ -115,52 +132,37 @@ makes one themselves:
    public key is not a secret — it is what a client checks a downloaded
    update's signature against, the same role a TLS certificate's public half
    plays.
-3. **Rebuild before checking whether step 2 worked.** `updater.rs` reads the
-   key from the *compiled-in* configuration, not from the file on disk:
-   `lib.rs` builds the app with `tauri::generate_context!()`, which embeds
-   `tauri.conf.json` at compile time, and `configured_public_key` reads that
-   embedded copy through `app.config()`. So an application that was already
-   built — an installed bundle, or a `cargo run` from before the edit — keeps
-   reporting `NoPublicKeyConfigured` no matter what the file now says, and
-   there is nothing on screen to distinguish that from having pasted the key
-   wrongly. This step is written out because the procedure used to go straight
-   from step 2 to the CI secret, and a maintainer following it had no way to
-   tell a stale binary from a bad key (KNEG-43).
-
-   The rebuild itself needs no special flag and no `cargo clean`: the
-   desktop crate's build script emits
-   `cargo:rerun-if-changed=apps/desktop/src-tauri/tauri.conf.json`, so an
-   ordinary `cargo build`, `cargo run` or `npx tauri dev` recompiles the
-   context after the edit. It is the *skipping* of a build that is the trap,
-   not the build being hard to trigger.
+3. **Rebuild before testing a future signed download.** Tauri's
+   `tauri::generate_context!()` embeds `tauri.conf.json` at compile time.
+   A future verifier must read that embedded public key and verify the downloaded
+   bytes. The current update check does not read it. An ordinary `cargo build`,
+   `cargo run` or `npx tauri dev` rebuilds the context after a configuration edit;
+   no `cargo clean` or special flag is needed.
 4. Add the private key file's contents as the repository secret
    `TAURI_SIGNING_PRIVATE_KEY` (repository Settings > Secrets and variables >
    Actions). If step 1 set a password, also add
    `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. `.github/workflows/release.yml`
-   reads both as environment variables on its `tauri build` step and signs
-   updater artifacts only when they are present; without them, that workflow
-   builds unsigned bundles, which is the state this repository is in today.
+   reads both as environment variables on its `tauri build` step. The current
+   unsigned override disables updater artifacts even if secrets are present.
+   A future signed download needs a reviewed change to enable signed artifacts.
 5. **The private key must never be committed, and must never be generated on
    a machine this project's CI or tooling controls.** It belongs nowhere in
    this repository, in `Cargo.lock`, or in any workflow file — only in the
    repository secret and, before that, on whatever machine ran step 1.
 
-Until a keypair exists, `plugins.updater.pubkey` stays empty, and a check
-reports that state explicitly (`UpdateCheckResult::NoPublicKeyConfigured`)
-rather than either extreme: checking anyway would mean trusting a downloaded
-update on the strength of an HTTPS connection to GitHub alone, with nothing
-that verifies the bytes came from this project's own signing key; silently
-reporting nothing would look identical to "no update exists" for a reason
-that has nothing to do with whether one does.
+No updater signing is in place today. That does not block a notice linking to a
+release page. The check needs a public repository; while it is private, every
+check reports "No public release could be found". Installed v0.1.1 still has the
+old key gate and reports "Update checking is not securely configured". Its users
+must download v0.2.0 by hand.
 
 This feature does not depend on the `tauri-plugin-updater` crate. Every
 request it makes stays behind `kw_network_policy::NetworkPolicy`, tagged
 `RequestPurpose::OwnGithubReleasesUpdater` like every other network call in
 this application, rather than through that plugin's own HTTP client — see
 `crates/network-policy/src/lib.rs`'s module doc on why this crate stays the
-only one that builds a `reqwest::Client`. `plugins.updater.pubkey` is still
-read from the conventional location the plugin itself would use, so a
-keypair generated the standard way drops in without translation.
+only one that builds a `reqwest::Client`. The keypair procedure retains the
+conventional public-key location for a future signed download.
 
 Installing an update is not implemented. A check reports that a newer
 release exists and where; nothing downloads or runs it without a further,

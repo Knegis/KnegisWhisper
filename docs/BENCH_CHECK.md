@@ -1040,36 +1040,40 @@ launched GUI locking the binary and breaking the next build (see the `[[bin]]` c
 `apps/desktop/src-tauri/Cargo.toml`). Everything below is green tests and a read of the code, not a
 person at the machine.
 
-1. **Press "Check for updates" on `Settings > Diagnostics`.** This is the one part of the whole
-   feature that is honestly reachable right now, with nothing missing: no updater public key is
-   configured, so the button should report "Update checking is not securely configured" rather than
-   either freezing, doing nothing visible, or claiming an update check that did not happen. Confirm
-   the sentence appears and the button re-enables afterward.
-2. **Generate a real keypair** (`docs/SECURITY.md`), paste the public half into
-   `plugins.updater.pubkey`, **and rebuild the application before pressing the button again** —
-   corrected by Task 19, which found this item unfollowable as written. `plugins.updater.pubkey` is
-   baked into the binary at compile time by Tauri's `generate_context!`; editing the file and
-   pressing "Check for updates" on a build that is already running, or re-launching a debug build
-   without a fresh `cargo build`/`npm run tauri:dev` restart that regenerates the context, changes
-   nothing the button can see. Once rebuilt with the key present, press the button again with a real
-   repository that has no releases yet. `GET /repos/{owner}/{repo}/releases/latest` should now
-   attempt a real request rather than short-circuiting, and — for a repository with zero releases —
-   come back 404, surfaced as `CheckFailed` rather than a silent "up to date". This is the first real
-   exercise of `NetworkPolicy::get_text` outside its own unit tests, which use a hand-rolled local
-   server rather than GitHub's actual API.
-3. **Publish one real release** (dispatching `.github/workflows/release.yml` for the first time,
-   which nobody has done) and press the button again. This is the only way to learn whether
-   GitHub's actual response shape matches the `tag_name`/`html_url` fields `updater.rs` assumes, and
-   whether the update-available sentence and the notification window both appear together and say
-   the same version.
-4. **Screen-record the desktop while the update notification is up**, the same claim as item 5 for
+1. **Open Settings > Diagnostics in an installed v0.2.0 build.** Confirm
+   "Check for updates automatically" is on by default. Press "Check for updates".
+   Against the newest published release, expect "Up to date"; while the repository
+   is private, expect "No public release could be found". Confirm "Last check"
+   shows the result and the button re-enables. No public key is needed.
+2. **Exercise the automatic check by hand.** With the switch on and no previous
+   automatic attempt, confirm a due check runs 15 seconds after launch. Inspect
+   "Last automatic check". Restart within 24 hours and confirm no automatic request
+   is sent. Leave the app running for its hourly due decisions and confirm those
+   decisions send nothing until due. Turn the switch off and confirm only the
+   manual button sends a request. A failed automatic check must show no window.
+   The once-a-day rule is unit-tested with invented data, not exercised in an install.
+3. **Check a real newer published release, including a prerelease.** The app's
+   request to `GET https://api.github.com/repos/Knegis/KnegisWhisper/releases?per_page=30`
+   has never run. The list response shape (`tag_name`, `draft`) is believed from
+   GitHub's documentation. Confirm the newest valid semver wins, drafts are skipped,
+   and the notice and Diagnostics show the same version. The repository needs to be
+   public; unauthenticated repository and release requests returned 404 on 2026-11-13.
+   An authenticated request to the old latest-release endpoint returned `tag_name`
+   `v0.1.1` on 2026-11-10; that did not exercise the list request.
+   Confirm "Open release page" opens the tag page built by Rust and "Dismiss"
+   closes the notice. After either action, the automatic check must not show that
+   version again in the session. A manual check must still show it. No install has
+   shown the notice for a real release; URL building is unit-tested with invented data.
+4. **Screen-record the desktop while the notice is up**, the same claim as item 5 for
    the meeting notification above: it must be absent from the recording and visible on the real
    screen. It reuses the identical `overlay::apply_treatments` call, so this is expected to pass, but
    nobody has looked.
-5. **Dispatch the release workflow once with `TAURI_SIGNING_PRIVATE_KEY` set and once without.**
-   Confirms two things nobody has checked: that `createUpdaterArtifacts: true` does not make
-   `tauri build` fail outright when the key is absent and the workflow's own `--config` override is
-   in effect, and that a `.sig` file actually appears next to a bundle when the key is present.
+5. **Inspect the release workflow's output with the unsigned override.** Confirm
+   `tools/release/unsigned.json` disables `createUpdaterArtifacts` and the release
+   contains the installer and `SHA256SUMS.txt`, without updater artifacts or signatures.
+   A future signed download still needs the keypair procedure in `docs/SECURITY.md`,
+   signature verification and a separate by-hand signed-artifact build. A build with
+   artifacts enabled and no signing key remains untested; the update check needs no key.
 
 ### Added by chunk F (calendars), and unchecked
 

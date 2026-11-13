@@ -1163,44 +1163,70 @@ and records why.
 
 ## Updates
 
-`apps/desktop/src-tauri/src/updater.rs` checks this project's own GitHub
-releases, opt-in and only when a person presses "Check for updates" on
-Settings > Diagnostics -- never at startup, never on a timer. It has still
-never been exercised end to end, and publishing a release did not change
-that. v0.1.1 was published on 9 November 2026 as a full release, and it is
-the repository's latest release, but the app never asks for it.
-`plugins.updater.pubkey` in `tauri.conf.json` is empty, so `check_now`
-returns `NoPublicKeyConfigured` ("Update checking is not securely
-configured") before sending any request. No signing key exists yet; see
-`docs/SECURITY.md`.
+KNEG-558's behavior is built for v0.2.0, which has not been released yet. The owner decided this behavior on 2026-11-13.
+`apps/desktop/src-tauri/src/updater.rs` checks this project's own GitHub releases.
+The check and the notice download and install nothing; they only link to a release page.
+No key is needed for the check. The app no longer reads `plugins.updater.pubkey`.
+A verified signature is still required before any future code downloads or installs an update.
 
-A key alone would not be enough yet. The repository is private, and the
-app's request to `GET /repos/{owner}/{repo}/releases/latest` carries no
-credentials. Checked 2026-11-10: without credentials that URL returns 404,
-and with the owner's credentials it returns v0.1.1.
+The request is `GET https://api.github.com/repos/Knegis/KnegisWhisper/releases?per_page=30`.
+It sends no credentials and goes through `NetworkPolicy` under
+`own-github-releases-updater`, with `User-Agent: KnegisWhisper/<version>`.
+Drafts are skipped. Prereleases count because every release of this project is a preview.
+Tags are parsed as semver after removing one leading `v`; tags that do not parse are skipped.
+The newest version wins. Publishing as a prerelease or without GitHub's "Latest" label
+no longer hides a release from the update check.
 
-What is and isn't known about the rest:
+Settings > Diagnostics has "Check for updates automatically", on by default
+(`updates.automatic`). At 15 seconds after launch, then once an hour while running,
+the app reads that setting and `updates.lastAutomaticCheck` locally to decide whether a
+check is due. That decision sends nothing. An automatic attempt is due when the last
+attempt is missing, in the future, or at least 24 hours old. Its time is saved before
+the request. If saving fails, nothing is sent. The automatic check sends at most one
+request a day. With the switch off, only "Check for updates" sends a request.
+GitHub learns the network address and app version in the User-Agent. Nothing else is sent.
+A failed automatic check never shows a window. Diagnostics shows "Last check", the last
+result, and "Last automatic check".
 
-- **The response shape `updater.rs` parses** (`tag_name`, `html_url`) matches
-  this project's own release. The authenticated request above returned
-  `tag_name` `v0.1.1` and the release page as `html_url`. The app itself has
-  never sent the request.
-- **The version comparison** (`semver::Version`, with a published tag's
-  leading `v` stripped) is exercised by unit tests against invented tags, not
-  against a tag this project has cut. Even with a key and a public
-  repository, a v0.1.1 install could only report that it is up to date.
-  Seeing a newer version needs a later release.
-- **No release carries updater signatures.** The Release workflow always builds
-  with `tools/release/unsigned.json`, which turns
-  `bundle.createUpdaterArtifacts` off. It uploads only the installer and
-  `SHA256SUMS.txt`. Whether `tauri build` would run with
-  `createUpdaterArtifacts: true` and no `TAURI_SIGNING_PRIVATE_KEY` has still
-  not been checked. Release builds avoid the question rather than answer it.
+The notice appears only for a newer version. For example, it says
+"Update available: v0.2.1" and "You have v0.2.0.", with "Open release page" and "Dismiss".
+"Open release page" opens `https://github.com/Knegis/KnegisWhisper/releases/tag/<tag>`
+in the default browser. Rust builds the URL from the repository field and the tag;
+the response never supplies a URL. A version opened or dismissed in this session is
+not shown again by the automatic check. After a restart it can appear again, at most
+once a day. A manual "Check for updates" always shows the notice for a newer version.
 
-None of this bears on whether the application works without an update check;
-it bears only on whether that specific, opt-in feature would behave as
-designed the first time somebody actually uses it. See `docs/SECURITY.md` for
-the keypair procedure and `docs/COMPLETION_PLAN.md` phase 9 for what remains.
+Diagnostics result states are:
+
+- "Up to date"
+- "Update available: vX"
+- "No public release could be found": GitHub returned 404 because the repository is private, renamed or removed.
+- "No release has been published yet"
+- "Could not check for an update"
+- "This build's own version could not be read"
+
+What is and is not known:
+
+- **Measured, 2026-11-13:** unauthenticated requests to the repository and its releases
+  both returned 404. The repository is private today. The owner intends to make it public
+  before publishing v0.2.0. The check needs a public repository; while it is private,
+  every check reports "No public release could be found".
+- **Measured, 2026-11-10:** an authenticated request to the old `/releases/latest`
+  endpoint returned `tag_name` `v0.1.1`. This does not exercise the new list request.
+- **Believed from GitHub's documentation:** the list response shape (`tag_name`, `draft`).
+- **Unit-tested with invented data:** release selection, 404 mapping, the once-a-day
+  rule and release URL building. These tests do not establish live GitHub behavior.
+- **Never run:** the app has never sent the list request. No install has shown the
+  notice for a real release.
+- **Release configuration:** `tools/release/unsigned.json` turns
+  `bundle.createUpdaterArtifacts` off. Release builds produce no updater artifacts
+  or signatures. Whether a build with artifacts enabled and no signing key succeeds
+  remains untested. See `docs/SECURITY.md` for preparation for a future signed download.
+
+Installed v0.1.1 keeps the old key gate, `/releases/latest`, and button-only check.
+It keeps reporting "Update checking is not securely configured". Those users must
+download v0.2.0 by hand. From v0.2.0 on, installs are told about later releases once
+the repository is public. See `docs/COMPLETION_PLAN.md` phase 9 for remaining checks.
 
 ## Known environment constraints
 

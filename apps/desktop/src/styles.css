@@ -4166,7 +4166,15 @@ button.microphone-error-retry { align-self: flex-start; min-height: 32px; margin
 .notify-busy { flex: none; width: 64px; height: 30px; border-radius: var(--r-control); background: var(--iris); background-size: 250% 250%; }
 :root[data-window="update"] .notify:not(.notify-empty) { box-shadow: none; }
 :root[data-window="update"] .notify .indicator { box-shadow: none; }
-:root[data-window="update"] .notify button { height: 34px; min-height: 34px; padding: 0 16px; border-radius: var(--r-control); font-size: 13px; letter-spacing: .04em; }
+/* Two compact actions leave the title and detail room inside 392x104. */
+:root[data-window="update"] .notify { gap: 10px; padding: 12px 14px; }
+:root[data-window="update"] .notify-actions { gap: 6px; }
+:root[data-window="update"] .notify button { height: 32px; min-height: 32px; padding: 0 10px; border-radius: var(--r-control); font-size: 12px; letter-spacing: 0; white-space: nowrap; }
+:root[data-window="update"] .notify button.primary { background: var(--mint-ink); color: #fff; }
+:root[data-window="update"] .notify button.primary:hover:not(:disabled) { background: var(--mint-ink); color: #fff; }
+:root[data-window="update"] .notify-detail.notify-alert { color: var(--error); }
+.diagnostics-update-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.diagnostics-update-actions .caveat { margin: 0; }
 
 /* The recording panel. */
 .notify-panel { gap: 0; padding: 0; border-radius: 32px; }

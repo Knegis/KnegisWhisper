@@ -13,6 +13,55 @@ maintained in place rather than appended to, because its purpose is to be curren
 ---
 
 
+## 2026-11-13 — The app tells people about a new release, once a day (KNEG-558)
+
+**What was wrong.** The update check could never find a release, for three reasons:
+- It refused to send anything without an updater public key, and the key was empty.
+- It asked `/releases/latest`, which never returns a prerelease. `release.yml` drafts every release as a prerelease, so a release published by the documented procedure was invisible to it.
+- It ran only when someone pressed **Check for updates**.
+
+A v0.1.1 install could therefore only ever report "not securely configured". v0.1.1 is visible on GitHub only because it was promoted to latest by hand.
+
+**The owner decided four things:**
+1. No key for the notice.
+2. A once-a-day check, on by default, with a switch.
+3. The repository is made public before v0.2.0 ships.
+4. An Open release page button.
+
+**Why the key gate went.** The key existed to verify a downloaded update, and nothing downloads one. The notice links to the release page, and the person downloads the installer there and checks its hash, which they would do anyway. Keeping the gate verified nothing and meant no one was ever told. A verified signature stays required before any code downloads or installs an update, and the module doc says so.
+
+**Why the release list.** Reading `/releases?per_page=30` and taking the newest semver tag means the publishing choice no longer matters: a prerelease counts, and so does a release not marked latest. The alternative was to change the procedure so every release is marked latest. That would have left a code path that silently breaks the day someone follows the old procedure. Drafts are skipped, and tags that don't parse are skipped rather than reported. A 404 gets its own state, "No public release could be found", so a private repository never reads as "up to date" or as a generic failure.
+
+**How the automatic check stays at once a day:**
+- 15 seconds after launch, and then hourly, the app decides whether a check is due. Deciding reads two settings and sends nothing.
+- The attempt time is saved **before** the request, and if it can't be saved nothing is sent. So a broken database or a failing request can't turn the check into an hourly one.
+- A failed automatic check never shows a window.
+
+This revises a documented promise. `NETWORK_BOUNDARY.md` said launching sends nothing. It was already untrue for a queued summary (KNEG-343), and it now names both exceptions.
+
+**Dismissal is per session, in memory.** A setting holding the dismissed version would have needed its own surface and writer for little gain. The cost: after a restart, a dismissed version can appear again, at most once a day. A manual check always shows it.
+
+**Open release page builds its own URL.** The URL comes from `CARGO_PKG_REPOSITORY` and a tag that parsed as semver. GitHub's `html_url` isn't used, and the frontend passes no URL. That keeps the rundll32 path handed only `[0-9A-Za-z.+-]` after the fixed prefix.
+
+**Two review findings, both fixed in a second round:**
+- The docs worker had rewritten three hunks of dated bench records; they were restored.
+- The new "nothing else is sent at launch" lines left out the queued summary; both exceptions are now named.
+
+**Verified.** Unit tests with invented data cover release selection, the 404 mapping, the due rule, dismissal and URL building. Headless Edge against dev fixtures:
+- the update card fits 392×104 in light and dark, with both buttons inside it;
+- the Diagnostics section renders its switch, **Last automatic check** and Open release page.
+
+On the merged tree (bd08522) every contract gate, the gate self-tests, tsc, 585 frontend tests, vite build, the built-asset scans, cargo fmt, workspace clippy with -D warnings on 1.90 and 1.99, the desktop crate's 589 unit tests and its tauri-test build (606) passed. cargo test --workspace was not run here; no other crate changed.
+
+**Not verified:**
+- the list request against GitHub;
+- the automatic check in a real install;
+- the browser opening;
+- the notice in its real window;
+- anything against a public repository, since today's is private.
+
+v0.1.1 installs can't benefit, so their users must install v0.2.0 by hand.
+
 ## 2026-11-12 — Feature-audit fixtures and consistent settings fields (KNEG-556, KNEG-550)
 
 The feature-audit self-tests reproduced four failures on base `d8dfe15`. Their negative cases

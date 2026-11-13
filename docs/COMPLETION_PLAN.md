@@ -165,16 +165,26 @@ an unrelated task.
 
 **Phase 9 — shipping.** Done except by-hand verification. `.github/workflows/release.yml`
 (`workflow_dispatch` only) builds and publishes unsigned nsis/dmg/appimage/deb bundles on
-all three OSes. `createUpdaterArtifacts` is now `true`, and the update check itself
-(`apps/desktop/src-tauri/src/updater.rs`) is opt-in and user-triggered, against this
-project's own GitHub releases through `kw_network_policy::NetworkPolicy` -- **not**
-`tauri-plugin-updater` as originally planned here, so that crate's "only egress point in
-the workspace" stays a real property rather than a nominal one with a second HTTP client
-sitting beside it. `docs/SECURITY.md` documents the keypair procedure; no keypair exists,
-so a check reports `NoPublicKeyConfigured` rather than checking unsafely or silently. The
-workflow has never been dispatched and no release has ever been published, so every path
-past `git tag` -- including whether the bundler actually needs the signing key present
-when `createUpdaterArtifacts` is on -- stays unverified; see `docs/PLATFORM_SUPPORT.md`.
+all three OSes. The release override `tools/release/unsigned.json` disables
+`createUpdaterArtifacts`, so release builds produce no updater artifacts. The update check
+(`apps/desktop/src-tauri/src/updater.rs`) needs no key. In v0.2.0 it runs manually through
+"Check for updates" or automatically once a day, on by default. Settings > Diagnostics
+has "Check for updates automatically". A local due decision runs 15 seconds after launch
+and hourly thereafter; saving the attempt time must succeed before any request is sent.
+The request lists published releases, including prereleases, through
+`kw_network_policy::NetworkPolicy`, not `tauri-plugin-updater`. The network boundary
+remains the only egress point. The notice links to a release page and downloads or installs
+nothing. A future download still needs signature verification; `docs/SECURITY.md` retains
+the keypair procedure for that work.
+
+**Unit-tested with invented data:** release selection, 404 mapping, the once-a-day rule
+and URL building. **Never run:** the app's list request and the notice for a real release.
+**Measured, 2026-11-13:** unauthenticated repository and release requests returned 404.
+The check needs a public repository; while private it reports "No public release could be found".
+v0.1.1 retains its key gate and must be upgraded to v0.2.0 by hand. By-hand acceptance
+remains open in `docs/BENCH_CHECK.md` and `docs/RELEASING.md`.
+The release workflow has published v0.1.1. A build with updater artifacts enabled and
+no signing key remains untested; release builds disable artifacts instead.
 
 **Phase 10 — agents.** Chat agent, voice agent and translation: the window role, the dispatch, the
 four `*-custom` credential slots, and the orphan tables. The home for the three actions whose
@@ -290,6 +300,8 @@ breakdown of what has and has not been run.
 **See [BENCH_CHECK.md](BENCH_CHECK.md) for the complete, current record of what has actually been
 run.** The 2026-08-25/26 passes covered phases 2, 6 and chunks A–D on real hardware and found eight
 real defects between them that every test had missed. **Nothing built since — meetings, calendars,
-media import, the MCP and CLI screens, the updater — has been run by a person at all.** That file's
-by-hand lists for chunk E onward and for the updater are the honest record of that, item by item,
+media import, the MCP and CLI screens — has been run by a person at all.** For the update check,
+the old key-gate result was observed in the 2026-08-28 bench run, but the v0.2.0 list request
+and the notice for a real release have never run. That file's by-hand lists for chunk E onward
+and for the update check record the remaining checks, item by item,
 and none of them should be read as done until someone actually presses the buttons.

@@ -178,6 +178,7 @@ import type {
   TrashSummary,
   UnhandledAction,
   UpdateCheckResult,
+  UpdatePreferences,
   VerifiedBy,
   Word,
 } from "../generated/ipc-types.js";
@@ -326,6 +327,7 @@ export type {
   TrashSummary,
   UnhandledAction,
   UpdateCheckResult,
+  UpdatePreferences,
   VerifiedBy,
   Word,
 };
@@ -1500,17 +1502,15 @@ export async function setCloudProvider(
 /* -------------------------------------------------------------- updater */
 
 /**
- * Check this project's own GitHub releases for a newer version.
- *
- * Never called except by an explicit click — nothing subscribes to this on a
- * timer or on load, which is what "opt-in, never at startup" means from the
- * frontend's side of the boundary. See `updater.rs`.
+ * Check this project's own GitHub releases immediately on a person's click.
+ * Rust also checks automatically on its daily schedule unless switched off;
+ * this manual entry point does not change that schedule. See `updater.rs`.
  */
 export async function checkForUpdate(): Promise<UpdateCheckResult> {
   return invoke<UpdateCheckResult>("update_check");
 }
 
-/** What the last check found, without starting a new one. `null` if nobody has ever checked. */
+/** What the last check found, without starting a new one. `null` until the first manual or automatic check. */
 export async function getLastUpdateCheck(): Promise<UpdateCheckResult | null> {
   return invoke<UpdateCheckResult | null>("update_check_last");
 }
@@ -1518,6 +1518,21 @@ export async function getLastUpdateCheck(): Promise<UpdateCheckResult | null> {
 /** Hide the update notification window without forgetting what it found. */
 export async function dismissUpdateNotification(): Promise<void> {
   return invoke("update_dismiss");
+}
+
+/** Open the Rust-built release page and dismiss this version for the session. */
+export async function openUpdateReleasePage(): Promise<void> {
+  return invoke("update_open_release");
+}
+
+/** Read automatic checking and the attempt time without reaching the network. */
+export async function getUpdatePreferences(): Promise<UpdatePreferences> {
+  return invoke<UpdatePreferences>("update_preferences");
+}
+
+/** Takes effect at the next hourly evaluation. */
+export async function setAutomaticUpdateCheck(enabled: boolean): Promise<void> {
+  return invoke("update_set_automatic", { enabled });
 }
 
 /** Fired whenever a check completes, whatever it found. */

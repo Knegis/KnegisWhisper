@@ -71,9 +71,9 @@ Quit KnegisWhisper from its tray menu, then use **Windows Settings > Apps >
 Installed apps > KnegisWhisper > Uninstall**. Closing the window alone can leave
 it running in the tray. Uninstall requires administrator rights.
 
-### New uninstall flow (unreleased)
+### The uninstall helper (v0.2.0 and later)
 
-Source builds now register a separate uninstall helper. It opens two choices,
+From v0.2.0 the installer registers a separate uninstall helper. It opens two choices,
 both unchecked:
 
 - **Delete my KnegisWhisper data** removes the initiating Windows account's
