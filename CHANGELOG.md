@@ -5,6 +5,8 @@ version, supported platforms, installation requirements and known limitations.
 
 ## Unreleased
 
+- Check GitHub once a day for a newer KnegisWhisper release and offer to open its release page. Turn it off with Check for updates automatically in Settings > Diagnostics. Nothing is downloaded or installed, prereleases count, and the check no longer needs an updater signing key (KNEG-558).
+
 - Align settings labels and fields, use consistent control sizes and readable form values, keep company-account labels and hints visible, and show filled actions in the unsaved-settings dialog (KNEG-550).
 
 - Keep scratch audio in a verified private directory for each user and profile, including accounts whose names contain non-ASCII characters.
