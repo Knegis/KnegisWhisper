@@ -179,8 +179,9 @@ the keypair procedure for that work.
 
 **Unit-tested with invented data:** release selection, 404 mapping, the once-a-day rule
 and URL building. **Never run:** the app's list request and the notice for a real release.
-**Measured, 2026-11-13:** unauthenticated repository and release requests returned 404.
-The check needs a public repository; while private it reports "No public release could be found".
+**Measured, 2026-11-13:** unauthenticated repository and release requests returned 404 while
+the repository was private. **Measured, 2026-11-16:** with it public, an unauthenticated `curl`
+of the release list returned 200 with v0.2.0 and v0.1.1. No installed app has made that request yet.
 v0.1.1 retains its key gate and must be upgraded to v0.2.0 by hand. By-hand acceptance
 remains open in `docs/BENCH_CHECK.md` and `docs/RELEASING.md`.
 The release workflow has published v0.1.1 and, on 2026-11-13, v0.2.0 (`docs/PRODUCT_REPOSITORY_VALIDATION.md`). A build with updater artifacts enabled and

@@ -2,9 +2,8 @@
 
 ## Install or run from source
 
-The newest Windows release, [v0.2.0](https://github.com/Knegis/KnegisWhisper/releases/tag/v0.2.0), is an unsigned preview.
-GitHub labels it Pre-release, and its "Latest" badge stays on v0.1.1, so open v0.2.0
-from that link or the Releases list. It has not yet been through the installation checks on a clean machine. To build the app yourself instead, follow
+The newest Windows release, [v0.2.0](https://github.com/Knegis/KnegisWhisper/releases/tag/v0.2.0), is an unsigned preview,
+and the release GitHub marks Latest. It has not yet been through the installation checks on a clean machine. To build the app yourself instead, follow
 [the source-build instructions](DEVELOPMENT.md#development).
 
 From that release page, download `KnegisWhisper_0.2.0_windows_x64_setup.exe` and its

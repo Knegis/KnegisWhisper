@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: Security vulnerability
-    url: https://github.com/Knegis/KnegisWhisper/blob/main/SECURITY.md
-    about: Read the private reporting policy. Never include credentials in an issue.
+    url: https://github.com/Knegis/KnegisWhisper/security/advisories/new
+    about: Report privately; only you and the maintainers see it. Never include credentials in an issue.
   - name: Getting started
     url: https://github.com/Knegis/KnegisWhisper/blob/main/docs/GETTING_STARTED.md
     about: Installation, model setup and your first dictation.

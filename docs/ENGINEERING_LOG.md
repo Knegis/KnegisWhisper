@@ -13,6 +13,43 @@ maintained in place rather than appended to, because its purpose is to be curren
 ---
 
 
+## 2026-11-16 — The repository is public, with rulesets
+
+The owner made the repository public after publishing v0.2.0. They asked that nobody can force-push
+or delete, and that every pull request needs their approval. The three rulesets are listed in
+[repository rules](RELEASING.md#repository-rules).
+
+**Why admins may merge without the approval, but only in a pull request.** GitHub never lets an
+author approve their own pull request, and the owner is the only person with write access. A
+required approval with no bypass would leave every `dev`→`main` pull request unmergeable. The
+bypass is limited to pull requests, so a direct push, force push or deletion on `main` is refused
+for the owner too. Approvals from people without write access don't count, so today nothing merges
+without the owner.
+
+**Why `dev` has no pull-request rule.** Work lands on `dev` by direct push. A pull-request rule
+there would need an always-on bypass, and a bypass covers its whole ruleset, force pushes and
+deletion included. If someone is ever given write access, `dev` needs a separate pull-request
+ruleset.
+
+**Why tag creation stays open.** Restricting it with no bypass would stop the owner tagging a
+release. Moving and deleting a `v*` tag are refused, which `docs/RELEASING.md` already asked for
+in words.
+
+Workflows on pull requests from outside contributors now wait for approval for every outside
+contributor, not only first-timers. The workflow token was already read-only and unable to approve
+pull requests.
+
+**What was checked, and what wasn't.** GitHub's rules endpoint lists deletion, non-fast-forward and
+a one-approval pull-request rule on `main`, deletion and non-fast-forward on `dev`, and nothing on
+other branches. That reads the configuration back; nobody attempted a refused push. An
+unauthenticated `curl` of the release list the update check reads returned 200 with v0.2.0 and
+v0.1.1; no installed app has sent that request yet (KNEG-558).
+
+**Private vulnerability reporting** was turned on the same day. Until then the policy named only
+"an existing private channel", which an outside reporter doesn't have. `SECURITY.md` and the
+issue chooser's security link now point to the report form. The signed-out Security tab shows
+**Report a vulnerability**; no test report was filed.
+
 ## 2026-11-13 — First real calendar accounts, and Outlook grants that didn't fit (KNEG-559, KNEG-82)
 
 **What happened.** The owner registered both app-owned clients and connected real accounts to

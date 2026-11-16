@@ -2,9 +2,9 @@
 
 ## Reporting
 
-Follow the [root reporting policy](../SECURITY.md). The repository is currently private and
-GitHub private vulnerability reporting is unavailable. Contact a maintainer through an existing
-private channel; do not file a public issue for an unfixed vulnerability.
+Follow the [root reporting policy](../SECURITY.md): report through GitHub private vulnerability
+reporting, on the repository's **Security** tab. Do not file a public issue for an unfixed
+vulnerability.
 
 ## Threat model
 
@@ -166,8 +166,8 @@ verification and enable signed artifacts before using it:
    repository secret and, before that, on whatever machine ran step 1.
 
 No updater signing is in place today. That does not block a notice linking to a
-release page. The check needs a public repository; while it is private, every
-check reports "No public release could be found". Installed v0.1.1 still has the
+release page. The check needs a public repository, which this is
+(checked 16 November 2026). Installed v0.1.1 still has the
 old key gate and reports "Update checking is not securely configured". Its users
 must download v0.2.0 by hand.
 

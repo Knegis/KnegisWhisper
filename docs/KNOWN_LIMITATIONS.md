@@ -15,8 +15,8 @@ clean machine were run, so those checks are still to come.
 There is no automatic update installation and no updater signing. v0.2.0 and later
 run an automatic check once a day and link to a newer release page. The switch is
 "Check for updates automatically" on Settings > Diagnostics, on by default.
-The check downloads and installs nothing. It needs a public repository; while the
-repository is private, every check reports "No public release could be found".
+The check downloads and installs nothing. It needs a public repository, which this
+is (checked 16 November 2026); no installed v0.2.0 has run a check against it yet.
 v0.1.1 still reports "Update checking is not securely configured". Those users
 must download v0.2.0 by hand.
 
