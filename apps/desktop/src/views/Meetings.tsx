@@ -190,6 +190,7 @@ import {
   sameMeetingStart,
   summaryPrivacyLine,
 } from "../lib/meetingView";
+import { interruptedMeta, interruptedNotice } from "../lib/interruptedNotice";
 import type { ViewId } from "../lib/navigation";
 import { localProviderProblem, meetingReadiness } from "../lib/readiness";
 import { summaryConfigured } from "../lib/summaryConfigured";
@@ -908,9 +909,36 @@ export function Meetings({
         </div>
       ) : null}
       {recent === null && recentRead.error === null ? <p className="history-note">Loading recent meetings…</p> : null}
-      {recent !== null && recent.length === 0 ? <p className="history-note">No meetings saved yet.</p> : null}
+      {recent !== null && recent.length === 0 && recoverable.length === 0 ? <p className="history-note">No meetings saved yet.</p> : null}
       {(recent !== null && recent.length > 0) || recoverable.length > 0 ? (
         <div className={compact ? "recent-pills" : "recent-grid"}>
+          {/* Interrupted recordings first: a meeting with no note yet is the one to act on, and
+              after twenty saved ones it was below everything else. */}
+          {recoverable.map((candidate) => {
+            // The name it was given before Start, from the plan Rust kept
+            // beside it (KNEG-365); otherwise when it started. The storage key
+            // is the title's tooltip.
+            const title = candidate.title ?? interruptedTitle(candidate.storageKey, now);
+            return compact ? (
+              <div className="recent-pill recent-pill-interrupted" key={candidate.storageKey}>
+                <span className="recent-interrupted-label">interrupted</span>
+                <span className="recent-title" title={candidate.storageKey}>{title}</span>
+                {recoverButton(candidate, title)}
+              </div>
+            ) : (
+              <div className="recent-interrupted" key={candidate.storageKey}>
+                <span className="recent-interrupted-label">interrupted</span>
+                <span className="recent-interrupted-body">
+                  <span className="recent-interrupted-title" title={candidate.storageKey}>{title}</span>
+                  <span className="recent-interrupted-meta">
+                    <span className="recent-interrupted-mark" aria-hidden="true" />
+                    {interruptedMeta(candidate)}
+                  </span>
+                </span>
+                {recoverButton(candidate, title)}
+              </div>
+            );
+          })}
           {(recent ?? []).map((note, position) => {
             const meta = recentMeta(note.createdAt, note.audioDurationSeconds, now).toLowerCase();
             return compact ? (
@@ -930,31 +958,6 @@ export function Meetings({
                 </span>
                 {meta === "" ? null : <span className="recent-meta">{meta}</span>}
               </button>
-            );
-          })}
-          {recoverable.map((candidate) => {
-            // The name it was given before Start, from the plan Rust kept
-            // beside it (KNEG-365); otherwise when it started. The storage key
-            // is the title's tooltip.
-            const title = candidate.title ?? interruptedTitle(candidate.storageKey, now);
-            return compact ? (
-              <div className="recent-pill recent-pill-interrupted" key={candidate.storageKey}>
-                <span className="recent-interrupted-label">interrupted</span>
-                <span className="recent-title" title={candidate.storageKey}>{title}</span>
-                {recoverButton(candidate, title)}
-              </div>
-            ) : (
-              <div className="recent-interrupted" key={candidate.storageKey}>
-                <span className="recent-interrupted-label">interrupted</span>
-                <span className="recent-interrupted-body">
-                  <span className="recent-interrupted-title" title={candidate.storageKey}>{title}</span>
-                  <span className="recent-interrupted-meta">
-                    <span className="recent-interrupted-mark" aria-hidden="true" />
-                    Not transcribed{candidate.hasNotes ? " · Typed notes found" : ""}
-                  </span>
-                </span>
-                {recoverButton(candidate, title)}
-              </div>
             );
           })}
         </div>
@@ -1201,7 +1204,7 @@ export function Meetings({
                 {finishing ? (
                   <div className="live-finishing">
                     <span className="live-finishing-pill"><MeetingProgress progress={finalisation} /></span>
-                    <span className="live-finishing-note">Your recording and notes are being preserved. Recovery or speaker analysis may take longer.</span>
+                    <span className="live-finishing-note">Your recording and typed notes are kept on this computer while the note is made. Long recordings take longer.</span>
                   </div>
                 ) : null}
                 {savedOutcome !== null ? (
@@ -1471,8 +1474,8 @@ export function Meetings({
               {recoverable.length > 0 ? (
                 <>
                   <p className="caveat">
-                    A recording from an earlier session was interrupted. Recover
-                    it from Recent, below; the audio may end abruptly.
+                    {interruptedNotice(recoverable) ?? "A recording from an earlier session has no note."}{" "}
+                    Recover it from Recent, below; the audio may end abruptly.
                   </p>
                   <LearnMore>
                     <p>

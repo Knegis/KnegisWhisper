@@ -164,6 +164,7 @@ fn render() -> String {
             kw_notes_core::summary::SummarySettings,
             kw_notes_core::summary::SummaryReference,
             kw_notes_core::summary::SummaryState,
+            kw_notes_core::speaker_labels::SpeakerLabelState,
             crate::summaries::SummarySetupTarget,
             crate::summaries::SummaryReadiness,
             crate::reasoning::CleanupSettings,

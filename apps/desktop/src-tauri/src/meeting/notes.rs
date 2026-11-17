@@ -262,52 +262,37 @@ pub(super) fn labelled(
         return (vec![segment(&pass.text, 0.0, None)], note);
     }
 
-    let spans: Vec<(f64, f64)> = pass.timings.iter().map(|s| (s.start, s.end)).collect();
-    let assigned = turns.map(|turns| kw_meeting_core::diarization::assign(turns, &spans));
-
-    let mut segments = Vec::with_capacity(pass.timings.len());
-    let mut unattributed = 0_usize;
-    for (at, timed) in pass.timings.iter().enumerate() {
-        let speaker = assigned
-            .as_ref()
-            .and_then(|all| all.get(at).copied().flatten());
-        if assigned.is_some() && speaker.is_none() {
-            unattributed = unattributed.saturating_add(1);
-        }
-        segments.push(kw_notes_core::transcript::Segment {
+    let mut segments: Vec<_> = pass
+        .timings
+        .iter()
+        .map(|timed| kw_notes_core::transcript::Segment {
             text: timed.text.trim().to_owned(),
             timestamp: Some(timed.start),
             end_timestamp: Some(timed.end),
-            speaker: speaker.map(|n| format!("speaker_{n}")),
-            // A generated placeholder, and flagged as one so a name somebody
-            // types later wins over it. `Speaker 1` is not a name and this is
-            // the field that says so.
-            speaker_name: speaker.map(|n| {
-                kw_meeting_core::diarization::Turn {
-                    start_seconds: timed.start,
-                    end_seconds: timed.end,
-                    speaker: n,
-                }
-                .label()
-            }),
-            speaker_is_placeholder: speaker.is_some(),
+            speaker: None,
+            speaker_name: None,
+            speaker_is_placeholder: false,
             source: None,
             // Whisper's words for the passage, so its row highlights word by
             // word as the recording plays (KNEG-408). The text is trimmed
             // here and the words are not; the row compares them with
             // whitespace aside, so the trim costs nothing.
             words: crate::transcript_words::stored_words(&timed.words),
-        });
-    }
+        })
+        .collect();
+    // One implementation of attaching turns to passages: the one that labels
+    // a saved note afterwards.
+    let unattributed = turns.map_or(0, |turns| {
+        crate::speaker_labels::apply_turns(&mut segments, turns, 0.0)
+    });
 
     let note = match (turns, wanted) {
         // Asked for, ran, and left some of the transcript unattributed. Said
         // out loud because a reader seeing most segments labelled and some not
         // would otherwise read the blanks as a person who said nothing.
-        (Some(_), _) if unattributed > 0 => Some(format!(
-            "{unattributed} of {} passages carry no speaker: the diarization pass found no \
-             voice covering them.",
-            segments.len()
+        (Some(_), _) if unattributed > 0 => Some(crate::speaker_labels::unattributed_sentence(
+            unattributed,
+            segments.len(),
         )),
         (Some(_), _) => None,
         // Asked for and nothing ran. The caller has already decided why; this
@@ -320,6 +305,31 @@ pub(super) fn labelled(
         (None, false) => None,
     };
     (segments, note)
+}
+
+/// The whole-recording pass as the note saves it: without speakers, which
+/// are added once the note exists (`crate::speaker_labels`). The sentence is
+/// present only when they were asked for and this pass has no timings to
+/// attach them to, so there is nothing to add later either.
+pub(super) fn unlabelled(
+    pass: &WholePass,
+    speakers_wanted: bool,
+) -> (Vec<kw_notes_core::transcript::Segment>, Option<String>) {
+    labelled(pass, None, speakers_wanted && pass.timings.is_empty())
+}
+
+/// Whether speaker labels can be added to `saved` after its note is saved:
+/// a whole transcript with timings, and no speakers of its provider's own.
+/// The running transcript kept because the whole-recording pass failed is
+/// overlapping windows, which never were labelled.
+pub(super) fn can_label(saved: &SavedTranscript) -> bool {
+    !saved.from_partials
+        && saved.speaker_note.is_none()
+        && !saved.segments.is_empty()
+        && saved
+            .segments
+            .iter()
+            .all(|segment| segment.speaker.is_none())
 }
 
 #[cfg(test)]

@@ -122,6 +122,7 @@ See the [audit record](UNINSTALL_AUDIT.md) for versions and evidence.
 | Installed executable, bundled resources and app shortcuts | Removed by ordinary uninstall | Removed by ordinary uninstall |
 | Notes, transcripts, summaries, settings, dictation history and saved voice data in `%APPDATA%\KnegisWhisper\knegiswhisper.db` | Kept | Kept |
 | Retained recordings and recovery files in `%APPDATA%\KnegisWhisper\meetings` | Kept | Kept |
+| The application's log in `%APPDATA%\KnegisWhisper\logs` | Kept | Kept |
 | Downloaded models, runtimes and temporary audio under `%APPDATA%\KnegisWhisper` | Kept | Kept |
 | Fallback models and temporary audio under `%ProgramData%\KnegisWhisper\cache` | Kept | Kept |
 | Provider keys and calendar tokens in Windows Credential Manager | Kept | Kept |

@@ -667,15 +667,9 @@ mod tests {
         assert_saved(&db, discarded, snapshot).await;
         // API stop delegates to the same runtime Stop; exercise its shared seam
         // without starting microphone capture or connecting a live provider.
-        let (api, _) = create_meeting_note_with_voices(
-            &db,
-            note(),
-            &plan,
-            None,
-            &kw_notes_core::known_voices::Analysis::default(),
-        )
-        .await
-        .unwrap();
+        let (api, _) = create_meeting_note_labelling(&db, note(), &plan, None, None)
+            .await
+            .unwrap();
         assert_saved(&db, api, snapshot).await;
         let (recovered_path, _) = recording_start(dir.path(), at(), uuid::Uuid::new_v4());
         std::fs::write(&recovered_path, b"fixture recording").unwrap();

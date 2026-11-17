@@ -2405,6 +2405,11 @@ button.microphone-language-toggle:hover:not(:disabled) { background: transparent
 .app-titlebar-buttons button:active:not(:disabled) { background: var(--band); color: var(--band-ink); }
 .app-titlebar-buttons button.window-close:hover:not(:disabled) { background: var(--signal); color: #000; }
 .app-titlebar-buttons button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* A meeting that was cut short, said from any screen but Meetings: under the title bar, at the end, as the window's own notices are. */
+.interrupted-notice { position: fixed; top: calc(var(--titlebar-height) + 8px); right: 12px; z-index: 1000; width: min(26rem, calc(100vw - 24px)); padding: 14px 16px 12px; background: var(--panel); color: var(--text); border-radius: var(--r-card); box-shadow: var(--card-shadow); font-size: 13px; line-height: 20px; animation: kw-enter .5s var(--ease-enter) both; }
+.interrupted-notice p { margin: 0; }
+.interrupted-notice-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.interrupted-notice button { margin: 0; height: 28px; padding: 0 12px; font-size: 13px; }
 .window-control-error { position: fixed; top: var(--titlebar-height); right: 12px; z-index: 1001; max-width: 32rem; padding: 12px 16px; background: var(--panel); color: var(--text); border-radius: var(--r-card); box-shadow: var(--card-shadow); animation: kw-enter .5s var(--ease-enter) both; }
 
 /*
@@ -2739,6 +2744,13 @@ button.note-people-add:hover:not(:disabled), button.note-people-add[aria-expande
 .recording-player input[type="range"]:disabled::-webkit-slider-thumb { background: var(--muted); }
 .recording-details { margin-bottom: 1rem; color: var(--muted); }
 .recording-details p { white-space: pre-wrap; overflow-wrap: anywhere; }
+/* A meeting note's speaker labels, over its transcript: still coming, failed, or left out. The note is whole either way, so this is
+ * a line and its two buttons, not a banner. */
+.speaker-label-status { margin: 12px 20px; font-size: 13px; line-height: 20px; }
+.speaker-label-status p { margin: 0; overflow-wrap: anywhere; }
+.speaker-label-status .speaker-label-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.speaker-label-status button { margin: 0; padding: 0 12px; height: 28px; font-size: 13px; }
+.speaker-label-status .failure-line { margin: 0; }
 /* The Transcript tab's transcript pulls out 20px each side, its lines' own inset, so their text starts where the note title's does
  * and their hovers and fills reach 20px past it (KNEG-448). */
 .note-workspace .transcript { margin-inline: -20px; }

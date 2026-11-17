@@ -31,23 +31,20 @@ pub(super) async fn create_meeting_note(
     plan: &MeetingPlan,
     recording: Option<(&str, f64)>,
 ) -> Result<(i64, bool), kw_storage::StorageError> {
-    create_meeting_note_with_voices(
-        db,
-        note,
-        plan,
-        recording,
-        &kw_notes_core::known_voices::Analysis::default(),
-    )
-    .await
+    create_meeting_note_labelling(db, note, plan, recording, None).await
 }
 
-pub(super) async fn create_meeting_note_with_voices(
+/// [`create_meeting_note`], queueing the note's speaker labels with it when
+/// `speakers` asks for them (`kw_notes_core::speaker_labels`).
+pub(super) async fn create_meeting_note_labelling(
     db: &Db,
     mut note: kw_notes_core::notes::NewNote,
     plan: &MeetingPlan,
     recording: Option<(&str, f64)>,
-    samples: &kw_notes_core::known_voices::Analysis,
+    speakers: Option<kw_notes_core::speaker_labels::Request>,
 ) -> Result<(i64, bool), kw_storage::StorageError> {
+    // Recognition results are saved by the speaker-label job, not here.
+    let samples = &kw_notes_core::known_voices::Analysis::default();
     note.calendar_event_id = plan.calendar.as_ref().map(|event| event.event_id.clone());
     if note.participants.is_none() {
         if let Some(event) = plan
@@ -68,13 +65,20 @@ pub(super) async fn create_meeting_note_with_voices(
             plan.folder_id
         }
     };
-    let id = match kw_notes_core::notes::create_with_voices(db.pool(), &note, recording, samples)
-        .await
+    let id = match kw_notes_core::notes::create_with_voices(
+        db.pool(),
+        &note,
+        recording,
+        samples,
+        speakers,
+    )
+    .await
     {
         Err(error) if note.folder_id.is_some() && error.is_foreign_key_violation() => {
             tracing::warn!(%error, "the meeting's folder was deleted as its note was saved");
             note.folder_id = None;
-            kw_notes_core::notes::create_with_voices(db.pool(), &note, recording, samples).await?
+            kw_notes_core::notes::create_with_voices(db.pool(), &note, recording, samples, speakers)
+                .await?
         }
         result => result?,
     };
@@ -174,6 +178,10 @@ pub(super) struct Stopped {
     pub(super) recording_attached: bool,
     pub(super) recording_removal: Option<RecordingRemoval>,
     pub(super) recording_removal_error: Option<String>,
+    /// Speaker labels are queued for the note. A recording that was to be
+    /// deleted is deleted once they are done, so `recording_removal` is
+    /// `None` until then.
+    pub(super) speaker_labels_pending: bool,
 }
 
 /// Save a stopped meeting's note, attach its recording, then tidy beside it:
@@ -186,6 +194,9 @@ pub(super) struct Stopped {
 /// recovered from it. Deletion (`removal`) comes last, after the attachment,
 /// so a crash before it leaves a recording a note owns rather than one
 /// offered for recovery a second time.
+///
+/// With `label_speakers`, the note's speaker labels are queued with it and
+/// the deletion waits for them: they are worked out from the recording.
 #[cfg(test)]
 pub(super) async fn save_stopped(
     db: &Db,
@@ -195,36 +206,45 @@ pub(super) async fn save_stopped(
     duration_seconds: f64,
     removal: Option<RecordingRemoval>,
 ) -> Result<Stopped, kw_storage::StorageError> {
-    save_stopped_with_voices(
-        db,
-        note,
-        plan,
-        recording,
-        duration_seconds,
-        removal,
-        &kw_notes_core::known_voices::Analysis::default(),
-    )
-    .await
+    save_stopped_labelling(db, note, plan, recording, duration_seconds, removal, false).await
 }
 
-pub(super) async fn save_stopped_with_voices(
+pub(super) async fn save_stopped_labelling(
     db: &Db,
     note: kw_notes_core::notes::NewNote,
     plan: &MeetingPlan,
     recording: &std::path::Path,
     duration_seconds: f64,
     removal: Option<RecordingRemoval>,
-    samples: &kw_notes_core::known_voices::Analysis,
+    label_speakers: bool,
 ) -> Result<Stopped, kw_storage::StorageError> {
+    let speakers = label_speakers.then_some(kw_notes_core::speaker_labels::Request {
+        recognize: true,
+        delete_recording: removal == Some(RecordingRemoval::Deleted),
+    });
     let (note_id, folder_missing) =
-        create_meeting_note_with_voices(db, note, plan, None, samples).await?;
+        create_meeting_note_labelling(db, note, plan, None, speakers).await?;
     let recording_attached =
         attach_meeting_recording(db, note_id, recording, duration_seconds).await;
     let (recording_removal, recording_removal_error) = if recording_attached {
         draft::remove_sidecars(recording);
-        removal::remove_recording(db, note_id, recording, removal).await
+        if speakers.is_some() {
+            // The job holds the deletion until it has read the recording.
+            (None, None)
+        } else {
+            removal::remove_recording(db, note_id, recording, removal).await
+        }
     } else {
         draft::remove_sidecar(recording);
+        if speakers.is_some() {
+            // Nothing to work the labels out from: say so on the note now,
+            // rather than leave it waiting for a recording it will not get.
+            if let Err(error) =
+                kw_notes_core::speaker_labels::fail_unattached(db.pool(), note_id).await
+            {
+                tracing::warn!(%error, note_id, "could not settle the note's speaker labels");
+            }
+        }
         (None, None)
     };
     Ok(Stopped {
@@ -233,6 +253,7 @@ pub(super) async fn save_stopped_with_voices(
         recording_attached,
         recording_removal,
         recording_removal_error,
+        speaker_labels_pending: speakers.is_some() && recording_attached,
     })
 }
 
@@ -294,7 +315,7 @@ pub(super) async fn save_recovered(
     details: &str,
     duration: f64,
 ) -> Result<MeetingOutcome, String> {
-    save_recovered_with_voices(
+    save_recovered_labelling(
         db,
         recording,
         storage_key,
@@ -302,14 +323,14 @@ pub(super) async fn save_recovered(
         segments,
         details,
         duration,
-        &kw_notes_core::known_voices::Analysis::default(),
+        false,
     )
     .await
 }
 
-// Keeps the existing recovery inputs together with its optional analysis result.
+// Keeps the existing recovery inputs together with whether to label speakers.
 #[allow(clippy::too_many_arguments)]
-pub(super) async fn save_recovered_with_voices(
+pub(super) async fn save_recovered_labelling(
     db: &Db,
     recording: &std::path::Path,
     storage_key: &str,
@@ -317,7 +338,7 @@ pub(super) async fn save_recovered_with_voices(
     segments: &[kw_notes_core::transcript::Segment],
     details: &str,
     duration: f64,
-    samples: &kw_notes_core::known_voices::Analysis,
+    label_speakers: bool,
 ) -> Result<MeetingOutcome, String> {
     let plan = match draft::read_plan(recording) {
         Some(plan) => plan,
@@ -342,8 +363,13 @@ pub(super) async fn save_recovered_with_voices(
             .as_ref(),
     )
     .ok_or("The recovered meeting had no content")?;
+    // Known voices are not matched on a recovered meeting, as before.
+    let speakers = label_speakers.then_some(kw_notes_core::speaker_labels::Request {
+        recognize: false,
+        delete_recording: removal == Some(RecordingRemoval::Deleted),
+    });
     let (note_id, folder_missing) =
-        create_meeting_note_with_voices(db, note, &plan, Some((storage_key, duration)), samples)
+        create_meeting_note_labelling(db, note, &plan, Some((storage_key, duration)), speakers)
             .await
             .map_err(|error| {
                 format!(
@@ -353,10 +379,15 @@ pub(super) async fn save_recovered_with_voices(
                 )
             })?;
     draft::remove_sidecars(recording);
-    let (recording_removal, recording_removal_error) =
-        removal::remove_recording(db, note_id, recording, removal).await;
+    let (recording_removal, recording_removal_error) = if speakers.is_some() {
+        // The job holds the deletion until it has read the recording.
+        (None, None)
+    } else {
+        removal::remove_recording(db, note_id, recording, removal).await
+    };
     Ok(MeetingOutcome::Saved {
         note_id,
+        speaker_labels_pending: speakers.is_some(),
         duration_seconds: duration,
         recording_path: recording.display().to_string(),
         recording_attached: true,

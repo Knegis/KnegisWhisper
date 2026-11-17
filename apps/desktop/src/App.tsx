@@ -70,7 +70,8 @@ import { PageHeader } from "./components/PageHeader";
 import { BackToSettings, SettingsSheet } from "./components/SettingsSheet";
 import { ConfirmHost } from "./components/ConfirmDialog";
 import { PanelCollapsed } from "./components/SplitView";
-import { getDiagnostics, getMeetingStatus, onMeetingState, type Diagnostics, type MeetingState } from "./lib/ipc";
+import { getDiagnostics, getMeetingStatus, getRecoverableRecordings, onMeetingState, type Diagnostics, type MeetingState } from "./lib/ipc";
+import { interruptedNotice } from "./lib/interruptedNotice";
 import { eyebrowOf, railOf, type ViewId } from "./lib/navigation";
 import { defaultDestination, initialHistory, navigationHistory, settingsReturnDestination } from "./lib/navigationHistory";
 import { PAGES } from "./lib/pages";
@@ -318,12 +319,36 @@ function Shell() {
   useEffect(() => {
     let disposed = false;
     let stop: (() => void) | undefined;
+    // A meeting cut short -- the application ended while it ran or was being
+    // saved -- has no note, only a row on the Meetings page. Said from every
+    // other screen too, so it is not taken for deleted. Read at launch and
+    // whenever a meeting or a recovery ends; the list is empty while one runs.
+    const readInterrupted = () => {
+      void getRecoverableRecordings().then((found) => { if (!disposed) setCutShort(interruptedNotice(found)); }).catch(() => {});
+    };
     void getMeetingStatus().then((status) => { if (!disposed) setMeetingRecording(capturing(status.state)); }).catch(() => {});
-    void onMeetingState((state) => { if (!disposed) setMeetingRecording(capturing(state)); }).then((unlisten) => {
+    readInterrupted();
+    void onMeetingState((state) => {
+      if (disposed) return;
+      setMeetingRecording(capturing(state));
+      if (state === "idle") readInterrupted();
+    }).then((unlisten) => {
       if (disposed) unlisten(); else stop = unlisten;
     });
     return () => { disposed = true; stop?.(); };
   }, []);
+  const [cutShort, setCutShort] = useState<string | null>(null);
+  const [cutShortDismissed, setCutShortDismissed] = useState(false);
+  // Not on Meetings: that page says it itself, beside the row that recovers it.
+  const cutShortNotice = cutShort !== null && !cutShortDismissed && view !== "meetings" ? (
+    <div className="interrupted-notice" role="status">
+      <p>{cutShort}</p>
+      <div className="interrupted-notice-actions">
+        <button type="button" className="secondary" onClick={() => select("meetings")}>Recover in Meetings</button>
+        <button type="button" onClick={() => setCutShortDismissed(true)}>Not now</button>
+      </div>
+    </div>
+  ) : null;
 
   const titlebar = <TitleBar view={view} onSelect={select} sheetOpen={sheetOpen} onOpenSheet={openSheet}
     onOpenNote={openNote} meetingRecording={meetingRecording}
@@ -336,6 +361,7 @@ function Shell() {
     <>{titlebar}<div className="frame">
       <main className="card">{card}</main>
     </div>
+    {cutShortNotice}
     <SettingsSheet open={sheetOpen} view={view} version={diagnostics?.appVersion ?? null} onSelect={selectFromSheet} onHide={() => setSheetOpen(false)} onDismiss={dismissSheet} /></>
   );
 

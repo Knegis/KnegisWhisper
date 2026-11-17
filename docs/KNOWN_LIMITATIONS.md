@@ -34,6 +34,12 @@ fixture tests and a new installer build do not establish that result.
   recordings; see [the measured findings](PARAKEET_BENCHMARK.md).
 - Replay seeks use available segment timings. Recordings without those timings
   can have only a whole-recording playback cue.
+- A meeting's note is saved once its whole recording is transcribed. If the application ends
+  before that, there is no note: the recording and typed notes stay in the `meetings` folder,
+  the window says so on its next launch, and Meetings offers **Recover**. Speaker labels are
+  added after the note is saved, so a failure there costs only the labels. Neither has been
+  tried by ending the real application mid-meeting; see
+  [interrupted meeting recovery](KNEG_316_MEETING_RECOVERY.md).
 - Google Calendar and Outlook offer app-owned one-click Connect or an Advanced custom client
   and bounded snapshot sync. On 2026-11-13 a development build carrying the app-owned values
   connected a personal Google account and a personal Outlook.com account and synced them; no

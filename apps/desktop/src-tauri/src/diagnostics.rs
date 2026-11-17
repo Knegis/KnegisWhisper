@@ -40,6 +40,9 @@ pub struct Diagnostics {
     /// Where the model cache ended up, and whether the per-user location had to
     /// be abandoned because the native ASR binaries cannot read it.
     pub model_cache: ModelCacheStatus,
+    /// Where the application writes its log, and a panic before it ends
+    /// (`crate::logging`). What somebody reporting a crash is asked to attach.
+    pub log_file: String,
     /// Whether a modifier-only shortcut can work here.
     ///
     /// Reported rather than assumed by the UI. The hotkey editor has to say
@@ -171,6 +174,7 @@ pub fn diagnostics(app: AppHandle) -> Diagnostics {
             path: cache.path.display().to_string(),
             fell_back: cache.fell_back,
         },
+        log_file: crate::logging::log_path().display().to_string(),
     }
 }
 

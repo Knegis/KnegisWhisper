@@ -241,6 +241,13 @@ exists. Kept wording describes this meeting's choice, regardless of the current
 setting. A failed attachment leaves no kept claim on the first note; its recording
 and plan remain eligible for Interrupted recovery.
 
+A meeting saved with speaker labels switched on has them added afterwards, by a job on the
+note. The job reads the recording, so a recording set to be deleted is deleted only once the job
+succeeds or the person presses **Continue without speaker labels**; while the job is failed or
+interrupted the recording stays, because it is the only way to retry. The note's automatic summary
+waits for the job in the same way, since it names the speakers. See
+[speaker labels after the save](KNEG_316_MEETING_RECOVERY.md#speaker-labels-after-the-save).
+
 Deletion first establishes durable intent and performs a full WAL checkpoint,
 then removes the attachment, sets the marker to deleted, removes the file and
 commits within one writer transaction. A failed removal rolls back the attachment

@@ -143,6 +143,12 @@ export function DiagnosticsView({ diagnostics }: { diagnostics: Diagnostics }) {
               }
             : {})}
         />
+        <Row
+          label="Log file"
+          code
+          value={diagnostics.logFile}
+          detail="kept on this computer; attach it when reporting a crash"
+        />
       </section>
 
       <section>

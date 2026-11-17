@@ -25,12 +25,20 @@ const saved = {
   folderMissing: false,
   recordingRemoval: null,
   recordingRemovalError: null,
+  speakerLabelsPending: false,
 } as const;
 
 test("a saved meeting says so plainly, with the note id and path behind Learn more", () => {
   const label = meetingOutcomeLabel(saved);
   assert.equal(label.text, "Saved as a note (5 min).");
   assert.equal(label.more, `Note 42. The recording is at ${PATH}.`);
+});
+
+// The note is saved before its speakers are analysed, so the meeting ends
+// with a note and a sentence that more is coming, not with a wait.
+test("a saved meeting whose speaker labels are still coming says so", () => {
+  const label = meetingOutcomeLabel({ ...saved, speakerLabelsPending: true });
+  assert.equal(label.text, "Saved as a note (5 min). Speaker labels are being added to the note.");
 });
 
 test("what is missing from a saved transcript stays in view", () => {

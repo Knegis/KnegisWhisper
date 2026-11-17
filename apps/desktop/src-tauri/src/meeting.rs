@@ -119,8 +119,8 @@ use config::{
 #[cfg(test)]
 use notes::segment;
 use notes::{
-    labelled, pcm_bytes, select_transcript, transcribed_by, whisper_for_note, SavedTranscript,
-    WholePass,
+    can_label, pcm_bytes, select_transcript, transcribed_by, unlabelled, whisper_for_note,
+    SavedTranscript, WholePass,
 };
 pub use recorder::Delivered;
 use recorder::{spawn_recorder, Drained, Finished, Recorder, RecorderCommand, RecorderEnd};
@@ -534,6 +534,9 @@ pub enum MeetingOutcome {
         recording_removal: Option<RecordingRemoval>,
         /// Why deleting it failed, with `RecordingRemoval::DeleteFailed`.
         recording_removal_error: Option<String>,
+        /// Speaker labels are being added to the saved note. A recording
+        /// that was to be deleted is deleted once they are done.
+        speaker_labels_pending: bool,
     },
     /// Nothing was transcribed, and what the two captures delivered.
     ///
@@ -1269,18 +1272,18 @@ impl MeetingRuntime {
         })?;
         // Automatic, whatever was chosen since: the meeting it came from may
         // not have been on the `local` provider at all.
-        let mut voice_samples = kw_notes_core::known_voices::Analysis::default();
+        // Speaker labels are added once the note is saved, as for Stop.
+        let speakers_wanted = crate::diarization::is_enabled(&self.db).await;
         let (segments, speaker_note, transcription_error) =
             match self.transcribe_whole(&path, None).await {
                 Ok(Some(pass)) => {
-                    let (segments, speaker_note) = self
-                        .with_speakers(pass, &path, &mut voice_samples, false)
-                        .await;
+                    let (segments, speaker_note) = unlabelled(&pass, speakers_wanted);
                     (segments, speaker_note, None)
                 }
                 Ok(None) => (Vec::new(), None, None),
                 Err(error) => (Vec::new(), None, Some(error)),
             };
+        let label_speakers = speakers_wanted && speaker_note.is_none() && !segments.is_empty();
         if segments.is_empty() && notes.trim().is_empty() {
             return Err(format!(
                 "No note was saved from {}: {}. The recording remains available for another attempt.",
@@ -1300,7 +1303,7 @@ impl MeetingRuntime {
             details.push_str(&format!(" {speaker_note}"));
         }
         self.progress_stage(FinalisationStage::SavingNote).await;
-        save_recovered_with_voices(
+        save_recovered_labelling(
             &self.db,
             &path,
             storage_key,
@@ -1308,7 +1311,7 @@ impl MeetingRuntime {
             &segments,
             &details,
             duration,
-            &voice_samples,
+            label_speakers,
         )
         .await
     }
@@ -1446,6 +1449,9 @@ impl MeetingRuntime {
         // Keep recording if writing fails, but drop the calendar link in memory
         // too: Stop must not link what Recover could never discover on disk.
         calendar_link::persist_start(&path, &mut plan, &mut notice);
+        // There until this meeting ends where the application can see it, so
+        // one that never does is told from a recording left on purpose.
+        draft::mark_unfinished(&path);
 
         // The pump announces its own ending, which is the whole of KNEG-95's
         // fix: until now the failure was detected at second zero and reported
@@ -1569,6 +1575,8 @@ impl MeetingRuntime {
             .await;
         // The note is saved, so nothing needs the meeting's model any more.
         drop(model_loan);
+        // Whatever the outcome, the meeting ended here and not in a crash.
+        draft::clear_unfinished(&recording_path);
 
         self.end_progress(generation).await;
         if self.lifecycle.lock().await.finished(generation) {
@@ -1704,6 +1712,7 @@ impl MeetingRuntime {
             tracing::warn!(error = %err, "the transcription task failed while cancelling");
         }
         self.release_stream(live.stream_lease).await;
+        draft::clear_unfinished(&recording_path);
         if self.lifecycle.lock().await.finished(generation) {
             self.emit_state(MeetingState::Idle);
             crate::meeting_window::hide(&self.app);
@@ -1890,7 +1899,11 @@ impl MeetingRuntime {
             );
         }
 
-        let mut voice_samples = kw_notes_core::known_voices::Analysis::default();
+        // Speaker labels are not worked out here. The note is saved first and
+        // they are added to it afterwards (`crate::speaker_labels`): the
+        // analysis takes minutes, and a note that does not exist yet is lost
+        // with whatever ends the application during them.
+        let speakers_wanted = crate::diarization::is_enabled(&self.db).await;
         let saved = select_transcript(
             provider_id,
             &transcript,
@@ -1902,9 +1915,7 @@ impl MeetingRuntime {
                     .transcribe_whole(&finished.path, save.whole_pass_model.as_deref())
                     .await?
                 {
-                    Some(pass) => Ok(self
-                        .with_speakers(pass, &finished.path, &mut voice_samples, true)
-                        .await),
+                    Some(pass) => Ok(unlabelled(&pass, speakers_wanted)),
                     None => Ok((Vec::new(), None)),
                 }
             },
@@ -1912,18 +1923,7 @@ impl MeetingRuntime {
         .await;
         // The route of the text being saved, not of the live view (KNEG-368).
         let made_by = transcribed_by(provider_id, &saved);
-        let saved = if saved.used_streaming {
-            let (segments, speaker_note) = self
-                .with_streaming_speakers(saved.segments, &finished, &mut voice_samples)
-                .await;
-            SavedTranscript {
-                segments,
-                speaker_note,
-                ..saved
-            }
-        } else {
-            saved
-        };
+        let label_speakers = speakers_wanted && can_label(&saved);
         let from_partials = saved.from_partials;
 
         if saved.segments.is_empty() && notes.trim().is_empty() {
@@ -1964,19 +1964,20 @@ impl MeetingRuntime {
             };
         };
         self.progress_stage(FinalisationStage::SavingNote).await;
-        match save_stopped_with_voices(
+        match save_stopped_labelling(
             &self.db,
             note,
             &save.plan,
             &finished.path,
             finished.duration_seconds,
             removal,
-            &voice_samples,
+            label_speakers,
         )
         .await
         {
             Ok(stopped) => MeetingOutcome::Saved {
                 note_id: stopped.note_id,
+                speaker_labels_pending: stopped.speaker_labels_pending,
                 duration_seconds: finished.duration_seconds,
                 recording_path: path,
                 recording_attached: stopped.recording_attached,
@@ -2002,116 +2003,6 @@ impl MeetingRuntime {
                         }
                     ),
                 }
-            }
-        }
-    }
-
-    /// Optional speaker analysis uses the existing streaming text and never
-    /// invokes ASR again. Native provider labels already identify speakers.
-    async fn with_streaming_speakers(
-        &self,
-        mut segments: Vec<kw_notes_core::transcript::Segment>,
-        finished: &Finished,
-        voice_samples: &mut kw_notes_core::known_voices::Analysis,
-    ) -> (Vec<kw_notes_core::transcript::Segment>, Option<String>) {
-        if segments.is_empty()
-            || segments.iter().any(|s| s.speaker.is_some())
-            || !crate::diarization::is_enabled(&self.db).await
-        {
-            return (segments, None);
-        }
-        let pass = WholePass {
-            text: String::new(),
-            timings: segments
-                .iter()
-                .enumerate()
-                .map(|(index, saved)| {
-                    let start = saved.timestamp.unwrap_or_default();
-                    let end = segments
-                        .iter()
-                        .skip(index + 1)
-                        .find(|next| next.source == saved.source)
-                        .and_then(|next| next.timestamp)
-                        .unwrap_or(finished.duration_seconds)
-                        .max(start);
-                    kw_transcription_core::local::TimedSegment {
-                        text: saved.text.clone(),
-                        start,
-                        end,
-                        // Only the spans are read back from the labelling.
-                        words: Vec::new(),
-                    }
-                })
-                .collect(),
-        };
-        let (labelled, note) = self
-            .with_speakers(pass, &finished.path, voice_samples, true)
-            .await;
-        for (saved, labelled) in segments.iter_mut().zip(labelled) {
-            saved.end_timestamp = labelled.end_timestamp;
-            saved.speaker = labelled.speaker;
-            saved.speaker_name = labelled.speaker_name;
-            saved.speaker_is_placeholder = labelled.speaker_is_placeholder;
-        }
-        (segments, note)
-    }
-
-    /// Run the diarizer if it was asked for, and label the pass.
-    ///
-    /// Failure here is never fatal: a note with no speaker labels is worth far
-    /// more than no note, so a diarization that could not run degrades to the
-    /// unlabelled transcript **and a sentence saying so**. Silence would be the
-    /// defect -- a user who turned the setting on would read an unlabelled note
-    /// and conclude the meeting had one speaker.
-    async fn with_speakers(
-        &self,
-        pass: WholePass,
-        recording: &std::path::Path,
-        voice_samples: &mut kw_notes_core::known_voices::Analysis,
-        recognize: bool,
-    ) -> (Vec<kw_notes_core::transcript::Segment>, Option<String>) {
-        let wanted = crate::diarization::is_enabled(&self.db).await;
-        if !wanted {
-            return labelled(&pass, None, false);
-        }
-        self.progress_stage(FinalisationStage::AnalysingSpeakers)
-            .await;
-        match crate::diarization::turns(recording).await {
-            Ok(Some(turns)) => {
-                let (segments, mut note) = labelled(&pass, Some(&turns), true);
-                match crate::known_voices::extract(&self.db, recording, &turns, recognize).await {
-                    Ok(samples) => {
-                        if samples.warning.is_some() {
-                            note = samples.warning.clone();
-                        }
-                        *voice_samples = samples;
-                    }
-                    Err(error) => {
-                        note = Some(format!(
-                            "Known voices could not run: {error}. Speaker labels were preserved."
-                        ))
-                    }
-                }
-                (segments, note)
-            }
-            Ok(None) => {
-                let (segments, _) = labelled(&pass, None, false);
-                (
-                    segments,
-                    Some(
-                        "Speaker labels are switched on but could not run: the diarization \
-                         models or runtime are not installed."
-                            .to_owned(),
-                    ),
-                )
-            }
-            Err(err) => {
-                tracing::warn!(error = %err, "the diarization pass failed; keeping the transcript");
-                let (segments, _) = labelled(&pass, None, false);
-                (
-                    segments,
-                    Some(format!("Speaker labels could not be produced: {err}")),
-                )
             }
         }
     }
@@ -3001,8 +2892,10 @@ mod tests {
             folder_missing: true,
             recording_removal: Some(RecordingRemoval::DeleteFailed),
             recording_removal_error: Some("could not delete C:/x.wav".to_owned()),
+            speaker_labels_pending: true,
         };
         let json = serde_json::to_value(&outcome).unwrap();
+        assert_eq!(json["speakerLabelsPending"], true);
         assert_eq!(json["outcome"], "saved");
         assert_eq!(json["noteId"], 7);
         assert_eq!(json["recordingAttached"], false);
@@ -3652,6 +3545,135 @@ mod tests {
             note_details(&db, saved.note_id).await.as_deref(),
             Some("Recording sources: microphone.")
         );
+    }
+
+    async fn speaker_job(db: &kw_storage::Db, note_id: i64) -> Option<String> {
+        kw_notes_core::speaker_labels::state(db.pool(), note_id)
+            .await
+            .unwrap()
+            .map(|state| state.status)
+    }
+
+    async fn summaries_on(db: &kw_storage::Db) {
+        kw_storage::settings::set(
+            db.pool(),
+            kw_notes_core::summary::SETTINGS_KEY,
+            &kw_notes_core::summary::SummarySettings {
+                enabled: true,
+                provider: "local".into(),
+                model: "fixture".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    async fn summary_jobs(db: &kw_storage::Db) -> i64 {
+        sqlx::query_scalar("SELECT count(*) FROM note_summary_jobs")
+            .fetch_one(db.pool())
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_stopped_meeting_is_saved_whole_before_its_speakers_are_analysed() {
+        // The defect this exists for: the note used to be written after the
+        // speaker analysis, so a process that died during it left no note.
+        // Nothing here runs a diarizer, and the note, its transcript and its
+        // recording are all there. The recording was to be deleted and is
+        // not: the labels are worked out from it.
+        let db = kw_storage::Db::open_in_memory().await.unwrap();
+        summaries_on(&db).await;
+        let dir = tempfile::tempdir().unwrap();
+        let plan = told(true);
+        let wav = stopped(dir.path(), &plan);
+
+        let saved = save_stopped_labelling(
+            &db,
+            transcribed(),
+            &plan,
+            &wav,
+            12.0,
+            removal::recording_removal(true, true, false),
+            true,
+        )
+        .await
+        .unwrap();
+
+        assert!(saved.speaker_labels_pending);
+        assert!(saved.recording_attached);
+        assert_eq!(saved.recording_removal, None);
+        assert!(wav.exists());
+        let note = kw_notes_core::notes::get(db.pool(), saved.note_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(note.transcript.is_some());
+        assert_eq!(
+            speaker_job(&db, saved.note_id).await.as_deref(),
+            Some("queued")
+        );
+        // The summary names speakers, so it waits for them.
+        assert_eq!(summary_jobs(&db).await, 0);
+        assert!(recovery::scan(&db, dir.path()).await.unwrap().is_empty());
+        assert!(
+            kw_notes_core::recording_state::get(db.pool(), saved.note_id, dir.path())
+                .await
+                .unwrap()
+                .is_none(),
+            "no deletion is requested while the labels are waiting"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_meeting_whose_recording_could_not_be_attached_says_its_labels_cannot_run() {
+        let db = kw_storage::Db::open_in_memory().await.unwrap();
+        summaries_on(&db).await;
+        sqlx::query("CREATE TRIGGER reject_attachment BEFORE INSERT ON note_recordings BEGIN SELECT RAISE(FAIL, 'injected attachment failure'); END")
+            .execute(db.pool()).await.unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let plan = told(false);
+        let wav = stopped(dir.path(), &plan);
+
+        let saved = save_stopped_labelling(&db, transcribed(), &plan, &wav, 12.0, None, true)
+            .await
+            .unwrap();
+
+        assert!(!saved.speaker_labels_pending);
+        assert_eq!(
+            speaker_job(&db, saved.note_id).await.as_deref(),
+            Some("failed")
+        );
+        // Nothing to wait for, so the note is summarised as it is.
+        assert_eq!(summary_jobs(&db).await, 1);
+    }
+
+    #[tokio::test]
+    async fn a_recovered_meeting_is_saved_before_its_speakers_are_analysed() {
+        let db = kw_storage::Db::open_in_memory().await.unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let (wav, key) = interrupted(dir.path());
+        draft::write_plan(&wav, &told(true)).unwrap();
+        let segments = [segment("hello", 0.0, None)];
+
+        let outcome =
+            save_recovered_labelling(&db, &wav, key, "typed", &segments, "Recovered.", 12.0, true)
+                .await
+                .unwrap();
+        let MeetingOutcome::Saved {
+            note_id,
+            recording_removal,
+            speaker_labels_pending,
+            ..
+        } = outcome
+        else {
+            panic!("expected a saved note, got {outcome:?}");
+        };
+        assert!(speaker_labels_pending);
+        assert_eq!(recording_removal, None);
+        assert!(wav.exists());
+        assert_eq!(speaker_job(&db, note_id).await.as_deref(), Some("queued"));
     }
 
     #[tokio::test]

@@ -38,6 +38,7 @@ mod local_api;
 mod local_asr;
 mod local_llm;
 mod local_model;
+mod logging;
 mod media;
 mod media_job;
 mod meeting;
@@ -51,6 +52,7 @@ mod recordings;
 mod sharing;
 mod sherpa_stream;
 mod shortcuts;
+mod speaker_labels;
 mod speech_install;
 mod state;
 mod summaries;
@@ -65,20 +67,6 @@ use anyhow::Context as _;
 use tauri::Manager as _;
 
 use state::AppState;
-
-/// Install log output.
-///
-/// Honours `KNEGISWHISPER_LOG`, defaulting to `info`. Errors are swallowed
-/// because a second initialisation attempt (in tests, or a re-entrant setup) is
-/// harmless and must not take the app down.
-fn init_tracing() {
-    use tracing_subscriber::{fmt, EnvFilter};
-
-    let filter =
-        EnvFilter::try_from_env("KNEGISWHISPER_LOG").unwrap_or_else(|_| EnvFilter::new("info"));
-
-    let _ = fmt().with_env_filter(filter).with_target(false).try_init();
-}
 
 /// Say so in the terminal when nothing is serving the frontend.
 ///
@@ -126,7 +114,7 @@ fn warn_if_nothing_serves_the_frontend(app: &tauri::App) {
 /// Returns rather than panicking so the binary can report a startup failure as a
 /// message and an exit code instead of a Rust panic dump.
 pub fn run() -> anyhow::Result<()> {
-    init_tracing();
+    logging::init();
 
     tracing::info!(
         version = env!("CARGO_PKG_VERSION"),
@@ -269,6 +257,9 @@ pub fn run() -> anyhow::Result<()> {
             );
             tauri::async_runtime::block_on(llm.reap_stale());
             summaries::start(handle.clone(), state.clone(), std::sync::Arc::clone(&llm));
+            // Speaker labels on saved meeting notes. A job the last run left
+            // unfinished is marked interrupted here, never started again.
+            speaker_labels::start(handle.clone(), state.clone());
             let llm_endpoint = llm.endpoint();
             app.manage(std::sync::Arc::clone(&llm));
 
@@ -497,6 +488,9 @@ pub fn run() -> anyhow::Result<()> {
             summaries::note_summary_cancel,
             summaries::note_summary_update,
             summaries::note_summary_export,
+            speaker_labels::note_speaker_labels_get,
+            speaker_labels::note_speaker_labels_retry,
+            speaker_labels::note_speaker_labels_dismiss,
             reasoning::reasoning_status,
             reasoning::reasoning_set_cleanup,
             reasoning::enterprise_config_set,

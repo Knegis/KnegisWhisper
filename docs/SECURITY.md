@@ -454,6 +454,14 @@ Never logged: API keys, OAuth tokens, local API bearer tokens, raw clipboard con
 credential file contents, or full transcripts by default. Secrets are redacted at the logging
 boundary rather than at each call site, so a new call site cannot forget.
 
+The log is also written to one file on this computer, `logs\knegiswhisper.log` in the
+application's data directory, because a release build has no console and a release panic aborts:
+without the file, an application that closed left nothing to read. A panic is appended to it, with
+its location and a backtrace, before the process ends. The file is started again past 5 MB, at
+launch and while the application runs, with the previous one kept beside it. Nothing sends it anywhere; Settings > Diagnostics shows where it
+is, for a person to attach to a report. The rule above is what keeps it safe to attach, and the
+file makes that rule matter more than it did when the log reached only a developer's terminal.
+
 ## Recording indication
 
 When recording is active the user gets a visible indicator. The application does not record

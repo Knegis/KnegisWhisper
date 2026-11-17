@@ -828,7 +828,8 @@ At that run, `meeting.rs`'s `keep` ran a whole-file pass rather than keeping the
 live partials. As of 2026-09-30, successful local streaming meetings save their settled
 transcript after flushing the final audio, without retranscribing the recording.
 Windowed local and cloud meetings, and failed or incomplete local streams, still use whole-file
-recovery. Optional local speaker analysis can still add processing time. The new
+recovery. Optional local speaker analysis runs after the note is saved, as a job on the note, so it
+no longer adds to Stop (2026-11-17). The new
 stop path has automated coverage; timing on a real long meeting remains to be checked.
 
 **The pinned server cannot bind to loopback, so the application refuses to start it.**

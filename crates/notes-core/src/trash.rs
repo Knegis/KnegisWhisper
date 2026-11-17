@@ -71,6 +71,7 @@ pub async fn trash(pool: &SqlitePool, id: i64) -> Result<bool, StorageError> {
         > 0;
     if moved {
         crate::summary::cancel_on(&mut tx, id).await?;
+        crate::speaker_labels::trash_on(&mut tx, id).await?;
     }
     tx.commit().await?;
     Ok(moved)
@@ -82,13 +83,25 @@ pub async fn trash(pool: &SqlitePool, id: i64) -> Result<bool, StorageError> {
 /// It comes back as it went, except for a folder deleted while it was in
 /// Trash: the folder's foreign key cleared the note's folder then, so it
 /// comes back in none.
+///
+/// A meeting trashed while its speaker labels were waiting comes back with
+/// its automatic summary queued, when summaries are on
+/// (`speaker_labels::restored`). That is a courtesy after the restore, never
+/// a condition of it: if it cannot be queued the note is still restored, and
+/// the note's own Generate summary is there.
 pub async fn restore(pool: &SqlitePool, id: i64) -> Result<bool, StorageError> {
     let result =
         sqlx::query("UPDATE notes SET trashed_at = NULL WHERE id = ? AND trashed_at IS NOT NULL")
             .bind(id)
             .execute(pool)
             .await?;
-    Ok(result.rows_affected() > 0)
+    let restored = result.rows_affected() > 0;
+    if restored {
+        if let Err(error) = crate::speaker_labels::restored(pool, id).await {
+            tracing::warn!(%error, note_id = id, "could not queue the restored note's summary");
+        }
+    }
+    Ok(restored)
 }
 
 /// Whether note `id` exists and is in Trash, for a caller that was refused

@@ -22,6 +22,11 @@ pub struct RecoverableRecording {
     /// (KNEG-365), tidied as the recovered note's title will be. `None` when
     /// it was given none, or has no plan.
     pub title: Option<String>,
+    /// The application never saw this meeting end: it crashed or was closed
+    /// while the meeting ran or was being saved (`draft::unfinished_path`).
+    /// `false` for a recording left with no note on purpose, and for any
+    /// made before the marker existed.
+    pub unfinished: bool,
 }
 
 pub async fn scan(db: &Db, directory: &Path) -> Result<Vec<RecoverableRecording>, String> {
@@ -61,6 +66,7 @@ pub async fn scan(db: &Db, directory: &Path) -> Result<Vec<RecoverableRecording>
             storage_key: key.to_owned(),
             has_notes,
             title,
+            unfinished: draft::is_unfinished(&path),
         });
     }
     found.sort_by(|a, b| b.storage_key.cmp(&a.storage_key));
@@ -134,6 +140,38 @@ mod tests {
         assert!(kw_notes_core::trash::trash(db.pool(), id).await.unwrap());
 
         assert!(scan(&db, dir.path()).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_meeting_the_application_never_saw_end_is_told_from_one_left_on_purpose() {
+        let db = Db::open_in_memory().await.unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let crashed = dir.path().join("20261117-090000-a.wav");
+        let quiet = dir.path().join("20261116-090000-b.wav");
+        std::fs::write(&crashed, b"wav").unwrap();
+        std::fs::write(&quiet, b"wav").unwrap();
+        // Start marks both; only the quiet room's meeting reached its end.
+        draft::mark_unfinished(&crashed);
+        draft::mark_unfinished(&quiet);
+        draft::clear_unfinished(&quiet);
+
+        let found: Vec<_> = scan(&db, dir.path())
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|c| (c.storage_key, c.unfinished))
+            .collect();
+        assert_eq!(
+            found,
+            [
+                ("20261117-090000-a.wav".to_owned(), true),
+                ("20261116-090000-b.wav".to_owned(), false),
+            ]
+        );
+
+        // Recovered and saved, it is nobody's unfinished meeting.
+        draft::remove_sidecars(&crashed);
+        assert!(!draft::is_unfinished(&crashed));
     }
 
     #[tokio::test]

@@ -13,6 +13,75 @@ maintained in place rather than appended to, because its purpose is to be curren
 ---
 
 
+## 2026-11-17 — A meeting's note is saved before its speakers are analysed
+
+Somebody trying v0.2.0 on their own Windows computer recorded a meeting with the Local windowed
+model. The application closed at the end, by their account while speaker labels were being
+worked out, and afterwards the meeting was not in it.
+
+**What the code said.** Nothing about a meeting reached the database until the last step of
+Stop: `keep` ran the whole-recording pass, then the speaker analysis, then created the note. The
+analysis takes about five minutes per hour of recording. Anything that ended the process in that
+time left no note. The recording, the typed notes and the plan were still beside each other in
+the `meetings` folder and offered under Interrupted, but that row came after up to twenty saved
+meetings, read "Not transcribed", and could sit under "No meetings saved yet.". Read from Notes,
+the meeting was gone.
+
+**What is not known.** Why the application closed. The diarizer is a child process and its
+failure already degraded to an unlabelled note, so the application itself ended: a panic
+somewhere (release aborts on one), memory, or a person closing something that showed no progress
+for minutes. A release build logged to a console it does not have, so there is nothing to read.
+The reporter's computer has not been examined.
+
+**Why speaker labels became a job on the note, and not a guarded step inside Stop.** Wrapping
+the step would have protected against the failure the code could already see. The loss came from
+the order: the irreplaceable thing was written last. Saving first makes every later failure
+cost only what it was working on. KNEG-487 had already recorded the same change as an
+improvement; this report made it a defect.
+
+**Why an unfinished job is not restarted at launch.** If analysing that recording is what ends
+the application, restarting it would end it again on every launch. It is marked interrupted and
+the note offers Retry and Continue without.
+
+**Why the summary and the recording's deletion wait for the job.** The summary names speakers
+and snapshots the transcript, so one made before the labels would be out of date as soon as they
+arrived. The job reads the recording, so deleting it first would make the labels impossible. A
+failed job keeps the recording for the same reason: it is the only way to retry.
+
+**Why the window's notice needs a marker.** A recording with no note is usually left on purpose:
+a quiet room keeps its recording. Raising every one of those from every screen at every launch
+would teach people to dismiss it. An empty `.unfinished` file, written at Start and removed at
+any ending the application sees, tells the two apart, and recordings made before it are not
+raised.
+
+**Why a log file, given the logging rule.** `SECURITY.md` already forbids logging secrets, audio
+and full transcripts; that rule was written when the log reached a developer's terminal. The
+file is local, bounded at about 10 MB, and sent nowhere. Without it this investigation had only
+the source to go on.
+
+**Also changed.** The diarizer is started with no console window, a deadline and bounded output,
+and a missing `onnxruntime.dll` is reported before the process is started. `labelled` and the job
+share one function for attaching turns to passages. The Analysing speakers stage is gone from
+Stop's progress.
+
+**What a second reader found.** A Codex review of the change, the same day, found five defects in
+the job's edges, none in the order of the saves, and all five were real. A deletion that could not
+be handed to `recording_state` was forgotten. A waiting summary kept progress made from the
+unlabelled transcript, because its steps are kept by position and not by what they read. A job's
+status that could not be read was taken for a cancellation, which left it marked as running with
+nothing running it. A note restored from Trash had neither its labels nor its summary. And the
+log's size was checked only at launch, so the bound this entry claims above was false for an
+application left running. All five are fixed, each with a test for the case it was found in; the tests were not run against the
+code before the fixes. The
+restore's summary is queued after the restore and its failure is logged, not returned: a note
+that comes back without a summary is a small loss, and a restore that fails because of one is not.
+
+**Not verified.** Listed in
+[the recovery document](KNEG_316_MEETING_RECOVERY.md#speaker-labels-after-the-save-2026-11-17):
+no real meeting has been stopped with the job, and no real process has been ended during it.
+Tray Quit still ends a Stop in progress without asking (KNEG-563), and a second launch can still
+run beside a process that is finishing (KNEG-564). The report itself is KNEG-562.
+
 ## 2026-11-16 — The repository is public, with rulesets
 
 The owner made the repository public after publishing v0.2.0. They asked that nobody can force-push

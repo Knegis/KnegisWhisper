@@ -1047,6 +1047,10 @@ export function meetingOutcomeLabel(outcome: MeetingOutcome): { text: string; mo
       if (removal === "deleted-update-failed") parts.push("The recording was deleted, but its attachment needs cleanup. Open the note to retry.");
       if (removal === "kept-incomplete") parts.push("The recording was kept because the transcript may be incomplete.");
       if (removal === "delete-failed") parts.push("The recording couldn't be deleted, so it's still attached to the note.");
+      // Labels are added to the saved note, not before it (the note used to
+      // wait for them, and was lost with anything that ended the application
+      // meanwhile). A recording that was to be deleted waits for them too.
+      if (outcome.speakerLabelsPending) parts.push("Speaker labels are being added to the note.");
       if (outcome.reconnects > 0) {
         parts.push(reconnectLabel(outcome.reconnects));
       }
