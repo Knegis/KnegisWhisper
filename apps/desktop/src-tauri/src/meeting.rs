@@ -1577,6 +1577,11 @@ impl MeetingRuntime {
         drop(model_loan);
         // Whatever the outcome, the meeting ended here and not in a crash.
         draft::clear_unfinished(&recording_path);
+        // Before Idle is published: a Quit waiting for this meeting to be
+        // saved must see that it was not.
+        if !matches!(outcome, MeetingOutcome::Saved { .. }) {
+            crate::quit::meeting_ended_without_note();
+        }
 
         self.end_progress(generation).await;
         if self.lifecycle.lock().await.finished(generation) {
@@ -1759,6 +1764,15 @@ impl MeetingRuntime {
         let Some(live) = self.live.lock().await.take() else {
             return;
         };
+        // Asked for first, briefly: the meeting window may hold an edit it has
+        // not sent yet, and nothing can be written once the notes are closed.
+        // An exit cannot wait long or ask again, so a window that does not
+        // answer costs that last edit and nothing else.
+        if let Err(reason) =
+            crate::quit::flush_typed_notes(&self.app, std::time::Duration::from_secs(2)).await
+        {
+            tracing::warn!(%reason, "typed notes could not be collected while exiting");
+        }
         // Closed and flushed, so the last words typed are in the sidecar.
         let _ = self.notes.take();
         self.notes.flush().await;
@@ -1796,6 +1810,26 @@ impl MeetingRuntime {
     /// is closed by then.
     pub async fn is_under_way(&self) -> bool {
         microphone_under_way(self.lifecycle.lock().await.phase)
+    }
+
+    /// What the meeting is doing, and nothing else.
+    ///
+    /// The same answer as [`Self::status`] gives in `state`, without the
+    /// settings read, the detection data and the window checks the screen
+    /// needs and a caller that polls does not.
+    pub async fn state(&self) -> MeetingState {
+        let phase = self.lifecycle.lock().await.phase;
+        if phase == SessionPhase::Finishing {
+            return MeetingState::Finishing;
+        }
+        match self.live.lock().await.as_ref() {
+            Some(live) => live_state(
+                live.transcript_failure.get().is_some(),
+                live.pump.is_finished(),
+                live.recorder_end.get().copied(),
+            ),
+            None => MeetingState::Idle,
+        }
     }
 
     /// What is happening, for the screen.

@@ -124,8 +124,33 @@ second process over one database, with no exception to write. It was rejected be
 bring the first window forward without inventing a channel between the two processes, and the
 plugin has one on each platform.
 
+**What a second reader found.** A Codex review of the change, the same day, found four defects and
+one saving, all real, none reproduced in the application.
+
+- *Stop and save* stopped the meeting without asking the meeting window for an edit it had not yet
+  sent. The window saves a little behind the typing, and Stop closes the notes to further writes;
+  the window's own Stop asks first. Quit now asks the same way (`flush_typed_notes`), and if the
+  window does not answer or reports a failed save it does not stop the meeting: it says so and
+  stays open. The exit cleanup asks too, for two seconds, and goes on without an answer.
+- *Stop and save* and *Quit when saved* exited once the meeting was over, whether or not that had
+  produced a note. `stop` now counts a meeting that ended as anything but saved, before it reports
+  idle, and a Quit that sees the count move stays open and says the meeting has no note.
+- A wait cancelled while it was reading the meeting's state could still exit, because it checked
+  before the read and not after. It checks after as well, and the exit is taken in the same step
+  as the last check.
+- The plugin's Windows half exits only if it finds the first copy's signalling window. A second
+  copy arriving after the first has made its mutex and before it has made that window is let
+  through into `setup`. The gap is believed to be microseconds wide; it is read from the plugin's
+  source and has not been hit. `single_instance.rs` closes it with a lock on a file in the data
+  folder, taken first thing in `setup`: a copy that cannot take it exits before touching anything.
+  This is the lock-file design rejected above, kept as the backstop it is good at and not as the
+  thing a person meets. It also refuses two debug copies given the same profile.
+- The wait read the whole screen status twice a second for one field. It reads
+  `MeetingRuntime::state`, which is the phase and the live session and nothing else. Not measured.
+
 **Not verified.** None of this has been run in the application. The decision, the answers, the one
-question at a time and the wait are unit-tested; the message box, the tray's Quit line,
+question at a time, the wait, the reading of a notes reply and the folder lock are unit-tested; the
+message box, the tray's Quit line, the notes handshake against a real meeting window,
 `end_for_exit` and a real second launch are not, because the tray and the meeting runtime take the
 real window handle and cannot be built on the mock runtime. The by-hand steps are in
 [the recovery document](KNEG_316_MEETING_RECOVERY.md#quit-and-a-second-copy-2026-11-20).

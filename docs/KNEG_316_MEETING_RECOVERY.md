@@ -85,6 +85,12 @@ section describes. An exit that does not come through that question, while a
 meeting is being recorded, closes the recording and keeps it, with what was
 typed, for recovery. Until 2026-11-20 it deleted the recording.
 
+**Stop and save, then quit** first asks the meeting window for any typed
+notes it has not sent yet, as the window's own Stop does. If the window does
+not answer, or says a save failed, the meeting is not stopped and the
+application stays open and says so. It also stays open, and says so, if the
+meeting ends without a note.
+
 Starting KnegisWhisper a second time shows the copy that is already running.
 Before 2026-11-20 a second copy started beside the first, listed the first
 one's live recording here as interrupted, and stopped its model servers.
@@ -169,14 +175,19 @@ end the app's process mid-meeting, then press Recover under Interrupted.
 
 Automated, on Windows: what Quit does for each meeting state, which button is
 which answer and that a closed box stays, one question at a time, a wait that
-ends when the meeting is saved and one that was cancelled (`quit`, eight tests);
-which copy is guarded (`single_instance_tests`, one test).
+ends when the meeting is saved, one cancelled before and one cancelled during a
+look, the exit taken once, a meeting counted as ended without a note, and a
+notes reply read for its own request only (`quit`, twelve tests); which copy
+has the plugin's guard, and the data folder's lock refusing a second claim and
+not a second folder (`single_instance`, four tests).
 
 Not done, and needing a person at the tray. Each wants a throwaway profile
 except the last:
 
 1. Quit while recording. **Keep recording** changes nothing. **Stop and save,
-   then quit** exits by itself, and the note is there at the next launch.
+   then quit** exits by itself, and the note is there at the next launch with
+   the words typed just before Quit. With nothing said, so that nothing is
+   transcribed, it stays open and says the meeting has no note.
 2. Quit while a meeting is being saved. **Quit when saved** changes the tray's
    Quit line and exits by itself with the note saved. **Quit now** leaves the
    recording raised as cut short at the next launch, and Recover saves it.

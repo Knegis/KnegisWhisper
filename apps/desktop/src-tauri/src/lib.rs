@@ -53,6 +53,7 @@ mod recordings;
 mod sharing;
 mod sherpa_stream;
 mod shortcuts;
+mod single_instance;
 mod speaker_labels;
 mod speech_install;
 mod state;
@@ -110,17 +111,6 @@ fn warn_if_nothing_serves_the_frontend(app: &tauri::App) {
     }
 }
 
-/// Whether this copy refuses to run beside another (KNEG-564).
-///
-/// Every copy does, except a debug build given its own profile: the guard is
-/// keyed on the application's identifier, which a development build shares
-/// with the installed one, and a profile moves the data folder, so that copy
-/// can do the other no harm. A development build with no profile uses the real
-/// data folder and is refused beside the installed application, as it should be.
-const fn guards_single_instance(own_profile: bool) -> bool {
-    !own_profile
-}
-
 /// Build and run the application.
 ///
 /// Returns rather than panicking so the binary can report a startup failure as a
@@ -139,7 +129,7 @@ pub fn run() -> anyhow::Result<()> {
     // First, so a second launch ends here: before any other plugin, and before
     // `setup`, which reaps model servers, marks unfinished work interrupted and
     // clears scratch files on the assumption that nothing else is running.
-    if guards_single_instance(kw_storage::paths::debug_profile().is_some()) {
+    if single_instance::shows_the_running_copy(kw_storage::paths::debug_profile().is_some()) {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             tracing::info!("a second copy was started; showing this one");
             tray::show_dashboard(app);
@@ -160,6 +150,25 @@ pub fn run() -> anyhow::Result<()> {
             None,
         ))
         .setup(|app| {
+            // Before anything that touches the data folder. The plugin above
+            // lets a second copy through if it arrives before the first has
+            // made its signalling window; this does not (`single_instance.rs`).
+            match single_instance::claim(&kw_storage::paths::data_dir()) {
+                single_instance::Claim::Held(lock) => {
+                    app.manage(lock);
+                }
+                single_instance::Claim::Taken => {
+                    tracing::warn!(
+                        "another copy of KnegisWhisper is using this data folder; this one is exiting"
+                    );
+                    app.handle().cleanup_before_exit();
+                    std::process::exit(0);
+                }
+                single_instance::Claim::Unknown(error) => {
+                    tracing::warn!(%error, "could not lock the data folder; starting without the lock");
+                }
+            }
+
             // First, because it explains a symptom the user is already looking
             // at by the time the rest of this finishes.
             #[cfg(debug_assertions)]
@@ -672,15 +681,6 @@ pub fn run() -> anyhow::Result<()> {
             automation::on_event(app, event);
         });
     Ok(())
-}
-
-#[cfg(test)]
-mod single_instance_tests {
-    #[test]
-    fn only_a_copy_with_its_own_profile_may_run_beside_another() {
-        assert!(super::guards_single_instance(false));
-        assert!(!super::guards_single_instance(true));
-    }
 }
 
 #[cfg(all(test, feature = "tauri-test", target_os = "windows"))]
