@@ -16,7 +16,7 @@ recordings. Everything starts checked. Save the `.knegis` file and send it throu
 your usual file-transfer channel. This is a snapshot; later edits are not shared
 automatically. Packages have no password protection.
 
-The recipient chooses **Import shared folder…**, checks the preview and folder name,
+The recipient chooses **Import**, then **Shared folder…**, checks the preview and folder name,
 then imports a separate, editable local copy. Existing notes stay intact. A duplicate
 folder name gets a numbered suffix; importing again creates another copy. Included
 recordings play against their transcripts, without retranscription or summary calls.

@@ -50,7 +50,7 @@ Use a short recording of your own voice for the first check.
 
 ## Import and keep notes
 
-Open **Notes**, reveal the list panel if needed, and choose **Import audio or video**.
+Open **Notes**, reveal the list panel if needed, and choose **Import**, then **Audio or video**.
 Select a local recording. Converted audio is retained with its note for replay;
 your source file stays intact. You can edit notes, search transcripts and export
 text, Markdown, JSON or subtitle formats. See [Notes workspace](NOTES_WORKSPACE.md).

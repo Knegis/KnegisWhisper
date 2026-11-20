@@ -30,7 +30,7 @@ transport and conflict decisions.
    recordings. Show estimated size and clearly identify omitted content.
 3. Save one package using a native save dialog.
 4. Send the package through the user's existing file transfer channel.
-5. Recipient selects Import shared folder, previews contents, then imports.
+5. Recipient selects Import, then Shared folder, previews contents, then imports.
 
 An app menu file picker is sufficient for an initial experiment. Double-click
 file association and drag-and-drop can follow. Whether recipients should also
@@ -121,8 +121,8 @@ checked by default, individual note selection, and no password protection in v1.
 Browser viewing, synchronization, merging, stable cross-installation identities,
 file associations and delivery integrations remain outside this version.
 
-Notes exposes Share folder from its folder actions and Import shared folder beside
-media import. Both use native file dialogs; filesystem paths are never input from
+Notes exposes Share folder from its folder actions and Shared folder in its Import
+menu, beside media import. Both use native file dialogs; filesystem paths are never input from
 the renderer. Export flushes pending edits. Import previews staged contents, allows
 a destination name, creates a fresh folder, expands it and opens its first note.
 Cancel cleans unfinished file work; Keep working allows navigation during processing.

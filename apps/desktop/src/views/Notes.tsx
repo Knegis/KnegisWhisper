@@ -131,7 +131,7 @@ type FocusTarget = "undo" | "title" | "trash";
  * The right-click menu's target: a note, or a folder heading. `fromButton` when the open note's
  * More opened it, so a second press of More closes it rather than reopening it (KNEG-377).
  */
-type ContextMenu = { x: number; y: number; anchor: HTMLButtonElement; fromButton?: boolean } & ({ kind: "note"; note: NoteListItem | Note } | { kind: "folder"; folder: Folder });
+type ContextMenu = { x: number; y: number; anchor: HTMLButtonElement; fromButton?: boolean } & ({ kind: "note"; note: NoteListItem | Note } | { kind: "folder"; folder: Folder } | { kind: "import" });
 
 export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, onImport, onSummarySetup }: { initialNoteId?: number | null; openRequest?: { id: number; transcriptRow: number | null; summaryFocus?: boolean } | null; onOpenNote?: (id: number, transcriptRow?: number) => void; onImport: () => void; onSummarySetup: (id: number, target: SummarySetupTarget) => void }) {
   const [context, setContext] = useState<ContextMenu | null>(null);
@@ -704,8 +704,15 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
       <div className="panel-surface" data-surface="notes.export">
         <div className="notes-actions">
           <PanelAction icon="plus" label="New note" onClick={() => { void newNote(); }} />
-          <PanelAction label="Import audio or video" onClick={onImport} />
-          <PanelAction label="Import shared folder…" onClick={() => { shareTrigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; setShareImportRequest(value => value + 1); }} />
+          {/* One Import, with what can be imported in its menu: two import pills beside New note wrapped the row. A second press closes it, as More does. */}
+          <button type="button" className="panel-action" aria-haspopup="dialog" aria-expanded={context?.kind === "import"} onClick={event => {
+            const anchor = event.currentTarget;
+            if (context?.kind === "import") { setContext(null); return; }
+            const rect = anchor.getBoundingClientRect();
+            setContext({ kind: "import", x: rect.left, y: rect.bottom + 4, anchor, fromButton: true });
+          }}>
+            <span className="panel-action-label">Import</span>
+          </button>
           <ListToggle />
         </div>
         <label className="panel-search">
@@ -862,7 +869,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
           </div>
         ))}
       </section>
-      {context && createPortal(<div ref={contextRef} className="notes-context-menu" role="dialog" aria-label={context.kind === "note" ? `Actions for ${context.note.title}` : `Actions for folder ${context.folder.name}`} style={{ left: context.x, top: context.y }} onContextMenu={event => event.preventDefault()} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget) && !(context.fromButton && event.relatedTarget === context.anchor)) setContext(null); }}>
+      {context && createPortal(<div ref={contextRef} className="notes-context-menu" role="dialog" aria-label={context.kind === "note" ? `Actions for ${context.note.title}` : context.kind === "folder" ? `Actions for folder ${context.folder.name}` : "Import"} style={{ left: context.x, top: context.y }} onContextMenu={event => event.preventDefault()} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget) && !(context.fromButton && event.relatedTarget === context.anchor)) setContext(null); }}>
         {context.kind === "note" ? <>
                 <button
                   type="button"
@@ -909,6 +916,9 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
             </select>
           </span>
         </div>
+        </> : context.kind === "import" ? <>
+          <button type="button" onClick={() => { setContext(null); onImport(); }}>Audio or video</button>
+          <button type="button" onClick={() => { shareTrigger.current = context.anchor; setContext(null); setShareImportRequest(value => value + 1); }}>Shared folder…</button>
         </> : <><button type="button" onClick={() => { shareTrigger.current = context.anchor; setShareFolder(context.folder); setContext(null); }}>Share folder…</button><button type="button" onClick={() => {
           const { folder } = context;
           setContext(null);

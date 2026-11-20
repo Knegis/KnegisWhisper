@@ -50,7 +50,7 @@ const SCREENS = {
   Meetings: [["button", "Meetings"]],
   Notes: [["button", "Notes"], ["first", ".notes-entry[title^='Weekly sync']"]],
   NotesEmpty: [["button", "Notes"]],
-  Import: [["button", "Notes"], ["button", "Import audio or video"]],
+  Import: [["button", "Notes"], ["button", "Import"], ["button", "Audio or video"]],
   Settings: [["button.nav-pill", "Settings"]],
   Shortcuts: SETTINGS("Shortcuts"),
   MeetingSettings: SETTINGS("Meetings"),
