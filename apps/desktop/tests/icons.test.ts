@@ -22,10 +22,11 @@ test("a name belongs to one family, so Icon never has to choose between two draw
   for (const name of Object.keys(FILLED)) assert.ok(!(name in ICONS), name);
 });
 
-test("a folder is line, New folder's outline without its plus; Trash stays solid", () => {
+test("a folder is line, New folder's outline without its plus; Trash is line too, and its own bin", () => {
   assert.ok("folder" in ICONS && !("folder" in FILLED));
   assert.ok(ICONS.folderPlus.startsWith(ICONS.folder), "folderPlus is the folder with a plus added");
-  assert.ok("trash" in FILLED);
+  assert.ok("trash" in ICONS && !("trash" in FILLED));
+  assert.notEqual(ICONS.trash, ICONS.discard);
   for (const action of ["folderPlus", "discard"]) assert.ok(action in ICONS, action);
 });
 

@@ -2570,6 +2570,10 @@ button:is(.notes-person, .notes-trash)[aria-pressed="true"], button:is(.notes-pe
  * state, rather than `--band`, which is a fill. */
 .notes-entry[data-dragging] { opacity: 0.45; }
 .notes-folder[data-drop-target] { outline: 1px solid var(--band); outline-offset: 2px; border-radius: var(--r-control); }
+/* Trash takes a dragged note as a folder does. Its ring is drawn inside, where its own hairline is:
+ * the button sits at the foot of a panel that clips, and an outline outside it lost its lower edge. */
+button.notes-trash[data-drop-target] { box-shadow: inset 0 0 0 2px var(--band); color: var(--band-text); }
+button.notes-trash[data-drop-target] > .icon { color: inherit; }
 .notes-drop-unfiled { margin: 4px 0; padding: 6px 10px; border: 1px dashed var(--faint); border-radius: var(--r-control); font: 15px/18px var(--font-mono); letter-spacing: .5px; color: var(--muted); text-align: center; }
 .notes-drop-unfiled[data-drop-target] { border-style: solid; border-color: var(--band); color: var(--band-text); }
 .notes-context-menu { position: fixed; z-index: 1100; width: 15rem; max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); overflow: auto; padding: 8px; background: var(--panel); color: var(--text); border: 0; border-radius: var(--r-card); box-shadow: var(--card-shadow); animation: kw-rise .35s var(--ease) both; }
@@ -3401,7 +3405,7 @@ button.notes-person[aria-pressed="true"] .notes-folder-count { color: inherit; }
 .notes-person-name { flex: none; max-width: 200px; }
 button.notes-trash { width: 100%; gap: 9px; height: 40px; margin: 0; padding: 0 16px; border-radius: var(--r-control); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 12%, transparent); font-size: 13px; letter-spacing: .04em; }
 button.notes-trash[aria-pressed="true"], button.notes-trash[aria-pressed="true"]:hover:not(:disabled) { background: var(--band); color: var(--band-ink); box-shadow: none; }
-button.notes-trash[aria-pressed="true"] .notes-folder-count, button.notes-trash[aria-pressed="true"] > .icon-filled { color: inherit; }
+button.notes-trash[aria-pressed="true"] .notes-folder-count, button.notes-trash[aria-pressed="true"] > .icon { color: inherit; }
 .notes-trash-label { flex: none; }
 .notes-trash > .notes-folder-count { margin-left: auto; }
 button.panel-inline { align-self: flex-start; height: 32px; margin: 4px; padding: 0 14px; border: 0; background: var(--wash); font-size: 13px; }

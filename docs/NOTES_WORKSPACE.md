@@ -163,7 +163,8 @@ people are part of what its summary was made from, so changing them marks a fini
 summary out of date and stops one being made; a summary still waiting to start uses the
 people on the note when it starts ([meeting summaries](MEETING_SUMMARIES.md)).
 
-**Trash** (KNEG-401). Delete, in a note's menu, moves the note to Trash without asking:
+**Trash** (KNEG-401). Delete, in a note's menu, moves the note to Trash without asking, and
+so does dragging the note onto **Trash** at the foot of the library:
 "Moved “{title}” to Trash." shows above the note that opens in its place, the newest one,
 with **Undo**. Nothing is deleted: the note keeps its transcript, its recording and the file
 behind it, its people and its speaker names, and nothing empties Trash on its own -- it

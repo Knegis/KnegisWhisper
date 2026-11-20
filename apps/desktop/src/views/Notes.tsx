@@ -539,6 +539,8 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
   // null for the strip, undefined for none.
   const [drag, setDrag] = useState<{ noteId: number; folderId: number | null } | null>(null);
   const [dropTarget, setDropTarget] = useState<number | null | undefined>(undefined);
+  // Trash as somewhere to drop a note: the same move as Delete, with its Undo.
+  const [trashDrop, setTrashDrop] = useState(false);
   const moveNote = useCallback((note: NoteListItem | Note, folderId: number | null) => {
     reveal(folderId);
     // Flushed first: the workspace may hold an unsaved edit of this very note,
@@ -614,7 +616,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
         onClick={() => { void selectNote(note.id).catch(fail); }}
         draggable data-dragging={drag?.noteId === note.id || undefined}
         onDragStart={event => { event.dataTransfer.setData(NOTE_DRAG_TYPE, String(note.id)); event.dataTransfer.effectAllowed = "move"; setDrag({ noteId: note.id, folderId: note.folderId }); }}
-        onDragEnd={() => { setDrag(null); setDropTarget(undefined); }}
+        onDragEnd={() => { setDrag(null); setDropTarget(undefined); setTrashDrop(false); }}
         onContextMenu={event => { event.preventDefault(); openNoteMenu(note, event.currentTarget, { x: event.clientX, y: event.clientY }); }}
         onKeyDown={event => { if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) { event.preventDefault(); openNoteMenu(note, event.currentTarget); } }}
         aria-haspopup="dialog" />
@@ -677,8 +679,28 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
   // its notes replace the tree, as a person's do, most recently deleted first.
   const trashEntry = (
     <PanelSection label={null}>
-      <button type="button" className="notes-trash" aria-pressed={trashOpen}
-        title="Deleted notes, kept until you empty Trash" onClick={toggleTrash}>
+      <button type="button" className="notes-trash" aria-pressed={trashOpen} data-drop-target={trashDrop || undefined}
+        title="Deleted notes, kept until you empty Trash" onClick={toggleTrash}
+        onDragOver={event => {
+          if (!carriesNote(event.dataTransfer.types)) return;
+          event.preventDefault();
+          event.dataTransfer.dropEffect = "move";
+          setTrashDrop(true);
+        }}
+        onDragLeave={event => {
+          if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return;
+          setTrashDrop(false);
+        }}
+        onDrop={event => {
+          const id = draggedNoteId(event.dataTransfer);
+          if (id === null) return;
+          event.preventDefault();
+          setTrashDrop(false);
+          setDropTarget(undefined);
+          setDrag(null);
+          const note = notes.find(item => item.id === id);
+          if (note) moveToTrash(note);
+        }}>
         <Icon name="trash" size={16} />
         <span className="notes-trash-label">Trash</span>
         <span className="notes-folder-count"><span aria-hidden="true">{trash.notes.length}</span><span className="sr-only">, {noteCount(trash.notes.length)}</span></span>
