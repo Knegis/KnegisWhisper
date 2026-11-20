@@ -79,8 +79,66 @@ that comes back without a summary is a small loss, and a restore that fails beca
 **Not verified.** Listed in
 [the recovery document](KNEG_316_MEETING_RECOVERY.md#speaker-labels-after-the-save-2026-11-17):
 no real meeting has been stopped with the job, and no real process has been ended during it.
-Tray Quit still ends a Stop in progress without asking (KNEG-563), and a second launch can still
-run beside a process that is finishing (KNEG-564). The report itself is KNEG-562.
+Tray Quit and a second launch, left open here as KNEG-563 and KNEG-564, are the entry of
+2026-11-20. The report itself is KNEG-562.
+
+## 2026-11-20 — Quit asks during a meeting, and a second launch shows the first
+
+Two ways to lose a meeting were left open on 2026-11-17, both read from the code and neither
+reproduced.
+
+**Quit (KNEG-563).** Tray Quit called `app.exit(0)` with no look at what was running. The shutdown
+cleanup then called `MeetingRuntime::cancel`. While a meeting was being saved that call fails at
+once, so the process ended before any note existed. While a meeting was being recorded it did
+worse, and this was not in the issue: `cancel` is the person's own Discard, so it deleted the
+recording and kept only what was typed. Nobody had been asked either time.
+
+Quit now looks first (`quit.rs`). With no meeting it exits as before. While one is recording it
+asks **Stop and save, then quit** or **Keep recording**. While one is being saved it asks **Quit
+when saved**, **Quit now** or **Cancel**, and says that quitting now leaves the recording to be
+recovered. A box closed with Escape stays: leaving is the choice that can lose something, so it is
+never reached by accident. While a Quit waits, the tray's Quit line says so, and pressing it again
+asks again, which is how the wait is cancelled or turned into quitting now.
+
+The alternative was to wait without asking. It was rejected because a save that never finishes
+would make Quit do nothing for ever, with no way out but ending the process.
+
+The cleanup itself no longer discards. `MeetingRuntime::end_for_exit` closes the recorder as Stop
+does and leaves the recording, the typed notes, the plan and the `.unfinished` marker, so an exit
+that reaches the cleanup by any other road costs a recovery and not a meeting.
+
+Speaker labels are not waited for. They are a job on a saved note, and one cut off by an exit is
+marked on the note with Retry.
+
+**A second copy (KNEG-564).** `tauri-plugin-single-instance` is registered before every other
+plugin. A second launch shows the running window and exits before `setup`, which is where a second
+copy did its damage: it reaped the first one's model servers, marked its running jobs interrupted
+and cleared its scratch files. A debug build given `KW_AUTOMATION_PROFILE` is not guarded. The
+plugin keys on the application's identifier, which a development build shares with the installed
+one, and a profile moves the data folder, so that copy can do the other no harm; the disposable
+smoke instance still runs beside the owner's application. A development build with no profile uses
+the real data folder and is now refused beside the installed application.
+
+A lock file in the data folder was the other design. It would have matched the harm exactly, a
+second process over one database, with no exception to write. It was rejected because it cannot
+bring the first window forward without inventing a channel between the two processes, and the
+plugin has one on each platform.
+
+**Not verified.** None of this has been run in the application. The decision, the answers, the one
+question at a time and the wait are unit-tested; the message box, the tray's Quit line,
+`end_for_exit` and a real second launch are not, because the tray and the meeting runtime take the
+real window handle and cannot be built on the mock runtime. The by-hand steps are in
+[the recovery document](KNEG_316_MEETING_RECOVERY.md#quit-and-a-second-copy-2026-11-20).
+
+**Found on the way, fixed.** The settings-key audit has failed on `dev` since `0d6be4d`: a test
+added there wrote the summary setting through `kw_notes_core::summary::SETTINGS_KEY`, a name the
+scanner cannot resolve. It now uses `summaries::SUMMARY_SETTINGS_KEY`, the same key under the name
+the audit knows. The audits were not run before that commit, which is how it got through.
+
+**Found on the way, not fixed.** Quit during a dictation that is being transcribed loses it: the
+audio exists only in memory (KNEG-568). Local model servers outlive Quit and are reaped at the next
+launch (KNEG-569). A failed `setup` panics, and a release panic aborts, so the comment on `run`
+about reporting a startup failure holds only for a failed build (KNEG-570).
 
 ## 2026-11-16 — The repository is public, with rulesets
 

@@ -1738,6 +1738,50 @@ impl MeetingRuntime {
         Ok(())
     }
 
+    /// Close a meeting that is being recorded because the application is
+    /// exiting, and keep everything it has.
+    ///
+    /// The recorder is closed as Stop closes it, so the WAV has its header, and
+    /// nothing more is done: no transcription, no note. The recording, what
+    /// was typed, the plan and the marker that says the meeting never ended
+    /// all stay, and the next launch offers it for recovery from every screen.
+    ///
+    /// Until KNEG-563 the shutdown called [`Self::cancel`] here, which deleted
+    /// the recording of a meeting nobody had chosen to discard.
+    ///
+    /// Does nothing while a meeting is being saved or none is running. The
+    /// phase is left at finishing on purpose: the process is ending, and that
+    /// refuses a new meeting until it has.
+    pub async fn end_for_exit(&self) {
+        if self.lifecycle.lock().await.begin_finish().is_err() {
+            return;
+        }
+        let Some(live) = self.live.lock().await.take() else {
+            return;
+        };
+        // Closed and flushed, so the last words typed are in the sidecar.
+        let _ = self.notes.take();
+        self.notes.flush().await;
+
+        let closed = close_recorder(&live.commands);
+        let _ = live.cancel_pump.send(());
+        if let Err(err) = live.pump.await {
+            tracing::warn!(error = %err, "the transcription task failed while exiting");
+        }
+        self.release_stream(live.stream_lease).await;
+        match closed {
+            Ok(_) => tracing::info!(
+                recording = %live.recording_path.display(),
+                "the application is exiting during a meeting; its recording is kept for recovery"
+            ),
+            Err(reason) => tracing::warn!(
+                recording = %live.recording_path.display(),
+                %reason,
+                "the recording could not be closed while exiting; it is kept as it is"
+            ),
+        }
+    }
+
     async fn release_stream(&self, lease: Option<crate::sherpa_stream::StreamLease>) {
         if let Some(lease) = lease {
             self.stream.release(lease).await;
@@ -3557,7 +3601,7 @@ mod tests {
     async fn summaries_on(db: &kw_storage::Db) {
         kw_storage::settings::set(
             db.pool(),
-            kw_notes_core::summary::SETTINGS_KEY,
+            crate::summaries::SUMMARY_SETTINGS_KEY,
             &kw_notes_core::summary::SummarySettings {
                 enabled: true,
                 provider: "local".into(),

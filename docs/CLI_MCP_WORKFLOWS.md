@@ -124,7 +124,9 @@ warning.
 To isolate a future **debug** smoke run, set `KW_AUTOMATION_PROFILE` to an absolute
 directory and run `cargo run -p kw-storage --example smoke_profile` once. It refuses
 an existing database. Debug builds then use that profile for data/discovery and an
-in-memory credential store; release builds ignore the override. Supply local
+in-memory credential store; release builds ignore the override. The profile is also
+what lets the run start beside another desktop instance: without one, a second launch
+only shows the copy already running and exits. Supply local
 sidecars/models separately. Set `WEBVIEW2_USER_DATA_FOLDER` to a separate directory
 when another desktop instance is open, and give the test Vite/Tauri dev URL its own
 port. Temporary SDK installations and smoke reports belong under ignored `target/`.

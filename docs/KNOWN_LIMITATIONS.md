@@ -37,8 +37,9 @@ fixture tests and a new installer build do not establish that result.
 - A meeting's note is saved once its whole recording is transcribed. If the application ends
   before that, there is no note: the recording and typed notes stay in the `meetings` folder,
   the window says so on its next launch, and Meetings offers **Recover**. Speaker labels are
-  added after the note is saved, so a failure there costs only the labels. Neither has been
-  tried by ending the real application mid-meeting; see
+  added after the note is saved, so a failure there costs only the labels. Quit from the tray
+  asks before ending a meeting that is being recorded or saved. None of this has been tried by
+  ending the real application mid-meeting; see
   [interrupted meeting recovery](KNEG_316_MEETING_RECOVERY.md).
 - Google Calendar and Outlook offer app-owned one-click Connect or an Advanced custom client
   and bounded snapshot sync. On 2026-11-13 a development build carrying the app-owned values

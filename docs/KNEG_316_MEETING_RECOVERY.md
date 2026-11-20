@@ -77,6 +77,18 @@ after up to twenty saved meetings, read "Not transcribed", and the page could
 say "No meetings saved yet." above them; read from Notes, the meeting looked
 deleted.
 
+Quit from the tray no longer cuts a meeting short without asking. While a
+meeting is being recorded it offers **Stop and save, then quit** or **Keep
+recording**. While one is being saved it offers **Quit when saved**, **Quit
+now** or **Cancel**; only **Quit now** leaves the meeting in the state this
+section describes. An exit that does not come through that question, while a
+meeting is being recorded, closes the recording and keeps it, with what was
+typed, for recovery. Until 2026-11-20 it deleted the recording.
+
+Starting KnegisWhisper a second time shows the copy that is already running.
+Before 2026-11-20 a second copy started beside the first, listed the first
+one's live recording here as interrupted, and stopped its model servers.
+
 ## Speaker labels after the save
 
 Until 2026-11-17 Stop and Recover analysed speakers before saving the note.
@@ -119,7 +131,8 @@ Now the note is saved first, with its transcript unlabelled, and
   queued the note is restored all the same.
 
 What still leaves no note is the application ending before the whole-recording
-pass finishes. That is the case the section above is for.
+pass finishes: a crash, the process being ended, or **Quit now**. That is the
+case the section above is for.
 
 The application's log is now also written to `logs\knegiswhisper.log` in its
 data directory, with any panic, so the next such report has something to read
@@ -151,6 +164,28 @@ synthetic transcription output, not a real crash or model:
 Neither presses the Meetings page's Recover button, and no recording interrupted
 by a real crash has been recovered. That by-hand step is item 34 of KNEG-378:
 end the app's process mid-meeting, then press Recover under Interrupted.
+
+### Quit and a second copy (2026-11-20)
+
+Automated, on Windows: what Quit does for each meeting state, which button is
+which answer and that a closed box stays, one question at a time, a wait that
+ends when the meeting is saved and one that was cancelled (`quit`, eight tests);
+which copy is guarded (`single_instance_tests`, one test).
+
+Not done, and needing a person at the tray. Each wants a throwaway profile
+except the last:
+
+1. Quit while recording. **Keep recording** changes nothing. **Stop and save,
+   then quit** exits by itself, and the note is there at the next launch.
+2. Quit while a meeting is being saved. **Quit when saved** changes the tray's
+   Quit line and exits by itself with the note saved. **Quit now** leaves the
+   recording raised as cut short at the next launch, and Recover saves it.
+3. Quit with no meeting exits at once.
+4. End the application some other way while recording, for example by signing
+   out of Windows. The recording is offered for recovery and plays.
+5. With no profile set, start the application a second time. No second process
+   stays, and the first window comes forward from the tray. With
+   `KW_AUTOMATION_PROFILE` set, a second copy still starts.
 
 ### Speaker labels after the save (2026-11-17)
 

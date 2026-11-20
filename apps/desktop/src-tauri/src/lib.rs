@@ -46,6 +46,7 @@ mod meeting_window;
 mod microphone_check;
 mod overlay;
 mod persistent_overlay;
+mod quit;
 mod reasoning;
 mod recording_attach;
 mod recordings;
@@ -109,6 +110,17 @@ fn warn_if_nothing_serves_the_frontend(app: &tauri::App) {
     }
 }
 
+/// Whether this copy refuses to run beside another (KNEG-564).
+///
+/// Every copy does, except a debug build given its own profile: the guard is
+/// keyed on the application's identifier, which a development build shares
+/// with the installed one, and a profile moves the data folder, so that copy
+/// can do the other no harm. A development build with no profile uses the real
+/// data folder and is refused beside the installed application, as it should be.
+const fn guards_single_instance(own_profile: bool) -> bool {
+    !own_profile
+}
+
 /// Build and run the application.
 ///
 /// Returns rather than panicking so the binary can report a startup failure as a
@@ -123,7 +135,18 @@ pub fn run() -> anyhow::Result<()> {
         "starting"
     );
 
-    tauri::Builder::default()
+    let mut builder = tauri::Builder::default();
+    // First, so a second launch ends here: before any other plugin, and before
+    // `setup`, which reaps model servers, marks unfinished work interrupted and
+    // clears scratch files on the assumption that nothing else is running.
+    if guards_single_instance(kw_storage::paths::debug_profile().is_some()) {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            tracing::info!("a second copy was started; showing this one");
+            tray::show_dashboard(app);
+        }));
+    }
+
+    builder
         .register_asynchronous_uri_scheme_protocol(recordings::SCHEME, recordings::serve)
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         // Registered so `commands::note_export_to_file` can open a save dialog
@@ -649,6 +672,15 @@ pub fn run() -> anyhow::Result<()> {
             automation::on_event(app, event);
         });
     Ok(())
+}
+
+#[cfg(test)]
+mod single_instance_tests {
+    #[test]
+    fn only_a_copy_with_its_own_profile_may_run_beside_another() {
+        assert!(super::guards_single_instance(false));
+        assert!(!super::guards_single_instance(true));
+    }
 }
 
 #[cfg(all(test, feature = "tauri-test", target_os = "windows"))]
