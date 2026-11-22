@@ -18,6 +18,9 @@ Implemented on `codex/kneg-455-400-395`, based on `dev` at `09635c8`.
   meeting views use the same labels. Recovery does not open a new compact window.
   Start remains disabled while finishing. No percentage, ETA, early note access or
   background speaker-label update was added. No database migration is needed.
+  Since 2026-11-17 the note is saved before its speakers are analysed and the labels are
+  added by a job on the note (KNEG-487), so there is no Analysing speakers stage; see
+  [interrupted meeting recovery](KNEG_316_MEETING_RECOVERY.md#speaker-labels-after-the-save).
 
 ## Evidence (Windows, 2026-10-12)
 

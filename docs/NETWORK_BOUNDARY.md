@@ -96,8 +96,9 @@ and then once an hour.
 The decision reads `updates.automatic` and `updates.lastAutomaticCheck` locally. A missing,
 future, or at least 24-hour-old attempt is due. The attempt time must be saved before the request;
 if saving fails, nothing is sent. With the switch off, only the button sends a request.
-The check needs a public repository. While it is private, every check reports
-"No public release could be found". The check downloads and installs nothing.
+The check needs a public repository, which this is (checked 16 November 2026). A private,
+renamed or removed repository makes every check report "No public release could be found".
+The check downloads and installs nothing.
 
 **Calendars** — `accounts.google.com`, `oauth2.googleapis.com`, `www.googleapis.com`,
 `login.microsoftonline.com`, `graph.microsoft.com`. Google uses the authorization and token

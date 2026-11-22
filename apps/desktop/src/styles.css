@@ -396,7 +396,19 @@ p { line-height: 1.5; }
 .split { flex: 1; min-width: 0; display: flex; }
 /* The list panel is lifted off the ground: a white rounded sheet, inset from the window's edges. */
 .list-panel { width: 280px; flex-shrink: 0; display: flex; flex-direction: column; overflow-y: auto; margin: 6px 0 14px 14px; background: var(--panel); border-radius: var(--r-card); box-shadow: var(--card-shadow); }
-.list-panel[hidden] { display: none; }
+/*
+ * Hidden, the panel slides out to the left and the main area grows into its place, and back. It
+ * keeps its width and moves by its margin, so nothing in it reflows on the way; `.card` clips what
+ * has left. `[hidden]` is still what hides it: `visibility` takes it out of the tab order and the
+ * accessibility tree, as `display: none` did, once the slide is over -- and at once on the way in.
+ *
+ * -315px is everything the panel holds in `.split` as now drawn (further down): its 310px, less
+ * the 15px its right margin gives back, and the 20px gap after it. Gone, the main area starts at
+ * the split's own 24px, as it ends 24px from the right. It was -280px at first, which left the
+ * main area 35px further in on the left than on the right (the owner's report, 2026-11-22).
+ */
+.list-panel { transition: margin-left .4s var(--ease-out), opacity .3s ease, visibility 0s; }
+.list-panel[hidden] { display: flex; margin-left: -315px; opacity: 0; visibility: hidden; pointer-events: none; transition: margin-left .4s var(--ease-out), opacity .3s ease, visibility 0s .4s; }
 .split-main { flex: 1; min-width: 0; overflow-y: auto; scrollbar-gutter: stable both-edges; position: relative; container: main / inline-size; }
 
 /* A section label in the pixel voice, navy as the reference frames draw it. */
@@ -1277,19 +1289,20 @@ button.transcript-speaker:focus-visible {
 button.transcript-find { flex: none; display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; margin: 0 -6px 0 0; padding: 0; color: var(--muted); }
 /*
  * Find in this transcript (KNEG-448), in the head in place of the label while it is open, at the
- * head's 52px: a field drawn as a settings page draws one -- a 1px `--edge` and a pill -- but on
- * the page's `--bg`, with the search icon and the count in it, the count in the machine voice and
+ * head's 52px: a field drawn as the list panel's search is (`.panel-search`) -- a 34px `--wash`
+ * pill with no edge, the owner's ask of 2026-11-22; it had a 1px `--edge` on the page's `--bg` --
+ * with the search icon and the count in it, the count in the machine voice and
  * muted, then Previous, Next and Close, 28px, transparent, with the neutral hover every button
- * has. The field's ring is the box's, not the bare input's inside it. No case transform: the
+ * has. Focused, the box lifts to `--panel` as every search field does. No case transform: the
  * query and the status read as written. Close ends where the Find button
  * did, 6px into the head's padding.
  */
 .transcript-findbar { flex: 1; min-width: 0; display: flex; align-items: center; gap: 2px; margin: 0 -6px 0 0; letter-spacing: normal; text-transform: none; }
-.transcript-find-field { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; height: 28px; margin: 0 4px 0 0; padding: 0 8px; border: 1px solid var(--edge); border-radius: var(--r-control); background: var(--bg); color: var(--muted); cursor: text; }
-.transcript-find-field:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+.transcript-find-field { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; height: 34px; margin: 0 4px 0 0; padding: 0 10px; border: 0; border-radius: var(--r-control); background: var(--wash); color: var(--muted); cursor: text; transition: background-color .3s ease, box-shadow .3s ease; }
+.transcript-find-field:focus-within { background: var(--panel); box-shadow: 0 1px 8px rgb(0 0 0 / 6%); }
 .transcript-find-field > .icon { flex: none; }
 /* Over the unscoped field rules, which fill and pad every input and ring it on focus. */
-.transcript .transcript-find-field input.transcript-find-input { flex: 1; min-width: 0; height: 26px; margin: 0; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--text); font: 13px/18px var(--font-sans); outline: none; }
+.transcript .transcript-find-field input.transcript-find-input { flex: 1; min-width: 0; height: 100%; margin: 0; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--text); font: 13.5px/18px var(--font-sans); outline: none; }
 .transcript-find-count { flex: none; font: 15px/18px var(--font-mono); letter-spacing: .5px; color: var(--muted); }
 button.transcript-find-step { flex: none; display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; margin: 0; padding: 0; color: var(--muted); }
 /* `section` and `h3` carry the settings screens' margins and `--surface` fill. */
@@ -1467,6 +1480,19 @@ button.follow-chip[aria-pressed="true"]:hover:not(:disabled) { background: var(-
 .note-detail { display: grid; grid-template-columns: minmax(0, 1fr); flex: none; }
 .note-detail-wide { flex: 1; min-height: 0; grid-template-columns: minmax(0, 1fr) 340px; }
 .note-detail-wide > .note-body { min-height: 0; overflow-y: auto; }
+/*
+ * The column's button (`toggleColumn`) opens and closes it over .4s: the second track grows from
+ * nothing, or shrinks to it, and the note takes or gives the room. The column keeps its 330px (the
+ * track's width in the layout now drawn, further down) all
+ * the way, so its lines do not rewrap as it moves; what the track does not yet hold is past the
+ * article's edge, which `.notes-main` clips. Only the button sets `data-column`: a note opening,
+ * or the window crossing 1280px, lays out at once as before.
+ */
+.note-detail-wide > .note-side { min-width: 330px; }
+@keyframes kw-column-open { from { grid-template-columns: minmax(0, 1fr) 0px; } to { grid-template-columns: minmax(0, 1fr) 330px; } }
+@keyframes kw-column-close { from { grid-template-columns: minmax(0, 1fr) 330px; } to { grid-template-columns: minmax(0, 1fr) 0px; } }
+.note-detail-wide[data-column="opening"] { animation: kw-column-open .4s var(--ease-out) both; }
+.note-detail-wide[data-column="closing"] { animation: kw-column-close .4s var(--ease-out) both; }
 .note-side { position: relative; display: flex; flex-direction: column; min-height: 0; background: var(--panel); border-left: 1px solid var(--rule); }
 /* Ends a card's height and 24px under its last line, so scrolled to the end that line stands 12px
  * clear of the card's top. `--player-h` is the card's own height, which `NoteWorkspace.tsx` keeps
@@ -2007,9 +2033,20 @@ input:not([type="checkbox"], [type="radio"]):not([type="range"], [type="file"]) 
   opacity: 1;
 }
 
-input:focus-visible {
+/*
+ * The ring is for the keyboard, and only on what is not typed in. A browser matches
+ * `:focus-visible` on a field you type in when it is clicked as well, so a ring there showed on
+ * every click (the owner asked for it gone, 2026-11-22). A field shows focus as a select does
+ * below, by its surface: it lifts to `--panel` under a soft shadow, and the caret is in it. The
+ * note's title has no box, and shows its caret alone.
+ */
+input:is([type="checkbox"], [type="radio"], [type="range"], [type="file"]):focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"]):focus-visible,
+textarea:focus-visible {
+  outline: none;
 }
 
 /*
@@ -2405,6 +2442,11 @@ button.microphone-language-toggle:hover:not(:disabled) { background: transparent
 .app-titlebar-buttons button:active:not(:disabled) { background: var(--band); color: var(--band-ink); }
 .app-titlebar-buttons button.window-close:hover:not(:disabled) { background: var(--signal); color: #000; }
 .app-titlebar-buttons button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* A meeting that was cut short, said from any screen but Meetings: under the title bar, at the end, as the window's own notices are. */
+.interrupted-notice { position: fixed; top: calc(var(--titlebar-height) + 8px); right: 12px; z-index: 1000; width: min(26rem, calc(100vw - 24px)); padding: 14px 16px 12px; background: var(--panel); color: var(--text); border-radius: var(--r-card); box-shadow: var(--card-shadow); font-size: 13px; line-height: 20px; animation: kw-enter .5s var(--ease-enter) both; }
+.interrupted-notice p { margin: 0; }
+.interrupted-notice-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.interrupted-notice button { margin: 0; height: 28px; padding: 0 12px; font-size: 13px; }
 .window-control-error { position: fixed; top: var(--titlebar-height); right: 12px; z-index: 1001; max-width: 32rem; padding: 12px 16px; background: var(--panel); color: var(--text); border-radius: var(--r-card); box-shadow: var(--card-shadow); animation: kw-enter .5s var(--ease-enter) both; }
 
 /*
@@ -2525,9 +2567,7 @@ button.microphone-language-toggle:hover:not(:disabled) { background: transparent
  * the `--band` fill, which the title bar's current pill already spends.
  */
 .panel-search { display: flex; align-items: center; gap: 8px; height: 34px; margin: 10px 12px 0; padding: 0 10px; border: 0; border-radius: var(--r-control); background: var(--wash); color: var(--muted); }
-.panel-search:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
 .panel-search input[type="search"] { flex: 1; min-width: 0; height: 100%; margin: 0; padding: 0; border: 0; background: transparent; color: var(--text); font-size: 13.5px; }
-.panel-search input[type="search"]:focus-visible { outline: none; }
 .notes-folders-head { display: flex; align-items: center; gap: 2px; padding: 18px 10px 4px 20px; }
 .notes-folders-head > .panel-label { flex: 1; padding: 0; }
 button.panel-tool { flex: none; display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; margin: 0; padding: 0; border-radius: var(--r-control); }
@@ -2565,6 +2605,10 @@ button:is(.notes-person, .notes-trash)[aria-pressed="true"], button:is(.notes-pe
  * state, rather than `--band`, which is a fill. */
 .notes-entry[data-dragging] { opacity: 0.45; }
 .notes-folder[data-drop-target] { outline: 1px solid var(--band); outline-offset: 2px; border-radius: var(--r-control); }
+/* Trash takes a dragged note as a folder does. Its ring is drawn inside, where its own hairline is:
+ * the button sits at the foot of a panel that clips, and an outline outside it lost its lower edge. */
+button.notes-trash[data-drop-target] { box-shadow: inset 0 0 0 2px var(--band); color: var(--band-text); }
+button.notes-trash[data-drop-target] > .icon { color: inherit; }
 .notes-drop-unfiled { margin: 4px 0; padding: 6px 10px; border: 1px dashed var(--faint); border-radius: var(--r-control); font: 15px/18px var(--font-mono); letter-spacing: .5px; color: var(--muted); text-align: center; }
 .notes-drop-unfiled[data-drop-target] { border-style: solid; border-color: var(--band); color: var(--band-text); }
 .notes-context-menu { position: fixed; z-index: 1100; width: 15rem; max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); overflow: auto; padding: 8px; background: var(--panel); color: var(--text); border: 0; border-radius: var(--r-card); box-shadow: var(--card-shadow); animation: kw-rise .35s var(--ease) both; }
@@ -2739,6 +2783,13 @@ button.note-people-add:hover:not(:disabled), button.note-people-add[aria-expande
 .recording-player input[type="range"]:disabled::-webkit-slider-thumb { background: var(--muted); }
 .recording-details { margin-bottom: 1rem; color: var(--muted); }
 .recording-details p { white-space: pre-wrap; overflow-wrap: anywhere; }
+/* A meeting note's speaker labels, over its transcript: still coming, failed, or left out. The note is whole either way, so this is
+ * a line and its two buttons, not a banner. */
+.speaker-label-status { margin: 12px 20px; font-size: 13px; line-height: 20px; }
+.speaker-label-status p { margin: 0; overflow-wrap: anywhere; }
+.speaker-label-status .speaker-label-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.speaker-label-status button { margin: 0; padding: 0 12px; height: 28px; font-size: 13px; }
+.speaker-label-status .failure-line { margin: 0; }
 /* The Transcript tab's transcript pulls out 20px each side, its lines' own inset, so their text starts where the note title's does
  * and their hovers and fills reach 20px past it (KNEG-448). */
 .note-workspace .transcript { margin-inline: -20px; }
@@ -2824,8 +2875,8 @@ button.note-people-add:hover:not(:disabled), button.note-people-add[aria-expande
   background: var(--field);
 }
 .content :is(input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"]), select, textarea) { font-family: var(--font-sans); font-size: 15px; font-variant-numeric: tabular-nums; }
-.content input:not([type="checkbox"], [type="radio"], [type="range"]) { transition: background-color .3s ease, box-shadow .3s ease; }
-.content input:not([type="checkbox"], [type="radio"], [type="range"]):focus { background: var(--panel); box-shadow: 0 1px 8px rgb(0 0 0 / 6%); }
+.content :is(input:not([type="checkbox"], [type="radio"], [type="range"]), textarea) { transition: background-color .3s ease, box-shadow .3s ease; }
+.content :is(input:not([type="checkbox"], [type="radio"], [type="range"]), textarea):focus { background: var(--panel); box-shadow: 0 1px 8px rgb(0 0 0 / 6%); }
 :is(.content, .notes-context-menu, .transcript-rename) select:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .content textarea { padding: 10px 14px; border: 0; border-radius: var(--r-row); background: var(--field); color: var(--text); }
 /* `flex: none`: beside a label long enough to wrap, a flex item's box shrank to 14px wide. */
@@ -3234,6 +3285,9 @@ button.call-card-record:hover:not(:disabled) { background: rgb(0 0 0 / 75%); }
 .tile-form { position: relative; display: flex; flex-direction: column; gap: 10px; width: 100%; max-width: 440px; }
 .tile-form input.meeting-name { width: 100%; height: 48px; margin: 0; padding: 0 22px; border: 0; border-radius: var(--r-control); background: rgb(255 255 255 / 82%); color: #000; font-size: 15px; }
 .tile-form input.meeting-name::placeholder { color: rgb(0 0 0 / 58%); }
+/* On the tile's colour, focus is the field going to full white under the shadow every field takes. */
+.tile-form input.meeting-name { transition: background-color .3s ease, box-shadow .3s ease; }
+.tile-form input.meeting-name:focus { background: #fff; box-shadow: 0 1px 8px rgb(0 0 0 / 12%); }
 .tile-form button.tile-cta { justify-content: center; }
 button.glass-action-wide { width: 100%; }
 .tile-dusk button.glass-action { background: rgb(10 20 50 / 55%); }
@@ -3357,7 +3411,7 @@ button.panel-action:hover:not(:disabled) { background: var(--control-hover); }
 button.panel-action > .icon { margin: 0 -3px; }
 .panel-list > button.panel-action { align-self: flex-start; }
 button.list-toggle { flex: none; display: flex; align-items: center; justify-content: center; width: 30px; height: 30px; margin: 0 0 0 auto; padding: 0; border-radius: 50%; background: transparent; color: var(--text); }
-button.list-toggle[data-collapsed="true"] { position: absolute; z-index: 2; top: 40px; left: 34px; margin: 0; background: var(--wash); }
+button.list-toggle[data-collapsed="true"] { position: absolute; z-index: 2; top: 40px; left: 34px; margin: 0; background: var(--wash); animation: kw-fade .3s .2s var(--ease-out) both; }
 .panel-search { flex: none; gap: 9px; height: 40px; margin: 0; padding: 0 16px; background: var(--wash); color: var(--text); transition: background-color .3s ease, box-shadow .3s ease; }
 .panel-search:focus-within { background: var(--panel); box-shadow: 0 1px 8px rgb(0 0 0 / 5%); }
 .panel-search input[type="search"] { font-size: 14px; }
@@ -3389,7 +3443,7 @@ button.notes-person[aria-pressed="true"] .notes-folder-count { color: inherit; }
 .notes-person-name { flex: none; max-width: 200px; }
 button.notes-trash { width: 100%; gap: 9px; height: 40px; margin: 0; padding: 0 16px; border-radius: var(--r-control); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 12%, transparent); font-size: 13px; letter-spacing: .04em; }
 button.notes-trash[aria-pressed="true"], button.notes-trash[aria-pressed="true"]:hover:not(:disabled) { background: var(--band); color: var(--band-ink); box-shadow: none; }
-button.notes-trash[aria-pressed="true"] .notes-folder-count, button.notes-trash[aria-pressed="true"] > .icon-filled { color: inherit; }
+button.notes-trash[aria-pressed="true"] .notes-folder-count, button.notes-trash[aria-pressed="true"] > .icon { color: inherit; }
 .notes-trash-label { flex: none; }
 .notes-trash > .notes-folder-count { margin-left: auto; }
 button.panel-inline { align-self: flex-start; height: 32px; margin: 4px; padding: 0 14px; border: 0; background: var(--wash); font-size: 13px; }
@@ -3403,16 +3457,35 @@ button.panel-inline:hover:not(:disabled) { border: 0; background: var(--control)
 .note-detail { gap: 20px; }
 .note-detail-wide { grid-template-columns: minmax(0, 1fr) 330px; }
 .note-body { min-width: 0; border-radius: var(--r-sheet); background: var(--panel); }
+/*
+ * With no column beside it -- below 1280px, or the column hidden -- the whole note scrolls in
+ * `.notes-main`, and the sheet used to scroll with it: its rounded top went off under the title
+ * bar, where beside a column the sheet stands still and the note scrolls inside it (the owner's
+ * report, 2026-11-22). So here `.notes-main` is the sheet: it has the fill and the corners, and
+ * does not move, and what it scrolls -- the note, the Transcript tab's lines, the mini player at
+ * its foot -- is drawn on it. The scroller is the same element as before, which the reading
+ * position, the editor's margin and Follow all look up by name.
+ */
+.notes-main:has(> .note-detail:not(.note-detail-wide)) { border-radius: var(--r-sheet); background: var(--panel); }
+.note-detail:not(.note-detail-wide) > .note-body { border-radius: 0; background: none; }
+.note-detail:not(.note-detail-wide) .transcript-head { background: var(--panel); }
+.notes-main:has(> .note-detail:not(.note-detail-wide)) > .notes-notices:not(:empty) { padding: 16px 44px 0; }
 .note-page { display: flex; flex-direction: column; gap: 18px; max-width: none; margin: 0; padding: 38px 44px 44px; }
 .note-detail-header { display: flex; flex-direction: column; gap: 18px; }
 .note-when { display: inline-flex; align-items: center; gap: 8px; margin: 0; font: 13px/1.3 var(--font-mono); color: var(--muted); }
+/*
+ * The date's line, which also holds the closed list panel's toggle: out in the sheet's 44px
+ * margin, 4px short of the date's mark and centred on the line, so the date starts where the
+ * title does whether the toggle is there or not. In the flow of the note, so it scrolls away
+ * with the date. The line is 17px tall with or without a date in it.
+ */
+.note-when-line { position: relative; display: flex; align-items: center; min-height: 17px; }
+.note-when-line > button.list-toggle[data-collapsed="true"] { top: 50%; left: -34px; margin-top: -15px; z-index: auto; }
 .note-when-mark { flex: none; width: 7px; height: 7px; border-radius: 2px; background: var(--text); }
 .note-title-heading { position: relative; margin: 0; font: inherit; letter-spacing: 0; }
 /* Grows with the title, in Iris; the caret and a selection keep to plain ink, which a gradient cannot draw. */
 .note-detail textarea.note-title { display: block; width: 100%; min-width: 0; margin: 0; padding: 0; overflow: hidden; resize: none; field-sizing: content; border: 0; background: var(--iris-text); -webkit-background-clip: text; background-clip: text; color: transparent; caret-color: var(--text); font: 400 44px/1.08 var(--font-sans); letter-spacing: .03em; }
 .note-detail textarea.note-title::selection { background: var(--band-wash); -webkit-text-fill-color: var(--text); }
-.note-detail textarea.note-title:focus { outline: none; }
-.note-detail textarea.note-title:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: var(--r-row); }
 .note-meta { gap: 8px; margin: 0; font-size: 13px; line-height: 1.3; color: var(--text); }
 .note-meta li.note-people { gap: 8px; }
 .note-people-list { gap: 8px; }
@@ -3472,6 +3545,9 @@ button.start-from-transcript:hover:not(:disabled) { background: var(--control-ho
 .transcript-head, .note-side .transcript-head { height: 36px; margin-bottom: 16px; padding: 0 4px 0 6px; background: var(--bg); font: 400 13px/1.3 var(--font-mono); letter-spacing: 0; color: var(--band-text); }
 button.transcript-find { width: 36px; height: 36px; margin: 0; border-radius: 50%; background: var(--wash); color: var(--text); }
 button.transcript-find:hover:not(:disabled) { background: var(--control-hover); }
+/* The bar ends where the Find button it replaces did. Its -6px was for the old head's 20px of
+   padding; against this head's 4px it put Close 2px past the column's edge, which clips it. */
+.transcript-findbar { margin-right: 0; }
 .note-side-body > p { margin: 0 6px; }
 .note-workspace .transcript, .note-transcript-inline .transcript { margin-inline: 0; }
 .transcript button.transcript-section-toggle { height: 32px; padding: 0 6px; border-top: 0; border-radius: var(--r-row); font-size: 13px; }
@@ -4224,8 +4300,6 @@ button.microphone-error-retry { align-self: flex-start; min-height: 32px; margin
  */
 .page-back, .task-notice { padding-left: calc(24px + (100cqw - 100vw) / 2); }
 
-/* KNEG-515: leave the floating library toggle its own space in the inline transcript. */
-.split[data-list-collapsed="true"] .note-transcript-inline .transcript-head { padding-left: 44px; }
 
 /* KNEG-547: keep the task's layout while reading, without inventing its state. */
 .task-page.task-loading { animation: none; }

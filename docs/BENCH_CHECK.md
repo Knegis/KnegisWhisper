@@ -1042,8 +1042,8 @@ person at the machine.
 
 1. **Open Settings > Diagnostics in an installed v0.2.0 build.** Confirm
    "Check for updates automatically" is on by default. Press "Check for updates".
-   Against the newest published release, expect "Up to date"; while the repository
-   is private, expect "No public release could be found". Confirm "Last check"
+   Against the newest published release, expect "Up to date"; the repository is
+   public (checked 16 November 2026). Confirm "Last check"
    shows the result and the button re-enables. No public key is needed.
 2. **Exercise the automatic check by hand.** With the switch on and no previous
    automatic attempt, confirm a due check runs 15 seconds after launch. Inspect

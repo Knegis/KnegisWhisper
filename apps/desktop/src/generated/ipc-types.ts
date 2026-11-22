@@ -158,6 +158,11 @@ overlay: OverlayStatus, allowedEgressPurposes: Array<string>,
  */
 modelCache: ModelCacheStatus,
 /**
+ * Where the application writes its log, and a panic before it ends
+ * (`crate::logging`). What somebody reporting a crash is asked to attach.
+ */
+logFile: string,
+/**
  * Whether a modifier-only shortcut can work here.
  *
  * Reported rather than assumed by the UI. The hotkey editor has to say
@@ -447,6 +452,22 @@ export type SummaryState = { noteId: number, content: string | null, revision: n
  * summary names only the model (KNEG-367).
  */
 model: string | null, references: Array<SummaryReference>, };
+
+/**
+ * What a note shows of its speaker labels. `None` for a note that never
+ * asked for them.
+ */
+export type SpeakerLabelState = {
+/**
+ * `queued`, `processing`, `succeeded`, `failed`, `interrupted` or
+ * `dismissed`.
+ */
+status: string, error: string | null,
+/**
+ * Whether the job can be started again: it is not running, the note is
+ * not in Trash, and its recording is still attached.
+ */
+canRetry: boolean, };
 
 export type SummarySetupTarget = "summary-settings" | "providers" | "local-text-models" | "company-accounts";
 
@@ -802,7 +823,7 @@ export type CalendarLinkNotice = "overlap" | "choice-unavailable" | "calendar-un
  */
 export type RecordingRemoval = "deleted" | "kept-incomplete" | "kept-untranscribed" | "deleted-update-failed" | "delete-failed";
 
-export type Stage = "preparing-recording" | "finishing-live-transcript" | "transcribing-recording" | "analysing-speakers" | "saving-note";
+export type Stage = "preparing-recording" | "finishing-live-transcript" | "transcribing-recording" | "saving-note";
 
 export type Kind = "stop" | "recovery";
 
@@ -930,7 +951,12 @@ recordingRemoval: RecordingRemoval | null,
 /**
  * Why deleting it failed, with `RecordingRemoval::DeleteFailed`.
  */
-recordingRemovalError: string | null, } | { "outcome": "nothing-transcribed", recordingPath: string, mic: Delivered, system: Delivered,
+recordingRemovalError: string | null,
+/**
+ * Speaker labels are being added to the saved note. A recording
+ * that was to be deleted is deleted once they are done.
+ */
+speakerLabelsPending: boolean, } | { "outcome": "nothing-transcribed", recordingPath: string, mic: Delivered, system: Delivered,
 /**
  * Scheduled live-session reconnects still happened even when no words
  * were produced. Keeping the count makes this successful provider work
@@ -944,7 +970,14 @@ export type RecoverableRecording = { storageKey: string, hasNotes: boolean,
  * (KNEG-365), tidied as the recovered note's title will be. `None` when
  * it was given none, or has no plan.
  */
-title: string | null, };
+title: string | null,
+/**
+ * The application never saw this meeting end: it crashed or was closed
+ * while the meeting ran or was being saved (`draft::unfinished_path`).
+ * `false` for a recording left with no note on purpose, and for any
+ * made before the marker existed.
+ */
+unfinished: boolean, };
 
 /**
  * An offer to record a meeting that appears to be happening.

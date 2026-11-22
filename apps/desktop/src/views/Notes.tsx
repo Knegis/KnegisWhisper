@@ -131,7 +131,7 @@ type FocusTarget = "undo" | "title" | "trash";
  * The right-click menu's target: a note, or a folder heading. `fromButton` when the open note's
  * More opened it, so a second press of More closes it rather than reopening it (KNEG-377).
  */
-type ContextMenu = { x: number; y: number; anchor: HTMLButtonElement; fromButton?: boolean } & ({ kind: "note"; note: NoteListItem | Note } | { kind: "folder"; folder: Folder });
+type ContextMenu = { x: number; y: number; anchor: HTMLButtonElement; fromButton?: boolean } & ({ kind: "note"; note: NoteListItem | Note } | { kind: "folder"; folder: Folder } | { kind: "import" });
 
 export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, onImport, onSummarySetup }: { initialNoteId?: number | null; openRequest?: { id: number; transcriptRow: number | null; summaryFocus?: boolean } | null; onOpenNote?: (id: number, transcriptRow?: number) => void; onImport: () => void; onSummarySetup: (id: number, target: SummarySetupTarget) => void }) {
   const [context, setContext] = useState<ContextMenu | null>(null);
@@ -539,6 +539,8 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
   // null for the strip, undefined for none.
   const [drag, setDrag] = useState<{ noteId: number; folderId: number | null } | null>(null);
   const [dropTarget, setDropTarget] = useState<number | null | undefined>(undefined);
+  // Trash as somewhere to drop a note: the same move as Delete, with its Undo.
+  const [trashDrop, setTrashDrop] = useState(false);
   const moveNote = useCallback((note: NoteListItem | Note, folderId: number | null) => {
     reveal(folderId);
     // Flushed first: the workspace may hold an unsaved edit of this very note,
@@ -577,7 +579,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
 
   if (!data) {
     return (
-      <SplitView label="Notes library" panel={<div className="notes-actions"><ListToggle /></div>}>
+      <SplitView label="Notes library" panel={<div className="notes-actions"><ListToggle place="panel" /></div>}>
         <section className="notes-main" aria-label="Note editor">
           <h1 className="sr-only">Notes</h1>
           <div className="notes-notices">{error ? <p className="error">{error}</p> : <p className="muted">Loading…</p>}</div>
@@ -614,7 +616,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
         onClick={() => { void selectNote(note.id).catch(fail); }}
         draggable data-dragging={drag?.noteId === note.id || undefined}
         onDragStart={event => { event.dataTransfer.setData(NOTE_DRAG_TYPE, String(note.id)); event.dataTransfer.effectAllowed = "move"; setDrag({ noteId: note.id, folderId: note.folderId }); }}
-        onDragEnd={() => { setDrag(null); setDropTarget(undefined); }}
+        onDragEnd={() => { setDrag(null); setDropTarget(undefined); setTrashDrop(false); }}
         onContextMenu={event => { event.preventDefault(); openNoteMenu(note, event.currentTarget, { x: event.clientX, y: event.clientY }); }}
         onKeyDown={event => { if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) { event.preventDefault(); openNoteMenu(note, event.currentTarget); } }}
         aria-haspopup="dialog" />
@@ -677,8 +679,28 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
   // its notes replace the tree, as a person's do, most recently deleted first.
   const trashEntry = (
     <PanelSection label={null}>
-      <button type="button" className="notes-trash" aria-pressed={trashOpen}
-        title="Deleted notes, kept until you empty Trash" onClick={toggleTrash}>
+      <button type="button" className="notes-trash" aria-pressed={trashOpen} data-drop-target={trashDrop || undefined}
+        title="Deleted notes, kept until you empty Trash" onClick={toggleTrash}
+        onDragOver={event => {
+          if (!carriesNote(event.dataTransfer.types)) return;
+          event.preventDefault();
+          event.dataTransfer.dropEffect = "move";
+          setTrashDrop(true);
+        }}
+        onDragLeave={event => {
+          if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return;
+          setTrashDrop(false);
+        }}
+        onDrop={event => {
+          const id = draggedNoteId(event.dataTransfer);
+          if (id === null) return;
+          event.preventDefault();
+          setTrashDrop(false);
+          setDropTarget(undefined);
+          setDrag(null);
+          const note = notes.find(item => item.id === id);
+          if (note) moveToTrash(note);
+        }}>
         <Icon name="trash" size={16} />
         <span className="notes-trash-label">Trash</span>
         <span className="notes-folder-count"><span aria-hidden="true">{trash.notes.length}</span><span className="sr-only">, {noteCount(trash.notes.length)}</span></span>
@@ -704,9 +726,16 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
       <div className="panel-surface" data-surface="notes.export">
         <div className="notes-actions">
           <PanelAction icon="plus" label="New note" onClick={() => { void newNote(); }} />
-          <PanelAction label="Import audio or video" onClick={onImport} />
-          <PanelAction label="Import shared folder…" onClick={() => { shareTrigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; setShareImportRequest(value => value + 1); }} />
-          <ListToggle />
+          {/* One Import, with what can be imported in its menu: two import pills beside New note wrapped the row. A second press closes it, as More does. */}
+          <button type="button" className="panel-action" aria-haspopup="dialog" aria-expanded={context?.kind === "import"} onClick={event => {
+            const anchor = event.currentTarget;
+            if (context?.kind === "import") { setContext(null); return; }
+            const rect = anchor.getBoundingClientRect();
+            setContext({ kind: "import", x: rect.left, y: rect.bottom + 4, anchor, fromButton: true });
+          }}>
+            <span className="panel-action-label">Import</span>
+          </button>
+          <ListToggle place="panel" />
         </div>
         <label className="panel-search">
           <Icon name="search" size={16} />
@@ -809,7 +838,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
   );
 
   return (
-    <SplitView label="Notes library" panel={panel}>
+    <SplitView label="Notes library" panel={panel} toggleInMain={!trashOpen && trashedView === null && openNote !== null}>
       <section className="notes-main" aria-label="Note editor" ref={mainRef}>
         {/* Always drawn, empty when there is nothing to say, so what comes into it -- a failure, "Moved
             to Trash", "Written to" -- is announced: a live region added already filled often is not. */}
@@ -862,7 +891,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
           </div>
         ))}
       </section>
-      {context && createPortal(<div ref={contextRef} className="notes-context-menu" role="dialog" aria-label={context.kind === "note" ? `Actions for ${context.note.title}` : `Actions for folder ${context.folder.name}`} style={{ left: context.x, top: context.y }} onContextMenu={event => event.preventDefault()} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget) && !(context.fromButton && event.relatedTarget === context.anchor)) setContext(null); }}>
+      {context && createPortal(<div ref={contextRef} className="notes-context-menu" role="dialog" aria-label={context.kind === "note" ? `Actions for ${context.note.title}` : context.kind === "folder" ? `Actions for folder ${context.folder.name}` : "Import"} style={{ left: context.x, top: context.y }} onContextMenu={event => event.preventDefault()} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget) && !(context.fromButton && event.relatedTarget === context.anchor)) setContext(null); }}>
         {context.kind === "note" ? <>
                 <button
                   type="button"
@@ -909,6 +938,9 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
             </select>
           </span>
         </div>
+        </> : context.kind === "import" ? <>
+          <button type="button" onClick={() => { setContext(null); onImport(); }}>Audio or video</button>
+          <button type="button" onClick={() => { shareTrigger.current = context.anchor; setContext(null); setShareImportRequest(value => value + 1); }}>Shared folder…</button>
         </> : <><button type="button" onClick={() => { shareTrigger.current = context.anchor; setShareFolder(context.folder); setContext(null); }}>Share folder…</button><button type="button" onClick={() => {
           const { folder } = context;
           setContext(null);

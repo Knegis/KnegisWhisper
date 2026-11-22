@@ -98,12 +98,14 @@ pub fn source_hash(transcript: &str, participants: Option<&str>) -> String {
     format!("{:x}", digest.finalize())
 }
 
-/// Called only by native note creation, not the foreign database importer.
+/// Called only by native note creation, not the foreign database importer,
+/// and by a note's speaker labels once they settle. A note that already has
+/// a summary job keeps it: labels can settle more than once.
 pub async fn enqueue_automatic(
     connection: &mut SqliteConnection,
     id: i64,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query("INSERT INTO note_summary_jobs(note_id,status,automatic,settings_json,source_transcript,source_participants,expected_revision)
+    sqlx::query("INSERT OR IGNORE INTO note_summary_jobs(note_id,status,automatic,settings_json,source_transcript,source_participants,expected_revision)
         SELECT n.id,'queued',1,s.value,n.transcript,n.participants,0 FROM notes n JOIN settings s ON s.key='reasoning.summaries'
         WHERE n.id=? AND n.note_type IN ('meeting','import') AND n.transcript IS NOT NULL AND length(trim(n.transcript))>2
         AND n.enhanced_content IS NULL AND json_valid(s.value) AND json_extract(s.value,'$.enabled')=1")

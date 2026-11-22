@@ -65,6 +65,7 @@ import type {
   InputDevice,
   InstallProgress,
   NoteRecordingState,
+  SpeakerLabelState,
   LevelSession,
   LevelSource,
   Lists,
@@ -153,6 +154,7 @@ const DIAGNOSTICS: Diagnostics = {
     // screen has for it is otherwise never seen in dev.
     fellBack: true,
   },
+  logFile: "C:\\Users\\dev\\AppData\\Roaming\\KnegisWhisper\\logs\\knegiswhisper.log",
   modifierOnlyShortcuts: {
     state: "available",
     mechanism: "WH_KEYBOARD_LL low-level hook",
@@ -700,6 +702,19 @@ function fixtureNoteTitle(given: string | null, started: Date): string {
 
 /** Local structured disposition, separate from a note's exportable prose. */
 const recordingStates = new Map<number, NoteRecordingState>();
+const speakerLabelStates = new Map<number, SpeakerLabelState>();
+function speakerLabelState(id: number): SpeakerLabelState | null {
+  const set = speakerLabelStates.get(id);
+  if (set) return set;
+  const asked = new URLSearchParams(window.location.search).get("speakerLabels");
+  if (asked === null) return null;
+  const stopped = asked === "failed" || asked === "interrupted";
+  return {
+    status: asked,
+    error: stopped ? "the speaker diarization step did not finish within 14 minutes and was stopped" : null,
+    canRetry: stopped || asked === "dismissed",
+  };
+}
 
 /**
  * The fixture meeting stopping: idle again, and what Rust's `keep` would
@@ -784,6 +799,7 @@ function fixtureStop(): MeetingOutcome {
     folderMissing: plan.folderId !== null && folderId === null,
     recordingRemoval: plan.deleteRecording ? "deleted" : null,
     recordingRemovalError: null,
+    speakerLabelsPending: false,
   };
 }
 
@@ -791,7 +807,11 @@ function fixtureStop(): MeetingOutcome {
  * Empty, as a fresh profile has none; `kw.interrupted()` adds one, so the
  * Meetings panel's Interrupted section and its Recover button can be seen.
  */
-let recoverable: RecoverableRecording[] = [];
+// `?interrupted` starts with a meeting that was cut short, as a crash during
+// Stop leaves one, to look at the window's notice and the Meetings row.
+let recoverable: RecoverableRecording[] = new URLSearchParams(window.location.search).has("interrupted")
+  ? [{ storageKey: "20261117-090000-3f2a9c1e.wav", hasNotes: true, title: "Supplier review", unfinished: true }]
+  : [];
 
 /*
  * The Windows-only floating microphone, off until Settings > Dictation turns
@@ -2202,6 +2222,19 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
   // A note that is not has no player, as in the app.
   speech_installations: () => ({ revision: 0, jobs: [] }),
   note_recording_state: a => recordingStates.get(arg<number>(a, "id") ?? 0) ?? null,
+  // `?speakerLabels=failed` (or queued, processing, interrupted, dismissed)
+  // puts every note in that state, to look at its status line.
+  note_speaker_labels_get: a => speakerLabelState(arg<number>(a, "id") ?? 0),
+  note_speaker_labels_retry: a => {
+    const id = arg<number>(a, "id") ?? 0;
+    speakerLabelStates.set(id, { status: "processing", error: null, canRetry: false });
+    return speakerLabelState(id);
+  },
+  note_speaker_labels_dismiss: a => {
+    const id = arg<number>(a, "id") ?? 0;
+    speakerLabelStates.set(id, { status: "dismissed", error: null, canRetry: true });
+    return speakerLabelState(id);
+  },
   note_recording_retry_deletion: () => { throw new Error("This note has no recording deletion request."); },
   note_recording_get: (a) => {
     const id = arg<number>(a, "id");
@@ -2567,6 +2600,7 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
       folderMissing: false,
       recordingRemoval: null,
       recordingRemovalError: null,
+      speakerLabelsPending: false,
     } satisfies MeetingOutcome;
   },
   // The plan comes back on `meeting_status` while the meeting runs, tidied,
@@ -2985,8 +3019,8 @@ const devConsole = {
    * after calling this. `title` is the name it was given before Start, as
    * its plan sidecar would carry it (KNEG-365).
    */
-  interrupted(storageKey = "20260901-101500-3f2a9c1e.wav", hasNotes = true, title: string | null = null) {
-    recoverable = [...recoverable.filter((r) => r.storageKey !== storageKey), { storageKey, hasNotes, title }];
+  interrupted(storageKey = "20260901-101500-3f2a9c1e.wav", hasNotes = true, title: string | null = null, unfinished = true) {
+    recoverable = [...recoverable.filter((r) => r.storageKey !== storageKey), { storageKey, hasNotes, title, unfinished }];
   },
   offer(name = "Zoom") {
     const next: Offer = {

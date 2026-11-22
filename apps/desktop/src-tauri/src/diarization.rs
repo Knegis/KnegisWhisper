@@ -11,12 +11,13 @@
 //! `sherpa-onnx-offline-speaker-diarization` reported a real-time factor of
 //! **0.081** on this machine over a 56.9-second recording — 4.6 seconds of CPU.
 //! Linear in the recording, so a one-hour meeting is roughly **five minutes**
-//! added to *Stop and transcribe*, on top of the whole-recording transcription
-//! pass that already runs there.
+//! of work, on top of the whole-recording transcription pass.
 //!
-//! That is why this is off by default and says its cost on the screen. It is
-//! not a background nicety; it is a second pass over the whole recording, and a
-//! person who turns it on should know they are choosing to wait.
+//! That is why this is off by default and says its cost on the screen: it is a
+//! second pass over the whole recording. It runs **after the note is saved**,
+//! as a job on the note (`crate::speaker_labels`), and not inside *Stop and
+//! transcribe* as it did until 2026-11-17 -- when a process that ended during
+//! those minutes left no note at all.
 //!
 //! ## English is the measured case
 //!
@@ -131,7 +132,55 @@ fn shipped() -> Result<&'static [kw_provider_registry::DiarizationModel], String
         .map_err(|err| err.to_string())
 }
 
-/// Run the diarizer over a finished recording.
+/// How much either stream of the diarizer is read. Its answer is one line per
+/// turn; anything past this is a process that has gone wrong.
+const OUTPUT_LIMIT: usize = 16 * 1024 * 1024;
+
+/// How long the diarizer may run over a recording of `duration_seconds`.
+///
+/// Measured at 0.081 of real time on one machine (the module doc). Ten
+/// minutes and the recording's own length is more than ten times that on an
+/// hour, and still an end: a process waiting on a dialog nobody can see, or
+/// stuck, is a failure the note can report rather than a job that never ends.
+fn deadline(duration_seconds: f64) -> std::time::Duration {
+    let recording = if duration_seconds.is_finite() {
+        duration_seconds.clamp(0.0, 24.0 * 3600.0)
+    } else {
+        0.0
+    };
+    std::time::Duration::from_secs_f64(600.0 + recording)
+}
+
+/// The library the diarizer cannot start without, when it is not beside it.
+///
+/// The Windows archive is the shared build: `onnxruntime.dll` is a file of
+/// its own. Started without it, the process shows a system dialog and waits.
+fn missing_runtime(executable: &std::path::Path) -> Option<PathBuf> {
+    if !cfg!(windows) {
+        return None;
+    }
+    let library = executable.parent()?.join("onnxruntime.dll");
+    (!library.is_file()).then_some(library)
+}
+
+async fn read_bounded(mut stream: impl tokio::io::AsyncRead + Unpin) -> Result<Vec<u8>, String> {
+    use tokio::io::AsyncReadExt as _;
+    let mut bytes = Vec::new();
+    (&mut stream)
+        .take((OUTPUT_LIMIT + 1) as u64)
+        .read_to_end(&mut bytes)
+        .await
+        .map_err(|err| format!("the speaker diarization step could not be read: {err}"))?;
+    if bytes.len() > OUTPUT_LIMIT {
+        return Err("the speaker diarization step wrote more than it should".to_owned());
+    }
+    Ok(bytes)
+}
+
+/// Run the diarizer over a finished recording of `duration_seconds`.
+///
+/// The process is this call's: it has no window, it is killed when the call
+/// is dropped or runs past [`deadline`], and its output is bounded.
 ///
 /// `Ok(None)` when the feature is not ready — no CLI, or a model missing. That
 /// is not an error: it is the ordinary state of a machine that has never turned
@@ -142,7 +191,10 @@ fn shipped() -> Result<&'static [kw_provider_registry::DiarizationModel], String
 /// A string, when the process was run and did not produce turns. Distinguished
 /// from `Ok(None)` because a failure the user could act on must not read as a
 /// feature that is simply off.
-pub async fn turns(wav: &std::path::Path) -> Result<Option<Vec<Turn>>, String> {
+pub async fn turns(
+    wav: &std::path::Path,
+    duration_seconds: f64,
+) -> Result<Option<Vec<Turn>>, String> {
     let Some(executable) = installed_cli() else {
         return Ok(None);
     };
@@ -150,18 +202,65 @@ pub async fn turns(wav: &std::path::Path) -> Result<Option<Vec<Turn>>, String> {
         return Ok(None);
     };
 
+    if let Some(library) = missing_runtime(&executable) {
+        return Err(format!(
+            "the speaker label runtime is incomplete: {} is missing",
+            library.display()
+        ));
+    }
+
     let args = diarization::build_args(&models, wav, &diarization::Tuning::default());
-    let output = tokio::process::Command::new(&executable)
+    let mut command = tokio::process::Command::new(&executable);
+    command
         .args(&args)
         .stdin(Stdio::null())
-        .output()
-        .await
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    // No console window: the application is a GUI process, so the child
+    // would open one of its own for as long as it runs.
+    #[cfg(windows)]
+    command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    let mut child = command
+        .spawn()
         .map_err(|err| format!("the speaker diarization step could not start: {err}"))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or("the speaker diarization step has no output")?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or("the speaker diarization step has no diagnostics")?;
+
+    let limit = deadline(duration_seconds);
+    let finished = tokio::time::timeout(limit, async {
+        let (stdout, stderr) = tokio::try_join!(read_bounded(stdout), read_bounded(stderr))?;
+        let status = child.wait().await.map_err(|err| {
+            format!("the speaker diarization step could not be waited for: {err}")
+        })?;
+        Ok::<_, String>((stdout, stderr, status.success()))
+    })
+    .await;
+    let (stdout, stderr, exited_cleanly) = match finished {
+        Ok(Ok(output)) => output,
+        other => {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            return Err(match other {
+                Ok(Err(error)) => error,
+                _ => format!(
+                    "the speaker diarization step did not finish within {} minutes and was stopped",
+                    limit.as_secs() / 60
+                ),
+            });
+        }
+    };
 
     diarization::interpret(
-        &String::from_utf8_lossy(&output.stdout),
-        &String::from_utf8_lossy(&output.stderr),
-        output.status.success(),
+        &String::from_utf8_lossy(&stdout),
+        &String::from_utf8_lossy(&stderr),
+        exited_cleanly,
     )
     .map(Some)
     .map_err(|err| err.to_string())
@@ -330,6 +429,16 @@ mod tests {
         // would read as a recording nobody spoke in.
         assert!(exe_name().starts_with("sherpa-onnx-offline-speaker-diarization"));
         assert_ne!(exe_name(), "sherpa-onnx-offline");
+    }
+
+    #[test]
+    fn the_diarizer_is_given_time_in_step_with_the_recording_and_always_an_end() {
+        assert_eq!(deadline(0.0).as_secs(), 600);
+        assert_eq!(deadline(3600.0).as_secs(), 4200);
+        // A duration nobody measured is still a deadline.
+        assert_eq!(deadline(f64::NAN).as_secs(), 600);
+        assert_eq!(deadline(-5.0).as_secs(), 600);
+        assert_eq!(deadline(f64::MAX).as_secs(), 600 + 24 * 3600);
     }
 
     #[test]

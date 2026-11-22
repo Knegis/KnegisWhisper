@@ -37,10 +37,13 @@ not an installed or tagged release candidate. See [video notes](INTRO_VIDEO.md).
 
 ## GitHub state and remaining release gates
 
-The repository description and topics were updated. Its visibility remains private,
-so its releases are visible only to people with access. GitHub private vulnerability
-reporting returned 404 for this private repository; the security policy uses a private
-maintainer channel instead of advertising an unavailable reporting form.
+The repository description and topics were updated. The repository was private when
+v0.2.0 was published and is public now (checked 16 November 2026), with the rulesets in
+[repository rules](RELEASING.md#repository-rules). GitHub private vulnerability reporting
+returned 404 while the repository was private. It was enabled on 16 November 2026: the API
+reports it on, and the signed-out Security tab shows **Report a vulnerability**, whose form
+asks the visitor to sign in. No test report has been filed. `SECURITY.md` and the issue
+chooser's security link point to that form.
 
 ## v0.2.0, published 13 November 2026
 
@@ -54,7 +57,9 @@ maintainer channel instead of advertising an unavailable reporting form.
 - Run [43437664044](https://github.com/Knegis/KnegisWhisper/actions/runs/43437664044) passed
   every step and created the draft. It reported `calendar: google=included
   microsoft=included`, and the notes say both one-click calendars are included.
-- Published as a prerelease, not marked latest, at 15:56 UTC. "Latest" stays on v0.1.1.
+- Published as a prerelease, not marked latest, at 15:56 UTC. Later the same day, at the
+  owner's request, it became a full release marked Latest. Its title still says "Windows
+  preview", and its notes still call it an early preview rather than a stable release.
   No intro video is attached, because the only one is v0.1.1's, with its outdated closing
   caption (KNEG-537).
 - The repository was still private at publication.

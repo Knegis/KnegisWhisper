@@ -13,15 +13,23 @@ import { Icon } from "./Icon";
 export const PanelCollapsed = createContext<{ collapsed: boolean; toggle: () => void }>({ collapsed: false, toggle: () => {} });
 
 /**
- * The button that shows and hides the list panel. Inside the panel while it is
- * open, among the page's own actions, and over the corner of the page while it is
- * not, so it never goes away along with what it would bring back. Either way the
- * press removes the button pressed, so focus moves to the one that replaces it
- * rather than dropping to the page.
+ * The button that shows and hides the list panel. There is one at a time, so the
+ * press removes the button pressed and focus moves to the one that replaces it
+ * rather than dropping to the page:
+ *
+ * - `place="panel"`: inside the panel while it is open, among the page's own
+ *   actions. Drawn only then; the hidden panel stays mounted and would otherwise
+ *   keep a second one.
+ * - With the panel closed, on the page, so it never goes away along with what it
+ *   would bring back. An open note draws it on its date line (`NoteWorkspace`),
+ *   where it scrolls away with the note (the owner's ask, 2026-11-22). Where the
+ *   page has no such line -- Trash, no note open -- `SplitView` draws it over
+ *   the page's corner, which is where every page had it before.
  */
-export function ListToggle() {
+export function ListToggle({ place = "page" }: { place?: "panel" | "page" }) {
   const { collapsed, toggle } = useContext(PanelCollapsed);
   const label = collapsed ? "Show list" : "Hide list";
+  if (place === "panel" && collapsed) return null;
   return (
     <button
       type="button"
@@ -52,12 +60,13 @@ export function ListToggle() {
  * `id="list-panel"` is what the toggle names in `aria-controls`. One page shows
  * at a time, so one `SplitView` is mounted and the id is unique in the document.
  * The panel draws its own toggle (`ListToggle`), wherever suits its actions.
+ * `toggleInMain` says the main area draws the closed panel's toggle itself.
  */
-export function SplitView({ label, panel, children }: { label: string; panel: ReactNode; children: ReactNode }) {
+export function SplitView({ label, panel, toggleInMain = false, children }: { label: string; panel: ReactNode; toggleInMain?: boolean; children: ReactNode }) {
   const { collapsed } = useContext(PanelCollapsed);
   return (
     <div className="split" data-list-collapsed={collapsed}>
-      {collapsed ? <ListToggle /> : null}
+      {collapsed && !toggleInMain ? <ListToggle /> : null}
       <aside id="list-panel" className="list-panel" aria-label={label} hidden={collapsed}>
         {panel}
       </aside>

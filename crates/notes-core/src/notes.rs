@@ -158,11 +158,16 @@ pub async fn create(pool: &SqlitePool, note: &NewNote) -> Result<i64, StorageErr
 }
 
 /// Save a meeting, its optional recording, and recognition results atomically.
+///
+/// With `speakers`, the note's speaker labels are queued in the same
+/// transaction and its automatic summary is not: the summary waits for the
+/// labels (`crate::speaker_labels`).
 pub async fn create_with_voices(
     pool: &SqlitePool,
     note: &NewNote,
     recording: Option<(&str, f64)>,
     samples: &crate::known_voices::Analysis,
+    speakers: Option<crate::speaker_labels::Request>,
 ) -> Result<i64, StorageError> {
     create_with_voices_policy(
         pool,
@@ -170,6 +175,7 @@ pub async fn create_with_voices(
         recording,
         samples,
         crate::known_voices::RELEASE_POLICY,
+        speakers,
     )
     .await
 }
@@ -180,30 +186,46 @@ async fn create_with_voices_policy(
     recording: Option<(&str, f64)>,
     samples: &crate::known_voices::Analysis,
     policy: Option<crate::known_voices::Policy>,
+    speakers: Option<crate::speaker_labels::Request>,
 ) -> Result<i64, StorageError> {
     let mut tx = pool.begin().await?;
     let id = create_on(&mut *tx, note).await?;
-    crate::summary::enqueue_automatic(&mut tx, id).await?;
+    match speakers {
+        Some(request) => crate::speaker_labels::enqueue_on(&mut tx, id, request).await?,
+        None => crate::summary::enqueue_automatic(&mut tx, id).await?,
+    }
     if let Some((key, duration)) = recording {
         crate::recordings::attach_on(&mut *tx, id, key, Some(duration), None).await?;
     }
     if let Some(policy) = policy {
-        sqlx::query("SAVEPOINT voice_results")
-            .execute(&mut *tx)
-            .await?;
-        if let Err(error) = crate::known_voices::persist(&mut tx, id, samples, policy).await {
-            sqlx::query("ROLLBACK TO voice_results")
-                .execute(&mut *tx)
-                .await?;
-            tracing::warn!(%error, "voice results could not be saved");
-            sqlx::query("UPDATE notes SET recording_details=COALESCE(recording_details,'') || ' Known voices could not be saved; speaker labels were preserved.' WHERE id=?").bind(id).execute(&mut *tx).await?;
-        }
-        sqlx::query("RELEASE voice_results")
-            .execute(&mut *tx)
-            .await?;
+        persist_voices(&mut tx, id, samples, policy).await?;
     }
     tx.commit().await?;
     Ok(id)
+}
+
+/// Save recognition results inside a note's transaction. A failure costs
+/// only them: the note says so and keeps its speaker labels.
+pub(crate) async fn persist_voices(
+    tx: &mut sqlx::SqliteConnection,
+    id: i64,
+    samples: &crate::known_voices::Analysis,
+    policy: crate::known_voices::Policy,
+) -> Result<(), StorageError> {
+    sqlx::query("SAVEPOINT voice_results")
+        .execute(&mut *tx)
+        .await?;
+    if let Err(error) = crate::known_voices::persist(&mut *tx, id, samples, policy).await {
+        sqlx::query("ROLLBACK TO voice_results")
+            .execute(&mut *tx)
+            .await?;
+        tracing::warn!(%error, "voice results could not be saved");
+        sqlx::query("UPDATE notes SET recording_details=COALESCE(recording_details,'') || ' Known voices could not be saved; speaker labels were preserved.' WHERE id=?").bind(id).execute(&mut *tx).await?;
+    }
+    sqlx::query("RELEASE voice_results")
+        .execute(&mut *tx)
+        .await?;
+    Ok(())
 }
 
 async fn create_on<'e, E: sqlx::Executor<'e, Database = sqlx::Sqlite>>(
@@ -1652,6 +1674,7 @@ mod voice_save_tests {
                 margin: 0.1,
                 min_seconds: 3.0,
             }),
+            None,
         )
         .await
         .unwrap();

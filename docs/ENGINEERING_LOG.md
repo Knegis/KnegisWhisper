@@ -13,6 +13,243 @@ maintained in place rather than appended to, because its purpose is to be curren
 ---
 
 
+## 2026-11-22 — Fields that are typed in lose the focus ring
+
+The owner asked why every search field and the note's title drew a blue line when clicked. It was the keyboard
+focus ring: a browser matches `:focus-visible` on a field that is typed in when it is clicked too, so the ring
+showed on every click. The same thing was found for `<select>` earlier and solved the same way.
+
+**What changed.** Text inputs and textareas draw no outline. A field shows focus by its surface: it lifts to
+`--panel` under a soft shadow, as the search fields already did. The transcript's Find field and settings
+textareas gained that lift, and the meeting-name field on its coloured tile goes to full white. The note's title
+has no box and shows its caret alone. Checkboxes, radios, sliders, file inputs, switches and every button keep
+the ring, which for them shows only for keyboard use.
+
+**Accepted cost.** Someone tabbing into a text field sees the lift and the caret, not a ring. CSS cannot tell a
+click from Tab for these fields.
+
+**Checked** in headless Edge against the dev fixtures: every visible typed field on Notes, Dictation, Meetings
+and each settings screen was focused, and its computed outline and surface read before and after. None draws an
+outline, and all but the note's title change surface. Tab to a button still draws the 2px ring. **Not checked:**
+fields inside dialogs that were not opened (folder sharing, add a person, rename a speaker, new folder), the two
+Google Calendar fields the fixture keeps closed, and the Tauri window itself.
+
+`shell-title-bar.mjs` check 6 now expects no outline on the search field. Running it showed checks 4 and 5 had
+been false since the list panel began to slide (`67a0716`, the same day): they read the hidden panel as visible,
+because it now keeps its box and is taken away by `visibility` after 0.4 s. `panelState` reads `visibility` too
+and check 4 waits out the slide. All twelve checks pass.
+
+**Three more from the same sitting.** The transcript's Find field is drawn as the list panel's search is, a
+`--wash` pill with no edge. Its Close button stood 2px past the column's edge and was clipped there on hover, from
+a -6px margin kept from an older head; the bar now ends inside the column. And with no transcript column beside
+the note (below 1280px, or the column hidden) the note's sheet scrolled away with the note, its rounded top going
+under the title bar. `.notes-main`, which is the scroller there, is now the sheet: it has the fill and the
+corners and stands still, and the Transcript tab's lines are drawn on it too, where they were on the page's
+`--bg`. The scroller is the same element, so nothing that looks it up changed. Seen in headless Edge at 1400px
+with both panels closed and at 1100px, on Notes, Transcript and Replay; not in the Tauri window, and not with a
+notice showing above the note.
+
+**The closed list panel.** The slide of `67a0716` hid the panel with a -280px margin, which left the main area
+35px further in on the left than on the right; it is -315px, and both sides are 24px. With the panel closed and a
+note open, the panel's toggle is on the note's date line, in the sheet's margin, and scrolls away with the note
+(`NoteWorkspace`, `ListToggle`); it floated over the page's corner and stayed while the note scrolled under it.
+Trash and a page with no note open keep the corner. There is one toggle at a time now: the panel's own is drawn
+only while the panel is open. KNEG-515's rule, which indented the inline transcript's head to clear the floating
+toggle, is removed with what it cleared. Measured in headless Edge: one toggle in each state, centred on the date
+line, moving with it on scroll, and focus handed to the toggle that replaces the one pressed.
+
+---
+
+
+## 2026-11-17 — A meeting's note is saved before its speakers are analysed
+
+Somebody trying v0.2.0 on their own Windows computer recorded a meeting with the Local windowed
+model. The application closed at the end, by their account while speaker labels were being
+worked out, and afterwards the meeting was not in it.
+
+**What the code said.** Nothing about a meeting reached the database until the last step of
+Stop: `keep` ran the whole-recording pass, then the speaker analysis, then created the note. The
+analysis takes about five minutes per hour of recording. Anything that ended the process in that
+time left no note. The recording, the typed notes and the plan were still beside each other in
+the `meetings` folder and offered under Interrupted, but that row came after up to twenty saved
+meetings, read "Not transcribed", and could sit under "No meetings saved yet.". Read from Notes,
+the meeting was gone.
+
+**What is not known.** Why the application closed. The diarizer is a child process and its
+failure already degraded to an unlabelled note, so the application itself ended: a panic
+somewhere (release aborts on one), memory, or a person closing something that showed no progress
+for minutes. A release build logged to a console it does not have, so there is nothing to read.
+The reporter's computer has not been examined.
+
+**Why speaker labels became a job on the note, and not a guarded step inside Stop.** Wrapping
+the step would have protected against the failure the code could already see. The loss came from
+the order: the irreplaceable thing was written last. Saving first makes every later failure
+cost only what it was working on. KNEG-487 had already recorded the same change as an
+improvement; this report made it a defect.
+
+**Why an unfinished job is not restarted at launch.** If analysing that recording is what ends
+the application, restarting it would end it again on every launch. It is marked interrupted and
+the note offers Retry and Continue without.
+
+**Why the summary and the recording's deletion wait for the job.** The summary names speakers
+and snapshots the transcript, so one made before the labels would be out of date as soon as they
+arrived. The job reads the recording, so deleting it first would make the labels impossible. A
+failed job keeps the recording for the same reason: it is the only way to retry.
+
+**Why the window's notice needs a marker.** A recording with no note is usually left on purpose:
+a quiet room keeps its recording. Raising every one of those from every screen at every launch
+would teach people to dismiss it. An empty `.unfinished` file, written at Start and removed at
+any ending the application sees, tells the two apart, and recordings made before it are not
+raised.
+
+**Why a log file, given the logging rule.** `SECURITY.md` already forbids logging secrets, audio
+and full transcripts; that rule was written when the log reached a developer's terminal. The
+file is local, bounded at about 10 MB, and sent nowhere. Without it this investigation had only
+the source to go on.
+
+**Also changed.** The diarizer is started with no console window, a deadline and bounded output,
+and a missing `onnxruntime.dll` is reported before the process is started. `labelled` and the job
+share one function for attaching turns to passages. The Analysing speakers stage is gone from
+Stop's progress.
+
+**What a second reader found.** A Codex review of the change, the same day, found five defects in
+the job's edges, none in the order of the saves, and all five were real. A deletion that could not
+be handed to `recording_state` was forgotten. A waiting summary kept progress made from the
+unlabelled transcript, because its steps are kept by position and not by what they read. A job's
+status that could not be read was taken for a cancellation, which left it marked as running with
+nothing running it. A note restored from Trash had neither its labels nor its summary. And the
+log's size was checked only at launch, so the bound this entry claims above was false for an
+application left running. All five are fixed, each with a test for the case it was found in; the tests were not run against the
+code before the fixes. The
+restore's summary is queued after the restore and its failure is logged, not returned: a note
+that comes back without a summary is a small loss, and a restore that fails because of one is not.
+
+**Not verified.** Listed in
+[the recovery document](KNEG_316_MEETING_RECOVERY.md#speaker-labels-after-the-save-2026-11-17):
+no real meeting has been stopped with the job, and no real process has been ended during it.
+Tray Quit and a second launch, left open here as KNEG-563 and KNEG-564, are the entry of
+2026-11-20. The report itself is KNEG-562.
+
+## 2026-11-20 — Quit asks during a meeting, and a second launch shows the first
+
+Two ways to lose a meeting were left open on 2026-11-17, both read from the code and neither
+reproduced.
+
+**Quit (KNEG-563).** Tray Quit called `app.exit(0)` with no look at what was running. The shutdown
+cleanup then called `MeetingRuntime::cancel`. While a meeting was being saved that call fails at
+once, so the process ended before any note existed. While a meeting was being recorded it did
+worse, and this was not in the issue: `cancel` is the person's own Discard, so it deleted the
+recording and kept only what was typed. Nobody had been asked either time.
+
+Quit now looks first (`quit.rs`). With no meeting it exits as before. While one is recording it
+asks **Stop and save, then quit** or **Keep recording**. While one is being saved it asks **Quit
+when saved**, **Quit now** or **Cancel**, and says that quitting now leaves the recording to be
+recovered. A box closed with Escape stays: leaving is the choice that can lose something, so it is
+never reached by accident. While a Quit waits, the tray's Quit line says so, and pressing it again
+asks again, which is how the wait is cancelled or turned into quitting now.
+
+The alternative was to wait without asking. It was rejected because a save that never finishes
+would make Quit do nothing for ever, with no way out but ending the process.
+
+The cleanup itself no longer discards. `MeetingRuntime::end_for_exit` closes the recorder as Stop
+does and leaves the recording, the typed notes, the plan and the `.unfinished` marker, so an exit
+that reaches the cleanup by any other road costs a recovery and not a meeting.
+
+Speaker labels are not waited for. They are a job on a saved note, and one cut off by an exit is
+marked on the note with Retry.
+
+**A second copy (KNEG-564).** `tauri-plugin-single-instance` is registered before every other
+plugin. A second launch shows the running window and exits before `setup`, which is where a second
+copy did its damage: it reaped the first one's model servers, marked its running jobs interrupted
+and cleared its scratch files. A debug build given `KW_AUTOMATION_PROFILE` is not guarded. The
+plugin keys on the application's identifier, which a development build shares with the installed
+one, and a profile moves the data folder, so that copy can do the other no harm; the disposable
+smoke instance still runs beside the owner's application. A development build with no profile uses
+the real data folder and is now refused beside the installed application.
+
+A lock file in the data folder was the other design. It would have matched the harm exactly, a
+second process over one database, with no exception to write. It was rejected because it cannot
+bring the first window forward without inventing a channel between the two processes, and the
+plugin has one on each platform.
+
+**What a second reader found.** A Codex review of the change, the same day, found four defects and
+one saving, all real, none reproduced in the application.
+
+- *Stop and save* stopped the meeting without asking the meeting window for an edit it had not yet
+  sent. The window saves a little behind the typing, and Stop closes the notes to further writes;
+  the window's own Stop asks first. Quit now asks the same way (`flush_typed_notes`), and if the
+  window does not answer or reports a failed save it does not stop the meeting: it says so and
+  stays open. The exit cleanup asks too, for two seconds, and goes on without an answer.
+- *Stop and save* and *Quit when saved* exited once the meeting was over, whether or not that had
+  produced a note. `stop` now counts a meeting that ended as anything but saved, before it reports
+  idle, and a Quit that sees the count move stays open and says the meeting has no note.
+- A wait cancelled while it was reading the meeting's state could still exit, because it checked
+  before the read and not after. It checks after as well, and the exit is taken in the same step
+  as the last check.
+- The plugin's Windows half exits only if it finds the first copy's signalling window. A second
+  copy arriving after the first has made its mutex and before it has made that window is let
+  through into `setup`. The gap is believed to be microseconds wide; it is read from the plugin's
+  source and has not been hit. `single_instance.rs` closes it with a lock on a file in the data
+  folder, taken first thing in `setup`: a copy that cannot take it exits before touching anything.
+  This is the lock-file design rejected above, kept as the backstop it is good at and not as the
+  thing a person meets. It also refuses two debug copies given the same profile.
+- The wait read the whole screen status twice a second for one field. It reads
+  `MeetingRuntime::state`, which is the phase and the live session and nothing else. Not measured.
+
+**Not verified.** None of this has been run in the application. The decision, the answers, the one
+question at a time, the wait, the reading of a notes reply and the folder lock are unit-tested; the
+message box, the tray's Quit line, the notes handshake against a real meeting window,
+`end_for_exit` and a real second launch are not, because the tray and the meeting runtime take the
+real window handle and cannot be built on the mock runtime. The by-hand steps are in
+[the recovery document](KNEG_316_MEETING_RECOVERY.md#quit-and-a-second-copy-2026-11-20).
+
+**Found on the way, fixed.** The settings-key audit has failed on `dev` since `0d6be4d`: a test
+added there wrote the summary setting through `kw_notes_core::summary::SETTINGS_KEY`, a name the
+scanner cannot resolve. It now uses `summaries::SUMMARY_SETTINGS_KEY`, the same key under the name
+the audit knows. The audits were not run before that commit, which is how it got through.
+
+**Found on the way, not fixed.** Quit during a dictation that is being transcribed loses it: the
+audio exists only in memory (KNEG-568). Local model servers outlive Quit and are reaped at the next
+launch (KNEG-569). A failed `setup` panics, and a release panic aborts, so the comment on `run`
+about reporting a startup failure holds only for a failed build (KNEG-570).
+
+## 2026-11-16 — The repository is public, with rulesets
+
+The owner made the repository public after publishing v0.2.0. They asked that nobody can force-push
+or delete, and that every pull request needs their approval. The three rulesets are listed in
+[repository rules](RELEASING.md#repository-rules).
+
+**Why admins may merge without the approval, but only in a pull request.** GitHub never lets an
+author approve their own pull request, and the owner is the only person with write access. A
+required approval with no bypass would leave every `dev`→`main` pull request unmergeable. The
+bypass is limited to pull requests, so a direct push, force push or deletion on `main` is refused
+for the owner too. Approvals from people without write access don't count, so today nothing merges
+without the owner.
+
+**Why `dev` has no pull-request rule.** Work lands on `dev` by direct push. A pull-request rule
+there would need an always-on bypass, and a bypass covers its whole ruleset, force pushes and
+deletion included. If someone is ever given write access, `dev` needs a separate pull-request
+ruleset.
+
+**Why tag creation stays open.** Restricting it with no bypass would stop the owner tagging a
+release. Moving and deleting a `v*` tag are refused, which `docs/RELEASING.md` already asked for
+in words.
+
+Workflows on pull requests from outside contributors now wait for approval for every outside
+contributor, not only first-timers. The workflow token was already read-only and unable to approve
+pull requests.
+
+**What was checked, and what wasn't.** GitHub's rules endpoint lists deletion, non-fast-forward and
+a one-approval pull-request rule on `main`, deletion and non-fast-forward on `dev`, and nothing on
+other branches. That reads the configuration back; nobody attempted a refused push. An
+unauthenticated `curl` of the release list the update check reads returned 200 with v0.2.0 and
+v0.1.1; no installed app has sent that request yet (KNEG-558).
+
+**Private vulnerability reporting** was turned on the same day. Until then the policy named only
+"an existing private channel", which an outside reporter doesn't have. `SECURITY.md` and the
+issue chooser's security link now point to the report form. The signed-out Security tab shows
+**Report a vulnerability**; no test report was filed.
+
 ## 2026-11-13 — First real calendar accounts, and Outlook grants that didn't fit (KNEG-559, KNEG-82)
 
 **What happened.** The owner registered both app-owned clients and connected real accounts to
@@ -520,7 +757,8 @@ every click logged, it stayed on Dictation, and closing changed nothing. That ru
 owner's desktop, so a person's clicks are the likely cause, but that is believed, not shown.
 
 **Still open from the earlier design audit:** `--dusk-text` contrast, and field edges under 3:1, which the
-boards' borderless fields go against. Focus rings stay on all fields. The palette still uses oem.care's exact
+boards' borderless fields go against. Focus rings stayed on all fields then; they came off the fields
+that are typed in on 2026-11-22 (see that entry). The palette still uses oem.care's exact
 values, and that remains a blocker before any public release.
 
 ---

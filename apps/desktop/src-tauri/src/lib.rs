@@ -38,6 +38,7 @@ mod local_api;
 mod local_asr;
 mod local_llm;
 mod local_model;
+mod logging;
 mod media;
 mod media_job;
 mod meeting;
@@ -45,12 +46,15 @@ mod meeting_window;
 mod microphone_check;
 mod overlay;
 mod persistent_overlay;
+mod quit;
 mod reasoning;
 mod recording_attach;
 mod recordings;
 mod sharing;
 mod sherpa_stream;
 mod shortcuts;
+mod single_instance;
+mod speaker_labels;
 mod speech_install;
 mod state;
 mod summaries;
@@ -65,20 +69,6 @@ use anyhow::Context as _;
 use tauri::Manager as _;
 
 use state::AppState;
-
-/// Install log output.
-///
-/// Honours `KNEGISWHISPER_LOG`, defaulting to `info`. Errors are swallowed
-/// because a second initialisation attempt (in tests, or a re-entrant setup) is
-/// harmless and must not take the app down.
-fn init_tracing() {
-    use tracing_subscriber::{fmt, EnvFilter};
-
-    let filter =
-        EnvFilter::try_from_env("KNEGISWHISPER_LOG").unwrap_or_else(|_| EnvFilter::new("info"));
-
-    let _ = fmt().with_env_filter(filter).with_target(false).try_init();
-}
 
 /// Say so in the terminal when nothing is serving the frontend.
 ///
@@ -126,7 +116,7 @@ fn warn_if_nothing_serves_the_frontend(app: &tauri::App) {
 /// Returns rather than panicking so the binary can report a startup failure as a
 /// message and an exit code instead of a Rust panic dump.
 pub fn run() -> anyhow::Result<()> {
-    init_tracing();
+    logging::init();
 
     tracing::info!(
         version = env!("CARGO_PKG_VERSION"),
@@ -135,7 +125,18 @@ pub fn run() -> anyhow::Result<()> {
         "starting"
     );
 
-    tauri::Builder::default()
+    let mut builder = tauri::Builder::default();
+    // First, so a second launch ends here: before any other plugin, and before
+    // `setup`, which reaps model servers, marks unfinished work interrupted and
+    // clears scratch files on the assumption that nothing else is running.
+    if single_instance::shows_the_running_copy(kw_storage::paths::debug_profile().is_some()) {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            tracing::info!("a second copy was started; showing this one");
+            tray::show_dashboard(app);
+        }));
+    }
+
+    builder
         .register_asynchronous_uri_scheme_protocol(recordings::SCHEME, recordings::serve)
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         // Registered so `commands::note_export_to_file` can open a save dialog
@@ -149,6 +150,25 @@ pub fn run() -> anyhow::Result<()> {
             None,
         ))
         .setup(|app| {
+            // Before anything that touches the data folder. The plugin above
+            // lets a second copy through if it arrives before the first has
+            // made its signalling window; this does not (`single_instance.rs`).
+            match single_instance::claim(&kw_storage::paths::data_dir()) {
+                single_instance::Claim::Held(lock) => {
+                    app.manage(lock);
+                }
+                single_instance::Claim::Taken => {
+                    tracing::warn!(
+                        "another copy of KnegisWhisper is using this data folder; this one is exiting"
+                    );
+                    app.handle().cleanup_before_exit();
+                    std::process::exit(0);
+                }
+                single_instance::Claim::Unknown(error) => {
+                    tracing::warn!(%error, "could not lock the data folder; starting without the lock");
+                }
+            }
+
             // First, because it explains a symptom the user is already looking
             // at by the time the rest of this finishes.
             #[cfg(debug_assertions)]
@@ -269,6 +289,9 @@ pub fn run() -> anyhow::Result<()> {
             );
             tauri::async_runtime::block_on(llm.reap_stale());
             summaries::start(handle.clone(), state.clone(), std::sync::Arc::clone(&llm));
+            // Speaker labels on saved meeting notes. A job the last run left
+            // unfinished is marked interrupted here, never started again.
+            speaker_labels::start(handle.clone(), state.clone());
             let llm_endpoint = llm.endpoint();
             app.manage(std::sync::Arc::clone(&llm));
 
@@ -497,6 +520,9 @@ pub fn run() -> anyhow::Result<()> {
             summaries::note_summary_cancel,
             summaries::note_summary_update,
             summaries::note_summary_export,
+            speaker_labels::note_speaker_labels_get,
+            speaker_labels::note_speaker_labels_retry,
+            speaker_labels::note_speaker_labels_dismiss,
             reasoning::reasoning_status,
             reasoning::reasoning_set_cleanup,
             reasoning::enterprise_config_set,

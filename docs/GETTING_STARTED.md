@@ -2,9 +2,8 @@
 
 ## Install or run from source
 
-The newest Windows release, [v0.2.0](https://github.com/Knegis/KnegisWhisper/releases/tag/v0.2.0), is an unsigned preview.
-GitHub labels it Pre-release, and its "Latest" badge stays on v0.1.1, so open v0.2.0
-from that link or the Releases list. It has not yet been through the installation checks on a clean machine. To build the app yourself instead, follow
+The newest Windows release, [v0.2.0](https://github.com/Knegis/KnegisWhisper/releases/tag/v0.2.0), is an unsigned preview,
+and the release GitHub marks Latest. It has not yet been through the installation checks on a clean machine. To build the app yourself instead, follow
 [the source-build instructions](DEVELOPMENT.md#development).
 
 From that release page, download `KnegisWhisper_0.2.0_windows_x64_setup.exe` and its
@@ -51,7 +50,7 @@ Use a short recording of your own voice for the first check.
 
 ## Import and keep notes
 
-Open **Notes**, reveal the list panel if needed, and choose **Import audio or video**.
+Open **Notes**, reveal the list panel if needed, and choose **Import**, then **Audio or video**.
 Select a local recording. Converted audio is retained with its note for replay;
 your source file stays intact. You can edit notes, search transcripts and export
 text, Markdown, JSON or subtitle formats. See [Notes workspace](NOTES_WORKSPACE.md).
@@ -123,6 +122,7 @@ See the [audit record](UNINSTALL_AUDIT.md) for versions and evidence.
 | Installed executable, bundled resources and app shortcuts | Removed by ordinary uninstall | Removed by ordinary uninstall |
 | Notes, transcripts, summaries, settings, dictation history and saved voice data in `%APPDATA%\KnegisWhisper\knegiswhisper.db` | Kept | Kept |
 | Retained recordings and recovery files in `%APPDATA%\KnegisWhisper\meetings` | Kept | Kept |
+| The application's log in `%APPDATA%\KnegisWhisper\logs` | Kept | Kept |
 | Downloaded models, runtimes and temporary audio under `%APPDATA%\KnegisWhisper` | Kept | Kept |
 | Fallback models and temporary audio under `%ProgramData%\KnegisWhisper\cache` | Kept | Kept |
 | Provider keys and calendar tokens in Windows Credential Manager | Kept | Kept |

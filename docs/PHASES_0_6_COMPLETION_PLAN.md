@@ -255,9 +255,11 @@ file removed on stop.
 The only thing that actually proves dictation works. Nothing below needs a developer — it is all
 buttons and one command — but it does need a person at the machine.
 
-**Before you start.** Only one copy of the application may run at a time. A second instance finds
-every shortcut already claimed by the first and registers none of them; the startup log now names
-each refusal, so if **Settings > Shortcuts** looks dead, check there first.
+**Before you start.** Only one copy of the application may run at a time. Since 2026-11-20 a second
+launch shows the copy already running and exits; a debug build with `KW_AUTOMATION_PROFILE` set is
+the exception. That second instance finds every shortcut already claimed by the first and registers
+none of them; the startup log names each refusal, so if **Settings > Shortcuts** looks dead, check
+there first.
 
 ```powershell
 # Stops anything left over, then launches both halves of the application.

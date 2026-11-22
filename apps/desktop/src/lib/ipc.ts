@@ -1700,6 +1700,15 @@ export const updateNoteSummary = (id: number, revision: number, content: string)
 export const exportNoteSummary = (id: number, format: "md" | "txt") => invoke<string | null>("note_summary_export", { id, format });
 export const onNoteSummaryChanged = (handler: (id: number) => void) => listen<number>("note-summary-changed", event => handler(event.payload));
 
+// Speaker labels are added to a meeting note after it is saved. `null` is a
+// note that never asked for them.
+export type { SpeakerLabelState } from "../generated/ipc-types.js";
+import type { SpeakerLabelState } from "../generated/ipc-types.js";
+export const getNoteSpeakerLabels = (id: number) => invoke<SpeakerLabelState | null>("note_speaker_labels_get", { id });
+export const retryNoteSpeakerLabels = (id: number) => invoke<SpeakerLabelState | null>("note_speaker_labels_retry", { id });
+export const dismissNoteSpeakerLabels = (id: number) => invoke<SpeakerLabelState | null>("note_speaker_labels_dismiss", { id });
+export const onNoteSpeakerLabelsChanged = (handler: (id: number) => void) => listen<number>("note-speaker-labels-changed", event => handler(event.payload));
+
 /** Lightweight participant acknowledgement; never fetch the note body. */
 export async function getNoteMetadataForPeople(id: number): Promise<NoteListItem | null> {
   return invoke<NoteListItem | null>("notes_get_summary", { id });

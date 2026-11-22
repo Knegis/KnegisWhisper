@@ -6,7 +6,7 @@ This engineering snapshot was moved from the previous README. Its September 8 st
 Local tests and Windows observations are separate from hosted CI and release validation.
 The v0.2.0 update check needs no key. It runs once a day automatically by default or through
 "Check for updates", and the notice links to a newer release without downloading or installing.
-The check needs a public repository; while private, it reports "No public release could be found".
+The check needs a public repository, which this is (checked 16 November 2026).
 v0.1.1 users must download v0.2.0 by hand. Release selection, 404 mapping, the once-a-day rule
 and URL building are unit-tested with invented data. The app's list request and the notice for
 a real release have never run. Updater signing remains future work; see `PLATFORM_SUPPORT.md`.

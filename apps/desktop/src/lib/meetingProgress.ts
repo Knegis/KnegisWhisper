@@ -5,7 +5,6 @@ export const FINALISATION_LABELS: Record<FinalisationProgress["stage"], string> 
   "preparing-recording": "Preparing recording",
   "finishing-live-transcript": "Finishing live transcript",
   "transcribing-recording": "Transcribing recording",
-  "analysing-speakers": "Analysing speakers",
   "saving-note": "Saving note",
 };
 export function newerProgress(current: FinalisationUpdate | null, incoming: FinalisationUpdate): boolean {

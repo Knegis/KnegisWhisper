@@ -25,7 +25,7 @@ const SCREENS = [
   ["Dictation", [NAV("Dictation")]],
   ["Meetings", [NAV("Meetings")]],
   ["Notes", [NAV("Notes")]],
-  ["Import", [NAV("Notes"), `[...document.querySelectorAll('button')].find(b => b.textContent.trim() === 'Import audio or video').click(); true`]],
+  ["Import", [NAV("Notes"), `[...document.querySelectorAll('.list-panel button')].find(b => b.textContent.trim() === 'Import').click(); true`, `[...document.querySelectorAll('.notes-context-menu button')].find(b => b.textContent.trim() === 'Audio or video').click(); true`]],
   ["Sheet", [NAV("Settings")]],
   ...["Shortcuts", "Meetings", "Vocabulary", "Transcription", "Cleanup & summaries", "Local text models", "Providers", "Calendar", "Local API", "CLI", "MCP", "Diagnostics"].map((t) => [`S-${t}`, [NAV("Settings"), TILE(t)]]),
 ];

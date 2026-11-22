@@ -72,7 +72,14 @@ try {
   await check("Export success displays saved location", "document.querySelector('dialog[open]').textContent.includes('Project.knegis')");
   await cdp.evaluate(clickText("dialog[open] button", "Close"));
   await wait("!document.querySelector('dialog[open]')");
-  await cdp.evaluate(clickText(".list-panel button", "Import shared folder…"));
+  // Pressed again if the menu is not there: closing the dialog hands focus back to what opened it,
+  // and focus leaving the menu closes it.
+  for (let attempt = 0; attempt < 5 && !(await cdp.evaluate("Boolean(document.querySelector('.notes-context-menu'))")); attempt++) {
+    await cdp.evaluate(clickText(".list-panel button", "Import"));
+    await new Promise(resolveWait => setTimeout(resolveWait, 400));
+  }
+  await wait("Boolean(document.querySelector('.notes-context-menu'))");
+  await cdp.evaluate(clickText(".notes-context-menu button", "Shared folder…"));
   await wait("Boolean(document.querySelector('dialog[open] .folder-sharing-name input'))");
   await check("Import preview explains independent copy", "document.querySelector('dialog[open]').textContent.includes('Existing folders and notes won’t change')");
   await cdp.screenshot(resolve(out, "import-preview.png"));

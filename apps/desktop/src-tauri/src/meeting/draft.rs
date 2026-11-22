@@ -144,6 +144,36 @@ pub fn read_plan(recording: &Path) -> Option<MeetingPlan> {
     }
 }
 
+/// `x.wav` becomes `x.unfinished`: an empty file that is there from Start
+/// until the meeting ends in any way the application saw -- saved, nothing
+/// transcribed, failed, discarded.
+///
+/// A recording with no note is offered for recovery whatever left it so, and
+/// most are left on purpose: a quiet room keeps its recording. This is what
+/// tells those from a meeting the application never finished, because it
+/// crashed or was closed, so only that one is raised from every screen.
+pub fn unfinished_path(recording: &Path) -> PathBuf {
+    recording.with_extension("unfinished")
+}
+
+/// Mark `recording` as a meeting still running. A failure costs only the
+/// notice: the recording is offered under Interrupted either way.
+pub fn mark_unfinished(recording: &Path) {
+    if let Err(error) = std::fs::write(unfinished_path(recording), b"") {
+        tracing::warn!(%error, "could not mark the meeting as running");
+    }
+}
+
+/// The meeting ended where the application could see it.
+pub fn clear_unfinished(recording: &Path) {
+    remove_quietly(&unfinished_path(recording), "running-meeting marker");
+}
+
+/// Whether `recording` is of a meeting the application never saw end.
+pub fn is_unfinished(recording: &Path) -> bool {
+    std::fs::symlink_metadata(unfinished_path(recording)).is_ok_and(|metadata| metadata.is_file())
+}
+
 /// Remove the typed notes' sidecar once the notes are safely saved or have
 /// nothing in them. The plan stays: see [`remove_sidecars`].
 pub fn remove_sidecar(recording: &Path) {
@@ -158,6 +188,7 @@ pub fn remove_sidecar(recording: &Path) {
 pub fn remove_sidecars(recording: &Path) {
     remove_sidecar(recording);
     remove_plan(recording);
+    clear_unfinished(recording);
 }
 
 /// Remove the plan alone: the recording it describes is gone, but the typed

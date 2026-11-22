@@ -5,7 +5,8 @@
 //! closes a window has not asked to stop being able to dictate.
 //!
 //! Quitting is explicit, from this menu. That is deliberate — an application
-//! that captures audio on a hotkey should be obvious about still running.
+//! that captures audio on a hotkey should be obvious about still running. What
+//! Quit does while a meeting is being recorded or saved is `quit.rs`.
 //!
 //! And it says what it is doing. The tooltip and the first menu line report
 //! whether the microphone is open, because the tray is the one part of this
@@ -82,6 +83,9 @@ impl Activity {
 /// else would mean one of them overwriting the other's state.
 static ACTIVITY_STATE: std::sync::Mutex<Activity> = std::sync::Mutex::new(Activity::Idle);
 
+/// The Quit line, kept so it can say when a Quit is waiting for a meeting.
+struct QuitItem(MenuItem<tauri::Wry>);
+
 /// Build the tray icon and its menu.
 pub fn create(app: &AppHandle) -> tauri::Result<()> {
     let activity = MenuItem::with_id(
@@ -96,8 +100,9 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
     )?;
     let show = MenuItem::with_id(app, SHOW, "Open KnegisWhisper", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
-    let quit = MenuItem::with_id(app, QUIT, "Quit", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, QUIT, crate::quit::label(false), true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&activity, &separator, &show, &separator, &quit])?;
+    app.manage(QuitItem(quit));
 
     TrayIconBuilder::with_id("main-tray")
         .icon(app.default_window_icon().cloned().ok_or_else(|| {
@@ -116,10 +121,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
             // catch-all, which would log it as unrecognised and send somebody
             // looking for a missing handler.
             ACTIVITY => {}
-            QUIT => {
-                tracing::info!("quitting from the tray menu");
-                app.exit(0);
-            }
+            QUIT => crate::quit::request(app),
             other => tracing::warn!(id = other, "unrecognised tray menu item"),
         })
         .on_tray_icon_event(|tray, event| {
@@ -145,6 +147,19 @@ pub fn dictating(app: &AppHandle, recording: bool) {
 /// Report that a meeting started or stopped, leaving any dictation alone.
 pub fn meeting(app: &AppHandle, recording: bool) {
     update(app, |current| current.with_meeting(recording));
+}
+
+/// Say on the Quit line whether a Quit is waiting for a meeting to be saved.
+///
+/// The line stays enabled while it waits: pressing it again is how the wait is
+/// cancelled, or turned into quitting now.
+pub fn quit_waiting(app: &AppHandle, waiting: bool) {
+    let Some(item) = app.try_state::<QuitItem>() else {
+        return;
+    };
+    if let Err(err) = item.0.set_text(crate::quit::label(waiting)) {
+        tracing::warn!(error = %err, "could not update the tray's Quit line");
+    }
 }
 
 /// Apply a change to the reported activity.

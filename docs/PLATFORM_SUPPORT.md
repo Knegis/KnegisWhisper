@@ -828,7 +828,8 @@ At that run, `meeting.rs`'s `keep` ran a whole-file pass rather than keeping the
 live partials. As of 2026-09-30, successful local streaming meetings save their settled
 transcript after flushing the final audio, without retranscribing the recording.
 Windowed local and cloud meetings, and failed or incomplete local streams, still use whole-file
-recovery. Optional local speaker analysis can still add processing time. The new
+recovery. Optional local speaker analysis runs after the note is saved, as a job on the note, so it
+no longer adds to Stop (2026-11-17). The new
 stop path has automated coverage; timing on a real long meeting remains to be checked.
 
 **The pinned server cannot bind to loopback, so the application refuses to start it.**
@@ -1208,12 +1209,14 @@ Diagnostics result states are:
 What is and is not known:
 
 - **Measured, 2026-11-13:** unauthenticated requests to the repository and its releases
-  both returned 404. The repository is private today. The owner intends to make it public
-  before publishing v0.2.0. The check needs a public repository; while it is private,
-  every check reports "No public release could be found".
+  both returned 404, because the repository was private.
+- **Measured, 2026-11-16:** with the repository public, an unauthenticated `curl` of the
+  list the app reads (`/releases?per_page=30`) returned 200 with `v0.2.0` and `v0.1.1`,
+  both `draft: false`. That was `curl`, not the app.
 - **Measured, 2026-11-10:** an authenticated request to the old `/releases/latest`
   endpoint returned `tag_name` `v0.1.1`. This does not exercise the new list request.
 - **Believed from GitHub's documentation:** the list response shape (`tag_name`, `draft`).
+  The 2026-11-16 response had both fields.
 - **Unit-tested with invented data:** release selection, 404 mapping, the once-a-day
   rule and release URL building. These tests do not establish live GitHub behavior.
 - **Never run:** the app has never sent the list request. No install has shown the

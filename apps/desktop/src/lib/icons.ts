@@ -8,11 +8,12 @@
  * press and what a row or chip is about.
  *
  * `FILLED` are soft solids, for what *is* the thing rather than a control for
- * it: `stop`, `play` and `pause` mark a state, and `trash` is a place in a
- * list. So the two bins differ on purpose -- `trash` is where deleted notes
- * are, the line `discard` is the action. `folder` was solid on the same
- * reasoning until the owner asked for it in line (2026-11-13); it is now
- * `folderPlus`'s outline without the plus.
+ * it: `stop`, `play` and `pause` mark a state. `folder` and `trash` were solid
+ * on the same reasoning, as places in a list, until the owner asked for each
+ * in line (2026-11-13 and 2026-11-20). `folder` is now `folderPlus`'s outline
+ * without the plus. `trash` is a plain bin: a lid, its handle and a body. It
+ * is not `discard`, which is the action and stands a little narrower; Trash is
+ * where deleted notes are, and where a note can be dragged.
  *
  * The glyphs began as the Kit's (the design before this one) and took their
  * rounding with oem.care's language; `git log` on this file has that history.
@@ -57,6 +58,7 @@ export type LineIconName =
   | "mcp"
   | "diagnostics"
   | "discard"
+  | "trash"
   | "close"
   | "plus"
   | "check"
@@ -127,6 +129,8 @@ export const ICONS: Record<LineIconName, string> = {
   diagnostics: "M3.5 12h4l2.25-6 4.5 12 2.25-6h4",
   discard:
     "M4.75 6.75h14.5M9.25 6.75V5.25a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1v1.5M6.75 6.75l.9 11.1a1.5 1.5 0 0 0 1.5 1.4h5.7a1.5 1.5 0 0 0 1.5-1.4l.9-11.1",
+  trash:
+    "M4.5 7h15M9.5 7V5.5a1.25 1.25 0 0 1 1.25-1.25h2.5a1.25 1.25 0 0 1 1.25 1.25V7M6.25 7l.85 10.9a2 2 0 0 0 2 1.85h5.8a2 2 0 0 0 2-1.85L17.75 7",
   close: "M6 6l12 12M18 6L6 18",
   plus: "M12 5v14M5 12h14",
   check: "M5 12.5l4.5 4.5L19 7.5",
@@ -157,15 +161,13 @@ export const ICONS: Record<LineIconName, string> = {
  * Filled marks: `fill: currentColor; stroke: none` (`.icon-filled` in
  * `styles.css`), for what is a solid shape rather than a stroked control -- a
  * playing transport is a solid triangle and the pause that replaces it two
- * solid bars, and Trash is a place, muted in its row.
+ * solid bars.
  */
 export const FILLED = {
   stop: "M8.5 5h7a3.5 3.5 0 0 1 3.5 3.5v7a3.5 3.5 0 0 1-3.5 3.5h-7a3.5 3.5 0 0 1-3.5-3.5v-7a3.5 3.5 0 0 1 3.5-3.5z",
   play: "M9.01 5.83L17.3 10.71A1.5 1.5 0 0 1 17.3 13.29L9.01 18.17A1.5 1.5 0 0 1 6.75 16.88L6.75 7.12A1.5 1.5 0 0 1 9.01 5.83z",
   pause:
     "M8.75 5a1.75 1.75 0 0 1 1.75 1.75v10.5a1.75 1.75 0 0 1-3.5 0V6.75A1.75 1.75 0 0 1 8.75 5zM15.25 5A1.75 1.75 0 0 1 17 6.75v10.5a1.75 1.75 0 0 1-3.5 0V6.75A1.75 1.75 0 0 1 15.25 5z",
-  trash:
-    "M9 3.5h6A1.5 1.5 0 0 1 16.5 5v1H20a1 1 0 1 1 0 2h-.6l-.9 11.1a2 2 0 0 1-2 1.9h-9a2 2 0 0 1-2-1.9L4.6 8H4a1 1 0 1 1 0-2h3.5V5A1.5 1.5 0 0 1 9 3.5z",
 } as const;
 
 /**

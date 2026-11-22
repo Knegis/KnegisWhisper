@@ -9,7 +9,6 @@ pub enum Stage {
     PreparingRecording,
     FinishingLiveTranscript,
     TranscribingRecording,
-    AnalysingSpeakers,
     SavingNote,
 }
 
@@ -90,13 +89,13 @@ mod tests {
         assert!(tracker.stage(Stage::SavingNote).is_none());
         let initial = tracker.begin(10, Kind::Stop);
         let started = tracker.active.as_ref().unwrap().3;
-        let stage = tracker.stage(Stage::AnalysingSpeakers).unwrap();
+        let stage = tracker.stage(Stage::TranscribingRecording).unwrap();
         assert!(stage.revision > initial.revision);
         let progress = stage.progress.unwrap();
         assert_eq!(progress.operation_id, 10);
-        assert_eq!(progress.stage, Stage::AnalysingSpeakers);
+        assert_eq!(progress.stage, Stage::TranscribingRecording);
         assert_eq!(tracker.active.as_ref().unwrap().3, started);
-        assert!(tracker.stage(Stage::AnalysingSpeakers).is_none());
+        assert!(tracker.stage(Stage::TranscribingRecording).is_none());
         tracker.begin(11, Kind::Recovery);
         assert!(tracker.end(10).is_none());
         assert_eq!(tracker.snapshot().progress.unwrap().operation_id, 11);

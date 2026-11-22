@@ -18,10 +18,12 @@
 //! # What has never been exercised
 //!
 //! The app has never requested the list endpoint. Its response shape is
-//! believed from GitHub's documentation, not a captured list response. On
-//! 2026-11-10 an authenticated request to `/releases/latest` returned tag_name
-//! `v0.1.1` for this repository. An unauthenticated request got 404 on
-//! 2026-11-13 because the repository is private.
+//! believed from GitHub's documentation. On 2026-11-10 an authenticated
+//! request to `/releases/latest` returned tag_name `v0.1.1` for this
+//! repository. An unauthenticated request got 404 on 2026-11-13, while the
+//! repository was private. On 2026-11-16, with it public, an unauthenticated
+//! `curl` of the list returned 200 with `tag_name` and `draft` for v0.2.0
+//! and v0.1.1.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

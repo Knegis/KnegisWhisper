@@ -201,7 +201,7 @@ try {
 
     console.log(scheme, "progress");
     await pill("Meetings"); await waitFor(cdp, "Boolean(globalThis.kw)");
-    for (const [index, stage] of ["preparing-recording", "finishing-live-transcript", "transcribing-recording", "analysing-speakers", "saving-note"].entries()) {
+    for (const [index, stage] of ["preparing-recording", "finishing-live-transcript", "transcribing-recording", "saving-note"].entries()) {
       await cdp.evaluate(`kw.meetingProgress({revision:${index+1},progress:{operationId:10,kind:'stop',stage:${JSON.stringify(stage)},elapsedSeconds:${index+12}}})`);
       await waitFor(cdp, "Boolean(document.querySelector('.meeting-progress'))");
       assert.equal(await cdp.evaluate("document.querySelector('.meeting-progress .muted').textContent.startsWith('Processing ')") , true);
@@ -220,8 +220,8 @@ try {
   for (const scheme of ["light", "dark"]) {
     await cdp.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: scheme }] });
     await reload(cdp); await waitFor(cdp, "Boolean(globalThis.kw)"); await cdp.evaluate(removeFixtureBanner());
-    await cdp.evaluate("kw.meetingProgress({revision:1,progress:{operationId:20,kind:'recovery',stage:'analysing-speakers',elapsedSeconds:72}})");
-    await waitFor(cdp, "document.querySelector('.notify .meeting-progress [role=status]')?.textContent==='Analysing speakers'");
+    await cdp.evaluate("kw.meetingProgress({revision:1,progress:{operationId:20,kind:'recovery',stage:'transcribing-recording',elapsedSeconds:72}})");
+    await waitFor(cdp, "document.querySelector('.notify .meeting-progress [role=status]')?.textContent==='Transcribing recording'");
     assert.equal(await cdp.evaluate("document.querySelector('.meeting-progress').getBoundingClientRect().bottom <= innerHeight"), true);
     await cdp.screenshot(`${out}/${scheme}-compact.png`);
     await cdp.evaluate("kw.meetingProgress({revision:2,progress:null})"); await waitFor(cdp, "!document.querySelector('.meeting-progress')");

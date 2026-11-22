@@ -129,7 +129,7 @@ export function sheetState() {
 
 /**
  * Whether the list panel is on screen, and what it lists. `visible` is the
- * rendered answer -- computed display and width -- not the `hidden`
+ * rendered answer -- computed display, visibility and width -- not the `hidden`
  * attribute alone, because a stylesheet can outrank that attribute.
  */
 export function panelState() {
@@ -144,8 +144,11 @@ export function panelState() {
       present: true,
       hidden: panel.hidden,
       display: style.display,
+      visibility: style.visibility,
       width: rect.width,
-      visible: style.display !== 'none' && rect.width > 0,
+      // Hidden, the panel keeps its box and slides out by its margin; visibility is what takes
+      // it away, once the slide is over.
+      visible: style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0,
       labels: [...panel.querySelectorAll('.panel-label')]
         .map((item) => item.textContent.trim()),
       items: [...panel.querySelectorAll('.panel-item')]

@@ -2,9 +2,9 @@
 
 ## Reporting
 
-Follow the [root reporting policy](../SECURITY.md). The repository is currently private and
-GitHub private vulnerability reporting is unavailable. Contact a maintainer through an existing
-private channel; do not file a public issue for an unfixed vulnerability.
+Follow the [root reporting policy](../SECURITY.md): report through GitHub private vulnerability
+reporting, on the repository's **Security** tab. Do not file a public issue for an unfixed
+vulnerability.
 
 ## Threat model
 
@@ -166,8 +166,8 @@ verification and enable signed artifacts before using it:
    repository secret and, before that, on whatever machine ran step 1.
 
 No updater signing is in place today. That does not block a notice linking to a
-release page. The check needs a public repository; while it is private, every
-check reports "No public release could be found". Installed v0.1.1 still has the
+release page. The check needs a public repository, which this is
+(checked 16 November 2026). Installed v0.1.1 still has the
 old key gate and reports "Update checking is not securely configured". Its users
 must download v0.2.0 by hand.
 
@@ -453,6 +453,14 @@ here, because extraction only runs after a mandatory SHA-256 matched.
 Never logged: API keys, OAuth tokens, local API bearer tokens, raw clipboard contents, raw audio,
 credential file contents, or full transcripts by default. Secrets are redacted at the logging
 boundary rather than at each call site, so a new call site cannot forget.
+
+The log is also written to one file on this computer, `logs\knegiswhisper.log` in the
+application's data directory, because a release build has no console and a release panic aborts:
+without the file, an application that closed left nothing to read. A panic is appended to it, with
+its location and a backtrace, before the process ends. The file is started again past 5 MB, at
+launch and while the application runs, with the previous one kept beside it. Nothing sends it anywhere; Settings > Diagnostics shows where it
+is, for a person to attach to a report. The rule above is what keeps it safe to attach, and the
+file makes that rule matter more than it did when the log reached only a developer's terminal.
 
 ## Recording indication
 

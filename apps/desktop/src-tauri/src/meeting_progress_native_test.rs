@@ -63,7 +63,7 @@ fn native_meeting_progress_and_settings_ipc() {
       await new Promise(resolve=>setTimeout(resolve,300));
       const stages=updates.filter(update=>update.progress).map(update=>update.progress.stage);
       for(const stage of ['preparing-recording','transcribing-recording','saving-note'])if(!stages.includes(stage))throw Error('Missing '+stage);
-      if(stages.includes('finishing-live-transcript')||stages.includes('analysing-speakers'))throw Error('Reported work that did not run');
+      if(stages.includes('finishing-live-transcript'))throw Error('Reported work that did not run');
       const active=updates.filter(update=>update.progress);
       if(active.some(update=>update.progress.kind!=='recovery'))throw Error('Wrong operation kind');
       if(active.some((update,index)=>index>0&&update.progress.elapsedSeconds<active[index-1].progress.elapsedSeconds))throw Error('Clock moved backwards');

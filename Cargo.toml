@@ -161,6 +161,9 @@ tauri-plugin-autostart = "2"
 # and the frontend needs no dialog permission -- see docs/SECURITY.md on path
 # traversal through export.
 tauri-plugin-dialog = "2"
+# One copy of the application per data folder (KNEG-564): a second launch shows
+# the running window and exits before it can touch the first one's work.
+tauri-plugin-single-instance = "2"
 
 # macOS input, for `kw_platform::keyhook`'s CGEventTap. Pinned to the versions
 # Tauri's own macOS dependency tree already resolves, so this selects features

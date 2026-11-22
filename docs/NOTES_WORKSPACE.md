@@ -16,7 +16,7 @@ recordings. Everything starts checked. Save the `.knegis` file and send it throu
 your usual file-transfer channel. This is a snapshot; later edits are not shared
 automatically. Packages have no password protection.
 
-The recipient chooses **Import shared folder…**, checks the preview and folder name,
+The recipient chooses **Import**, then **Shared folder…**, checks the preview and folder name,
 then imports a separate, editable local copy. Existing notes stay intact. A duplicate
 folder name gets a numbered suffix; importing again creates another copy. Included
 recordings play against their transcripts, without retranscription or summary calls.
@@ -163,7 +163,8 @@ people are part of what its summary was made from, so changing them marks a fini
 summary out of date and stops one being made; a summary still waiting to start uses the
 people on the note when it starts ([meeting summaries](MEETING_SUMMARIES.md)).
 
-**Trash** (KNEG-401). Delete, in a note's menu, moves the note to Trash without asking:
+**Trash** (KNEG-401). Delete, in a note's menu, moves the note to Trash without asking, and
+so does dragging the note onto **Trash** at the foot of the library:
 "Moved “{title}” to Trash." shows above the note that opens in its place, the newest one,
 with **Undo**. Nothing is deleted: the note keeps its transcript, its recording and the file
 behind it, its people and its speaker names, and nothing empties Trash on its own -- it
@@ -240,6 +241,13 @@ intentional deletion and offers **Attach another recording** if another copy
 exists. Kept wording describes this meeting's choice, regardless of the current
 setting. A failed attachment leaves no kept claim on the first note; its recording
 and plan remain eligible for Interrupted recovery.
+
+A meeting saved with speaker labels switched on has them added afterwards, by a job on the
+note. The job reads the recording, so a recording set to be deleted is deleted only once the job
+succeeds or the person presses **Continue without speaker labels**; while the job is failed or
+interrupted the recording stays, because it is the only way to retry. The note's automatic summary
+waits for the job in the same way, since it names the speakers. See
+[speaker labels after the save](KNEG_316_MEETING_RECOVERY.md#speaker-labels-after-the-save).
 
 Deletion first establishes durable intent and performs a full WAL checkpoint,
 then removes the attachment, sets the marker to deleted, removes the file and

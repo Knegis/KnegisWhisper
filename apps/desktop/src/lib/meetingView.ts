@@ -176,7 +176,8 @@ export function speakerLabelsChip(status: Pick<DiarizationStatus, "ready" | "ena
         : "Speaker labels need setting up. Settings > Meetings says what's missing",
     };
   }
-  const cost = "Adds roughly five minutes per hour of recording when you stop";
+  // After the note is saved, not before it: the note no longer waits for them.
+  const cost = "They take roughly five minutes per hour of recording, and are added once the note is saved";
   return {
     kind: "toggle",
     pressed: status.enabled,
@@ -193,7 +194,7 @@ export function speakerLabelsChip(status: Pick<DiarizationStatus, "ready" | "ena
  */
 export function speakerLabelsNote(status: Pick<DiarizationStatus, "ready" | "enabled"> | null): string | null {
   return status?.ready && status.enabled
-    ? "Speaker labels add roughly five minutes per hour of recording when you stop, and they're worse in languages other than English."
+    ? "Speaker labels take roughly five minutes per hour of recording and are added once the note is saved. They're worse in languages other than English."
     : null;
 }
 

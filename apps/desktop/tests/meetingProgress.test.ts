@@ -15,7 +15,8 @@ test("a same-revision snapshot can advance elapsed time, never move it backwards
   assert.equal(newerProgress(initial, { ...initial, progress: { ...initial.progress!, operationId: 9, elapsedSeconds: 13 } }), false);
 });
 test("stage labels cover real stages and the clock is elapsed processing time", () => {
-  assert.equal(Object.keys(FINALISATION_LABELS).length, 5);
+  // Four: speakers are analysed after the note is saved, not while it is made.
+  assert.equal(Object.keys(FINALISATION_LABELS).length, 4);
   assert.equal(processingClock(61.9), "Processing 1:01");
   assert.equal(processingClock(3601), "Processing 1:00:01");
 });

@@ -19,7 +19,9 @@ pub fn on_event(app: &tauri::AppHandle, event: tauri::RunEvent) {
                 let media = app.state::<Arc<crate::media::MediaImportRuntime>>();
                 let meetings = app.state::<Arc<crate::meeting::MeetingRuntime>>();
                 let api = app.state::<Arc<crate::local_api::LocalApiRuntime>>();
-                let _ = tokio::join!(api.stop(), media.shutdown(), meetings.cancel());
+                // Not `cancel`, which is the person's own Discard and deletes
+                // the recording. An exit is nobody's decision to discard.
+                let _ = tokio::join!(api.stop(), media.shutdown(), meetings.end_for_exit());
             };
             if tokio::time::timeout(std::time::Duration::from_secs(10), cleanup)
                 .await

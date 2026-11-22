@@ -15,8 +15,8 @@ clean machine were run, so those checks are still to come.
 There is no automatic update installation and no updater signing. v0.2.0 and later
 run an automatic check once a day and link to a newer release page. The switch is
 "Check for updates automatically" on Settings > Diagnostics, on by default.
-The check downloads and installs nothing. It needs a public repository; while the
-repository is private, every check reports "No public release could be found".
+The check downloads and installs nothing. It needs a public repository, which this
+is (checked 16 November 2026); no installed v0.2.0 has run a check against it yet.
 v0.1.1 still reports "Update checking is not securely configured". Those users
 must download v0.2.0 by hand.
 
@@ -34,6 +34,13 @@ fixture tests and a new installer build do not establish that result.
   recordings; see [the measured findings](PARAKEET_BENCHMARK.md).
 - Replay seeks use available segment timings. Recordings without those timings
   can have only a whole-recording playback cue.
+- A meeting's note is saved once its whole recording is transcribed. If the application ends
+  before that, there is no note: the recording and typed notes stay in the `meetings` folder,
+  the window says so on its next launch, and Meetings offers **Recover**. Speaker labels are
+  added after the note is saved, so a failure there costs only the labels. Quit from the tray
+  asks before ending a meeting that is being recorded or saved. None of this has been tried by
+  ending the real application mid-meeting; see
+  [interrupted meeting recovery](KNEG_316_MEETING_RECOVERY.md).
 - Google Calendar and Outlook offer app-owned one-click Connect or an Advanced custom client
   and bounded snapshot sync. On 2026-11-13 a development build carrying the app-owned values
   connected a personal Google account and a personal Outlook.com account and synced them; no

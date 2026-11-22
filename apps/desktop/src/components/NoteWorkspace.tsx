@@ -1,15 +1,17 @@
 import { enrollKnownVoice } from "../lib/ipc";
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { forwardRef, useCallback, useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { attachNoteRecording, getNoteRecording, getNoteRecordingState, getNoteMetadataForPeople, restoreNote, retryNoteRecordingDeletion, type NoteRecordingState, getNoteSpeakerSuggestions, getNoteTranscriptRows, renameNoteSpeaker, updateNote, type Note, type NoteUpdate } from "../lib/ipc";
+import { attachNoteRecording, getNoteRecording, getNoteRecordingState, getNoteMetadataForPeople, restoreNote, retryNoteRecordingDeletion, type NoteRecordingState, getNoteSpeakerLabels, retryNoteSpeakerLabels, dismissNoteSpeakerLabels, onNoteSpeakerLabelsChanged, type SpeakerLabelState, getNoteSpeakerSuggestions, getNoteTranscriptRows, renameNoteSpeaker, updateNote, type Note, type NoteUpdate } from "../lib/ipc";
 import { useAutosave, type AutosaveStatus } from "../lib/useAutosave";
 import { workspaceSaveText } from "../lib/saveStatus";
 import { transcriptToMarkdown } from "../lib/noteBody";
 import { hasStoredTranscript, noteMeta, noteWhen } from "../lib/noteMeta";
 import { lastStartedLine, NO_SELECTION, sectionMarks, selectionInterval, transcriptSections, type LineSelection } from "../lib/transcriptLayout";
 import { message } from "../lib/useRefresh";
+import { speakerLabelLine } from "../lib/speakerLabels";
 import { askConfirm } from "./ConfirmDialog";
+import { FailureLine } from "./FailureLine";
 import { Icon } from "./Icon";
 import { NoteEditor } from "./NoteEditor";
 import { NotePeople } from "./NotePeople";
@@ -17,6 +19,7 @@ import { PlayerHeader } from "./PlayerHeader";
 import { SummaryPane, type SummaryPaneHandle } from "./SummaryPane";
 import type { SummarySetupTarget } from "../lib/ipc";
 import { RecordingPlayer, type RecordingPlayerHandle } from "./RecordingPlayer";
+import { ListToggle, PanelCollapsed } from "./SplitView";
 import { TranscriptHeading, TranscriptPanel } from "./TranscriptPanel";
 
 export type NoteWorkspaceHandle = { flush: () => Promise<void> };
@@ -329,12 +332,39 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
     return () => query.removeEventListener("change", change);
   }, [takeFlip]);
   // The column's button. The same switch of layout as crossing the width, carried across the same way.
-  const toggleColumn = () => {
-    const hide = !columnHidden;
+  const setColumn = (hide: boolean) => {
     flip.current = takeFlip();
     columnHiddenChoice = hide; columnHiddenNow.current = hide;
     setColumnHidden(hide);
     if (!hide) setTab(current => current === "transcript" ? "notes" : current);
+  };
+  // The button moves the column over a moment (`data-column`, `styles.css`). Opening lays out at
+  // once and the column grows into it. Closing is the other way about: the layout stays while the
+  // column shrinks, and switches when that is over -- switched first, there would be no column
+  // left to shrink.
+  const [columnMove, setColumnMove] = useState<"opening" | "closing" | null>(null);
+  const columnMoveNow = useRef(columnMove);
+  columnMoveNow.current = columnMove;
+  const endColumnMove = () => {
+    const move = columnMoveNow.current;
+    if (move === null) return;
+    columnMoveNow.current = null;
+    if (move === "closing") setColumn(true);
+    setColumnMove(null);
+  };
+  // The animation's end is what finishes a move. This is for an end that never comes: a column
+  // taken off screen mid-move, by the window narrowing or the note's transcript going.
+  useEffect(() => {
+    if (columnMove === null) return;
+    const late = window.setTimeout(endColumnMove, 700);
+    return () => window.clearTimeout(late);
+  }, [columnMove]);
+  const toggleColumn = () => {
+    if (columnMove !== null) return;
+    if (!columnHidden && wide) { setColumnMove("closing"); return; }
+    const opening = columnHidden;
+    setColumn(!columnHidden);
+    if (opening) setColumnMove("opening");
   };
   // The reading position and focus, before the new layout is painted.
   useLayoutEffect(() => {
@@ -432,6 +462,37 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
     }
   }, [note.id]);
   useEffect(() => { void loadTranscript(); }, [loadTranscript]);
+  // Speaker labels are added after the note is saved, so they can still be
+  // coming, or have failed, while the note is open. Each change reloads the
+  // rows too: that is where the labels land, and where a deleted recording goes.
+  const [speakerLabels, setSpeakerLabels] = useState<SpeakerLabelState | null>(null);
+  const [speakerLabelsBusy, setSpeakerLabelsBusy] = useState(false);
+  const [speakerLabelsError, setSpeakerLabelsError] = useState<string | null>(null);
+  useEffect(() => {
+    let current = true;
+    const load = async (reload: boolean) => {
+      try {
+        const next = await getNoteSpeakerLabels(note.id);
+        if (!current) return;
+        setSpeakerLabels(next);
+        if (reload) void loadTranscript();
+      } catch { /* The line is extra; the transcript's own load reports a database that can't be read. */ }
+    };
+    void load(false);
+    const subscription = onNoteSpeakerLabelsChanged(id => { if (id === note.id) void load(true); });
+    return () => { current = false; void subscription.then(stop => stop()); };
+  }, [note.id, loadTranscript]);
+  const actOnSpeakerLabels = async (act: (id: number) => Promise<SpeakerLabelState | null>) => {
+    if (speakerLabelsBusy) return;
+    setSpeakerLabelsBusy(true); setSpeakerLabelsError(null);
+    try {
+      const next = await act(note.id);
+      if (!alive.current) return;
+      setSpeakerLabels(next);
+      void loadTranscript();
+    } catch (cause) { if (alive.current) setSpeakerLabelsError(message(cause)); }
+    finally { if (alive.current) setSpeakerLabelsBusy(false); }
+  };
   const renameSpeaker = useCallback(async (speakerId: string, name: string, remember = false, replaceId: number | null = null) => {
     if (remember && name.trim()) await enrollKnownVoice(note.id, speakerId, name, replaceId);
     else await renameNoteSpeaker(note.id, speakerId, name);
@@ -564,8 +625,21 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
 
   const { date, minutes, transcribed } = noteMeta(note, []);
   const when = noteWhen(date, minutes);
+  // With the list panel closed, its toggle is on the date line, in the sheet's margin beside it.
+  const listClosed = useContext(PanelCollapsed).collapsed;
   const dispositionLine = recordingState?.status === "deleted" ? "The recording was deleted after transcribing, as chosen for this meeting." : recordingState?.status === "deleted-update-failed" ? "The recording file is gone, but its attachment still needs cleanup." : recordingState?.status === "kept-incomplete" ? "This meeting was set to delete its recording after transcribing. It was kept because the saved transcript may be incomplete." : recordingState?.status === "kept-untranscribed" ? "This meeting was set to delete its recording after transcribing. It was kept because nothing was transcribed from it." : recordingState?.canRetry ? "The recording is still attached. Its requested deletion has not completed." : null;
   const disposition = dispositionLine && <div className="recording-disposition" role="status"><p>{dispositionLine}</p>{recordingState?.error && <p>{recordingState.error}</p>}{recordingState?.canRetry && <button type="button" disabled={blocked !== null || retryingDeletion} onClick={() => { void retryDeletion(); }}>{retryingDeletion ? "Retrying deletion…" : "Retry deletion"}</button>}</div>;
+  const labelLine = speakerLabelLine(speakerLabels);
+  const speakerLabelStatus = labelLine && <div className="speaker-label-status">
+    {labelLine.kind === "failed"
+      ? <FailureLine text={labelLine.text} detail={labelLine.detail} />
+      : <p role="status" className="muted">{labelLine.text}</p>}
+    <div className="speaker-label-actions">
+      {labelLine.retry && <button type="button" className="secondary" disabled={blocked !== null || speakerLabelsBusy} onClick={() => { void actOnSpeakerLabels(retryNoteSpeakerLabels); }}>{labelLine.retry}</button>}
+      {labelLine.dismiss && <button type="button" className="secondary" disabled={blocked !== null || speakerLabelsBusy} onClick={() => { void actOnSpeakerLabels(dismissNoteSpeakerLabels); }}>{labelLine.dismiss}</button>}
+    </div>
+    {speakerLabelsError && <p className="error" role="alert">{speakerLabelsError}</p>}
+  </div>;
   const recordingDetails = note.recordingDetails && <details className="recording-details" open><summary>Recording details</summary><p>{note.recordingDetails}</p></details>;
   const transcriptBody = transcriptError ? <p className="error" role="alert">{transcriptError} <button type="button" onClick={() => { void loadTranscript(); }}>Retry</button></p> : !transcript ? <p role="status">Loading transcript and recording…</p> : transcript.rows.length ?
     <TranscriptPanel noteId={note.id} readOnly={blocked !== null} sourceRequest={sourceRequest} onSourceShown={clearSource} rows={transcript.rows} sections={sections}
@@ -591,12 +665,16 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
     ? <RecordingPlayer ref={playerRef} noteId={note.id} onCurrentTime={setCurrentTime} onPlayingChange={onPlayingChange} onReadyChange={setMediaReady} marks={marks} header={header} />
     : null;
 
-  return <article ref={articleRef} id={`note-detail-${note.id}`} className={wide ? "note-detail note-detail-wide" : "note-detail"} aria-label={title}>
+  return <article ref={articleRef} id={`note-detail-${note.id}`} className={wide ? "note-detail note-detail-wide" : "note-detail"} aria-label={title}
+    data-column={columnMove ?? undefined} onAnimationEnd={event => { if (event.target === event.currentTarget) endColumnMove(); }}>
     <div className="note-body" ref={bodyRef}>
       <div className="note-page">
         {autosave.status === "failed" && <p className="save-status error" role="alert">Couldn't save: {autosave.error} <button type="button" disabled={blocked !== null} onClick={() => { void autosave.retry().catch(() => undefined); }}>Retry save</button></p>}
         <header className="note-detail-header">
-          {when === null ? null : <p className="note-when"><span className="note-when-mark" aria-hidden="true" />{when}</p>}
+          {when === null && !listClosed ? null : <div className="note-when-line">
+            {listClosed ? <ListToggle /> : null}
+            {when === null ? null : <p className="note-when"><span className="note-when-mark" aria-hidden="true" />{when}</p>}
+          </div>}
           {/* The title is the page's heading and a field. A textarea, because at this size a
               one-line field would cut off most titles; Enter stays out of it, and a line break
               pasted in becomes a space, since a title has one line to Rust. The heading is
@@ -688,7 +766,7 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
       role={wide ? undefined : "tabpanel"} aria-labelledby={wide ? undefined : `note-${note.id}-tab-transcript`}
       className={wide ? "note-side" : "note-transcript-inline"} hidden={!wide && tab !== "transcript"}>
       {!wide && <>{recordingDetails}{disposition}</>}
-      <div className="note-side-body">{transcriptShown ? null : <TranscriptHeading />}{transcriptBody}</div>
+      <div className="note-side-body">{speakerLabelStatus}{transcriptShown ? null : <TranscriptHeading />}{transcriptBody}</div>
       {player && playerSlot === "side" ? <div ref={holdObservedPlayer} className="note-side-player" /> : null}
     </div>
     {player && playerSlot === "inline" ? <div className="note-inline-player" hidden={tab === "notes" && !playbackStarted}>

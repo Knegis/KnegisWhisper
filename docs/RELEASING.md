@@ -52,8 +52,7 @@ Record the machine, commit, installer hash, date and result for each check:
 - Run the [Windows uninstall acceptance matrix](#windows-uninstall-acceptance)
   against the [documented retention behaviour](GETTING_STARTED.md#uninstall-on-windows).
 - Confirm Settings > Diagnostics shows "Check for updates automatically" switched on.
-- Confirm "Check for updates" reports "Up to date" against the newest published release,
-  or "No public release could be found" while the repository is private.
+- Confirm "Check for updates" reports "Up to date" against the newest published release.
 
 A debug app, browser fixtures or a successful packaging job does not substitute
 for these installed-app checks. Keep all test data fictional.
@@ -71,8 +70,10 @@ Only after the draft assets and installed-app evidence have been reviewed:
 
 The app's update check counts prereleases, so publishing as a prerelease does not
 hide a release from installed apps. GitHub's "Latest" label stays on the release
-last marked latest, which is v0.1.1 today. Locate the preview by its tag or release
-page. Future stable promotion, Windows code signing, updater signing and macOS/Linux
+last marked latest. So far the owner has promoted each preview to a full release marked
+Latest on the day it was published: v0.1.1 on 2026-11-09 and v0.2.0 on 2026-11-13, so
+v0.2.0 carries the label today. A preview left as a prerelease is found by its tag or
+release page. Future stable promotion, Windows code signing, updater signing and macOS/Linux
 installers are separate
 release decisions. The current app does not install updates automatically.
 
@@ -80,7 +81,8 @@ release decisions. The current app does not install updates automatically.
 
 A failed build can be rerun while the release remains a draft. Fix a defective
 published installer through a new version and release; do not silently replace its
-bytes or move its tag. If a preview must be withdrawn, mark its release clearly
+bytes or move its tag; the release-tag ruleset refuses both a moved and a deleted
+`v*` tag. If a preview must be withdrawn, mark its release clearly
 and point users to the replacement. Preserve its source and validation evidence.
 
 ## Repository presentation
@@ -88,7 +90,26 @@ and point users to the replacement. Preserve its source and validation evidence.
 The product description and topics can be maintained in GitHub's About panel.
 The social-preview image is `docs/assets/social-preview.png`; upload it in
 **Settings > General > Social preview** when preparing the public-facing repository.
-Keep repository visibility unchanged unless the owner explicitly requests a public launch.
+The repository is public (checked 16 November 2026).
+
+## Repository rules
+
+Three rulesets apply since 16 November 2026. See them in **Settings > Rules > Rulesets**.
+
+- **Protect main:** no deletion and no force push. Changes arrive only through a pull
+  request with one approval from someone with write access, and a new push dismisses an
+  earlier approval. Repository admins may merge a pull request without that approval,
+  but only inside a pull request: a direct push, force push or deletion is refused for
+  them too. GitHub never lets an author approve their own pull request, so without this
+  the owner, the only person with write access, could not merge `dev` into `main`.
+- **Protect dev:** no deletion and no force push, with no bypass. Direct pushes still work.
+- **Protect release tags:** a pushed `v*` tag cannot be deleted or moved, with no bypass.
+  Creating one is unrestricted.
+
+Workflows on pull requests from outside contributors wait for a maintainer's approval
+(**Settings > Actions > General**). The workflow token is read-only and cannot approve
+pull requests. If someone is given write access, their approval counts on `main`, and
+`dev` has no pull-request rule.
 
 ## Windows uninstall acceptance
 
