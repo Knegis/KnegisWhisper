@@ -331,12 +331,39 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
     return () => query.removeEventListener("change", change);
   }, [takeFlip]);
   // The column's button. The same switch of layout as crossing the width, carried across the same way.
-  const toggleColumn = () => {
-    const hide = !columnHidden;
+  const setColumn = (hide: boolean) => {
     flip.current = takeFlip();
     columnHiddenChoice = hide; columnHiddenNow.current = hide;
     setColumnHidden(hide);
     if (!hide) setTab(current => current === "transcript" ? "notes" : current);
+  };
+  // The button moves the column over a moment (`data-column`, `styles.css`). Opening lays out at
+  // once and the column grows into it. Closing is the other way about: the layout stays while the
+  // column shrinks, and switches when that is over -- switched first, there would be no column
+  // left to shrink.
+  const [columnMove, setColumnMove] = useState<"opening" | "closing" | null>(null);
+  const columnMoveNow = useRef(columnMove);
+  columnMoveNow.current = columnMove;
+  const endColumnMove = () => {
+    const move = columnMoveNow.current;
+    if (move === null) return;
+    columnMoveNow.current = null;
+    if (move === "closing") setColumn(true);
+    setColumnMove(null);
+  };
+  // The animation's end is what finishes a move. This is for an end that never comes: a column
+  // taken off screen mid-move, by the window narrowing or the note's transcript going.
+  useEffect(() => {
+    if (columnMove === null) return;
+    const late = window.setTimeout(endColumnMove, 700);
+    return () => window.clearTimeout(late);
+  }, [columnMove]);
+  const toggleColumn = () => {
+    if (columnMove !== null) return;
+    if (!columnHidden && wide) { setColumnMove("closing"); return; }
+    const opening = columnHidden;
+    setColumn(!columnHidden);
+    if (opening) setColumnMove("opening");
   };
   // The reading position and focus, before the new layout is painted.
   useLayoutEffect(() => {
@@ -635,7 +662,8 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
     ? <RecordingPlayer ref={playerRef} noteId={note.id} onCurrentTime={setCurrentTime} onPlayingChange={onPlayingChange} onReadyChange={setMediaReady} marks={marks} header={header} />
     : null;
 
-  return <article ref={articleRef} id={`note-detail-${note.id}`} className={wide ? "note-detail note-detail-wide" : "note-detail"} aria-label={title}>
+  return <article ref={articleRef} id={`note-detail-${note.id}`} className={wide ? "note-detail note-detail-wide" : "note-detail"} aria-label={title}
+    data-column={columnMove ?? undefined} onAnimationEnd={event => { if (event.target === event.currentTarget) endColumnMove(); }}>
     <div className="note-body" ref={bodyRef}>
       <div className="note-page">
         {autosave.status === "failed" && <p className="save-status error" role="alert">Couldn't save: {autosave.error} <button type="button" disabled={blocked !== null} onClick={() => { void autosave.retry().catch(() => undefined); }}>Retry save</button></p>}

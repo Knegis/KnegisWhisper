@@ -396,7 +396,14 @@ p { line-height: 1.5; }
 .split { flex: 1; min-width: 0; display: flex; }
 /* The list panel is lifted off the ground: a white rounded sheet, inset from the window's edges. */
 .list-panel { width: 280px; flex-shrink: 0; display: flex; flex-direction: column; overflow-y: auto; margin: 6px 0 14px 14px; background: var(--panel); border-radius: var(--r-card); box-shadow: var(--card-shadow); }
-.list-panel[hidden] { display: none; }
+/*
+ * Hidden, the panel slides out to the left and the main area grows into its place, and back. It
+ * keeps its width and moves by its margin, so nothing in it reflows on the way; `.card` clips what
+ * has left. `[hidden]` is still what hides it: `visibility` takes it out of the tab order and the
+ * accessibility tree, as `display: none` did, once the slide is over -- and at once on the way in.
+ */
+.list-panel { transition: margin-left .4s var(--ease-out), opacity .3s ease, visibility 0s; }
+.list-panel[hidden] { display: flex; margin-left: -280px; opacity: 0; visibility: hidden; pointer-events: none; transition: margin-left .4s var(--ease-out), opacity .3s ease, visibility 0s .4s; }
 .split-main { flex: 1; min-width: 0; overflow-y: auto; scrollbar-gutter: stable both-edges; position: relative; container: main / inline-size; }
 
 /* A section label in the pixel voice, navy as the reference frames draw it. */
@@ -1467,6 +1474,19 @@ button.follow-chip[aria-pressed="true"]:hover:not(:disabled) { background: var(-
 .note-detail { display: grid; grid-template-columns: minmax(0, 1fr); flex: none; }
 .note-detail-wide { flex: 1; min-height: 0; grid-template-columns: minmax(0, 1fr) 340px; }
 .note-detail-wide > .note-body { min-height: 0; overflow-y: auto; }
+/*
+ * The column's button (`toggleColumn`) opens and closes it over .4s: the second track grows from
+ * nothing, or shrinks to it, and the note takes or gives the room. The column keeps its 330px (the
+ * track's width in the layout now drawn, further down) all
+ * the way, so its lines do not rewrap as it moves; what the track does not yet hold is past the
+ * article's edge, which `.notes-main` clips. Only the button sets `data-column`: a note opening,
+ * or the window crossing 1280px, lays out at once as before.
+ */
+.note-detail-wide > .note-side { min-width: 330px; }
+@keyframes kw-column-open { from { grid-template-columns: minmax(0, 1fr) 0px; } to { grid-template-columns: minmax(0, 1fr) 330px; } }
+@keyframes kw-column-close { from { grid-template-columns: minmax(0, 1fr) 330px; } to { grid-template-columns: minmax(0, 1fr) 0px; } }
+.note-detail-wide[data-column="opening"] { animation: kw-column-open .4s var(--ease-out) both; }
+.note-detail-wide[data-column="closing"] { animation: kw-column-close .4s var(--ease-out) both; }
 .note-side { position: relative; display: flex; flex-direction: column; min-height: 0; background: var(--panel); border-left: 1px solid var(--rule); }
 /* Ends a card's height and 24px under its last line, so scrolled to the end that line stands 12px
  * clear of the card's top. `--player-h` is the card's own height, which `NoteWorkspace.tsx` keeps
@@ -3373,7 +3393,7 @@ button.panel-action:hover:not(:disabled) { background: var(--control-hover); }
 button.panel-action > .icon { margin: 0 -3px; }
 .panel-list > button.panel-action { align-self: flex-start; }
 button.list-toggle { flex: none; display: flex; align-items: center; justify-content: center; width: 30px; height: 30px; margin: 0 0 0 auto; padding: 0; border-radius: 50%; background: transparent; color: var(--text); }
-button.list-toggle[data-collapsed="true"] { position: absolute; z-index: 2; top: 40px; left: 34px; margin: 0; background: var(--wash); }
+button.list-toggle[data-collapsed="true"] { position: absolute; z-index: 2; top: 40px; left: 34px; margin: 0; background: var(--wash); animation: kw-fade .3s .2s var(--ease-out) both; }
 .panel-search { flex: none; gap: 9px; height: 40px; margin: 0; padding: 0 16px; background: var(--wash); color: var(--text); transition: background-color .3s ease, box-shadow .3s ease; }
 .panel-search:focus-within { background: var(--panel); box-shadow: 0 1px 8px rgb(0 0 0 / 5%); }
 .panel-search input[type="search"] { font-size: 14px; }
