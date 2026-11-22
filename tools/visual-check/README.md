@@ -114,7 +114,8 @@ tool measures twelve shell claims (KNEG-363, KNEG-382, KNEG-390):
    restores it, and focus is on the toggle after each.
 5. After a load at 720x520, `.list-panel` starts hidden on Notes,
    `document.scrollingElement.scrollWidth <= innerWidth`, and the sheet opens.
-6. Tab reaches every pill and the search field, each with a 2px outline.
+6. Tab reaches every pill, each with a 2px outline, and the search field, which
+   shows focus by its surface and draws no outline.
 7. Ctrl+K focuses `input[role=combobox]` (and Escape empties it and leaves).
 8. On Notes, `.note-detail` is one grid track with the Notes, Transcript and
    Replay tabs at 1000x720; at 1440x900 it is two, with a 330px transcript

@@ -15,6 +15,8 @@ No installer release is claimed by this entry. See
   quit once the meeting is saved. Quitting no longer deletes the recording of a meeting in
   progress (KNEG-563).
 - Starting KnegisWhisper a second time shows the copy that is already running (KNEG-564).
+- Search fields, the note title and other text fields no longer draw a blue ring when clicked.
+  They show focus by lifting to white. Buttons and checkboxes keep the ring for keyboard use.
 
 ## 0.2.0 — 2026-11-13
 

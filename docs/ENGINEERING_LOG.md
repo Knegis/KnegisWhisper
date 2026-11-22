@@ -13,6 +13,54 @@ maintained in place rather than appended to, because its purpose is to be curren
 ---
 
 
+## 2026-11-22 — Fields that are typed in lose the focus ring
+
+The owner asked why every search field and the note's title drew a blue line when clicked. It was the keyboard
+focus ring: a browser matches `:focus-visible` on a field that is typed in when it is clicked too, so the ring
+showed on every click. The same thing was found for `<select>` earlier and solved the same way.
+
+**What changed.** Text inputs and textareas draw no outline. A field shows focus by its surface: it lifts to
+`--panel` under a soft shadow, as the search fields already did. The transcript's Find field and settings
+textareas gained that lift, and the meeting-name field on its coloured tile goes to full white. The note's title
+has no box and shows its caret alone. Checkboxes, radios, sliders, file inputs, switches and every button keep
+the ring, which for them shows only for keyboard use.
+
+**Accepted cost.** Someone tabbing into a text field sees the lift and the caret, not a ring. CSS cannot tell a
+click from Tab for these fields.
+
+**Checked** in headless Edge against the dev fixtures: every visible typed field on Notes, Dictation, Meetings
+and each settings screen was focused, and its computed outline and surface read before and after. None draws an
+outline, and all but the note's title change surface. Tab to a button still draws the 2px ring. **Not checked:**
+fields inside dialogs that were not opened (folder sharing, add a person, rename a speaker, new folder), the two
+Google Calendar fields the fixture keeps closed, and the Tauri window itself.
+
+`shell-title-bar.mjs` check 6 now expects no outline on the search field. Running it showed checks 4 and 5 had
+been false since the list panel began to slide (`67a0716`, the same day): they read the hidden panel as visible,
+because it now keeps its box and is taken away by `visibility` after 0.4 s. `panelState` reads `visibility` too
+and check 4 waits out the slide. All twelve checks pass.
+
+**Three more from the same sitting.** The transcript's Find field is drawn as the list panel's search is, a
+`--wash` pill with no edge. Its Close button stood 2px past the column's edge and was clipped there on hover, from
+a -6px margin kept from an older head; the bar now ends inside the column. And with no transcript column beside
+the note (below 1280px, or the column hidden) the note's sheet scrolled away with the note, its rounded top going
+under the title bar. `.notes-main`, which is the scroller there, is now the sheet: it has the fill and the
+corners and stands still, and the Transcript tab's lines are drawn on it too, where they were on the page's
+`--bg`. The scroller is the same element, so nothing that looks it up changed. Seen in headless Edge at 1400px
+with both panels closed and at 1100px, on Notes, Transcript and Replay; not in the Tauri window, and not with a
+notice showing above the note.
+
+**The closed list panel.** The slide of `67a0716` hid the panel with a -280px margin, which left the main area
+35px further in on the left than on the right; it is -315px, and both sides are 24px. With the panel closed and a
+note open, the panel's toggle is on the note's date line, in the sheet's margin, and scrolls away with the note
+(`NoteWorkspace`, `ListToggle`); it floated over the page's corner and stayed while the note scrolled under it.
+Trash and a page with no note open keep the corner. There is one toggle at a time now: the panel's own is drawn
+only while the panel is open. KNEG-515's rule, which indented the inline transcript's head to clear the floating
+toggle, is removed with what it cleared. Measured in headless Edge: one toggle in each state, centred on the date
+line, moving with it on scroll, and focus handed to the toggle that replaces the one pressed.
+
+---
+
+
 ## 2026-11-17 — A meeting's note is saved before its speakers are analysed
 
 Somebody trying v0.2.0 on their own Windows computer recorded a meeting with the Local windowed
@@ -709,7 +757,8 @@ every click logged, it stayed on Dictation, and closing changed nothing. That ru
 owner's desktop, so a person's clicks are the likely cause, but that is believed, not shown.
 
 **Still open from the earlier design audit:** `--dusk-text` contrast, and field edges under 3:1, which the
-boards' borderless fields go against. Focus rings stay on all fields. The palette still uses oem.care's exact
+boards' borderless fields go against. Focus rings stayed on all fields then; they came off the fields
+that are typed in on 2026-11-22 (see that entry). The palette still uses oem.care's exact
 values, and that remains a blocker before any public release.
 
 ---

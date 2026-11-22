@@ -1,5 +1,5 @@
 import { enrollKnownVoice } from "../lib/ipc";
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { forwardRef, useCallback, useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { attachNoteRecording, getNoteRecording, getNoteRecordingState, getNoteMetadataForPeople, restoreNote, retryNoteRecordingDeletion, type NoteRecordingState, getNoteSpeakerLabels, retryNoteSpeakerLabels, dismissNoteSpeakerLabels, onNoteSpeakerLabelsChanged, type SpeakerLabelState, getNoteSpeakerSuggestions, getNoteTranscriptRows, renameNoteSpeaker, updateNote, type Note, type NoteUpdate } from "../lib/ipc";
@@ -19,6 +19,7 @@ import { PlayerHeader } from "./PlayerHeader";
 import { SummaryPane, type SummaryPaneHandle } from "./SummaryPane";
 import type { SummarySetupTarget } from "../lib/ipc";
 import { RecordingPlayer, type RecordingPlayerHandle } from "./RecordingPlayer";
+import { ListToggle, PanelCollapsed } from "./SplitView";
 import { TranscriptHeading, TranscriptPanel } from "./TranscriptPanel";
 
 export type NoteWorkspaceHandle = { flush: () => Promise<void> };
@@ -624,6 +625,8 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
 
   const { date, minutes, transcribed } = noteMeta(note, []);
   const when = noteWhen(date, minutes);
+  // With the list panel closed, its toggle is on the date line, in the sheet's margin beside it.
+  const listClosed = useContext(PanelCollapsed).collapsed;
   const dispositionLine = recordingState?.status === "deleted" ? "The recording was deleted after transcribing, as chosen for this meeting." : recordingState?.status === "deleted-update-failed" ? "The recording file is gone, but its attachment still needs cleanup." : recordingState?.status === "kept-incomplete" ? "This meeting was set to delete its recording after transcribing. It was kept because the saved transcript may be incomplete." : recordingState?.status === "kept-untranscribed" ? "This meeting was set to delete its recording after transcribing. It was kept because nothing was transcribed from it." : recordingState?.canRetry ? "The recording is still attached. Its requested deletion has not completed." : null;
   const disposition = dispositionLine && <div className="recording-disposition" role="status"><p>{dispositionLine}</p>{recordingState?.error && <p>{recordingState.error}</p>}{recordingState?.canRetry && <button type="button" disabled={blocked !== null || retryingDeletion} onClick={() => { void retryDeletion(); }}>{retryingDeletion ? "Retrying deletion…" : "Retry deletion"}</button>}</div>;
   const labelLine = speakerLabelLine(speakerLabels);
@@ -668,7 +671,10 @@ export const NoteWorkspace = forwardRef<NoteWorkspaceHandle, {
       <div className="note-page">
         {autosave.status === "failed" && <p className="save-status error" role="alert">Couldn't save: {autosave.error} <button type="button" disabled={blocked !== null} onClick={() => { void autosave.retry().catch(() => undefined); }}>Retry save</button></p>}
         <header className="note-detail-header">
-          {when === null ? null : <p className="note-when"><span className="note-when-mark" aria-hidden="true" />{when}</p>}
+          {when === null && !listClosed ? null : <div className="note-when-line">
+            {listClosed ? <ListToggle /> : null}
+            {when === null ? null : <p className="note-when"><span className="note-when-mark" aria-hidden="true" />{when}</p>}
+          </div>}
           {/* The title is the page's heading and a field. A textarea, because at this size a
               one-line field would cut off most titles; Enter stays out of it, and a line break
               pasted in becomes a space, since a title has one line to Rust. The heading is

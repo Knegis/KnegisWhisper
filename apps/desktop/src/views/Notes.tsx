@@ -579,7 +579,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
 
   if (!data) {
     return (
-      <SplitView label="Notes library" panel={<div className="notes-actions"><ListToggle /></div>}>
+      <SplitView label="Notes library" panel={<div className="notes-actions"><ListToggle place="panel" /></div>}>
         <section className="notes-main" aria-label="Note editor">
           <h1 className="sr-only">Notes</h1>
           <div className="notes-notices">{error ? <p className="error">{error}</p> : <p className="muted">Loading…</p>}</div>
@@ -735,7 +735,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
           }}>
             <span className="panel-action-label">Import</span>
           </button>
-          <ListToggle />
+          <ListToggle place="panel" />
         </div>
         <label className="panel-search">
           <Icon name="search" size={16} />
@@ -838,7 +838,7 @@ export function Notes({ initialNoteId = null, openRequest = null, onOpenNote, on
   );
 
   return (
-    <SplitView label="Notes library" panel={panel}>
+    <SplitView label="Notes library" panel={panel} toggleInMain={!trashOpen && trashedView === null && openNote !== null}>
       <section className="notes-main" aria-label="Note editor" ref={mainRef}>
         {/* Always drawn, empty when there is nothing to say, so what comes into it -- a failure, "Moved
             to Trash", "Written to" -- is announced: a live region added already filled often is not. */}

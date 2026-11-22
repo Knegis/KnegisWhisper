@@ -223,15 +223,16 @@ export async function runShellTitleBar(options) {
     await click(cdp, NAV_PILL, "Notes");
     await waitFor(cdp, NOTE_OPEN, "a note to open");
     const beforeToggle = await cdp.evaluate(snippets.panelToggle());
+    // The panel slides for .4s and is hidden when that is over.
     await cdp.evaluate(snippets.clickSelector(TOGGLE));
-    await delay(150);
+    await delay(600);
     const collapsed = {
       panel: await cdp.evaluate(snippets.panelState()),
       toggle: await cdp.evaluate(snippets.panelToggle()),
     };
     const shot4a = await screenshot(cdp, out, "04-panel-hidden.png");
     await cdp.evaluate(snippets.clickSelector(TOGGLE));
-    await delay(150);
+    await delay(600);
     const restored = {
       panel: await cdp.evaluate(snippets.panelState()),
       toggle: await cdp.evaluate(snippets.panelToggle()),
@@ -242,7 +243,7 @@ export async function runShellTitleBar(options) {
       claim: "On Notes the panel's toggle hides the list panel, a second press restores it, and focus stays on the toggle each time.",
       measured: { beforeToggle, collapsed, restored },
       expectation: [
-        "after one press .list-panel is not rendered and the toggle reads Show list,",
+        "after one press .list-panel is not visible and the toggle reads Show list,",
         "aria-expanded false, focused; after the second it is rendered again, Hide list, true, focused",
       ].join(" "),
       matches: beforeToggle.expanded === "true"
@@ -255,7 +256,7 @@ export async function runShellTitleBar(options) {
         && restored.toggle.expanded === "true"
         && restored.toggle.focused,
       screenshots: [shot4a, shot4b],
-      note: "Visibility is the computed display and width, not the hidden attribute alone. The press removes the button pressed, so the focus half is ListToggle's replacement taking it.",
+      note: "Visibility is the computed display, visibility and width, read after the .4s slide, not the hidden attribute alone. The press removes the button pressed, so the focus half is ListToggle's replacement taking it.",
     });
 
     // The minimum window: a fresh load at 720x520, because the panel's
@@ -279,7 +280,7 @@ export async function runShellTitleBar(options) {
       claim: "At 720x520 the list panel starts hidden, nothing scrolls sideways, and the Settings sheet opens.",
       measured: narrow,
       expectation: [
-        "after a load at 720x520 and a press on Notes, .list-panel is not rendered;",
+        "after a load at 720x520 and a press on Notes, .list-panel is not visible;",
         "document.scrollingElement.scrollWidth <= innerWidth; the Settings pill then shows the sheet",
       ].join(" "),
       matches: narrow.panel.present
@@ -320,15 +321,17 @@ export async function runShellTitleBar(options) {
     const railTexts = new Set(reached.filter((item) => item.kind === "pill").map((item) => item.text));
     addCheck(report, {
       id: "6",
-      claim: "Tab reaches every pill and the search field, each drawing a 2px outline.",
+      claim: "Tab reaches every pill, each drawing a 2px outline, and the search field, which draws none.",
       measured: { focused },
       expectation: [
         "the four pills and input[role=combobox] each receive focus from Tab,",
-        "each with a 2px outline whose style is not none",
+        "each pill with a 2px outline whose style is not none, the field with outline-style none",
       ].join(" "),
       matches: railTexts.size === 4
         && reached.some((item) => item.kind === "search")
-        && reached.every((item) => item.outlineWidth === "2px" && item.outlineStyle !== "none"),
+        && reached.every((item) => item.kind === "search"
+          ? item.outlineStyle === "none"
+          : item.outlineWidth === "2px" && item.outlineStyle !== "none"),
       screenshots: [shot6],
       note: [
         "Tab was dispatched from the document body, up to 30 times, stopping once",
