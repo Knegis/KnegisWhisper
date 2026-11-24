@@ -168,6 +168,9 @@ impl SherpaStream {
 
         match outcome {
             kw_sidecar::Outcome::NoRecord => {}
+            kw_sidecar::Outcome::AlreadyExited => tracing::debug!(
+                "the streaming model server had already ended; its PID record was cleared"
+            ),
             other => tracing::info!(?other, "reaped a stale streaming model server"),
         }
     }
