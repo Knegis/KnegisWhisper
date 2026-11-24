@@ -56,6 +56,8 @@ mod shortcuts;
 mod single_instance;
 mod speaker_labels;
 mod speech_install;
+#[doc(hidden)]
+pub mod startup_failure;
 mod state;
 mod summaries;
 mod transcribed_by;
@@ -111,10 +113,350 @@ fn warn_if_nothing_serves_the_frontend(app: &tauri::App) {
     }
 }
 
+fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    // Before anything that touches the data folder. The plugin above
+    // lets a second copy through if it arrives before the first has
+    // made its signalling window; this does not (`single_instance.rs`).
+    match single_instance::claim(&kw_storage::paths::data_dir()) {
+        single_instance::Claim::Held(lock) => {
+            app.manage(lock);
+        }
+        single_instance::Claim::Taken => {
+            tracing::warn!(
+                "another copy of KnegisWhisper is using this data folder; this one is exiting"
+            );
+            app.handle().cleanup_before_exit();
+            std::process::exit(0);
+        }
+        single_instance::Claim::Unknown(error) => {
+            tracing::warn!(%error, "could not lock the data folder; starting without the lock");
+        }
+    }
+
+    // First, because it explains a symptom the user is already looking
+    // at by the time the rest of this finishes.
+    #[cfg(debug_assertions)]
+    warn_if_nothing_serves_the_frontend(app);
+
+    let handle = app.handle().clone();
+
+    // Opening the database is the one thing that must succeed before the
+    // application is usable, so it is awaited here and a failure aborts
+    // startup with a readable message rather than leaving every command
+    // erroring later.
+    let state = tauri::async_runtime::block_on(AppState::open())
+        .map_err(|error| anyhow::anyhow!("could not open the database: {error:#}"))?;
+
+    let bindings = tauri::async_runtime::block_on(commands::load_bindings(&state))
+        .map_err(|e| anyhow::anyhow!(e))
+        .context("could not read the configured hotkeys")?;
+
+    let db = state.db().clone();
+    app.manage(
+        tauri::async_runtime::block_on(sharing::SharingRuntime::recover(&state))
+            .map_err(|e| anyhow::anyhow!(e))?,
+    );
+    let credentials = state.credentials_arc();
+    // Cloned before it is moved into the dictation runtime below.
+    let meeting_credentials = std::sync::Arc::clone(&credentials);
+    let calendar_credentials = std::sync::Arc::clone(&credentials);
+    let policy = state.policy().clone();
+    // Cloned before `policy` is moved into the dictation runtime below.
+    let meeting_policy = policy.clone();
+    let calendar_policy = policy.clone();
+    let portal_enabled = cfg!(target_os = "linux")
+        && tauri::async_runtime::block_on(kw_storage::settings::get::<bool>(
+            state.db().pool(),
+            "hotkey.usePortal",
+        ))
+        .ok()
+        .flatten()
+        .unwrap_or(false);
+    app.manage(state.clone());
+
+    // Local transcription. The catalogue is parsed here so a malformed
+    // config/sidecars.json is a startup message rather than a surprise
+    // on the first dictation.
+    let local = std::sync::Arc::new(
+        local_model::LocalTranscription::new(
+            policy.clone(),
+            // So long recordings can find their speech first
+            // (KNEG-404). Checked against its pin once, here.
+            local_model::bundled_vad_model(app.path().resource_dir().ok().as_deref()),
+        )
+        .map_err(|e| anyhow::anyhow!(e))
+        .context("could not load config/sidecars.json")?,
+    );
+
+    // The streaming model server behind the `local-streaming` meeting
+    // provider. Not started here -- a 630 MB model held from launch for
+    // a user who never records a meeting is a cost nobody asked for --
+    // but reaped here, beside the others, before any port is allocated.
+    let stream = std::sync::Arc::new(
+        sherpa_stream::SherpaStream::new()
+            .map_err(|e| anyhow::anyhow!(e))
+            .context("could not load config/sidecars.json")?,
+    );
+
+    // Before anything asks for a port: a previous run that crashed may
+    // have left a server holding one.
+    tauri::async_runtime::block_on(local.reap_stale());
+    tauri::async_runtime::block_on(stream.reap_stale());
+
+    let shared = local.shared();
+
+    // How dictation and media import start the server again when it has
+    // gone out from under them. Built here because it needs both the
+    // runtime and the database, and neither path holds the other.
+    let revive = local_model::revive_handle(&local, &db);
+
+    // The other local engine. No process and no port -- a selection and
+    // a one-shot CLI -- so there is nothing to reap and nothing to
+    // start, only a remembered choice to read back. See `local_asr`'s
+    // module doc on why only one of the two is ever selected.
+    let asr = std::sync::Arc::new(
+        local_asr::LocalAsr::new(policy.clone())
+            .context("could not load config/sidecars.json for local ASR")?,
+    );
+    tauri::async_runtime::block_on(asr.restore(&db));
+    let sherpa_selection = asr.selection();
+    app.manage(std::sync::Arc::clone(&asr));
+
+    // Media import: audio, video and url import all end by going
+    // through the existing transcription route, so this needs exactly
+    // the handles that route does. Cloned before `credentials` and
+    // `policy` are moved into the dictation runtime below.
+    let media_import = std::sync::Arc::new(
+        media::MediaImportRuntime::new(
+            policy.clone(),
+            std::sync::Arc::clone(&credentials),
+            std::sync::Arc::clone(&shared.port),
+            std::sync::Arc::clone(&shared.model),
+            asr.selection(),
+            std::sync::Arc::clone(&revive),
+            shared.speech.clone(),
+            shared.users.clone(),
+            db.clone(),
+        )
+        .map_err(|e| anyhow::anyhow!(e))
+        .context("could not load config/sidecars.json for media import")?,
+    );
+    app.manage(std::sync::Arc::clone(&media_import));
+
+    // The route survives a restart; the server process does not. Bring
+    // back whichever model the user was last dictating with, in the
+    // background so the window does not wait for a model to load.
+    local_model::resume_last_used(&local, &db);
+
+    app.manage(std::sync::Arc::clone(&local));
+
+    // Local text generation. Same lifecycle, one more sidecar. Nothing
+    // starts here: the model is gigabytes and starting it uninvited
+    // would be several of them resident before anyone asked.
+    let llm = std::sync::Arc::new(
+        local_llm::LocalLlm::new(policy.clone())
+            .map_err(|e| anyhow::anyhow!(e))
+            .context("could not prepare the local text-generation server")?,
+    );
+    tauri::async_runtime::block_on(llm.reap_stale());
+    summaries::start(handle.clone(), state.clone(), std::sync::Arc::clone(&llm));
+    // Speaker labels on saved meeting notes. A job the last run left
+    // unfinished is marked interrupted here, never started again.
+    speaker_labels::start(handle.clone(), state.clone());
+    let llm_endpoint = llm.endpoint();
+    app.manage(std::sync::Arc::clone(&llm));
+
+    let session = std::sync::Arc::new(dictation::DictationRuntime::build(
+        handle.clone(),
+        db.clone(),
+        credentials,
+        policy,
+        dictation::LocalTargets {
+            transcription_port: shared.port,
+            transcription_model: shared.model,
+            transcription_sherpa: sherpa_selection,
+            transcription_revive: revive,
+            transcription_switching: shared.switching,
+            transcription_users: shared.users,
+            generation: llm_endpoint,
+        },
+        // Off until `reasoning::apply_at_startup` fills it, and off
+        // for good if the user has never switched cleanup on. The raw
+        // transcript is a correct answer; a half-configured cleanup
+        // that silently does nothing is not.
+        std::sync::Arc::new(std::sync::RwLock::new(None)),
+    ));
+
+    // The route survives a restart. Bring it back, in the background:
+    // the window should not wait on a settings read.
+    reasoning::apply_at_startup(&session, &db);
+    // So does the microphone (KNEG-341). Read before the first
+    // dictation can start: it is one settings row.
+    tauri::async_runtime::block_on(session.restore_device());
+
+    app.manage(session);
+    // The Meetings page's "Test microphone": one at a time (KNEG-364).
+    app.manage(microphone_check::MicrophoneChecks::default());
+
+    // Meetings. Nothing starts here and nothing is scheduled: a meeting
+    // begins only when somebody presses the button, which is what "the
+    // user must know it is recording" means in practice.
+    // The notification window, hidden. Created at startup rather than on
+    // demand: one created at the moment a meeting is detected would
+    // appear a second late and, on Windows, would steal focus while its
+    // webview initialised.
+    meeting_window::initialize(&handle);
+    match meeting_window::create(&handle) {
+        Ok(window) => {
+            let status = meeting_window::apply_treatments(&window);
+            tracing::info!(
+                capture_exclusion = ?status.capture_exclusion,
+                non_activating = ?status.non_activating,
+                "meeting notification window ready"
+            );
+        }
+        Err(err) => tracing::error!(
+            error = %err,
+            "no meeting notification window, so a recording meeting will have no                      indicator of its own"
+        ),
+    }
+
+    // Create the update notice hidden so showing it later neither lags
+    // nor steals focus while a webview initialises. Window creation is
+    // local; the automatic checker below waits 15 seconds and sends
+    // only when enabled and due. See updater.rs for its daily schedule.
+    match update_window::create(&handle) {
+        Ok(window) => {
+            let status = update_window::apply_treatments(&window);
+            tracing::info!(
+                capture_exclusion = ?status.capture_exclusion,
+                non_activating = ?status.non_activating,
+                "update notification window ready"
+            );
+        }
+        Err(err) => tracing::error!(
+            error = %err,
+            "could not create the update notification window"
+        ),
+    }
+    app.manage(updater::LastCheck::default());
+    updater::start_automatic(handle.clone(), state.clone());
+
+    // Empty at startup, and only `pick_import_file` ever adds to it:
+    // the three commands that take a file path refuse anything this
+    // set does not hold. See `commands::DialogGrants`.
+    app.manage(commands::DialogGrants::default());
+
+    let notes_draft = std::sync::Arc::new(meeting::draft::NotesDraft::default());
+    app.manage(std::sync::Arc::clone(&notes_draft));
+    let meetings = std::sync::Arc::new(meeting::MeetingRuntime::new(
+        handle.clone(),
+        db.clone(),
+        meeting_policy,
+        meeting_credentials,
+        local.shared(),
+        // So Start can bring the server up for the `local` provider,
+        // whatever dictation is routed to (KNEG-387).
+        local_model::meeting_revive_handle(&local, &db),
+        // So a model chosen for meetings is loaded, and dictation's put
+        // back afterwards.
+        local_model::MeetingServer::new(&local, &db),
+        // So the whole-recording pass uses the engine dictation uses.
+        asr.selection(),
+        std::sync::Arc::clone(&stream),
+        notes_draft,
+    ));
+    // Polls the process table while idle and offers to record a meeting
+    // in progress. There is no path from it to `start` without a click.
+    meetings.watch();
+    app.manage(meetings);
+    app.manage(std::sync::Arc::clone(&stream));
+
+    // Calendars. Nothing here reaches the network either: connecting an
+    // account and manual sync are explicit clicks; Meetings opening can
+    // request a throttled sync. Construction starts no calendar work.
+    let calendar_handle = app.handle().clone();
+    let calendars = std::sync::Arc::new(
+        calendar::CalendarRuntime::new(db.clone(), calendar_credentials, calendar_policy)
+            .with_notifier(std::sync::Arc::new(move || {
+                use tauri::Emitter;
+                let _ = calendar_handle.emit(calendar::CHANGED_EVENT, ());
+            })),
+    );
+    app.manage(calendars);
+
+    // Off unless the user has switched it on. See local_api.rs.
+    tauri::async_runtime::block_on(kw_storage::jobs::interrupt_unfinished(db.pool()))?;
+    tauri::async_runtime::block_on(media_import.recover_jobs())?;
+    tauri::async_runtime::block_on(automation::clean_job_scratch(
+        &db,
+        &kw_storage::paths::audio_temp_dir()?.join("import"),
+    ))?;
+    let uploads = kw_storage::paths::database_path().with_file_name("api-uploads");
+    automation::clean_uploads(&uploads)?;
+    let api = std::sync::Arc::new(local_api::LocalApiRuntime::new(db).with_runtime(
+        std::sync::Arc::new(automation::DesktopRuntime::new(handle.clone())),
+        uploads,
+    ));
+    tauri::async_runtime::block_on(api.start_if_enabled());
+    app.manage(api);
+
+    tray::create(&handle).context("could not create the tray icon")?;
+
+    // The overlay is created up front so its capture-exclusion state is
+    // a fact about a real window by the time the user opens settings,
+    // rather than a prediction. Restore the chosen presentation next.
+    persistent_overlay::initialize(&handle);
+    match overlay::create(&handle) {
+        Ok(window) => {
+            let status = overlay::apply_treatments(&window);
+            if let Err(error) = persistent_overlay::reconcile(&handle, true) {
+                tracing::warn!(%error, "could not restore microphone overlay");
+            }
+            tracing::info!(
+                capture_exclusion = ?status.capture_exclusion,
+                non_activating = ?status.non_activating,
+                "overlay ready"
+            );
+        }
+        Err(err) => {
+            // Not fatal. The dashboard still works; the settings screen
+            // will report the overlay as absent.
+            tracing::error!(error = %err, "could not create the overlay window");
+        }
+    }
+
+    // Held in state so a settings change replaces the hook rather than
+    // trying to install a second one, which Windows refuses.
+    let hooks = std::sync::Arc::new(shortcuts::Hooks::new(portal_enabled));
+    let registrations = shortcuts::register_all(&handle, &bindings, &hooks);
+    app.manage(std::sync::Arc::clone(&hooks));
+    let live = registrations.iter().filter(|r| r.is_live()).count();
+    tracing::info!(live, total = registrations.len(), "hotkeys registered");
+
+    // Tauri creates configured windows before calling this setup hook.
+    // Open the dashboard only after its commands have all their state:
+    // Dictation calls `hotkeys` as soon as its webview loads.
+    let main = app
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|window| window.label == "main")
+        .ok_or_else(|| anyhow::anyhow!("main window is missing from the configuration"))?;
+    tauri::WebviewWindowBuilder::from_config(&handle, main)
+        .context("could not configure the main window")?
+        .build()
+        .context("could not create the main window")?;
+
+    Ok(())
+}
+
 /// Build and run the application.
 ///
-/// Returns rather than panicking so the binary can report a startup failure as a
-/// message and an exit code instead of a Rust panic dump.
+/// A failed build returns an error for `main` to report. A failed setup is
+/// reported inside the setup hook and exits with code 1. On a normal run this
+/// function does not return: the event loop exits the process.
 pub fn run() -> anyhow::Result<()> {
     logging::init();
 
@@ -149,333 +491,15 @@ pub fn run() -> anyhow::Result<()> {
             // launching by hand.
             None,
         ))
-        .setup(|app| {
-            // Before anything that touches the data folder. The plugin above
-            // lets a second copy through if it arrives before the first has
-            // made its signalling window; this does not (`single_instance.rs`).
-            match single_instance::claim(&kw_storage::paths::data_dir()) {
-                single_instance::Claim::Held(lock) => {
-                    app.manage(lock);
-                }
-                single_instance::Claim::Taken => {
-                    tracing::warn!(
-                        "another copy of KnegisWhisper is using this data folder; this one is exiting"
-                    );
-                    app.handle().cleanup_before_exit();
-                    std::process::exit(0);
-                }
-                single_instance::Claim::Unknown(error) => {
-                    tracing::warn!(%error, "could not lock the data folder; starting without the lock");
-                }
+        .setup(|app| match setup(app) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                startup_failure::report(error.as_ref());
+                // Exit directly: the run callbacks require state that a failed
+                // setup may not have managed yet.
+                app.handle().cleanup_before_exit();
+                std::process::exit(1);
             }
-
-            // First, because it explains a symptom the user is already looking
-            // at by the time the rest of this finishes.
-            #[cfg(debug_assertions)]
-            warn_if_nothing_serves_the_frontend(app);
-
-            let handle = app.handle().clone();
-
-            // Opening the database is the one thing that must succeed before the
-            // application is usable, so it is awaited here and a failure aborts
-            // startup with a readable message rather than leaving every command
-            // erroring later.
-            let state = tauri::async_runtime::block_on(AppState::open())
-                .map_err(|error| anyhow::anyhow!("could not open the database: {error:#}"))?;
-
-            let bindings = tauri::async_runtime::block_on(commands::load_bindings(&state))
-                .map_err(|e| anyhow::anyhow!(e))
-                .context("could not read the configured hotkeys")?;
-
-            let db = state.db().clone();
-            app.manage(tauri::async_runtime::block_on(sharing::SharingRuntime::recover(&state))
-                .map_err(|e| anyhow::anyhow!(e))?);
-            let credentials = state.credentials_arc();
-            // Cloned before it is moved into the dictation runtime below.
-            let meeting_credentials = std::sync::Arc::clone(&credentials);
-            let calendar_credentials = std::sync::Arc::clone(&credentials);
-            let policy = state.policy().clone();
-            // Cloned before `policy` is moved into the dictation runtime below.
-            let meeting_policy = policy.clone();
-            let calendar_policy = policy.clone();
-            let portal_enabled = cfg!(target_os = "linux") && tauri::async_runtime::block_on(
-                kw_storage::settings::get::<bool>(state.db().pool(), "hotkey.usePortal")
-            ).ok().flatten().unwrap_or(false);
-            app.manage(state.clone());
-
-            // Local transcription. The catalogue is parsed here so a malformed
-            // config/sidecars.json is a startup message rather than a surprise
-            // on the first dictation.
-            let local = std::sync::Arc::new(
-                local_model::LocalTranscription::new(
-                    policy.clone(),
-                    // So long recordings can find their speech first
-                    // (KNEG-404). Checked against its pin once, here.
-                    local_model::bundled_vad_model(app.path().resource_dir().ok().as_deref()),
-                )
-                    .map_err(|e| anyhow::anyhow!(e))
-                    .context("could not load config/sidecars.json")?,
-            );
-
-            // The streaming model server behind the `local-streaming` meeting
-            // provider. Not started here -- a 630 MB model held from launch for
-            // a user who never records a meeting is a cost nobody asked for --
-            // but reaped here, beside the others, before any port is allocated.
-            let stream = std::sync::Arc::new(
-                sherpa_stream::SherpaStream::new()
-                    .map_err(|e| anyhow::anyhow!(e))
-                    .context("could not load config/sidecars.json")?,
-            );
-
-            // Before anything asks for a port: a previous run that crashed may
-            // have left a server holding one.
-            tauri::async_runtime::block_on(local.reap_stale());
-            tauri::async_runtime::block_on(stream.reap_stale());
-
-            let shared = local.shared();
-
-            // How dictation and media import start the server again when it has
-            // gone out from under them. Built here because it needs both the
-            // runtime and the database, and neither path holds the other.
-            let revive = local_model::revive_handle(&local, &db);
-
-            // The other local engine. No process and no port -- a selection and
-            // a one-shot CLI -- so there is nothing to reap and nothing to
-            // start, only a remembered choice to read back. See `local_asr`'s
-            // module doc on why only one of the two is ever selected.
-            let asr = std::sync::Arc::new(
-                local_asr::LocalAsr::new(policy.clone())
-                    .context("could not load config/sidecars.json for local ASR")?,
-            );
-            tauri::async_runtime::block_on(asr.restore(&db));
-            let sherpa_selection = asr.selection();
-            app.manage(std::sync::Arc::clone(&asr));
-
-            // Media import: audio, video and url import all end by going
-            // through the existing transcription route, so this needs exactly
-            // the handles that route does. Cloned before `credentials` and
-            // `policy` are moved into the dictation runtime below.
-            let media_import = std::sync::Arc::new(
-                media::MediaImportRuntime::new(
-                    policy.clone(),
-                    std::sync::Arc::clone(&credentials),
-                    std::sync::Arc::clone(&shared.port),
-                    std::sync::Arc::clone(&shared.model),
-                    asr.selection(),
-                    std::sync::Arc::clone(&revive),
-                    shared.speech.clone(),
-                    shared.users.clone(),
-                    db.clone(),
-                )
-                .map_err(|e| anyhow::anyhow!(e))
-                .context("could not load config/sidecars.json for media import")?,
-            );
-            app.manage(std::sync::Arc::clone(&media_import));
-
-            // The route survives a restart; the server process does not. Bring
-            // back whichever model the user was last dictating with, in the
-            // background so the window does not wait for a model to load.
-            local_model::resume_last_used(&local, &db);
-
-            app.manage(std::sync::Arc::clone(&local));
-
-            // Local text generation. Same lifecycle, one more sidecar. Nothing
-            // starts here: the model is gigabytes and starting it uninvited
-            // would be several of them resident before anyone asked.
-            let llm = std::sync::Arc::new(
-                local_llm::LocalLlm::new(policy.clone())
-                    .map_err(|e| anyhow::anyhow!(e))
-                    .context("could not prepare the local text-generation server")?,
-            );
-            tauri::async_runtime::block_on(llm.reap_stale());
-            summaries::start(handle.clone(), state.clone(), std::sync::Arc::clone(&llm));
-            // Speaker labels on saved meeting notes. A job the last run left
-            // unfinished is marked interrupted here, never started again.
-            speaker_labels::start(handle.clone(), state.clone());
-            let llm_endpoint = llm.endpoint();
-            app.manage(std::sync::Arc::clone(&llm));
-
-            let session = std::sync::Arc::new(dictation::DictationRuntime::build(
-                handle.clone(),
-                db.clone(),
-                credentials,
-                policy,
-                dictation::LocalTargets {
-                    transcription_port: shared.port,
-                    transcription_model: shared.model,
-                    transcription_sherpa: sherpa_selection,
-                    transcription_revive: revive,
-                    transcription_switching: shared.switching,
-                    transcription_users: shared.users,
-                    generation: llm_endpoint,
-                },
-                // Off until `reasoning::apply_at_startup` fills it, and off
-                // for good if the user has never switched cleanup on. The raw
-                // transcript is a correct answer; a half-configured cleanup
-                // that silently does nothing is not.
-                std::sync::Arc::new(std::sync::RwLock::new(None)),
-            ));
-
-            // The route survives a restart. Bring it back, in the background:
-            // the window should not wait on a settings read.
-            reasoning::apply_at_startup(&session, &db);
-            // So does the microphone (KNEG-341). Read before the first
-            // dictation can start: it is one settings row.
-            tauri::async_runtime::block_on(session.restore_device());
-
-            app.manage(session);
-            // The Meetings page's "Test microphone": one at a time (KNEG-364).
-            app.manage(microphone_check::MicrophoneChecks::default());
-
-            // Meetings. Nothing starts here and nothing is scheduled: a meeting
-            // begins only when somebody presses the button, which is what "the
-            // user must know it is recording" means in practice.
-            // The notification window, hidden. Created at startup rather than on
-            // demand: one created at the moment a meeting is detected would
-            // appear a second late and, on Windows, would steal focus while its
-            // webview initialised.
-            meeting_window::initialize(&handle);
-            match meeting_window::create(&handle) {
-                Ok(window) => {
-                    let status = meeting_window::apply_treatments(&window);
-                    tracing::info!(
-                        capture_exclusion = ?status.capture_exclusion,
-                        non_activating = ?status.non_activating,
-                        "meeting notification window ready"
-                    );
-                }
-                Err(err) => tracing::error!(
-                    error = %err,
-                    "no meeting notification window, so a recording meeting will have no                      indicator of its own"
-                ),
-            }
-
-            // Create the update notice hidden so showing it later neither lags
-            // nor steals focus while a webview initialises. Window creation is
-            // local; the automatic checker below waits 15 seconds and sends
-            // only when enabled and due. See updater.rs for its daily schedule.
-            match update_window::create(&handle) {
-                Ok(window) => {
-                    let status = update_window::apply_treatments(&window);
-                    tracing::info!(
-                        capture_exclusion = ?status.capture_exclusion,
-                        non_activating = ?status.non_activating,
-                        "update notification window ready"
-                    );
-                }
-                Err(err) => tracing::error!(
-                    error = %err,
-                    "could not create the update notification window"
-                ),
-            }
-            app.manage(updater::LastCheck::default());
-            updater::start_automatic(handle.clone(), state.clone());
-
-            // Empty at startup, and only `pick_import_file` ever adds to it:
-            // the three commands that take a file path refuse anything this
-            // set does not hold. See `commands::DialogGrants`.
-            app.manage(commands::DialogGrants::default());
-
-            let notes_draft = std::sync::Arc::new(meeting::draft::NotesDraft::default());
-            app.manage(std::sync::Arc::clone(&notes_draft));
-            let meetings = std::sync::Arc::new(meeting::MeetingRuntime::new(
-                handle.clone(),
-                db.clone(),
-                meeting_policy,
-                meeting_credentials,
-                local.shared(),
-                // So Start can bring the server up for the `local` provider,
-                // whatever dictation is routed to (KNEG-387).
-                local_model::meeting_revive_handle(&local, &db),
-                // So a model chosen for meetings is loaded, and dictation's put
-                // back afterwards.
-                local_model::MeetingServer::new(&local, &db),
-                // So the whole-recording pass uses the engine dictation uses.
-                asr.selection(),
-                std::sync::Arc::clone(&stream),
-                notes_draft,
-            ));
-            // Polls the process table while idle and offers to record a meeting
-            // in progress. There is no path from it to `start` without a click.
-            meetings.watch();
-            app.manage(meetings);
-            app.manage(std::sync::Arc::clone(&stream));
-
-            // Calendars. Nothing here reaches the network either: connecting an
-            // account and manual sync are explicit clicks; Meetings opening can
-            // request a throttled sync. Construction starts no calendar work.
-            let calendar_handle = app.handle().clone();
-            let calendars = std::sync::Arc::new(calendar::CalendarRuntime::new(
-                db.clone(),
-                calendar_credentials,
-                calendar_policy,
-            ).with_notifier(std::sync::Arc::new(move || {
-                use tauri::Emitter;
-                let _ = calendar_handle.emit(calendar::CHANGED_EVENT, ());
-            })));
-            app.manage(calendars);
-
-            // Off unless the user has switched it on. See local_api.rs.
-            tauri::async_runtime::block_on(kw_storage::jobs::interrupt_unfinished(db.pool()))?;
-            tauri::async_runtime::block_on(media_import.recover_jobs())?;
-            tauri::async_runtime::block_on(automation::clean_job_scratch(&db,
-                &kw_storage::paths::audio_temp_dir()?.join("import")))?;
-            let uploads = kw_storage::paths::database_path().with_file_name("api-uploads");
-            automation::clean_uploads(&uploads)?;
-            let api = std::sync::Arc::new(local_api::LocalApiRuntime::new(db)
-                .with_runtime(std::sync::Arc::new(automation::DesktopRuntime::new(handle.clone())), uploads));
-            tauri::async_runtime::block_on(api.start_if_enabled());
-            app.manage(api);
-
-            tray::create(&handle).context("could not create the tray icon")?;
-
-            // The overlay is created up front so its capture-exclusion state is
-            // a fact about a real window by the time the user opens settings,
-            // rather than a prediction. Restore the chosen presentation next.
-            persistent_overlay::initialize(&handle);
-            match overlay::create(&handle) {
-                Ok(window) => {
-                    let status = overlay::apply_treatments(&window);
-                    if let Err(error) = persistent_overlay::reconcile(&handle, true) {
-                        tracing::warn!(%error, "could not restore microphone overlay");
-                    }
-                    tracing::info!(
-                        capture_exclusion = ?status.capture_exclusion,
-                        non_activating = ?status.non_activating,
-                        "overlay ready"
-                    );
-                }
-                Err(err) => {
-                    // Not fatal. The dashboard still works; the settings screen
-                    // will report the overlay as absent.
-                    tracing::error!(error = %err, "could not create the overlay window");
-                }
-            }
-
-            // Held in state so a settings change replaces the hook rather than
-            // trying to install a second one, which Windows refuses.
-            let hooks = std::sync::Arc::new(shortcuts::Hooks::new(portal_enabled));
-            let registrations = shortcuts::register_all(&handle, &bindings, &hooks);
-            app.manage(std::sync::Arc::clone(&hooks));
-            let live = registrations.iter().filter(|r| r.is_live()).count();
-            tracing::info!(live, total = registrations.len(), "hotkeys registered");
-
-            // Tauri creates configured windows before calling this setup hook.
-            // Open the dashboard only after its commands have all their state:
-            // Dictation calls `hotkeys` as soon as its webview loads.
-            let main = app
-                .config()
-                .app
-                .windows
-                .iter()
-                .find(|window| window.label == "main")
-                .ok_or_else(|| anyhow::anyhow!("main window is missing from the configuration"))?;
-            tauri::WebviewWindowBuilder::from_config(&handle, main)
-                .context("could not configure the main window")?
-                .build()
-                .context("could not create the main window")?;
-
-            Ok(())
         })
         .on_window_event(|window, event| {
             // Closing the dashboard hides it. Dictation is a background service;
@@ -558,7 +582,6 @@ pub fn run() -> anyhow::Result<()> {
             known_voices::known_voice_rename,
             known_voices::known_voice_delete,
             known_voices::known_voices_repair,
-
             commands::note_speaker_suggestions,
             commands::folders_list,
             commands::folder_create,
@@ -675,7 +698,10 @@ pub fn run() -> anyhow::Result<()> {
         .build(tauri::generate_context!())
         .context("the application could not be built")?
         .run(|app, event| {
-            if matches!(&event, tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit) {
+            if matches!(
+                &event,
+                tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
+            ) {
                 app.state::<sharing::SharingRuntime>().close();
             }
             automation::on_event(app, event);

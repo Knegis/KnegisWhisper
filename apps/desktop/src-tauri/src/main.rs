@@ -8,9 +8,7 @@ fn main() -> std::process::ExitCode {
     match knegiswhisper_lib::run() {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(err) => {
-            // The GUI may never have appeared, so stderr is the only channel
-            // we can rely on here.
-            eprintln!("KnegisWhisper failed to start: {err:#}");
+            knegiswhisper_lib::startup_failure::report(err.as_ref());
             std::process::ExitCode::FAILURE
         }
     }
