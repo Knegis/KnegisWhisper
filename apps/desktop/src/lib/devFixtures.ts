@@ -2363,37 +2363,45 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
   /* import */
   import_openwhispr: () => {
     const report: ImportReport = {
-      source: "C:\\Users\\dev\\AppData\\Roaming\\openwhispr\\openwhispr.db",
+      source: "C:\\Users\\dev\\AppData\\Roaming\\openwhispr\\transcriptions.db",
       tables: [
         {
           table: "notes",
           copied: 128,
           skipped: 2,
+          deletedLeftOut: 1,
           absentColumns: ["enhanced_content"],
-          droppedColumns: ["legacy_sync_state"],
+          droppedColumns: ["sync_status", "cloud_id", "deleted_at"],
           skipReason: "referenced folder 7, which was itself not imported",
         },
         {
           table: "folders",
           copied: 6,
           skipped: 0,
+          deletedLeftOut: 1,
           absentColumns: [],
-          droppedColumns: [],
+          droppedColumns: ["deleted_at"],
           skipReason: null,
         },
         {
           table: "transcriptions",
           copied: 412,
           skipped: 0,
-          absentColumns: ["route_kind"],
-          droppedColumns: [],
+          deletedLeftOut: 1,
+          absentColumns: ["raw_text"],
+          droppedColumns: ["deleted_at"],
           skipReason: null,
         },
       ],
       relocatedCredentials: [
-        { sourceTable: "settings", account: "openai", slot: "openai" },
+        { sourceTable: "google_calendar_tokens", account: "user@example.com", slot: "calendar-google-1" },
       ],
-      absentTables: ["dictation_presets"],
+      absentTables: ["actions"],
+      leftBehindTables: [
+        { table: "analytics_history_backfill_state", rows: 1 },
+        { table: "pending_vector_purges", rows: 0 },
+        { table: "spaces", rows: 1 },
+      ],
       ftsRows: 128,
     };
     return report;

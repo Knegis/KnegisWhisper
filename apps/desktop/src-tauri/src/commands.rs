@@ -1218,7 +1218,8 @@ pub struct ImportRequest {
     pub path: String,
 }
 
-/// Import an OpenWhispr database, read-only, into this one.
+/// Import through a read-only source connection into this database.
+/// SQLite may update the transient `-shm` index beside a WAL source.
 ///
 /// **The path must be one a real dialog returned** — see [`DialogGrants`].
 /// `kw_storage::import::from_openwhispr` checks `exists()` rather than

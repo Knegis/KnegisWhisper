@@ -873,6 +873,21 @@ export function droppedColumnsByTable(
     .map((t) => ({ table: t.table, columns: t.droppedColumns }));
 }
 
+/** Tables with rows get their own lines; empty or uncountable tables share one. */
+export function leftBehindTableLabels(report: ImportReport): string[] {
+  const tables = [...report.leftBehindTables].sort((a, b) => a.table.localeCompare(b.table));
+  const lines = tables.filter((t) => t.rows > 0)
+    .map((t) => `${t.table}: ${t.rows} row${t.rows === 1 ? "" : "s"}`);
+  const empty = tables.filter((t) => t.rows === 0).map((t) => t.table);
+  if (empty.length > 0) lines.push(`Empty, or could not be counted: ${empty.join(", ")}`);
+  return lines;
+}
+
+/** Deleted rows are separate from rows that failed to copy. */
+export function deletedLeftOutLabel(count: number): string {
+  return count > 0 ? `, ${count} deleted in OpenWhispr and not copied` : "";
+}
+
 /** A relocated credential, without ever naming its value. */
 export function relocatedCredentialLabel(c: RelocatedCredential): string {
   return `${c.account} — moved from ${c.sourceTable} into credential slot ${c.slot}`;

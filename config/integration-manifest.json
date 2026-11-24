@@ -1163,7 +1163,7 @@
       "backend": "crates/storage",
       "ui": "Notes > Upload",
       "reachable": true,
-      "note": "storage::import::from_openwhispr: attaches an existing OpenWhispr transcriptions.db read-only, introspects its columns with pragma table_info rather than assuming upstream's ~70-ALTER-TABLE schema, drops every cloud/sync column and both plaintext token tables (relocating the tokens into the OS credential store instead), and rebuilds notes_fts. Implemented and tested from early in the build; deliberately absent from this manifest until it had a screen, which it now does. The screen renders the full ImportReport -- what copied, what was skipped and why, which columns were dropped per table, and which credentials moved -- never the credential values."
+      "note": "storage::import::from_openwhispr: opens an existing OpenWhispr transcriptions.db through a second, read-only connection, introspects its columns with pragma table_info rather than assuming upstream's ~70-ALTER-TABLE schema, drops every cloud/sync column and both plaintext token tables (relocating the tokens into the OS credential store instead), and fills notes_fts through triggers as notes are inserted. Implemented and tested from early in the build; deliberately absent from this manifest until it had a screen, which it now does. The screen renders the full ImportReport -- what copied, what was skipped and why, which tables were not copied with row counts, which rows deleted in OpenWhispr were passed over, which columns were dropped per table, and which credentials moved -- never the credential values."
     },
     "media:transcript-export": {
       "status": "ported",

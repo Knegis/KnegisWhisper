@@ -53,6 +53,8 @@ import {
 } from "../lib/ipc";
 import {
   droppedColumnsByTable,
+  leftBehindTableLabels,
+  deletedLeftOutLabel,
   importReportSummary,
   mediaImportProgressLabel,
   mediaImportSourceLabel,
@@ -342,21 +344,25 @@ export function NotesUpload({ onOpenNote }: { onOpenNote: (id: number) => void }
             Copies an existing OpenWhispr <code>transcriptions.db</code> into
             this application: notes and their folders, transcriptions, your
             custom dictionary, snippets, custom actions, agent conversations
-            and their messages, speaker profiles, the speaker names and voice
-            fingerprints kept with notes, contacts, and your Google, Microsoft and
+            and their messages, speaker profiles, the speaker names
+            kept with notes, contacts, and your Google, Microsoft and
             Apple calendars with their events.
           </p>
           <p>
             Left behind: anything you deleted in OpenWhispr, its{" "}
             <code>spaces</code> table and two internal queues, and every cloud
-            and sync field.
+            and sync field. Speaker voice fingerprints kept with notes are also
+            left behind. The report after the import lists every table that was
+            not copied.
           </p>
           <p>
-            The source file is opened read-only and is never written to.
-            Nothing this import does can change or corrupt your existing
-            OpenWhispr install — if anything about the result looks wrong,
-            nothing has been lost from the source, and it is safe to delete
-            this application's database and try again.
+            The import only reads the OpenWhispr database and changes none of
+            your notes or settings there. If OpenWhispr left its database in
+            write-ahead mode, SQLite updates a small index file beside it (the
+            one ending in <code>-shm</code>) when the database is read. That file
+            holds none of your data, and OpenWhispr rebuilds it. If the result
+            looks wrong, it is safe to delete this application's database and
+            try again.
           </p>
         </LearnMore>
 
@@ -404,6 +410,17 @@ export function NotesUpload({ onOpenNote }: { onOpenNote: (id: number) => void }
             ) : null}
 
             <h3>What was left behind</h3>
+            <p className="muted">Tables not copied</p>
+            {leftBehindTableLabels(importReport).length === 0 ? (
+              <p className="muted">No tables were left behind.</p>
+            ) : (
+              <ul className="list">
+                {leftBehindTableLabels(importReport).map((line) => (
+                  <li key={line}>{line}</li>
+                ))}
+              </ul>
+            )}
+            <p className="muted">Columns not copied</p>
             {droppedColumnsByTable(importReport).length === 0 ? (
               <p className="muted">No columns were dropped.</p>
             ) : (
@@ -438,6 +455,7 @@ export function NotesUpload({ onOpenNote }: { onOpenNote: (id: number) => void }
                     {" "}
                     {t.copied} copied
                     {t.skipped > 0 ? `, ${t.skipped} skipped` : ""}
+                    {deletedLeftOutLabel(t.deletedLeftOut)}
                   </span>
                   {t.skipReason ? <em className="row-detail">{t.skipReason}</em> : null}
                 </li>
