@@ -4,10 +4,10 @@
 //! version of this one, so it gets an importer rather than a migration. Four
 //! properties follow from that, and each is tested:
 //!
-//! * **The source is opened read-only and never written.** Not by convention —
-//!   `SQLITE_OPEN_READONLY`, so a stray `INSERT` would fail rather than
-//!   corrupt the user's existing installation. The import is therefore
-//!   reversible by deleting the target.
+//! * **The source connection is read-only.** `SQLITE_OPEN_READONLY` prevents
+//!   changes to its notes and settings. SQLite may update the transient `-shm`
+//!   wal-index beside a WAL database while reading it; that index holds no user
+//!   data and can be rebuilt. Deleting the target lets the user try again.
 //!
 //! * **The source column set is introspected, not assumed.** Upstream's schema
 //!   is whatever seventy conditional `ALTER TABLE` statements happened to
@@ -23,11 +23,11 @@
 //!   column. Importing that faithfully would import the defect. The importer
 //!   moves the token and leaves a slot name behind.
 //!
-//! Dynamic SQL note: table and column names are interpolated into the copy
-//! statements, but every name comes from [`COPY_PLAN`] — a static table in this
-//! file. The source database's own names are only ever used for set membership,
-//! never substituted into SQL, so a maliciously named column in a hand-crafted
-//! source file cannot reach the query text.
+//! Dynamic SQL note: names from [`COPY_PLAN`] are interpolated into copy
+//! statements as before. A source-supplied table name reaches exactly one
+//! statement: a `SELECT count(*)` in [`count_source_table`], quoted as a SQLite
+//! identifier, on the source connection opened read-only. Other source names
+//! are used for set membership or bound parameters, never query text.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -43,9 +43,11 @@ use crate::{Db, StorageError};
 /// Which tables are copied, in dependency order, and which columns of each.
 ///
 /// Everything not listed is deliberately left behind. That includes the `spaces`,
-/// `pending_vector_purges`, and `optimistic_folder_delete_rows` tables, every
+/// `pending_vector_purges`, `optimistic_folder_delete_rows`, and
+/// `note_speaker_embeddings` tables, every
 /// cloud and sync column, and the two token tables (handled by
-/// [`relocate_calendar_tokens`] instead).
+/// [`plan_credential_relocation`] instead). The report lists tables left behind
+/// with their row counts, excluding relocated tokens and derived search data.
 const COPY_PLAN: &[(&str, &[&str])] = &[
     (
         "folders",
@@ -261,6 +263,8 @@ pub struct TableReport {
     /// Rows the source had that could not be written, almost always because
     /// they referenced a row that was itself not imported.
     pub skipped: u64,
+    /// Source rows deleted in OpenWhispr and excluded from the copy.
+    pub deleted_left_out: u64,
     /// Columns this importer wanted that the source did not have.
     pub absent_columns: Vec<String>,
     /// Columns the source had that were deliberately not copied.
@@ -268,6 +272,15 @@ pub struct TableReport {
     /// Why the first skipped row was skipped. A count on its own tells the user
     /// nothing they can act on.
     pub skip_reason: Option<String>,
+}
+
+/// A source table deliberately not copied, excluding tokens and derived search data.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct LeftBehindTable {
+    pub table: String,
+    /// Source rows; zero can also mean the table could not be counted.
+    pub rows: u64,
 }
 
 /// A token moved out of SQLite and into the OS credential store.
@@ -291,6 +304,8 @@ pub struct ImportReport {
     pub relocated_credentials: Vec<RelocatedCredential>,
     /// Tables named in the copy plan that the source did not have at all.
     pub absent_tables: Vec<String>,
+    /// Source tables not copied, sorted by name, excluding tokens and derived search data.
+    pub left_behind_tables: Vec<LeftBehindTable>,
     /// Rows in `notes_fts` after the import. The triggers populate it as notes
     /// are inserted, so this is an assertion that they fired, not a rebuild.
     pub fts_rows: i64,
@@ -340,6 +355,7 @@ pub async fn from_openwhispr(
 
     let src = open_source_read_only(source).await?;
     let src_tables = table_names(&src).await?;
+    let left_behind_tables = left_behind_tables(&src, &src_tables).await?;
 
     // One transaction on one connection, for two reasons. An import is
     // all-or-nothing, so a failure halfway must not leave a half-populated
@@ -391,6 +407,7 @@ pub async fn from_openwhispr(
         tables,
         relocated_credentials: relocated,
         absent_tables,
+        left_behind_tables,
         fts_rows,
     };
 
@@ -478,6 +495,62 @@ async fn table_names(pool: &SqlitePool) -> Result<BTreeSet<String>, StorageError
     Ok(set)
 }
 
+fn quote_sqlite_identifier(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\"\""))
+}
+
+/// The only query text that receives a source-supplied identifier.
+async fn count_source_table(src: &SqlitePool, table: &str) -> u64 {
+    let sql = format!("SELECT count(*) FROM {}", quote_sqlite_identifier(table));
+    match sqlx::query_scalar::<_, i64>(&sql).fetch_one(src).await {
+        Ok(rows) => rows as u64,
+        Err(error) => {
+            tracing::warn!(table, %error, "source table could not be counted; reporting zero rows");
+            0
+        }
+    }
+}
+
+async fn left_behind_tables(
+    src: &SqlitePool,
+    names: &BTreeSet<String>,
+) -> Result<Vec<LeftBehindTable>, StorageError> {
+    let definitions: Vec<(String, Option<String>)> =
+        sqlx::query_as("SELECT name, sql FROM sqlite_schema WHERE type = 'table'")
+            .fetch_all(src)
+            .await?;
+    let virtual_tables: Vec<String> = definitions
+        .into_iter()
+        .filter_map(|(name, sql)| {
+            sql.filter(|sql| {
+                sql.trim_start()
+                    .to_ascii_uppercase()
+                    .starts_with("CREATE VIRTUAL TABLE")
+            })
+            .map(|_| name)
+        })
+        .collect();
+    let mut result = Vec::new();
+    for name in names {
+        if COPY_PLAN.iter().any(|(table, _)| *table == name)
+            || matches!(
+                name.as_str(),
+                "google_calendar_tokens" | "microsoft_calendar_tokens"
+            )
+            || virtual_tables
+                .iter()
+                .any(|table| name == table || name.starts_with(&format!("{table}_")))
+        {
+            continue;
+        }
+        result.push(LeftBehindTable {
+            table: name.clone(),
+            rows: count_source_table(src, name).await,
+        });
+    }
+    Ok(result)
+}
+
 async fn column_names(pool: &SqlitePool, table: &str) -> Result<BTreeSet<String>, StorageError> {
     let rows = sqlx::query("SELECT name FROM pragma_table_info(?)")
         .bind(table)
@@ -497,6 +570,13 @@ async fn copy_table(
     wanted: &[&str],
 ) -> Result<TableReport, StorageError> {
     let present = column_names(src, table).await?;
+    // `table` comes from COPY_PLAN, just like the copy query below.
+    let deleted_left_out = if present.contains("deleted_at") {
+        let sql = format!("SELECT count(*) FROM {table} WHERE deleted_at IS NOT NULL");
+        sqlx::query_scalar::<_, i64>(&sql).fetch_one(src).await? as u64
+    } else {
+        0
+    };
 
     let columns: Vec<&str> = wanted
         .iter()
@@ -519,6 +599,7 @@ async fn copy_table(
             table: table.to_owned(),
             copied: 0,
             skipped: 0,
+            deleted_left_out,
             absent_columns,
             dropped_columns,
             skip_reason: None,
@@ -588,6 +669,7 @@ async fn copy_table(
         table: table.to_owned(),
         copied,
         skipped,
+        deleted_left_out,
         absent_columns,
         dropped_columns,
         skip_reason: first_skip_reason,
@@ -911,6 +993,129 @@ mod tests {
         let creds = MemoryCredentialStore::new();
         let report = from_openwhispr(&target, &src_path, &creds).await.unwrap();
         (report, target, creds, dir)
+    }
+
+    #[tokio::test]
+    async fn reports_tables_left_behind_and_deleted_rows() {
+        let (report, _target, _, _dir) = run_import().await;
+        let left: Vec<_> = report
+            .left_behind_tables
+            .iter()
+            .map(|t| (t.table.as_str(), t.rows))
+            .collect();
+        assert_eq!(left, vec![("note_speaker_embeddings", 1), ("spaces", 1)]);
+        for table in ["folders", "notes", "transcriptions"] {
+            let detail = report.tables.iter().find(|t| t.table == table).unwrap();
+            assert_eq!(detail.deleted_left_out, 1, "{table}");
+        }
+        let speakers = report
+            .tables
+            .iter()
+            .find(|t| t.table == "speaker_profiles")
+            .unwrap();
+        assert_eq!(speakers.deleted_left_out, 0);
+    }
+
+    #[test]
+    fn sqlite_identifiers_escape_quotes_and_keep_semicolons_inside() {
+        assert_eq!(
+            quote_sqlite_identifier("odd\"; DROP TABLE notes;--"),
+            "\"odd\"\"; DROP TABLE notes;--\""
+        );
+    }
+
+    #[tokio::test]
+    async fn reports_unknown_tables_safely_and_excludes_virtual_search_tables() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("source.db");
+        let source = openwhispr_fixture(&path).await;
+        source
+            .execute(
+                r#"
+            CREATE TABLE "odd""; DROP TABLE notes;--" (value TEXT);
+            INSERT INTO "odd""; DROP TABLE notes;--" VALUES ('one'), ('two');
+            CREATE TABLE empty_unknown (value TEXT);
+            cReAtE vIrTuAl TaBlE source_search USING fts5(content);
+            INSERT INTO source_search VALUES ('derived text');
+        "#,
+            )
+            .await
+            .unwrap();
+        source.close().await;
+        let target = Db::open(&dir.path().join("kw.db")).await.unwrap();
+        let report = from_openwhispr(&target, &path, &MemoryCredentialStore::new())
+            .await
+            .unwrap();
+        let left: Vec<_> = report
+            .left_behind_tables
+            .iter()
+            .map(|t| (t.table.as_str(), t.rows))
+            .collect();
+        assert_eq!(
+            left,
+            vec![
+                ("empty_unknown", 0),
+                ("note_speaker_embeddings", 1),
+                ("odd\"; DROP TABLE notes;--", 2),
+                ("spaces", 1)
+            ]
+        );
+        assert_eq!(
+            report
+                .tables
+                .iter()
+                .find(|t| t.table == "notes")
+                .unwrap()
+                .copied,
+            1
+        );
+        let source = open_source_read_only(&path).await.unwrap();
+        let notes: i64 = sqlx::query_scalar("SELECT count(*) FROM notes")
+            .fetch_one(&source)
+            .await
+            .unwrap();
+        assert_eq!(notes, 3);
+        // Failure to count an exotic or unreadable table is nonfatal.
+        assert_eq!(count_source_table(&source, "missing table").await, 0);
+        source.close().await;
+    }
+
+    #[tokio::test]
+    async fn importing_a_held_open_wal_source_preserves_main_and_wal_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("source.db");
+        let source = openwhispr_fixture(&path).await;
+        source.execute("PRAGMA journal_mode = WAL").await.unwrap();
+        source
+            .execute("INSERT INTO spaces (name) VALUES ('only in WAL')")
+            .await
+            .unwrap();
+        let mut wal = path.as_os_str().to_owned();
+        wal.push("-wal");
+        let wal = PathBuf::from(wal);
+        let mut shm = path.as_os_str().to_owned();
+        shm.push("-shm");
+        assert!(PathBuf::from(shm).exists());
+        let main_before = std::fs::read(&path).unwrap();
+        let wal_before = std::fs::read(&wal).unwrap();
+        assert!(!wal_before.is_empty());
+        assert!(!String::from_utf8_lossy(&main_before).contains("only in WAL"));
+        let target = Db::open(&dir.path().join("kw.db")).await.unwrap();
+        let report = from_openwhispr(&target, &path, &MemoryCredentialStore::new())
+            .await
+            .unwrap();
+        assert_eq!(
+            report
+                .left_behind_tables
+                .iter()
+                .find(|t| t.table == "spaces")
+                .unwrap()
+                .rows,
+            2
+        );
+        assert_eq!(main_before, std::fs::read(&path).unwrap());
+        assert_eq!(wal_before, std::fs::read(&wal).unwrap());
+        source.close().await;
     }
 
     #[tokio::test]
