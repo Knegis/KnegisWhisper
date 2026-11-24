@@ -1,9 +1,11 @@
 //! Remembering which processes we started, so they can be cleaned up after a
 //! crash.
 //!
-//! A sidecar outlives an application that dies without running its shutdown
-//! path — a panic, a `SIGKILL`, a power cut. On the next launch the only trace
-//! is a PID, so it gets written to disk at spawn and removed at exit.
+//! A sidecar can outlive the application on macOS and Linux, or on Windows if
+//! assignment to the kill-on-close job failed. Its PID record is written at
+//! spawn and removed by `stop`, by the watcher when it notices the child ended,
+//! or by the next launch's reaper. Application exit can leave the record behind
+//! even when the Windows job has ended the process.
 //!
 //! A PID on its own is not enough to act on, because the operating system
 //! reuses them. So each record also carries the executable path, and

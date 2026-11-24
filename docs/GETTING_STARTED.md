@@ -144,9 +144,10 @@ that a folder was removed.
    `%APPDATA%\KnegisWhisper` folder. Credentials are stored separately.
 2. If the app is still installed, clear saved provider keys in **Settings >
    Providers** and disconnect calendar accounts in **Settings > Calendar**.
-   Quit from the tray. Stop any remaining KnegisWhisper transcription/model
-   processes before deleting files; check their executable paths so you do not
-   stop another application's runtime.
+   Quit from the tray. On Windows, model servers normally end with the application.
+   If a KnegisWhisper transcription or model process is still running, stop it
+   before deleting files; check its executable path so you do not stop another
+   application's runtime.
 3. Sign into the Windows account that used the app. In File Explorer, enter
    `%APPDATA%\KnegisWhisper` and verify the full resolved path and folder name.
    Delete that specific folder only when you intend to erase its contents,

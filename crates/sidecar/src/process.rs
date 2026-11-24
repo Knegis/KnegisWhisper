@@ -187,6 +187,9 @@ impl Running {
 
     /// Ask it to stop, and clear its PID record.
     ///
+    /// On Windows the process-wide job also ends it when the application exits,
+    /// even when this method is never called.
+    ///
     /// Uses the child handle rather than the reaper: this is our own child, so
     /// there is no possibility of a reused id and nothing to verify. The reaper
     /// is for processes that outlived the run that started them.
@@ -280,6 +283,9 @@ pub async fn start_with_env<H: Health>(
         executable: launch.executable.clone(),
         source,
     })?;
+    if let Err(error) = crate::job::assign(&child) {
+        tracing::warn!(sidecar = %spec.name, %error, "could not tie the sidecar to the application lifetime");
+    }
 
     let pid = child.id().unwrap_or_default();
     let stderr = Arc::new(Mutex::new(StderrTail::new()));
@@ -712,6 +718,127 @@ mod tests {
                 port,
             }
         }
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn two_children_can_join_the_process_job() {
+        let mut first = command_for(&long_lived(8192), &[])
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let mut second = command_for(&long_lived(8193), &[])
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+
+        crate::job::assign(&first).unwrap();
+        crate::job::assign(&second).unwrap();
+
+        first.kill().await.unwrap();
+        second.kill().await.unwrap();
+    }
+
+    #[cfg(not(windows))]
+    #[tokio::test]
+    async fn assigning_a_child_on_other_platforms_is_a_no_op() {
+        let mut child = command_for(&long_lived(8192), &[])
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        crate::job::assign(&child).unwrap();
+        assert!(child.try_wait().unwrap().is_none());
+        child.kill().await.unwrap();
+    }
+
+    // A separate test process owns the job: exiting this one must kill its
+    // server without a stop, a runtime shutdown, or any destructor running.
+    #[cfg(windows)]
+    #[test]
+    fn job_exit_helper() {
+        use std::io::Write as _;
+
+        let Some(directory) = std::env::var_os("KW_SIDECAR_JOB_HELPER") else {
+            return;
+        };
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            // Only the parent's temporary directory, never the production PID
+            // directory: touching that can kill a developer's live server
+            // (KNEG-320).
+            let store = PidStore::new(std::path::Path::new(&directory));
+            let running = start(
+                &spec(),
+                &long_lived(8194),
+                &store,
+                &ReadyAfter::immediately(),
+                fast(),
+            )
+            .await
+            .unwrap();
+            // libtest can leave its test-name prefix on the current line.
+            println!("\npid={}", running.pid());
+            std::io::stdout().flush().unwrap();
+            std::process::exit(0);
+        });
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_server_ends_when_its_starting_process_exits_without_stopping_it() {
+        use std::io::{BufRead as _, BufReader};
+
+        use crate::reap::{Liveness, ProcessTable as _, SystemProcessTable};
+
+        let directory = tempfile::tempdir().unwrap();
+        let mut helper = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "process::tests::job_exit_helper",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env("KW_SIDECAR_JOB_HELPER", directory.path())
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .unwrap();
+        let mut output = BufReader::new(helper.stdout.take().unwrap());
+        let pid = loop {
+            let mut line = String::new();
+            assert_ne!(
+                output.read_line(&mut line).unwrap(),
+                0,
+                "helper sent no PID"
+            );
+            if let Some(pid) = line.trim().strip_prefix("pid=") {
+                break pid.parse::<u32>().unwrap();
+            }
+        };
+        // Never read to EOF: an uncontained grandchild could keep the pipe
+        // open. The parent process's exit, not pipe closure, is the trigger.
+        assert!(helper.wait().unwrap().success());
+        assert_eq!(
+            PidStore::new(directory.path())
+                .read("probe")
+                .unwrap()
+                .unwrap()
+                .pid,
+            pid,
+            "exit must leave the record behind, rather than having stopped the server"
+        );
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while std::time::Instant::now() < deadline {
+            if SystemProcessTable.liveness(pid) == Liveness::Gone {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        // Clean up the test's own child if the containment regresses.
+        SystemProcessTable.kill(pid);
+        panic!("server {pid} survived the process that started it");
     }
 
     /// A process that exits straight away with a non-zero code.
