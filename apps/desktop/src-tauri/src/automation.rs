@@ -5,6 +5,14 @@ use std::{path::Path, sync::Arc};
 use tauri::Manager as _;
 
 static EXIT_STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether exit cleanup has begun. New recordings must not start while it
+/// waits, but an open dictation can still be ended. Cleanup shares a ten-second
+/// limit; it cannot promise that a dictation will finish before the process exits.
+pub(crate) fn exiting() -> bool {
+    EXIT_STARTED.load(std::sync::atomic::Ordering::SeqCst)
+}
+
 pub fn on_event(app: &tauri::AppHandle, event: tauri::RunEvent) {
     if let tauri::RunEvent::ExitRequested { api, .. } = event {
         if EXIT_STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
@@ -19,16 +27,27 @@ pub fn on_event(app: &tauri::AppHandle, event: tauri::RunEvent) {
                 let media = app.state::<Arc<crate::media::MediaImportRuntime>>();
                 let meetings = app.state::<Arc<crate::meeting::MeetingRuntime>>();
                 let api = app.state::<Arc<crate::local_api::LocalApiRuntime>>();
+                // An exit can arrive before setup has managed the session.
+                let dictation = app.try_state::<Arc<crate::dictation::DictationRuntime>>();
                 // Not `cancel`, which is the person's own Discard and deletes
                 // the recording. An exit is nobody's decision to discard.
-                let _ = tokio::join!(api.stop(), media.shutdown(), meetings.end_for_exit());
+                let _ = tokio::join!(
+                    api.stop(),
+                    media.shutdown(),
+                    meetings.end_for_exit(),
+                    async {
+                        if let Some(dictation) = dictation {
+                            dictation.settle_for_exit().await;
+                        }
+                    }
+                );
             };
             if tokio::time::timeout(std::time::Duration::from_secs(10), cleanup)
                 .await
                 .is_err()
             {
                 tracing::warn!(
-                    "shutdown timed out; unfinished imports will be marked interrupted at restart"
+                    "shutdown timed out; unfinished imports will be marked interrupted at restart; a dictation still being transcribed or inserted will be lost"
                 );
             }
             app.exit(0);
@@ -120,7 +139,7 @@ impl kw_local_api::runtime::Runtime for DesktopRuntime {
             .await
     }
     async fn recording_start(&self, provider: &str, system_audio: bool) -> Result<Value, ApiError> {
-        if EXIT_STARTED.load(std::sync::atomic::Ordering::SeqCst) {
+        if exiting() {
             return Err(ApiError::new(
                 ErrorCode::Unavailable,
                 "the app is shutting down",
