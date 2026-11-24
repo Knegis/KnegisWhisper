@@ -1210,6 +1210,22 @@ impl MeetingRuntime {
         recovery::scan(&self.db, &crate::recordings::recording_dir()).await
     }
 
+    /// Delete one recording that has no note, and what was kept beside it.
+    ///
+    /// Only while nothing is being recorded, saved or recovered, and the
+    /// lifecycle lock is held until the files are gone: a recovery, or a
+    /// Start, that began in between would be working on a file this removes.
+    pub async fn delete_recording(&self, storage_key: &str) -> Result<(), String> {
+        let lifecycle = self.lifecycle.lock().await;
+        if !lifecycle.may_poll() {
+            return Err(
+                "A meeting is being recorded or saved. Delete the recording once that has finished."
+                    .to_owned(),
+            );
+        }
+        recovery::delete(&self.db, &crate::recordings::recording_dir(), storage_key).await
+    }
+
     /// Recover one interrupted recording using the normal whole-file engine.
     pub async fn recover_recording(&self, storage_key: &str) -> Result<MeetingOutcome, String> {
         let generation = self
@@ -2569,6 +2585,17 @@ pub async fn meeting_recover_recording(
     storage_key: String,
 ) -> Result<MeetingOutcome, String> {
     runtime.recover_recording(&storage_key).await
+}
+
+/// Delete an interrupted recording the person chose not to recover
+/// (KNEG-575). `storage_key` is a bare file name, resolved inside the
+/// recordings folder and refused unless recovery would still offer it.
+#[tauri::command]
+pub async fn meeting_delete_recording(
+    runtime: State<'_, Arc<MeetingRuntime>>,
+    storage_key: String,
+) -> Result<(), String> {
+    runtime.delete_recording(&storage_key).await
 }
 
 /// Start recording a meeting, saved under `title` in `folder_id` (KNEG-365).

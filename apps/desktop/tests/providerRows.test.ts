@@ -81,14 +81,31 @@ test("a missing speech client does not mark a key unsupported while the key has 
   assert.equal(bySlot(available, "tinfoil")?.unsupported, false);
 });
 
-test("custom endpoints and enterprise connectors get their own lists, stored or not", () => {
+test("custom endpoints and enterprise connectors get their own lists", () => {
   const { inUse, available, custom, enterprise } = providerRows(slots, transcription);
-  assert.deepEqual(custom.map((r) => r.slot), ["note-formatting-custom", "translation-custom"]);
-  assert.deepEqual(enterprise.map((r) => r.slot), ["bedrock", "azure"]);
   for (const id of ["note-formatting-custom", "translation-custom", "bedrock", "azure"]) {
     assert.equal(bySlot(inUse, id), undefined, id);
     assert.equal(bySlot(available, id), undefined, id);
   }
+  assert.ok(bySlot(custom, "translation-custom"));
+  assert.ok(bySlot(enterprise, "bedrock"));
+});
+
+test("a slot nothing reads is listed only once a key is stored in it (KNEG-571)", () => {
+  // Note formatting has no purpose and no key: its address screen is not
+  // built, so a key there would do nothing. Translation is the same slot kind
+  // with a key already stored, and has to stay findable so it can be removed.
+  const { custom, enterprise } = providerRows(slots, transcription);
+  assert.deepEqual(custom.map((r) => r.slot), ["translation-custom"]);
+  // The same for a company account: Bedrock is set up, Azure is not.
+  assert.deepEqual(enterprise.map((r) => r.slot), ["bedrock"]);
+});
+
+test("a custom endpoint that has a use is listed with no key", () => {
+  // "Your own server": cleanup and summaries read its key (KNEG-415).
+  const own = slot({ slot: "custom", name: "Your own server", kind: "custom-endpoint", usedFor: ["reasoning"] });
+  const { custom } = providerRows([own, noteFormatting], transcription);
+  assert.deepEqual(custom.map((r) => r.slot), ["custom"]);
 });
 
 test("each list keeps the order the slots arrived in", () => {

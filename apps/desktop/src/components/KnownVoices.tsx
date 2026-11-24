@@ -12,6 +12,12 @@ export function KnownVoices({ refreshKey }: { refreshKey: string }) {
     try { await guard(action); }
     finally { setBusy(false); }
   };
+  // Not drawn until it can be used (KNEG-571). In this version nothing can turn
+  // it on: the switch was shown disabled beside "awaiting validation on labeled
+  // recordings", which is a status report, not a setting. It is drawn as soon
+  // as it is ready, wherever it is already on, wherever a voice is remembered
+  // (so one can still be forgotten), and when its runtime is what is missing.
+  if (!error && (!data || (!data.ready && !data.enabled && data.voices.length === 0 && !data.reason?.startsWith("Install")))) return null;
   return <section>
     <h2>Known voices</h2>
     <p>Recognize remembered participants after a meeting. Only voices you explicitly remember are saved on this computer. Keep the meeting recording, then choose Remember this voice when naming a speaker.</p>

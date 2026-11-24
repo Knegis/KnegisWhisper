@@ -4356,3 +4356,74 @@ button.calendar-settings-link { height: auto; min-height: 0; padding: 0; border-
 @media (prefers-reduced-motion: reduce) {
   .task-page.task-arrival { animation: none; }
 }
+
+/*
+ * Settings lists in parts, and a key entered where a service is chosen
+ * (KNEG-572, KNEG-573). Layout only: the parts are the existing model rows,
+ * cards and fields, under a label in the page's own small-label type.
+ */
+.model-group-label { margin: 10px 0 0; font: 400 14px/1.3 var(--font-mono); color: var(--band-text); }
+.model-group-label:first-of-type { margin-top: 0; }
+.provider-key { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.content .provider-key .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; }
+.content .provider-key .controls > input { flex: 1 1 220px; min-width: 0; height: var(--field-height-compact); margin: 0; padding: 0 14px; font-size: 15px; }
+.content .provider-key .controls > button { margin: 0; }
+.service-list { display: flex; flex-direction: column; gap: 14px; margin: 0; padding: 6px 0 10px; list-style: none; }
+.service-row { display: grid; grid-template-columns: minmax(120px, 200px) minmax(0, 1fr); align-items: center; gap: 8px 16px; }
+.service-name { font-size: 16px; line-height: 1.3; }
+@container main (width < 554.5px) {
+  .service-row { grid-template-columns: minmax(0, 1fr); }
+}
+
+/*
+ * Meetings (KNEG-575). The tile keeps its own height: it stretched to the
+ * options card beside it, which grows with every note and caveat, and Start
+ * is pinned to the tile's foot, so it went under the fold at 1280x800.
+ * And the recordings with no note, as one line and a list, where each was a
+ * card ahead of every saved meeting.
+ */
+.task-meetings .task-grid { align-items: start; }
+/* Without the idle clock the tile holds a label and the form, so it needs less room than the 380px every picture tile starts from. */
+.task-meetings .task-grid > .tile-dusk { min-height: 320px; }
+.unfinished { display: flex; flex-direction: column; gap: 12px; margin-bottom: 18px; padding: 16px 20px; border-radius: var(--r-sheet); background: var(--panel); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 10%, transparent); }
+.unfinished-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
+.unfinished-count { display: inline-flex; align-items: center; gap: 8px; font-size: 16px; color: var(--warm-ink); }
+.unfinished-note { flex: 1 1 240px; min-width: 0; font-size: 13px; color: var(--muted); }
+.unfinished-list { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; }
+.unfinished-item { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; padding: 10px 0; border-top: 1px solid color-mix(in srgb, var(--text) 8%, transparent); }
+.unfinished-text { display: flex; flex: 1 1 260px; flex-direction: column; gap: 4px; min-width: 0; }
+.unfinished-actions { display: inline-flex; flex: none; gap: 8px; }
+.unfinished .pill { height: 36px; padding: 0 16px; letter-spacing: 0; }
+.unfinished-all { align-self: flex-start; }
+.recent-pill-more { padding: 0 18px; }
+
+/*
+ * The first-run setup guide, on Dictation (KNEG-329). A card in the page's own
+ * materials: the options card's panel and shadow, the small mono label, pills.
+ */
+.setup-guide { width: min(860px, 100%); margin: 0 auto 28px; padding: 24px 28px; border-radius: var(--r-sheet); background: var(--panel); box-shadow: var(--card-shadow); text-align: left; }
+.setup-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.setup-heading { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.setup-intro { margin: 0; font-size: 15px; color: var(--muted); }
+.setup-count { flex: none; font: 400 14px/1.3 var(--font-mono); color: var(--muted); }
+.setup-steps { display: flex; flex-direction: column; margin: 16px 0 0; padding: 0; list-style: none; }
+.setup-step { display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 0 14px; padding: 16px 0; border-top: 1px solid color-mix(in srgb, var(--text) 8%, transparent); }
+.setup-number { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 50%; background: var(--control); font: 400 14px/1 var(--font-mono); }
+.setup-step[data-done="true"] .setup-number { background: var(--mint, var(--control)); }
+.setup-body { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; min-width: 0; }
+.setup-title { margin: 0; font-size: 17px; font-weight: 400; line-height: 1.6; }
+.setup-state { margin: 0; font-size: 15px; line-height: 1.5; color: var(--muted); }
+.setup-step[data-done="true"] .setup-state { color: var(--text); }
+.setup-choices { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr)); gap: 12px; width: 100%; }
+.setup-choice { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; min-width: 0; padding: 16px 18px; border-radius: 24px; background: var(--wash, var(--control)); }
+.setup-choice-name { margin: 0; font-size: 16px; }
+.setup-choice .muted { margin: 0; font-size: 14px; }
+.content .setup-choice select, .setup-choice select { margin: 0; max-width: 100%; }
+.setup-choice .provider-key { width: 100%; }
+.setup-choice .provider-key .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; }
+.setup-choice .provider-key .controls > input { flex: 1 1 180px; min-width: 0; height: var(--field-height-compact); margin: 0; padding: 0 14px; font-size: 15px; }
+.setup-choice .provider-key .controls > button { margin: 0; }
+.setup-sample { width: 100%; margin: 0; padding: 14px 18px; border-radius: 20px; background: var(--wash, var(--control)); font-size: 17px; line-height: 1.5; overflow-wrap: anywhere; }
+.setup-sample-empty { color: var(--muted); }
+.setup-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; padding-top: 16px; border-top: 1px solid color-mix(in srgb, var(--text) 8%, transparent); }
+.setup-guide .pill { height: 40px; padding: 0 18px; letter-spacing: 0; }

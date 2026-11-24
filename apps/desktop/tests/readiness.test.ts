@@ -52,6 +52,25 @@ test("a route problem is needs-setup, fixed by opening Transcription, with the p
   assert.deepEqual(r.fix, { view: "transcription", label: "Open Transcription" });
 });
 
+test("a cloud service with no key is needs-setup, not ready (KNEG-329)", () => {
+  // A new profile: the route resolves to OpenAI with no problem, and no key is saved.
+  const providers = [{ id: "openai", name: "OpenAI", configured: false }];
+  const cloud = route({ isLocal: false, destination: "openai" });
+  const result = dictationReadiness({ route: cloud, hotkeys: report(), canInsert: true, providers });
+  assert.equal(result.state, "needs-setup");
+  if (result.state !== "needs-setup") return;
+  assert.equal(result.problem, "OpenAI needs a key before it can transcribe.");
+  assert.match(result.detail ?? "", /no key is saved/);
+  assert.deepEqual(result.fix, { view: "transcription", label: "Open Transcription" });
+
+  // With its key it is ready, and a local route never asks about keys.
+  assert.equal(dictationReadiness({ route: cloud, hotkeys: report(), canInsert: true, providers: [{ id: "openai", name: "OpenAI", configured: true }] }).state, "ready");
+  assert.equal(dictationReadiness({ route: route({ isLocal: true, destination: "openai" }), hotkeys: report(), canInsert: true, providers }).state, "ready");
+  // A destination that is no listed service, and no list at all, answer as before.
+  assert.equal(dictationReadiness({ route: route({ isLocal: false, destination: "a server of mine" }), hotkeys: report(), canInsert: true, providers }).state, "ready");
+  assert.equal(dictationReadiness({ route: cloud, hotkeys: report(), canInsert: true }).state, "ready");
+});
+
 test("a dictation binding with no accelerators is needs-setup, fixed by setting a shortcut", () => {
   const r = dictationReadiness({
     route: route(),

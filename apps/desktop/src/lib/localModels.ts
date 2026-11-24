@@ -191,6 +191,38 @@ export function localModelRows(local: LocalStatus, sherpa: SherpaStatus, route: 
   return [...whisper, ...parakeet].sort((a, b) => rank(a) - rank(b) || bySize(a, b));
 }
 
+/**
+ * The list in three parts: what is installed, what is recommended, and the
+ * rest (KNEG-573).
+ *
+ * One flat list put fifteen models on the page with the installed ones
+ * wherever their size happened to sort them. The parts answer the two
+ * questions a person arrives with -- what do I have, what should I get --
+ * before the catalogue, which the page folds.
+ *
+ * - **installed**: every installed model, the one in use first, then in the
+ *   order `localModelRows` gave. A model that is loaded while dictation goes
+ *   elsewhere is not "in use" and keeps its place.
+ * - **recommended**: recommended models that are not installed. The flag is
+ *   the registry's and nothing more: it is not sized to this computer, whose
+ *   memory and processor this application does not read.
+ * - **more**: the rest, in the order given.
+ *
+ * Every row is in exactly one part.
+ */
+export function localModelSections(rows: readonly LocalModelRow[]): {
+  installed: LocalModelRow[];
+  recommended: LocalModelRow[];
+  more: LocalModelRow[];
+} {
+  const installed = rows.filter((row) => row.installed);
+  return {
+    installed: [...installed.filter((row) => row.inUse), ...installed.filter((row) => !row.inUse)],
+    recommended: rows.filter((row) => !row.installed && row.recommended),
+    more: rows.filter((row) => !row.installed && !row.recommended),
+  };
+}
+
 /** The row's first line: name, size, languages, then recommended and the KNEG-407 hint. */
 export function localModelLine(row: LocalModelRow): string {
   return [

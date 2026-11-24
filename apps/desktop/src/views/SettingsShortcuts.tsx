@@ -41,7 +41,6 @@ import {
   type Binding,
   type HotkeyMode,
   type ShortcutHookStatus,
-  type UnhandledAction,
 } from "../lib/ipc";
 import {
   acceleratorLabel,
@@ -49,6 +48,7 @@ import {
   changeLabel,
   hotkeyActionLabel,
   hotkeyModeLabel,
+  listedActions,
   outcomeLabel,
   registrationFor,
 } from "../lib/labels";
@@ -175,16 +175,20 @@ export function SettingsShortcuts({
   }
 
   const { hotkeys } = data;
-  // Keyed by action, because that is the shape of the fact: nothing handles the
-  // chat agent, whatever it happens to be bound to.
-  const unhandled = new Map<string, string>(
-    hotkeys.unhandled.map((u: UnhandledAction) => [u.action, u.reason]),
-  );
+  // Only the actions something handles (KNEG-571). The rest of this page is
+  // about these and no others: a conflict with, or a caution about, an action
+  // that is not listed and not registered is about nothing a person can see.
+  const bindings = listedActions(hotkeys.bindings, hotkeys.unhandled);
+  const listed = new Set<string>(bindings.map((b) => b.action));
+  const conflicts = hotkeys.conflicts
+    .map((c) => ({ ...c, actions: c.actions.filter((a) => listed.has(a)) }))
+    .filter((c) => c.actions.length > 1);
+  const cautions = hotkeys.cautions.filter((c) => listed.has(c.action));
   // The modifier-only shortcuts bound now. Without the hook they do nothing,
   // and once dictation is rebound away from `Control+Super` there are none, so
   // the caveat below goes with them rather than outliving its cause (KNEG-351).
   // Once each: two actions can share one.
-  const modifierOnly = [...new Set(hotkeys.bindings.flatMap((b) =>
+  const modifierOnly = [...new Set(bindings.flatMap((b) =>
     b.accelerators.filter((a) => a.kind === "modifier-only").map((a) => a.accelerator),
   ))];
 
@@ -217,7 +221,7 @@ export function SettingsShortcuts({
             </p>)}
           </div>
         ))}
-        {hotkeys.bindings.map((b) => {
+        {bindings.map((b) => {
           const name = hotkeyActionLabel(b.action);
           const isDictation = b.action === "dictation";
           // The registration as well as the platform's hook: a hook that
@@ -252,7 +256,7 @@ export function SettingsShortcuts({
           return (
             <div key={b.action} className="shortcut-card" data-action={b.action}>
               <div className="shortcut-head">
-                <h2 className="shortcut-name">{b.action}</h2>
+                <h2 className="shortcut-name">{name}</h2>
                 <span className="shortcut-keys">
                   {b.accelerators.length === 0 ? <em className="row-detail">none configured</em> : null}
                   {/*
@@ -270,23 +274,8 @@ export function SettingsShortcuts({
                   ))}
                 </span>
               </div>
-              {/*
-                First, and ahead of anything an accelerator could say, because it
-                outranks it. Four of these five actions used to register a real
-                system shortcut and then do nothing whatsoever when pressed — and
-                the row showed a tidy `Control+Shift+Space` with no problem beside
-                it, which is the interface agreeing that it worked.
-              */}
-              {unhandled.has(b.action) ? (
-                <span className="shortcut-problem"><StatusDot tone="bad" />{unhandled.get(b.action)}</span>
-              ) : null}
               {labelled.map(({ label }, i) => {
-                // No "works" note for an action nothing handles: its
-                // accelerators are not offered to the platform at all -- not
-                // registered and not hooked (`register_all`,
-                // src-tauri/src/shortcuts.rs) -- so the sentence would be
-                // false, and the red line above already says why.
-                const note = unhandled.has(b.action) ? null : label.note;
+                const note = label.note;
                 // Red only for a failure; a binding that works and is worth a
                 // word says so plainly, with the mechanism folded.
                 return (
@@ -371,11 +360,11 @@ export function SettingsShortcuts({
           );
         })}
         <div className="shortcut-notes">
-        {hotkeys.conflicts.length > 0 ? (
+        {conflicts.length > 0 ? (
           <p className="caveat warn">
-            {hotkeys.conflicts
+            {conflicts
               .map(
-                (c) => `${c.accelerator} is claimed by ${c.actions.join(" and ")}`,
+                (c) => `${c.accelerator} is claimed by ${c.actions.map(hotkeyActionLabel).join(" and ")}`,
               )
               .join("; ")}
             .
@@ -390,9 +379,9 @@ export function SettingsShortcuts({
           are the chord, and nothing downstream can tell the two apart. See
           KNEG-37.
         */}
-        {hotkeys.cautions.map((c, i) => (
+        {cautions.map((c, i) => (
           <p className="caveat warn" key={`caution-${i}`}>
-            <strong>{c.action}:</strong> {c.reason}
+            <strong>{hotkeyActionLabel(c.action)}:</strong> {c.reason}
           </p>
         ))}
         {/*
@@ -423,21 +412,6 @@ export function SettingsShortcuts({
         ) : null}
         </div>
         <LearnMore summary="About these shortcuts">
-          {/* The verb follows the count -- "1 of 5 actions has", "2 of 5
-              actions have" -- and the sentence after it is worded so that it
-              reads the same for one action as for several. */}
-          {hotkeys.unhandled.length > 0 ? (
-            <p>
-              {`${hotkeys.unhandled.length} of ${hotkeys.bindings.length} ${
-                hotkeys.bindings.length === 1 ? "action" : "actions"
-              } ${hotkeys.unhandled.length === 1 ? "has" : "have"} nothing behind ${
-                hotkeys.unhandled.length === 1 ? "it" : "them"
-              } yet.`}{" "}
-              A shortcut for an action with nothing behind it is still saved,
-              and deliberately not registered with the system — so its keys
-              stay free for the applications that do something with them.
-            </p>
-          ) : null}
           <p>
             A shortcut takes effect as soon as you set it. The dictation default,{" "}
             <Keycaps accelerators={["Control+Super"]} />, is two modifiers and no key, which no

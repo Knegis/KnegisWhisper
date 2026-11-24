@@ -127,6 +127,10 @@ try {
       ["Transcription", 'input[aria-label="Corti tenant"]', "fixture-tenant"],
       ["Cleanup & summaries", '[data-surface="settings.intelligence.enterprise"] input[type="text"]', "fixture-region"],
     ];
+    // Corti's card, and with it the field this group types in, is drawn only
+    // once Corti has a key (KNEG-573). The fixture's own credential command
+    // stores one, as the page's key form would.
+    await cdp.evaluate("window.__TAURI_INTERNALS__.invoke('provider_credential_set', { slot: 'corti', value: 'fixture-key' })");
     for (const [name, selector, value] of groups) {
       console.log("group", name);
       await pill("Settings"); await section(name);

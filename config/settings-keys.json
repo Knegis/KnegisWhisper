@@ -70,7 +70,8 @@
         "hotkey_set"
       ],
       "ui": "Settings > Shortcuts",
-      "reachable": true
+      "reachable": false,
+      "note": "Not listed on Settings > Shortcuts since 2026-11-24 (KNEG-571): the screen shows only the actions commands::hotkeys does not report as unhandled, and nothing handles this one. hotkey_set and hotkey_set_mode still accept it, so the key is honoured and no screen changes it. It becomes reachable: true by itself the day the action is handled, because the list is HotkeyReport.unhandled and nothing in the frontend."
     },
     "hotkey.voice-agent": {
       "what": "The accelerator list bound to the voice-agent action. Settable; nothing handles the action.",
@@ -78,7 +79,8 @@
         "hotkey_set"
       ],
       "ui": "Settings > Shortcuts",
-      "reachable": true
+      "reachable": false,
+      "note": "Not listed on Settings > Shortcuts since 2026-11-24 (KNEG-571): the screen shows only the actions commands::hotkeys does not report as unhandled, and nothing handles this one. hotkey_set and hotkey_set_mode still accept it, so the key is honoured and no screen changes it. It becomes reachable: true by itself the day the action is handled, because the list is HotkeyReport.unhandled and nothing in the frontend."
     },
     "hotkey.translation": {
       "what": "The accelerator list bound to the translation action. Settable; nothing handles the action.",
@@ -86,7 +88,8 @@
         "hotkey_set"
       ],
       "ui": "Settings > Shortcuts",
-      "reachable": true
+      "reachable": false,
+      "note": "Not listed on Settings > Shortcuts since 2026-11-24 (KNEG-571): the screen shows only the actions commands::hotkeys does not report as unhandled, and nothing handles this one. hotkey_set and hotkey_set_mode still accept it, so the key is honoured and no screen changes it. It becomes reachable: true by itself the day the action is handled, because the list is HotkeyReport.unhandled and nothing in the frontend."
     },
     "hotkey.meeting": {
       "what": "The accelerator list bound to the meeting action. Settable; nothing handles the action.",
@@ -94,7 +97,8 @@
         "hotkey_set"
       ],
       "ui": "Settings > Shortcuts",
-      "reachable": true
+      "reachable": false,
+      "note": "Not listed on Settings > Shortcuts since 2026-11-24 (KNEG-571): the screen shows only the actions commands::hotkeys does not report as unhandled, and nothing handles this one. hotkey_set and hotkey_set_mode still accept it, so the key is honoured and no screen changes it. It becomes reachable: true by itself the day the action is handled, because the list is HotkeyReport.unhandled and nothing in the frontend."
     },
     "hotkey.dictation.mode": {
       "what": "Whether the dictation hotkey toggles on each press or records for as long as it is held (push-to-talk). Defaults to toggle, which is the shipped behaviour: holding is one of the answers to KNEG-115 and making it the default would settle that open question in passing.",
@@ -110,7 +114,8 @@
         "hotkey_set_mode"
       ],
       "ui": "Settings > Shortcuts",
-      "reachable": true
+      "reachable": false,
+      "note": "Not listed on Settings > Shortcuts since 2026-11-24 (KNEG-571): the screen shows only the actions commands::hotkeys does not report as unhandled, and nothing handles this one. hotkey_set and hotkey_set_mode still accept it, so the key is honoured and no screen changes it. It becomes reachable: true by itself the day the action is handled, because the list is HotkeyReport.unhandled and nothing in the frontend."
     },
     "hotkey.voice-agent.mode": {
       "what": "Whether the voice-agent hotkey toggles on each press or records for as long as it is held (push-to-talk). Settable; nothing handles the action, so the mode has nothing to change yet.",
@@ -118,7 +123,8 @@
         "hotkey_set_mode"
       ],
       "ui": "Settings > Shortcuts",
-      "reachable": true
+      "reachable": false,
+      "note": "Not listed on Settings > Shortcuts since 2026-11-24 (KNEG-571): the screen shows only the actions commands::hotkeys does not report as unhandled, and nothing handles this one. hotkey_set and hotkey_set_mode still accept it, so the key is honoured and no screen changes it. It becomes reachable: true by itself the day the action is handled, because the list is HotkeyReport.unhandled and nothing in the frontend."
     },
     "hotkey.translation.mode": {
       "what": "Whether the translation hotkey toggles on each press or records for as long as it is held (push-to-talk). Settable; nothing handles the action, so the mode has nothing to change yet.",
@@ -126,7 +132,8 @@
         "hotkey_set_mode"
       ],
       "ui": "Settings > Shortcuts",
-      "reachable": true
+      "reachable": false,
+      "note": "Not listed on Settings > Shortcuts since 2026-11-24 (KNEG-571): the screen shows only the actions commands::hotkeys does not report as unhandled, and nothing handles this one. hotkey_set and hotkey_set_mode still accept it, so the key is honoured and no screen changes it. It becomes reachable: true by itself the day the action is handled, because the list is HotkeyReport.unhandled and nothing in the frontend."
     },
     "hotkey.meeting.mode": {
       "what": "Whether the meeting hotkey toggles on each press or records for as long as it is held (push-to-talk). Settable; nothing handles the action, so the mode has nothing to change yet.",
@@ -134,7 +141,8 @@
         "hotkey_set_mode"
       ],
       "ui": "Settings > Shortcuts",
-      "reachable": true
+      "reachable": false,
+      "note": "Not listed on Settings > Shortcuts since 2026-11-24 (KNEG-571): the screen shows only the actions commands::hotkeys does not report as unhandled, and nothing handles this one. hotkey_set and hotkey_set_mode still accept it, so the key is honoured and no screen changes it. It becomes reachable: true by itself the day the action is handled, because the list is HotkeyReport.unhandled and nothing in the frontend."
     },
     "transcription.route": {
       "what": "Where dictation audio goes (the local engine, or a named cloud provider and model), and Dictation's languages: local Whisper decodes with them, and a cloud route is sent the language when exactly one is chosen and detects it otherwise (KNEG-370). Imports share both.",
@@ -309,7 +317,7 @@
       ],
       "ui": "Settings > Meetings",
       "reachable": false,
-      "note": "Nothing can turn it on in this build. known_voices_set_enabled refuses true while kw_notes_core::known_voices::RELEASE_POLICY is None, which it stays until the match threshold is validated on labelled recordings from separate days (KNEG-319, docs/KNOWN_VOICES.md), and settings_set refuses this key outright. The switch is drawn on Settings > Meetings by components/KnownVoices.tsx. When the policy is set this becomes reachable: true, and KnownVoices.tsx then needs its own config/ui-surfaces.json entry: this gate looks for the writer's IPC wrapper in the surface's own component, and SettingsMeetings.tsx only renders KnownVoices."
+      "note": "Nothing can turn it on in this build. known_voices_set_enabled refuses true while kw_notes_core::known_voices::RELEASE_POLICY is None, which it stays until the match threshold is validated on labelled recordings from separate days (KNEG-319, docs/KNOWN_VOICES.md), and settings_set refuses this key outright. components/KnownVoices.tsx draws the section on Settings > Meetings only once it is ready, already on, or holding a remembered voice (KNEG-571); until then nothing of it is shown, where it used to show the switch disabled. When the policy is set this becomes reachable: true, and KnownVoices.tsx then needs its own config/ui-surfaces.json entry: this gate looks for the writer's IPC wrapper in the surface's own component, and SettingsMeetings.tsx only renders KnownVoices."
     },
     "audio.inputDevice": {
       "what": "The microphone dictation and meetings record from, by device name; absent for the system default (KNEG-341). One choice for both tasks, the owner's call on 2026-10-06: read at startup into dictation's recorder and by MeetingRuntime::start when a meeting begins. Until then the choice lived only in memory and was gone after every restart, and meetings always opened the default. Chosen in the microphone menu on Dictation or on Meetings (KNEG-364), both through dictation_set_device, and read by the Meetings microphone check (microphone_check) as a meeting reads it. A device that is not connected when recording starts falls back to the system default (kw_audio_core::Capture::start); both microphone menus say so beforehand. A meeting already running keeps the microphone it opened, and its live view names that one.",
@@ -345,13 +353,23 @@
     },
     "updates.automatic": {
       "what": "Check GitHub for a newer release once a day automatically; defaults to on when absent. Nothing is downloaded or installed.",
-      "writtenBy": ["update_set_automatic"],
+      "writtenBy": [
+        "update_set_automatic"
+      ],
       "ui": "Settings > Diagnostics",
       "reachable": true
     },
     "updates.lastAutomaticCheck": {
       "what": "RFC 3339 UTC time of the last automatic update attempt, including unsuccessful requests.",
       "internal": "Bookkeeping written by the automatic check before each request. A person editing it would be recording a check that did not happen."
+    },
+    "setup.guideDismissed": {
+      "what": "Whether the first-run setup guide on Dictation was finished or skipped (KNEG-329). Absent or false on a new profile; once true the guide is never shown again. A profile with any dictation history is not shown it either, whatever this says.",
+      "writtenBy": [
+        "setup_guide_dismiss"
+      ],
+      "ui": "Dictation",
+      "reachable": true
     }
   }
 }

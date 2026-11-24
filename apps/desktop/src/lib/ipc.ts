@@ -430,6 +430,15 @@ export async function getRecoverableRecordings(): Promise<RecoverableRecording[]
 export async function recoverMeetingRecording(storageKey: string): Promise<MeetingOutcome> {
   return invoke<MeetingOutcome>("meeting_recover_recording", { storageKey });
 }
+
+/**
+ * Delete an interrupted recording, with its typed notes and plan (KNEG-575).
+ * Refused while a meeting is being recorded, saved or recovered, and for a
+ * recording a note owns.
+ */
+export async function deleteMeetingRecording(storageKey: string): Promise<void> {
+  return invoke("meeting_delete_recording", { storageKey });
+}
 export async function saveMeetingNotificationPlacement(): Promise<void> { return invoke("meeting_notification_placement_save"); }
 export async function resetMeetingNotificationPlacement(): Promise<void> { return invoke("meeting_notification_placement_reset"); }
 
@@ -787,6 +796,21 @@ export async function setEnterpriseConfig(
 
 export async function clearEnterpriseConfig(provider: string): Promise<void> {
   return invoke("enterprise_config_clear", { provider });
+}
+
+/* -------------------------------------------------------------- setup guide */
+
+/**
+ * Whether the setup guide on Dictation is still to be shown (KNEG-329): not
+ * yet dismissed, on a profile that has never dictated.
+ */
+export async function isSetupGuidePending(): Promise<boolean> {
+  return invoke<boolean>("setup_guide_pending");
+}
+
+/** The setup guide was finished or skipped. It is not shown again. */
+export async function dismissSetupGuide(): Promise<void> {
+  return invoke("setup_guide_dismiss");
 }
 
 /* ------------------------------------------------------------------ history */

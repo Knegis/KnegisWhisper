@@ -8,7 +8,7 @@ import { useRefresh } from "../lib/useRefresh";
 function Usage({ title, review, sub = false }: { title: string; review: VocabularyReview; sub?: boolean }) {
   return <div className="vocabulary-usage">
     <h2 className={sub ? "vocabulary-usage-sub" : "section-label"}>{title}{review.model ? ` · ${review.model}` : ""}</h2>
-    <p>{review.supported ? `${review.included.length} of ${review.included.length + review.omitted.length} terms included` : "Not supported by this integration"}</p>
+    <p>{review.supported ? `${review.included.length} of ${review.included.length + review.omitted.length} terms included` : "Not used: this provider takes no vocabulary."}</p>
     {review.supported && <p className="muted">{review.limit}</p>}
     {review.omitted.length > 0 && <LearnMore summary={<span className="muted"><span className="vocabulary-count">{review.omitted.length}</span> omitted terms</span>}><ul>{review.omitted.map(item => <li key={item.word}><strong>{item.word}</strong> — {item.reason}</li>)}</ul></LearnMore>}
   </div>;
@@ -80,10 +80,14 @@ export function Vocabulary() {
         <Usage title="next dictation" review={data.dictationReview} />
       </div>
       <div className="vocabulary-card">
-        <label htmlFor="vocabulary-preview" className="section-label">meeting provider preview</label>
-        <select id="vocabulary-preview" aria-label="Vocabulary meeting provider" value={data.provider} onChange={event => setMeetingPreview(event.target.value)}>{data.providers.map(provider => <option key={provider.id} value={provider.id}>{provider.name}</option>)}</select>
-        <p className="muted">Preview only; this does not change your meeting provider.{data.meeting.provider ? " An active meeting retains its original vocabulary until it ends." : ""}</p>
-        <Usage title="next meeting" review={data.meetingReview} sub />
+        <Usage title={meetingPreview ? "compared provider" : "next meeting"} review={data.meetingReview} />
+        {data.meeting.provider ? <p className="muted">An active meeting retains its original vocabulary until it ends.</p> : null}
+        {/* Folded (KNEG-571): the card answered "what will my next meeting
+            use" with a selector that changes nothing, ahead of the answer. */}
+        <LearnMore summary="Compare another meeting provider">
+          <select id="vocabulary-preview" aria-label="Vocabulary meeting provider" value={data.provider} onChange={event => setMeetingPreview(event.target.value)}>{data.providers.map(provider => <option key={provider.id} value={provider.id}>{provider.name}</option>)}</select>
+          <p className="muted">A comparison only; this does not change your meeting provider.</p>
+        </LearnMore>
       </div>
     </section>}
   </div>;

@@ -73,10 +73,141 @@ pub async fn scan(db: &Db, directory: &Path) -> Result<Vec<RecoverableRecording>
     Ok(found)
 }
 
+/// Delete one recording that has no note, with what was kept beside it.
+///
+/// Until this existed a recording with no note could only be recovered, and
+/// one with nothing in it could not be: recovery refuses a recording that
+/// transcribes to nothing and has no typed notes, and leaves it "available
+/// for another attempt". It was listed for ever (KNEG-575).
+///
+/// The same check recovery makes, made again here: the name must be a valid
+/// storage key for a WAV in `directory`, and [`scan`] must still offer it, so
+/// no recording a note owns can be reached, a note in Trash included. The
+/// caller holds the meeting lifecycle idle, which is what keeps this off the
+/// recording being made and the one being recovered.
+///
+/// The audio goes first. If that fails nothing else is touched and the
+/// recording is still recoverable with its notes; if it succeeds, the typed
+/// notes, the plan and the running-meeting marker have nothing left to
+/// describe, and a failure to remove one of them is logged, not returned.
+pub async fn delete(db: &Db, directory: &Path, storage_key: &str) -> Result<(), String> {
+    let path = kw_notes_core::recordings::resolve(directory, storage_key)
+        .filter(|path| path.extension().is_some_and(|ext| ext == "wav"))
+        .ok_or("Invalid meeting recording name")?;
+    scan(db, directory)
+        .await?
+        .into_iter()
+        .find(|candidate| candidate.storage_key == storage_key)
+        .ok_or("This recording is no longer here to delete")?;
+    std::fs::remove_file(&path)
+        .map_err(|error| format!("Could not delete the recording {storage_key}: {error}"))?;
+    draft::remove_sidecars(&path);
+    Ok(())
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    /// KNEG-575. The audio, the typed notes, the plan and the marker all go,
+    /// and the recording is no longer offered.
+    #[tokio::test]
+    async fn deleting_an_interrupted_recording_removes_it_and_what_was_kept_beside_it() {
+        let db = Db::open_in_memory().await.unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let wav = dir.path().join("20261124-090000-a.wav");
+        std::fs::write(&wav, b"wav").unwrap();
+        std::fs::write(draft::sidecar_path(&wav), b"typed").unwrap();
+        std::fs::write(draft::plan_path(&wav), b"{}").unwrap();
+        draft::mark_unfinished(&wav);
+        // Another recording beside it, which must be left alone.
+        let other = dir.path().join("20261124-100000-b.wav");
+        std::fs::write(&other, b"wav").unwrap();
+        std::fs::write(draft::sidecar_path(&other), b"typed").unwrap();
+
+        delete(&db, dir.path(), "20261124-090000-a.wav")
+            .await
+            .unwrap();
+
+        assert!(!wav.exists());
+        assert!(!draft::sidecar_path(&wav).exists());
+        assert!(!draft::plan_path(&wav).exists());
+        assert!(!draft::is_unfinished(&wav));
+        assert!(other.exists());
+        assert!(draft::sidecar_path(&other).exists());
+        let left = scan(&db, dir.path()).await.unwrap();
+        assert_eq!(left.len(), 1);
+        assert_eq!(left.first().unwrap().storage_key, "20261124-100000-b.wav");
+    }
+
+    /// A recording a note owns is never deleted this way, whether the note is
+    /// live or in Trash: Restore brings a trashed note back with its audio.
+    #[tokio::test]
+    async fn a_recording_a_note_owns_is_refused_and_left_in_place() {
+        let db = Db::open_in_memory().await.unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let wav = dir.path().join("20261124-090000-a.wav");
+        std::fs::write(&wav, b"wav").unwrap();
+        let note = kw_notes_core::notes::NewNote {
+            title: "Board review".into(),
+            ..Default::default()
+        };
+        kw_notes_core::notes::create_meeting_with_recording(
+            db.pool(),
+            &note,
+            "20261124-090000-a.wav",
+            1.0,
+        )
+        .await
+        .unwrap();
+
+        let refused = delete(&db, dir.path(), "20261124-090000-a.wav").await;
+
+        assert!(refused.is_err());
+        assert!(wav.exists());
+    }
+
+    /// The name comes from the renderer. Nothing outside the recordings
+    /// folder, and nothing that is not a WAV, is reachable through it.
+    #[tokio::test]
+    async fn a_name_that_is_not_a_recording_here_is_refused() {
+        let db = Db::open_in_memory().await.unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let outside = dir.path().join("outside.wav");
+        std::fs::write(&outside, b"wav").unwrap();
+        let recordings = dir.path().join("meetings");
+        std::fs::create_dir(&recordings).unwrap();
+        std::fs::write(recordings.join("notes.txt"), b"not audio").unwrap();
+
+        for name in [
+            "../outside.wav",
+            "..\\outside.wav",
+            "notes.txt",
+            "",
+            "missing.wav",
+        ] {
+            assert!(delete(&db, &recordings, name).await.is_err(), "{name:?}");
+        }
+        assert!(outside.exists());
+        assert!(recordings.join("notes.txt").exists());
+    }
+
+    /// Deleting twice is an error that says so, not a silent success: the
+    /// second press is about a recording that is no longer there.
+    #[tokio::test]
+    async fn a_second_delete_says_the_recording_is_gone() {
+        let db = Db::open_in_memory().await.unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("20261124-090000-a.wav"), b"wav").unwrap();
+        delete(&db, dir.path(), "20261124-090000-a.wav")
+            .await
+            .unwrap();
+        let again = delete(&db, dir.path(), "20261124-090000-a.wav")
+            .await
+            .unwrap_err();
+        assert!(again.contains("no longer here"), "{again}");
+    }
 
     #[tokio::test]
     async fn only_unattached_regular_wavs_are_offered() {

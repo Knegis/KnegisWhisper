@@ -13,6 +13,87 @@ maintained in place rather than appended to, because its purpose is to be curren
 ---
 
 
+## 2026-11-24 — The design review's six: Settings cut down, Meetings' Start back in view, a first run
+
+A design review of the running application scored it 22 of 40 (`.impeccable/critique/`, not in this
+repository's history). The owner chose its six P1 issues, and ruled on four things first: the audience is a
+technical user, so the precise vocabulary stays and its volume and place change; the approved look stays; Settings
+is fixed in place, twelve screens with the names they have; unbuilt features are hidden outright; and an
+interrupted recording can be deleted.
+
+**Two of the review's findings were wrong** and were not acted on. The speech-model list was already sorted, and
+six text models are flagged recommended, one per family, not two.
+
+**Hidden, not deleted (KNEG-571).** Shortcuts lists only the actions Rust does not report as unhandled, which
+today is dictation alone; four cards with a red "… is not built yet" beside a working field are gone, and the
+headings are names where they were ids ("chat-agent"). Providers lists a custom endpoint only when something
+reads its key, and a company account only once one is set up. The Apple Calendar row and the Tinfoil rows are not
+drawn. Known voices is not drawn until it can be used. The rule everywhere: whatever is already set up on a
+profile stays visible, so no saved setting becomes unreachable. Twelve settings keys and eight manifest entries are
+now `reachable: false`, with the reason, so the manifests say what the screens do.
+
+**A key where the service is chosen (KNEG-572).** `ProviderKeyForm` is the Providers page's field on its own. It
+stands under the provider on Transcription, Meeting settings and Cleanup & summaries. Providers keeps its own
+form: that one opens a row at a time and resets the page's connection test, which a field under a select has no
+use for. The plan said Providers would use the shared one; it does not, and the difference is deliberate.
+
+**Lists in parts (KNEG-573).** Speech models and text models come as Installed, Recommended, then the catalogue
+behind a fold. The text models' fold has a search and family headings. Transcription draws a card only for a
+service with a key or the one in use; the rest are under "Add a cloud service". "Recommended" is the registry's
+flag and the label says no more: memory and processor do not reach the frontend, so nothing is sized to this
+computer. The dev fixture drew no text-model list at all (its platform was "not published") and two of that
+screen's commands threw for want of a stub; both are fixed.
+
+**Verification lines, to Diagnostics (KNEG-574).** The capture-session interface, the display-affinity readback
+and the per-application evidence moved to a "meeting detection" section there. Meeting settings keeps the switch,
+the two lists, and a folded list of what is running, because the names in the lists are copied from it. The two
+provider catalogues are one closed fold each. The speaker-label cost is one sentence, with the measurements
+folded; it said "measured on this machine", which was true of the machine it was written on and no other.
+
+**Meetings (KNEG-575).** Start recording was cut off by the fold at 1280x800. Nothing set the tile's height: it
+stretched to the options card beside it, which has grown with every note added since the 2026-11-04 measurement,
+and Start is pinned to the tile's foot. The idle 00:00:00 clock is gone and the tile keeps its own height.
+Recordings with no note are one row at the head of Recent, where each was a card ahead of every saved meeting;
+they stay first, as KNEG-562 ruled. A new command, `meeting_delete_recording`, removes the audio, the typed notes,
+the plan and the marker. It makes the same check recovery makes and is refused while a meeting is being recorded,
+saved or recovered. Without it a recording that transcribes to nothing could never leave the list.
+
+**A first run (KNEG-329).** `dictationReadiness` now says a cloud service with no key is not ready. A new
+profile's route resolves to OpenAI with no problem, so the page read "Press … to dictate" and the first dictation
+failed at Stop. A setup card on Dictation gives three steps: where speech becomes text, a five-second microphone
+check, and a first try shown in the card. It installs nothing and sends nothing; it is closed for good by Skip or
+Done, and never shown to a profile with dictation history. Its first step is done by the readiness check's own
+reading, so the card cannot say ready when the page does not.
+
+**Verified.**
+
+- Frontend tests 622 passed; workspace tests 2392 passed; the `tauri-test` lib run 651 passed; Clippy clean on
+  1.99.0; every contract audit and tool self-test CI runs.
+- **In the application, on a throwaway profile, read by instrument** (`target/ui-p1`, a debug build with the
+  frontend embedded): the setup card on a fresh profile, "0 / 3", step one reading "OpenAI is chosen, and it has no
+  key yet", the page's title saying the same; Skip remembered. On Meetings, Start's bottom edge at 679 of 800px
+  and no idle clock; five recordings behind Review; one deleted, with its typed notes and marker gone from the
+  folder; Cancel leaving the rest; Delete all removing them; `../knegiswhisper.db` refused and the database still
+  there.
+- **Seen in headless Edge against dev fixtures**, not in the Tauri window: every changed settings screen in
+  light, the setup card in light and dark, Start at 672 of 800px and 655 of 720px.
+- `local-models`, `meeting-plan`, `settings-return`, `summary-setup` and `shell-title-bar` pass.
+  `local-models` was updated for the two parts.
+
+**Not verified.** The microphone check and a real first dictation through the card: neither was run, the first
+because it opens the microphone and the second because it needs a model or a key. A key saved through the new
+field against a real provider. The settings screens in the Tauri window on the owner's profile. A window narrower
+than 1000px for the setup card. No before-and-after count of controls on one profile: the review's numbers were
+taken on the owner's data and these were taken on fixtures, so they are not compared here.
+
+**Found on the way, not fixed.** `tools/visual-check/three-issues.mjs` fails at its Calendar step, waiting for
+"Synthetic calendar failure", and fails the same way on `dev` before any of this. The step it reached before that,
+Corti's field, did need a key stored first, and that is updated.
+
+Nothing was pushed.
+
+---
+
 ## 2026-11-24 — Five fixes: the exit, a failed start, the servers, the import report and the CAM++ address
 
 Five issues that needed no decision from the owner, done in one pass through the Codex orchestrator: five

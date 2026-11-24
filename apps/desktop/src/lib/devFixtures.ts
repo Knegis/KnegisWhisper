@@ -809,9 +809,19 @@ function fixtureStop(): MeetingOutcome {
  */
 // `?interrupted` starts with a meeting that was cut short, as a crash during
 // Stop leaves one, to look at the window's notice and the Meetings row.
-let recoverable: RecoverableRecording[] = new URLSearchParams(window.location.search).has("interrupted")
-  ? [{ storageKey: "20261117-090000-3f2a9c1e.wav", hasNotes: true, title: "Supplier review", unfinished: true }]
-  : [];
+// `?interrupted=6` starts with that many recordings with no note, the rest
+// left on purpose and unnamed, to look at the list behind Review (KNEG-575).
+const interruptedCount = (() => {
+  const value = new URLSearchParams(window.location.search).get("interrupted");
+  if (value === null) return 0;
+  const count = Number.parseInt(value, 10);
+  return Number.isFinite(count) && count > 0 ? Math.min(count, 40) : 1;
+})();
+let recoverable: RecoverableRecording[] = Array.from({ length: interruptedCount }, (_, i) =>
+  i === 0
+    ? { storageKey: "20261117-090000-3f2a9c1e.wav", hasNotes: true, title: "Supplier review", unfinished: true }
+    : { storageKey: `202611${String(16 - (i % 15)).padStart(2, "0")}-1${i % 10}3000-0000000${i % 10}.wav`, hasNotes: i % 3 === 0, title: null, unfinished: false },
+);
 
 /*
  * The Windows-only floating microphone, off until Settings > Dictation turns
@@ -1163,15 +1173,15 @@ const SHERPA: SherpaStatus = {
 };
 
 const LOCAL_LLM: LocalLlmStatus = {
-  availability: {
-    state: "not-published",
-    reason: "no llama.cpp build is published for windows-aarch64",
-    tracking: "https://github.com/ggml-org/llama.cpp/releases",
-  },
-  serverInstalled: false,
-  // Nothing is installed on this fixture's platform, so there is nothing to be
-  // out of date. The `stale` and `unknown` branches are rendered by the two
-  // blocks above; a third copy here would be a third thing to keep in step.
+  // Installable, so the page draws its list (KNEG-573). It was "not-published",
+  // which drew the "Not available on this computer yet" hero and nothing else:
+  // the model list, the parts it comes in and every card on it could not be
+  // looked at in a browser at all. That hero is three lines of static text.
+  availability: { state: "installable" },
+  serverInstalled: true,
+  // No record of which build this is. The `stale` and `unknown` branches are
+  // rendered by the two blocks above; a third copy here would be a third thing
+  // to keep in step.
   serverFreshness: { state: "not-installed" },
   models: [
     {
@@ -1256,6 +1266,48 @@ const LOCAL_LLM: LocalLlmStatus = {
       // or pinned it. Nothing ships in this state, and the screen still has to
       // say so plainly rather than leaving the row silent.
       verifiedBy: "size",
+      draft: null,
+    },
+    // Not installed, and what the page offers first to somebody with nothing:
+    // a recommended model, then two that are only in the catalogue, in two
+    // families, so the fold, its family headings and its search have rows.
+    {
+      id: "gemma-4-e4b-qat-q4",
+      name: "Gemma 4 E4B QAT (Q4_0)",
+      provider: "gemma",
+      sizeBytes: 5_200_000_000,
+      quantization: "Q4_0",
+      contextLength: 32768,
+      recommended: true,
+      supportsThinking: false,
+      integrity: { state: "not-installed" },
+      verifiedBy: "stated-digest",
+      draft: null,
+    },
+    {
+      id: "gemma-4-e2b-q4",
+      name: "Gemma 4 E2B (Q4_K_M)",
+      provider: "gemma",
+      sizeBytes: 3_100_000_000,
+      quantization: "Q4_K_M",
+      contextLength: 32768,
+      recommended: false,
+      supportsThinking: false,
+      integrity: { state: "not-installed" },
+      verifiedBy: "stated-digest",
+      draft: null,
+    },
+    {
+      id: "lfm2.5-1.2b-q4",
+      name: "LFM2.5 1.2B (Q4_K_M)",
+      provider: "liquidai",
+      sizeBytes: 730_000_000,
+      quantization: "Q4_K_M",
+      contextLength: 32768,
+      recommended: false,
+      supportsThinking: false,
+      integrity: { state: "not-installed" },
+      verifiedBy: "stated-digest",
       draft: null,
     },
   ],
@@ -1928,6 +1980,15 @@ const sqliteNow = (): string => new Date().toISOString().replace("T", " ").slice
 /* ---------------------------------------------------------------- handlers */
 
 let removedVocabulary: string | null = null;
+let setupGuidePending = new URLSearchParams(window.location.search).has("setup");
+// `?setup=new` is a profile with no keys at all, as a new install is: the
+// route still resolves to OpenAI, which is what the guide's first step and the
+// page's readiness have to say is not ready.
+if (new URLSearchParams(window.location.search).get("setup") === "new") {
+  for (const provider of PROVIDERS) provider.configured = false;
+  for (const slot of CREDENTIAL_SLOTS) slot.stored = false;
+}
+
 const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
   /* capabilities */
   diagnostics: () => DIAGNOSTICS,
@@ -2068,6 +2129,13 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
   enterprise_config_clear: () => null,
 
   /* history */
+  // The first-run guide (KNEG-329): off, as on a profile that has dictated,
+  // unless the page is opened with `?setup`.
+  setup_guide_pending: () => setupGuidePending,
+  setup_guide_dismiss: () => {
+    setupGuidePending = false;
+    return null;
+  },
   history: (a) => {
     const limit = arg<number | null>(a, "limit");
     return typeof limit === "number" ? HISTORY.slice(0, limit) : HISTORY;
@@ -2571,6 +2639,10 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
   local_llm_install: () => null,
   local_llm_start: () => 8080,
   local_llm_stop: () => null,
+  // The two this page calls that had no stub, so pressing either threw
+  // "dev fixtures: no stub for …" (KNEG-573).
+  local_llm_recheck_model: () => ({ outcome: "matched", verifiedBy: "stated-digest" }),
+  local_llm_refresh_server: () => ({ files: 12, restarted: null, restartError: null }),
 
   /* local api */
   local_api_status: () => LOCAL_API,
@@ -2589,6 +2661,15 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => unknown> = {
   meeting_notification_placement_save: () => null,
   meeting_notification_placement_reset: () => null,
   meeting_recoverable_recordings: () => recoverable,
+  // KNEG-575. Refused, as Rust refuses it, for a recording that is not listed.
+  meeting_delete_recording: (a) => {
+    const key = arg<string>(a, "storageKey");
+    if (!recoverable.some((r) => r.storageKey === key)) {
+      throw new Error("This recording is no longer here to delete");
+    }
+    recoverable = recoverable.filter((r) => r.storageKey !== key);
+    return null;
+  },
   meeting_recover_recording: (a) => {
     const key = arg<string>(a, "storageKey");
     if (!recoverable.some((r) => r.storageKey === key)) {

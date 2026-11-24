@@ -289,6 +289,28 @@ export function hotkeyActionLabel(action: HotkeyAction): string {
 }
 
 /**
+ * The actions Settings > Shortcuts lists: the ones something handles.
+ *
+ * Four of the five actions have nothing behind them, and their cards used to
+ * be drawn with a red "… is not built yet" line beside a working field and a
+ * Set button, on the first screen in Settings (KNEG-571). They are left out
+ * until they do something. Nothing is lost by it: an unhandled action's keys
+ * are saved and never offered to the system (`register_all`,
+ * src-tauri/src/shortcuts.rs), so a card for one configured nothing a person
+ * could use.
+ *
+ * Which actions are handled is Rust's answer, `HotkeyReport.unhandled`, and
+ * there is no second list here: the day one of them is built it appears.
+ */
+export function listedActions<T extends { action: HotkeyAction }>(
+  bindings: readonly T[],
+  unhandled: readonly { action: HotkeyAction }[],
+): T[] {
+  const hidden = new Set(unhandled.map((u) => u.action));
+  return bindings.filter((b) => !hidden.has(b.action));
+}
+
+/**
  * Whether an action toggles or is held, in the words a control needs.
  *
  * The `detail` is the cost, not a restatement of the name. Push-to-talk turns
