@@ -752,6 +752,8 @@ pub struct LocalTargets {
 /// same answer, and push-to-talk's release could not tell which it was undoing.
 #[derive(Debug)]
 pub enum Pressed {
+    /// Exit cleanup has begun, so a new recording was silently refused.
+    Ignored,
     /// It opened the microphone.
     Started,
     /// It finished the recording that was running.
@@ -776,6 +778,26 @@ fn start_refusal(switching: bool) -> Option<String> {
 /// and a release that toggled would have started a recording nothing ends.
 fn release_finishes(press: &Result<Pressed, String>) -> bool {
     matches!(press, Ok(Pressed::Started))
+}
+
+/// Only transcription (including cleanup) and insertion can settle by
+/// themselves. Recording still needs a key release or another press.
+const fn waits_for_exit(state: SessionState) -> bool {
+    matches!(state, SessionState::Transcribing | SessionState::Inserting)
+}
+
+/// Wait for work already past recording. The caller owns the timeout; an open
+/// microphone, including the gap before transcription starts, is not waited for.
+async fn until_settled(state: impl Fn() -> SessionState, look_again: std::time::Duration) {
+    while waits_for_exit(state()) {
+        tokio::time::sleep(look_again).await;
+    }
+}
+
+/// Exit refuses a press that would start a recording, but still lets a toggle
+/// finish an open one. Push-to-talk's release is handled separately.
+const fn press_allowed(exiting: bool, state: SessionState) -> bool {
+    !exiting || !matches!(state, SessionState::Idle)
 }
 
 /// The dictation session, assembled.
@@ -885,6 +907,17 @@ impl DictationRuntime {
         self.session.state()
     }
 
+    /// Let transcription, cleanup, insertion and the history write finish before
+    /// exit. Idle is set only after the history write has returned.
+    ///
+    /// The caller shares its ten-second cleanup limit with this wait. Work that
+    /// outlasts it is still lost. Recording is dropped as before, including the
+    /// brief gap after key release before Transcribing is set: nothing here can
+    /// make an open microphone finish by itself.
+    pub async fn settle_for_exit(&self) {
+        until_settled(|| self.state(), std::time::Duration::from_millis(25)).await;
+    }
+
     /// Choose the input device for the next recording.
     pub fn set_device(&self, device: Option<String>) {
         self.recorder.set_device(device);
@@ -919,9 +952,17 @@ impl DictationRuntime {
     /// transcribing is ignored rather than queued: the user pressed it again
     /// because nothing had happened yet, and starting a second recording on top
     /// of an in-flight one is never what they wanted. A start while the user is
-    /// switching the local model is refused; see [`start_refusal`].
+    /// switching the local model is refused; see [`start_refusal`]. Exit silently
+    /// refuses new recordings, but still lets a press finish an open one.
     pub async fn press(&self) -> Result<Pressed, String> {
-        match self.state() {
+        let state = self.state();
+        // Use the same state that decides whether this press starts or finishes.
+        // A hotkey task queued before exit may only run after cleanup begins.
+        if !press_allowed(crate::automation::exiting(), state) {
+            tracing::debug!("dictation start ignored while the app is shutting down");
+            return Ok(Pressed::Ignored);
+        }
+        match state {
             SessionState::Idle => {
                 if let Some(refusal) = start_refusal(self.switching.in_progress()) {
                     return Err(refusal);
@@ -944,11 +985,11 @@ impl DictationRuntime {
 
     /// [`press`](Self::press), answered as an outcome, for the command the page
     /// and the floating microphone call. A start has no outcome of its own and
-    /// still answers `Cancelled`, as it always has, so the command's answer and
-    /// its TypeScript type are unchanged.
+    /// still answers `Cancelled`, as does a start refused during exit, so the
+    /// command's answer and its TypeScript type are unchanged.
     pub async fn toggle(&self) -> Result<kw_app_core::dictation::Outcome, String> {
         Ok(match self.press().await? {
-            Pressed::Started => kw_app_core::dictation::Outcome::Cancelled,
+            Pressed::Ignored | Pressed::Started => kw_app_core::dictation::Outcome::Cancelled,
             Pressed::Finished(outcome) => outcome,
         })
     }
@@ -1407,10 +1448,10 @@ pub fn on_hotkey(app: &AppHandle, what: crate::shortcuts::Act) {
 /// Emit what a press did. A start emits nothing: the session's state event
 /// already says the microphone is open, and the `Cancelled` a start used to
 /// report read "Last dictation result: Cancelled." on Settings › Shortcuts for
-/// as long as the recording ran.
+/// as long as the recording ran. A start refused during exit is silent too.
 fn report_press(app: &AppHandle, press: Result<Pressed, String>) {
     match press {
-        Ok(Pressed::Started) => {}
+        Ok(Pressed::Ignored | Pressed::Started) => {}
         Ok(Pressed::Finished(outcome)) => report(app, Ok(outcome)),
         Err(message) => report(app, Err(message)),
     }
@@ -1491,6 +1532,70 @@ mod tests {
     }
     use super::*;
 
+    /* ---------------------------------------- settling on exit (KNEG-568) */
+
+    #[test]
+    fn exit_waits_only_for_transcription_and_insertion() {
+        assert!(!waits_for_exit(SessionState::Idle));
+        assert!(!waits_for_exit(SessionState::Recording));
+        assert!(waits_for_exit(SessionState::Transcribing));
+        assert!(waits_for_exit(SessionState::Inserting));
+    }
+
+    #[tokio::test]
+    async fn idle_and_recording_do_not_delay_exit() {
+        use std::future::Future as _;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::task::{Context, Poll, Waker};
+
+        for state in [SessionState::Idle, SessionState::Recording] {
+            let looks = AtomicUsize::new(0);
+            let mut wait = Box::pin(until_settled(
+                || {
+                    looks.fetch_add(1, Ordering::SeqCst);
+                    state
+                },
+                std::time::Duration::from_millis(1),
+            ));
+            assert_eq!(
+                wait.as_mut().poll(&mut Context::from_waker(Waker::noop())),
+                Poll::Ready(())
+            );
+            assert_eq!(looks.load(Ordering::SeqCst), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn exit_waits_through_transcription_and_insertion_until_idle() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let looks = AtomicUsize::new(0);
+        until_settled(
+            || match looks.fetch_add(1, Ordering::SeqCst) {
+                0 | 1 => SessionState::Transcribing,
+                2 | 3 => SessionState::Inserting,
+                _ => SessionState::Idle,
+            },
+            std::time::Duration::from_millis(1),
+        )
+        .await;
+        assert_eq!(looks.load(Ordering::SeqCst), 5);
+    }
+
+    #[test]
+    fn exit_refuses_a_start_but_allows_a_press_that_finishes() {
+        for state in [
+            SessionState::Idle,
+            SessionState::Recording,
+            SessionState::Transcribing,
+            SessionState::Inserting,
+        ] {
+            assert!(press_allowed(false, state));
+        }
+        assert!(!press_allowed(true, SessionState::Idle));
+        assert!(press_allowed(true, SessionState::Recording));
+    }
+
     /* ------------------------------------ the language a route sends (KNEG-370) */
 
     #[test]
@@ -1561,6 +1666,7 @@ mod tests {
         // recording left the session idle, and the release started a new one
         // that nothing would end.
         assert!(release_finishes(&Ok(Pressed::Started)));
+        assert!(!release_finishes(&Ok(Pressed::Ignored)));
         assert!(!release_finishes(&Ok(Pressed::Finished(
             kw_app_core::dictation::Outcome::Cancelled
         ))));
