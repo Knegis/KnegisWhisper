@@ -312,8 +312,8 @@
       ],
       "backend": "crates/reasoning-core",
       "ui": "Settings > Intelligence > Enterprise",
-      "reachable": true,
-      "note": "Reachable: organisation credentials are entered on Settings > Cleanup & summaries > Company accounts and stored as one JSON document in the OS credential store. The request shape and signing are implemented and tested -- SigV4 against AWS's published vectors -- but no live call has been made to any of the three, which needs org credentials this project does not have. Recorded as unverified in docs/PLATFORM_SUPPORT.md."
+      "reachable": false,
+      "note": "Reachable until 2026-11-24: organisation credentials are entered on Settings > Cleanup & summaries > Company accounts and stored as one JSON document in the OS credential store. The request shape and signing are implemented and tested -- SigV4 against AWS's published vectors -- but no live call has been made to any of the three, which needs org credentials this project does not have. Recorded as unverified in docs/PLATFORM_SUPPORT.md. Hidden since 2026-11-24 (KNEG-571): the three company-account forms are drawn only for a connector that is already set up on the profile (views/SettingsIntelligence.tsx), because the requests are built and tested and have never been run against a real account. reasoning_set_enterprise still accepts it."
     },
     "enterprise:azure": {
       "status": "rewired-to-direct-byok",
@@ -326,8 +326,8 @@
       ],
       "backend": "crates/reasoning-core",
       "ui": "Settings > Intelligence > Enterprise",
-      "reachable": true,
-      "note": "Reachable: organisation credentials are entered on Settings > Cleanup & summaries > Company accounts and stored as one JSON document in the OS credential store. The request shape and signing are implemented and tested -- SigV4 against AWS's published vectors -- but no live call has been made to any of the three, which needs org credentials this project does not have. Recorded as unverified in docs/PLATFORM_SUPPORT.md."
+      "reachable": false,
+      "note": "Reachable until 2026-11-24: organisation credentials are entered on Settings > Cleanup & summaries > Company accounts and stored as one JSON document in the OS credential store. The request shape and signing are implemented and tested -- SigV4 against AWS's published vectors -- but no live call has been made to any of the three, which needs org credentials this project does not have. Recorded as unverified in docs/PLATFORM_SUPPORT.md. Hidden since 2026-11-24 (KNEG-571): the three company-account forms are drawn only for a connector that is already set up on the profile (views/SettingsIntelligence.tsx), because the requests are built and tested and have never been run against a real account. reasoning_set_enterprise still accepts it."
     },
     "enterprise:vertex": {
       "status": "rewired-to-direct-byok",
@@ -343,8 +343,8 @@
       ],
       "backend": "crates/reasoning-core",
       "ui": "Settings > Intelligence > Enterprise",
-      "reachable": true,
-      "note": "Reachable: organisation credentials are entered on Settings > Cleanup & summaries > Company accounts and stored as one JSON document in the OS credential store. The request shape and signing are implemented and tested -- SigV4 against AWS's published vectors -- but no live call has been made to any of the three, which needs org credentials this project does not have. Recorded as unverified in docs/PLATFORM_SUPPORT.md."
+      "reachable": false,
+      "note": "Reachable until 2026-11-24: organisation credentials are entered on Settings > Cleanup & summaries > Company accounts and stored as one JSON document in the OS credential store. The request shape and signing are implemented and tested -- SigV4 against AWS's published vectors -- but no live call has been made to any of the three, which needs org credentials this project does not have. Recorded as unverified in docs/PLATFORM_SUPPORT.md. Hidden since 2026-11-24 (KNEG-571): the three company-account forms are drawn only for a connector that is already set up on the profile (views/SettingsIntelligence.tsx), because the requests are built and tested and have never been run against a real account. reasoning_set_enterprise still accepts it."
     },
     "local-llm:qwen": {
       "status": "ported-with-new-rust-implementation",
@@ -864,8 +864,8 @@
       ],
       "backend": "crates/security",
       "ui": "Settings > Providers",
-      "reachable": true,
-      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10. Reachable: Settings > Providers stores every slot the registry declares. A custom-endpoint slot stores its key here and still needs the base URL that lives with the feature using it, which the screen says rather than implying otherwise."
+      "reachable": false,
+      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10. Reachable: Settings > Providers stores every slot the registry declares. A custom-endpoint slot stores its key here and still needs the base URL that lives with the feature using it, which the screen says rather than implying otherwise. Not listed on Settings > Providers since 2026-11-24 (KNEG-571): the page lists a custom endpoint only when something reads its key or a key is already stored in it (lib/providerRows.ts), and the screen where this endpoint's server address would be entered is not built, so a key here did nothing. provider_credential_set still accepts the slot."
     },
     "credential:translation-custom": {
       "status": "ported-with-new-rust-implementation",
@@ -878,8 +878,8 @@
       ],
       "backend": "crates/security",
       "ui": "Settings > Providers",
-      "reachable": true,
-      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10. Reachable: Settings > Providers stores every slot the registry declares. A custom-endpoint slot stores its key here and still needs the base URL that lives with the feature using it, which the screen says rather than implying otherwise."
+      "reachable": false,
+      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10. Reachable: Settings > Providers stores every slot the registry declares. A custom-endpoint slot stores its key here and still needs the base URL that lives with the feature using it, which the screen says rather than implying otherwise. Not listed on Settings > Providers since 2026-11-24 (KNEG-571): the page lists a custom endpoint only when something reads its key or a key is already stored in it (lib/providerRows.ts), and the screen where this endpoint's server address would be entered is not built, so a key here did nothing. provider_credential_set still accepts the slot."
     },
     "credential:dictation-agent-custom": {
       "status": "ported-with-new-rust-implementation",
@@ -892,8 +892,8 @@
       ],
       "backend": "crates/security",
       "ui": "Settings > Providers",
-      "reachable": true,
-      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10. Reachable: Settings > Providers stores every slot the registry declares. A custom-endpoint slot stores its key here and still needs the base URL that lives with the feature using it, which the screen says rather than implying otherwise."
+      "reachable": false,
+      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10. Reachable: Settings > Providers stores every slot the registry declares. A custom-endpoint slot stores its key here and still needs the base URL that lives with the feature using it, which the screen says rather than implying otherwise. Not listed on Settings > Providers since 2026-11-24 (KNEG-571): the page lists a custom endpoint only when something reads its key or a key is already stored in it (lib/providerRows.ts), and the screen where this endpoint's server address would be entered is not built, so a key here did nothing. provider_credential_set still accepts the slot."
     },
     "credential:dictation-agent-vision-custom": {
       "status": "ported-with-new-rust-implementation",
@@ -906,8 +906,8 @@
       ],
       "backend": "crates/security",
       "ui": "Settings > Providers",
-      "reachable": true,
-      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10. Reachable: Settings > Providers stores every slot the registry declares. A custom-endpoint slot stores its key here and still needs the base URL that lives with the feature using it, which the screen says rather than implying otherwise."
+      "reachable": false,
+      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10. Reachable: Settings > Providers stores every slot the registry declares. A custom-endpoint slot stores its key here and still needs the base URL that lives with the feature using it, which the screen says rather than implying otherwise. Not listed on Settings > Providers since 2026-11-24 (KNEG-571): the page lists a custom endpoint only when something reads its key or a key is already stored in it (lib/providerRows.ts), and the screen where this endpoint's server address would be entered is not built, so a key here did nothing. provider_credential_set still accepts the slot."
     },
     "credential:chat-agent-custom": {
       "status": "ported-with-new-rust-implementation",
@@ -920,8 +920,8 @@
       ],
       "backend": "crates/security",
       "ui": "Settings > Providers",
-      "reachable": true,
-      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10. Reachable: Settings > Providers stores every slot the registry declares. A custom-endpoint slot stores its key here and still needs the base URL that lives with the feature using it, which the screen says rather than implying otherwise."
+      "reachable": false,
+      "note": "Moves from an AES-256-GCM file blob keyed by a keyring master secret to one OS-credential-store entry per key, per the brief section 10. Reachable: Settings > Providers stores every slot the registry declares. A custom-endpoint slot stores its key here and still needs the base URL that lives with the feature using it, which the screen says rather than implying otherwise. Not listed on Settings > Providers since 2026-11-24 (KNEG-571): the page lists a custom endpoint only when something reads its key or a key is already stored in it (lib/providerRows.ts), and the screen where this endpoint's server address would be entered is not built, so a key here did nothing. provider_credential_set still accepts the slot."
     },
     "credential:assemblyai": {
       "status": "rewired-to-direct-byok",
@@ -1021,7 +1021,7 @@
       "backend": "crates/calendar-core",
       "ui": "Integrations > Calendar",
       "reachable": false,
-      "note": "Status corrected by Task 19's audit of every ACTIVE-vocabulary entry: this previously carried status \"platform-specific\", which verify-parity.mjs treats as asserting a working implementation exists for the platforms it names, while apple.rs's own module doc says AppleCalendarSource is deliberately unimplemented by anything in this crate, on every platform including macOS -- the identical pattern platform:aec was already corrected for. Integrations > Calendar reports it as Unsupported with that reason rather than hiding the row or showing an empty calendar list, which is honest UI -- but honest UI about an absent capability is not the same claim as reachable, the same distinction transcription:tinfoil draws. Implementing it needs a macOS build of this application and EventKit bindings, neither of which exists; unverifiable on this development machine even once written."
+      "note": "Status corrected by Task 19's audit of every ACTIVE-vocabulary entry: this previously carried status \"platform-specific\", which verify-parity.mjs treats as asserting a working implementation exists for the platforms it names, while apple.rs's own module doc says AppleCalendarSource is deliberately unimplemented by anything in this crate, on every platform including macOS -- the identical pattern platform:aec was already corrected for. Integrations > Calendar reported it as Unsupported with that reason until 2026-11-24, when the row was removed (KNEG-571): a row that could only say \"Not supported yet\" is not a setting. calendar_status still returns the reason. Implementing it needs a macOS build of this application and EventKit bindings, neither of which exists; unverifiable on this development machine even once written."
     },
     "developer:local-rest-api": {
       "status": "ported-with-new-rust-implementation",

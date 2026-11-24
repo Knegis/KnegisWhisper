@@ -35,6 +35,7 @@ import { useCallback, useRef, useState } from "react";
 
 import { FailureLine } from "../components/FailureLine";
 import { LearnMore } from "../components/LearnMore";
+import { ProviderKeyForm } from "../components/ProviderKeyForm";
 import { Row } from "../components/Row";
 import { cleanupFields, cleanupRouteLine, effectiveCleanup, reasoningDispatchLine, savedLine } from "../lib/cleanup";
 import {
@@ -235,7 +236,14 @@ export function SettingsIntelligence({
   const drafts = { provider: draftProvider, model: draftModel, url: draftUrl };
   const { provider, url, selfHosted, chosen, model } = cleanupFields(settings, providers, drafts);
 
-  const usable = providers.filter((p) => p.dispatch.state === "ready");
+  // Company accounts are drawn only for a profile that already uses one
+  // (KNEG-571): a connector that is set up, one whose saved settings broke, or
+  // cleanup pointed at one. The requests are built and tested and have never
+  // been run against a real account, so nobody is invited to start. Whoever
+  // has, keeps everything: all three forms, and the choice in the lists.
+  const showCompany = settings.enterprise || enterprise.some((e) => e.configured || e.problem !== null);
+  const listed = providers.filter((p) => !p.enterprise || showCompany || p.id === provider);
+  const usable = listed.filter((p) => p.dispatch.state === "ready");
   // The model as the model menu names it, not its id.
   const modelName = (id: string) =>
     providers.flatMap((p) => p.models).find((m) => m.id === id)?.name ?? id;
@@ -332,7 +340,7 @@ export function SettingsIntelligence({
               }}
             >
               <option value="">Choose a provider</option>
-              {providers.map((p) => (
+              {listed.map((p) => (
                 <option
                   key={p.id}
                   value={p.id}
@@ -343,6 +351,12 @@ export function SettingsIntelligence({
                 </option>
               ))}
             </select>
+            {/* The key, where the provider is chosen (KNEG-572). It was a trip
+                to Providers and back. Not for this computer, which has no key,
+                nor a company account, which has a form of its own. */}
+            {!selfHosted && chosen && !chosen.enterprise && chosen.credentialSlot ? (
+              <ProviderKeyForm slot={chosen.credentialSlot} name={chosen.name} stored={chosen.configured} onSaved={reload} />
+            ) : null}
           </span>
         </div>
 
@@ -414,9 +428,6 @@ export function SettingsIntelligence({
           <button type="button" onClick={() => apply(false)}>
             Turn it off
           </button>
-          <button type="button" onClick={onGoToProviders}>
-            Open Providers
-          </button>
         </div>
         {cleanupDraft.feedback}
         {said ? (
@@ -426,11 +437,13 @@ export function SettingsIntelligence({
         ) : null}
         {usable.length === 0 ? (
           <p className="caveat">
-            No provider can be used yet. Add a key on the Providers page first.
+            No provider can be used yet. Choose one above and add its key, or
+            start a model under Local text models.
           </p>
         ) : null}
       </section>
 
+      {showCompany ? (
       <section data-surface="settings.intelligence.enterprise">
         <h2>company accounts</h2>
         <p className="muted">
@@ -469,14 +482,19 @@ export function SettingsIntelligence({
           ))}
         </div>
       </section>
+      ) : null}
 
+      {/* A catalogue, not a setting, so it is folded (KNEG-574). It was eleven
+          rows at the foot of the page, open. */}
       <section>
-        <h2>all providers</h2>
-        <p className="muted">
-          Every provider for cleanup and summaries, including the ones this
-          version can't use yet, with the reason.
-        </p>
-        {providers.map(providerRow)}
+        <LearnMore summary="Every provider, and why some can't be used">
+          <p className="muted">
+            Every provider for cleanup and summaries, including the ones this
+            version can't use yet, with the reason. All the keys are on the{" "}
+            <button type="button" className="provider-link" onClick={onGoToProviders}>Providers page</button>.
+          </p>
+          {listed.map(providerRow)}
+        </LearnMore>
       </section>
     </div>
   );

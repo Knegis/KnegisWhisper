@@ -27,6 +27,23 @@ No installer release is claimed by this entry. See
   file is. Before, the application simply did not open (KNEG-570).
 - On Windows, local model servers end when KnegisWhisper quits. They used to keep running,
   holding their models in memory, until the next launch (KNEG-569).
+- The first time KnegisWhisper opens, Dictation shows three setup steps: where speech becomes
+  text, a microphone check, and a first try. Nothing is downloaded or sent unless you choose it,
+  and Skip setup closes it for good. Dictation no longer reads as ready while it is set to a
+  cloud service with no key (KNEG-329).
+- A key for a cloud service is entered where the service is chosen, under Transcription,
+  Meeting settings and Cleanup & summaries. It was only possible on the Providers page
+  (KNEG-572).
+- Settings lists what can be used. Shortcuts shows the actions that work; unbuilt actions,
+  endpoints and company accounts are no longer listed unless you have already set one up
+  (KNEG-571).
+- Speech and text models are listed as Installed, then Recommended, then all the others behind
+  a fold; the text models can be searched (KNEG-573).
+- Meetings: Start recording is back in view at the default window size. Recordings that never
+  became a note are one row at the top of Recent, and each can be deleted as well as recovered
+  (KNEG-575).
+- Technical details about how meetings are detected moved from Meeting settings to Diagnostics
+  (KNEG-574).
 - The OpenWhispr import lists the tables it did not copy, with row counts, and how many rows
   it passed over because they were deleted in OpenWhispr. Its description no longer says the
   source file is never touched: the import only reads your data and changes none of it, but

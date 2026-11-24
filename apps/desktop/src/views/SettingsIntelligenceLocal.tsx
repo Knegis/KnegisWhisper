@@ -41,6 +41,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { FailureLine } from "../components/FailureLine";
 import { LearnMore } from "../components/LearnMore";
 import { Row } from "../components/Row";
+import { PROVIDER_REGISTRY } from "../generated/providers";
+import { textModelSections } from "../lib/textModels";
 import {
   downloadCheckPlain,
   freshnessLabel,
@@ -63,6 +65,9 @@ import {
   type LocalLlmModelStatus,
 } from "../lib/ipc";
 import { message, useRefresh } from "../lib/useRefresh";
+
+/** A family id to its name, from the registry: "openai-oss" is "OpenAI" to a reader. */
+const FAMILY = new Map<string, string>(PROVIDER_REGISTRY.localLlm.map((family) => [family.id, family.name]));
 
 export function SettingsIntelligenceLocal() {
   const load = useCallback(() => getLocalLlmStatus(), []);
@@ -105,6 +110,9 @@ export function SettingsIntelligenceLocal() {
     return () => unlisten?.();
   }, [reload]);
 
+  /** What is typed in the catalogue's search. */
+  const [query, setQuery] = useState("");
+
   if (!data) {
     return (
       <div className="view">
@@ -116,6 +124,7 @@ export function SettingsIntelligenceLocal() {
   const running = data.port !== null;
   const runningName = data.models.find((m) => m.id === data.runningModel)?.name ?? data.runningModel;
   const freshness = freshnessLabel(data.serverFreshness);
+  const parts = textModelSections(data.models, data.runningModel, query, (id) => FAMILY.get(id) ?? id);
 
   /**
    * Hash one model's files, on request.
@@ -170,7 +179,7 @@ export function SettingsIntelligenceLocal() {
         ) : null}
         <LearnMore summary="Details">
           <p>
-            Model id <code>{m.id}</code>, from the {m.provider} family
+            Model id <code>{m.id}</code>, from the {FAMILY.get(m.provider) ?? m.provider} family
             {m.quantization ? `, quantised as ${m.quantization}` : ""}
             {m.contextLength ? `, with a ${(m.contextLength / 1024).toFixed(0)}k context` : ""}
             {m.supportsThinking ? ", and it can reason step by step before it answers" : ""}.
@@ -285,6 +294,54 @@ export function SettingsIntelligenceLocal() {
               the largest are slower than a cloud service.
             </p>
 
+            {progress ? <Row label="Progress" value={progress} /> : null}
+
+            {/*
+              Installed, then recommended, then the catalogue behind a fold
+              and a search (KNEG-573). It was every model in registry order,
+              under the engine's own controls, with the installed one wherever
+              its family fell. "Recommended" is the registry's flag: nothing
+              here is sized to this computer, and the label does not say so.
+            */}
+            {parts.installed.length > 0 ? (
+              <>
+                <p className="model-group-label">Installed</p>
+                <ul className="text-models">{parts.installed.map(modelRow)}</ul>
+              </>
+            ) : null}
+            {parts.recommended.length > 0 ? (
+              <>
+                <p className="model-group-label">{parts.installed.length > 0 ? "Recommended" : "Recommended to start with"}</p>
+                <ul className="text-models">{parts.recommended.map(modelRow)}</ul>
+              </>
+            ) : null}
+            {parts.rest > 0 ? (
+              <LearnMore summary={`All models (${parts.rest} more)`}>
+                <div className="model-filter">
+                  <label htmlFor="text-model-search">Find a model</label>
+                  <input
+                    id="text-model-search"
+                    type="search"
+                    placeholder="Name or family"
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                  />
+                </div>
+                {parts.families.length === 0 ? (
+                  <p className="muted">No model here matches “{query.trim()}”.</p>
+                ) : (
+                  parts.families.map((family) => (
+                    <div key={family.id} className="text-model-family">
+                      <p className="model-group-label">{family.name}</p>
+                      <ul className="text-models">{family.models.map(modelRow)}</ul>
+                    </div>
+                  ))
+                )}
+              </LearnMore>
+            ) : null}
+
+            <h2>text engine</h2>
+
             <Row
               label="Text engine"
               value={
@@ -388,9 +445,6 @@ export function SettingsIntelligenceLocal() {
               </p>
             </LearnMore>
 
-            {progress ? <Row label="Progress" value={progress} /> : null}
-
-            <ul className="text-models">{data.models.map(modelRow)}</ul>
           </>
         )}
       </section>

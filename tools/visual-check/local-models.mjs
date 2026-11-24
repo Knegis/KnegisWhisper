@@ -32,25 +32,36 @@ const NAV_PILL = "button.nav-pill";
 const WIDE = { width: 1000, height: 720 };
 const SMALL = { width: 720, height: 520 };
 
-/** The fixtures' models, in the order the list must give them: dictation, then meetings, each smallest first. */
-const ORDER = [
+/**
+ * The fixtures' models, in the order the page must give them (KNEG-573):
+ * the installed ones, the one in use first and the rest dictation then
+ * meetings, each smallest first; then, behind "All models", the ones that are
+ * not installed, in that same order. No fixture model is recommended and not
+ * installed, so there is no Recommended part here.
+ */
+const INSTALLED = [
+  "Nemotron Speech Streaming EN 0.6B",
   "Whisper Small (Q5)",
   "Whisper Large v3 Turbo (Q5)",
   "Parakeet Unified EN 0.6B",
+  "Nemotron 3.5 ASR Streaming 0.6B",
+];
+const ORDER = [
+  ...INSTALLED,
   "Parakeet TDT 0.6B v3",
   "KB Whisper Large (Swedish, Q5)",
   "Whisper Medium (Q5)",
   "Whisper Base (English)",
-  "Nemotron Speech Streaming EN 0.6B",
-  "Nemotron 3.5 ASR Streaming 0.6B",
 ];
+/** The language filter narrows "All models" and leaves what is installed alone. */
 const SWEDISH = [
-  "Whisper Small (Q5)",
-  "Whisper Large v3 Turbo (Q5)",
+  ...INSTALLED,
   "Parakeet TDT 0.6B v3",
   "KB Whisper Large (Swedish, Q5)",
   "Whisper Medium (Q5)",
 ];
+/** Opens the "All models" fold, so every row is on the page to be measured and pressed. */
+const OPEN_ALL = `(() => { for (const fold of document.querySelectorAll('[data-surface="settings.transcription.local"] details')) fold.open = true; return true; })()`;
 const FILTER_OPTIONS = ["Any language", "Swedish", "English", "Danish", "Norwegian", "Finnish", "German", "French", "Spanish"];
 const CAVEAT = "This engine can't be updated from here yet. To reinstall it, close the app and delete its folder by hand.";
 const LOADED_BUT = "Loaded, but dictation goes to Parakeet Unified EN 0.6B";
@@ -143,6 +154,7 @@ async function fresh(cdp, size = WIDE) {
   await cdp.evaluate(snippets.installInvokeStub());
   await cdp.evaluate(snippets.openSettingsScreen("Transcription"));
   await waitFor(cdp, SECTION_READY, "the local models list");
+  await cdp.evaluate(OPEN_ALL);
   await delay(300);
   await cdp.evaluate(snippets.clearStubCalls());
 }
@@ -195,9 +207,9 @@ export async function runLocalModels(options) {
 
     await check({
       id: "1",
-      claim: "The local models are one list: no separate Parakeet list or heading, and model ids only inside closed Details.",
+      claim: "The local models are in two parts, Installed and All models: no separate Parakeet list or heading, and model ids only inside closed Details.",
       expectation: [
-        "one ul in the local section, holding a row for each of the fixtures' nine models; its headings exactly",
+        "two uls in the local section, holding between them a row for each of the fixtures' nine models; its headings exactly",
         "h2 'local transcription' and h2 'engines'; every Details closed; no model id in the shown text, and every id somewhere in the section (under Details)",
       ].join(" "),
     }, async () => {
@@ -210,7 +222,7 @@ export async function runLocalModels(options) {
       await cdp.screenshot(resolve(out, shot));
       return {
         measured: { ids, lists: page.lists, rows: page.rows.length, headings: page.headings, openDetails: page.openDetails, idsShown: page.idsShown, idsAnywhere: page.idsAnywhere },
-        matches: ids.length === 9 && page.lists === 1 && page.rows.length === 9
+        matches: ids.length === 9 && page.lists === 2 && page.rows.length === 9
           && JSON.stringify(page.headings) === JSON.stringify(["h2:local transcription", "h2:engines"])
           && page.openDetails === 0 && page.idsShown.length === 0 && page.idsAnywhere.length === ids.length,
         screenshots: [shot],

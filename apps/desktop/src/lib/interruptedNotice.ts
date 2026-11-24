@@ -27,6 +27,29 @@ export function interruptedNotice(recordings: readonly RecoverableRecording[]): 
 }
 
 /** What an interrupted recording's row says under its name, on the Meetings page. */
+/**
+ * The one line Recent gives its recordings with no note (KNEG-575). They were
+ * a card each, ahead of every saved meeting: twenty-four cards, on the profile
+ * this was measured on, before the first meeting.
+ */
+export function unfinishedSummary(count: number): string {
+  return count === 1 ? "1 unfinished recording" : `${count} unfinished recordings`;
+}
+
+/**
+ * Whether the list under that line starts open. A few are shown at once, as
+ * they were; more than that wait behind Review, so the saved meetings below
+ * are not pushed off the page.
+ */
+export const UNFINISHED_SHOWN_OPEN = 3;
+
+/** What deleting asks first, for one recording or for all of them. */
+export function deleteUnfinishedQuestion(count: number, anyNotes: boolean): string {
+  const what = count === 1 ? "this recording" : `these ${count} recordings`;
+  const notes = anyNotes ? (count === 1 ? " and the notes typed during it" : " and any notes typed during them") : "";
+  return `Delete ${what}${notes}? ${count === 1 ? "It was" : "They were"} never made into a note, and this can't be undone.`;
+}
+
 export function interruptedMeta(recording: RecoverableRecording): string {
   return `Not a note yet · recording kept${recording.hasNotes ? " · typed notes kept" : ""}`;
 }

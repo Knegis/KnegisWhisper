@@ -51,7 +51,6 @@ import {
   calendarTroubleshootingLabel,
 } from "../lib/calendarLabels";
 import {
-  appleCalendarSupportLabel,
   connectOutcomeLabel,
   syncOutcomeLabel,
   tokenStatusLabel,
@@ -331,18 +330,14 @@ export function IntegrationsCalendar() {
       {error ? <FailureLine text="This page couldn't load." detail={error} /> : <p className="muted">Loading…</p>}
     </div>;
   }
-  const apple = appleCalendarSupportLabel(status.apple);
   return (
     <div className="view" data-surface="integrations.calendar">
       {error ? <FailureLine text="That didn't work." detail={error} /> : null}
       {PROVIDERS.map(({ id, label }) => <ProviderSection key={id} provider={id} label={label}
         status={id === "google" ? status.google : status.microsoft} reload={reload} />)}
-      <section>
-        <h2>apple calendar</h2>
-        <Row label="State" value={apple.text}>
-          <LearnMore summary="Why"><p>{apple.detail}</p></LearnMore>
-        </Row>
-      </section>
+      {/* Apple Calendar is not listed: it is not built on any platform, and a
+          row that could only say "Not supported yet" is not a setting
+          (KNEG-571). `status.apple` and its label stay for the day it is. */}
     </div>
   );
 }

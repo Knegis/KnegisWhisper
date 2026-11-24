@@ -39,6 +39,13 @@
  * or not, because what they need is different from a key on its own; the
  * rest are in use when a key is stored and available when not. Each keeps the
  * order the slots arrived in, which is the registry's.
+ *
+ * **What is left out (KNEG-571).** A slot nothing reads is not listed: a
+ * custom endpoint with no purpose, which is one whose address screen is not
+ * built, and an enterprise connector, which is built and has never been run
+ * against a real account. Both are listed once a key is stored in them, so a
+ * key that is already there can still be found and removed. The test is the
+ * slot's own fields, not its id, so a slot that gains a use appears by itself.
  */
 
 import type { CredentialSlotStatus, MeetingProviderSummary, ProviderSummary } from "../generated/ipc-types.js";
@@ -72,6 +79,7 @@ export function providerRows(
       stored: slot.stored,
       unsupported: noClient && !forMeetings && slot.usedFor.every((use) => use === "transcription"),
     };
+    if (!slot.stored && (slot.kind === "enterprise" || (slot.kind === "custom-endpoint" && purposes.length === 0))) continue;
     const list = slot.kind === "custom-endpoint" ? lists.custom
       : slot.kind === "enterprise" ? lists.enterprise
       : slot.stored ? lists.inUse

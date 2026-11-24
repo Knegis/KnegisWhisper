@@ -71,11 +71,30 @@ discarded. A recording made before the marker existed has none.
 For a recording that still has the marker, the window says so on every screen
 but Meetings -- "A meeting was cut short before it was saved. Its recording and
 typed notes are kept on this computer." -- with **Recover in Meetings**. On
-Meetings, interrupted recordings come first under Recent, ahead of saved
-meetings, and read "Not a note yet · recording kept". Until 2026-11-17 they came
-after up to twenty saved meetings, read "Not transcribed", and the page could
-say "No meetings saved yet." above them; read from Notes, the meeting looked
-deleted.
+Meetings, recordings with no note come first under Recent, ahead of saved
+meetings, as one row: "3 unfinished recordings". Up to three are listed straight
+away; more wait behind **Review**. Each reads "Not a note yet · recording kept"
+and has **Recover** and **Delete**. Until 2026-11-17 they came after up to twenty
+saved meetings, read "Not transcribed", and the page could say "No meetings saved
+yet." above them; read from Notes, the meeting looked deleted. From then until
+2026-11-24 each was a card of its own ahead of every saved meeting (KNEG-575).
+
+**Delete** (2026-11-24, KNEG-575) removes the recording, the notes typed during
+it, its plan and its marker, after a question that says so. **Delete all**
+asks once for all of them and stops at the first that fails. It is refused while
+a meeting is being recorded, saved or recovered, and for any recording a note
+owns, a note in Trash included. Until it existed a recording could only be
+recovered, and one with nothing in it could not be: Recover refuses a recording
+that transcribes to nothing and has no typed notes, so it was listed for ever.
+
+Automated, on Windows: the delete removes the four files and leaves a second
+recording alone; a recording a note owns is refused and left in place; a name
+outside the folder, a file that is not a WAV and a missing one are refused; a
+second delete says the recording is gone (`meeting::recovery`, four tests).
+Run once in the application on a throwaway profile, read by instrument: five
+recordings listed behind Review, one deleted with its notes and marker gone from
+the folder, Cancel leaving the rest, Delete all removing them, and
+`../knegiswhisper.db` refused with the database still there.
 
 Quit from the tray no longer cuts a meeting short without asking. While a
 meeting is being recorded it offers **Stop and save, then quit** or **Keep

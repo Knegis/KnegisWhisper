@@ -22,8 +22,10 @@ import {
   onUpdateCheckResult,
   openUpdateReleasePage,
   setAutomaticUpdateCheck,
+  getMeetingStatus,
   isCaptureExclusionConfirmed,
   type Diagnostics,
+  type MeetingStatus,
   type SystemAudioSupport,
   type UpdateCheckResult,
   type UpdatePreferences,
@@ -31,6 +33,9 @@ import {
 import { systemAudioValue } from "../lib/labels";
 import {
   captureExclusionLabel,
+  detectedLabel,
+  microphoneDetail,
+  microphoneValue,
   nonActivatingLabel,
   updateCheckLabel,
 } from "../lib/labels";
@@ -55,6 +60,66 @@ function systemAudioDetail(s: SystemAudioSupport): string {
     case "unsupported":
       return s.reason;
   }
+}
+
+/**
+ * How a meeting is detected, and what proves the recording window is hidden
+ * from screen sharing (KNEG-574).
+ *
+ * These lines were on Settings > Meetings, among the settings: the Win32
+ * interface the microphone is watched through, the affinity value read back
+ * from the notification window, and each running application with the
+ * evidence it was matched on. None of them can be changed. They are read once
+ * when this screen opens, like the rest of it; Settings > Meetings keeps the
+ * switch and the two lists, and a folded list of what is running.
+ */
+function MeetingDetection() {
+  const [status, setStatus] = useState<MeetingStatus | null>(null);
+  const [problem, setProblem] = useState<string | null>(null);
+  useEffect(() => {
+    let active = true;
+    getMeetingStatus()
+      .then((next) => { if (active) setStatus(next); })
+      .catch((cause) => { if (active) setProblem(String(cause)); });
+    return () => { active = false; };
+  }, []);
+  if (problem) {
+    return (
+      <section>
+        <h2>meeting detection</h2>
+        <Row label="State" tone="bad" value="Couldn't read it" detail={problem} />
+      </section>
+    );
+  }
+  if (!status) return null;
+  const watching = status.microphone?.state === "available";
+  const window = status.notificationExcluded ? captureExclusionLabel(status.notificationExcluded) : null;
+  return (
+    <section>
+      <h2>meeting detection</h2>
+      <Row
+        label="Microphone activity"
+        tone={watching ? "ok" : "off"}
+        value={microphoneValue(status.microphone)}
+        detail={microphoneDetail(status.microphone)}
+      />
+      {window ? (
+        <Row
+          label="Meeting notification window"
+          tone={status.notificationExcluded && isCaptureExclusionConfirmed(status.notificationExcluded) ? "ok" : "bad"}
+          value={window.text}
+          detail={window.detail}
+        />
+      ) : null}
+      {status.detected.length === 0 ? (
+        <Row label="Meeting applications" value="None running" />
+      ) : (
+        status.detected.map((d) => (
+          <Row key={`${d.provider}-${d.evidence}`} label={d.name} value={d.inCall ? "In a call" : "Open"} detail={detectedLabel(d)} />
+        ))
+      )}
+    </section>
+  );
 }
 
 export function DiagnosticsView({ diagnostics }: { diagnostics: Diagnostics }) {
@@ -235,6 +300,8 @@ export function DiagnosticsView({ diagnostics }: { diagnostics: Diagnostics }) {
           </p>
         ) : null}
       </section>
+
+      <MeetingDetection />
 
       <section>
         <h2>software update</h2>
