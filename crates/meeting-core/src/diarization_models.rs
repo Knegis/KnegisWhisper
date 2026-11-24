@@ -11,8 +11,9 @@
 //! competing installs with an OS lock, and recovers interrupted staging/backup
 //! directories on retry. The old archive layout is preserved for existing users.
 //!
-//! The English CAM++ embedding has no verified equivalent immutable mirror yet.
-//! Its existing GitHub download writes a fixed `.partial` file, checks the exact
+//! The English CAM++ embedding uses a fixed-commit Hugging Face mirror, downloaded
+//! and hashed on 2026-11-24 to confirm it matches the original pinned bytes. Its
+//! single-file download writes a fixed `.partial` file, checks the exact
 //! pinned size and digest, and renames only verified bytes into place. Archive
 //! fallback entries also use `kw_sidecar::extract_with_limit` to enforce a
 //! separate decompression ceiling. Missing pins refuse installation; display

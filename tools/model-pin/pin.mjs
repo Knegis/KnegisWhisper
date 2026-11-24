@@ -78,10 +78,11 @@
  *
  * ## What `--verify` reads
  *
- * **One file.** `config/provider-registry.json` → `localAsr.whisper[]` and
- * `localAsr.sherpa[]`. It is generated, so the URL, `sha256` and
- * `expectedSizeBytes` are read as data, with no parsing and no second copy.
- * Their source is `WHISPER_PINS` and `SHERPA_PINS` in
+ * **One file.** `config/provider-registry.json` → `localAsr.whisper[]`,
+ * `localAsr.sherpa[]` and `localAsr.diarization[]`. It is generated, so the URL,
+ * `sha256` and `expectedSizeBytes` are read as data, with no parsing and no
+ * second copy.
+ * Their source is `WHISPER_PINS`, `SHERPA_PINS` and `DIARIZATION_PINS` in
  * `tools/integration-audit/generate-provider-registry.mjs`; a model with a
  * null `sha256` is skipped, because there is nothing committed to re-measure.
  *
@@ -108,28 +109,17 @@
  * would be ignored by the second month. It is news about pins worth revisiting,
  * not a defect.
  *
- * **And the six k2-fsa assets, which are not on Hugging Face at all.** The
- * four sherpa ASR archives are in k2-fsa's rolling `asr-models` GitHub
- * release, and the two diarization models in `speaker-segmentation-models`
- * and `speaker-recongition-models` (k2-fsa's spelling). GitHub's release API
- * states a `size` per asset and, for assets uploaded from about mid-2025, a
- * `digest` -- the same shape as `lfs.oid`, from a different host, one request
- * per release. All six are *also* downloaded and re-hashed by `--verify`, so
- * this is not how they are checked; it is an earlier and far cheaper signal
- * that tells a swapped asset from a damaged download before the re-download
- * runs. Measured 2026-08-31: the two Parakeet archives' stated digests and
- * sizes match the committed pins exactly (KNEG-112).
+ * The sherpa and diarization pins also use fixed Hugging Face commits. File
+ * manifests are checked against the tree at their committed revisions; the
+ * single-file CAM++ embedding is checked the same way, using `lfs.oid` and
+ * `lfs.size`. Downloaded from the fixed commit and hashed on 2026-11-24, the
+ * mirror file matches the original pin, after the rolling GitHub asset was
+ * replaced.
  *
- * **The two diarization models have no stated digest, and never will.** Both
- * were uploaded in October 2024, before GitHub computed digests: 0 of 7
- * assets in `speaker-segmentation-models` have one, and nothing uploaded to
- * `speaker-recongition-models` before 2025-08-14 does (measured 2026-09-29).
- * For them the size is compared and the missing digest is printed as a note,
- * not a failure. From 2026-09-07 to 2026-09-29 it was a failure, which turned
- * the weekly job red for a reason that could not clear, and a job that is
- * always red is not read (KNEG-358). A replaced asset would be a new upload,
- * and new uploads carry a digest, so the note cannot hide a swap -- a swap
- * would arrive with a digest that disagrees.
+ * GitHub release metadata remains supported for pinned release assets. None
+ * remain in the committed model registry, so this mode makes no GitHub API
+ * requests. A missing digest on an older release asset is a note rather than
+ * a failure; size is still compared (KNEG-358).
  *
  * `--verify` re-measures bytes. `--verify-stated` re-reads a claim. Both catch
  * a silent upstream re-upload, which is the failure that matters most here;
@@ -536,11 +526,10 @@ export async function verify(only) {
 
 
 /**
- * Every committed GGUF pin, as things to re-read rather than re-download.
+ * Committed GGUF pins and fixed-commit sherpa/diarization files to re-read.
  *
- * `localLlm` only. The whisper and sherpa pins are bytes this project hashed,
- * so re-reading a publisher's claim is not how they are checked -- `--verify`
- * is. Included here would make a weaker check look like it covered them.
+ * The measured files are also downloaded by `--verify`; this metadata check
+ * corroborates the committed object and revision without re-measuring bytes.
  *
  * A digest with no size, or a size with no digest, is a `die()` and not a
  * skip, for the reason `pinnedTargets` gives: the generator emits `sha256`,
@@ -593,11 +582,17 @@ export function statedTargets(reg = registry()) {
   }
 
   for (const models of [reg.localAsr?.sherpa ?? [], reg.localAsr?.diarization ?? []]) {
-    for (const model of models) for (const f of model.files ?? []) {
-      const parsed = parseHfUrl(f.url);
-      if (!parsed) die("Invalid pinned model URL " + f.url);
-      add(model.id + "/" + f.path, {hfRepo: parsed.repo, revision: parsed.revision,
-        fileName: f.path, sha256: f.sha256, sizeBytes: f.expectedSizeBytes, sha256Measured: true});
+    for (const model of models) {
+      for (const f of model.files ?? []) {
+        const parsed = parseHfUrl(f.url);
+        if (!parsed) die("Invalid pinned model URL " + f.url);
+        add(model.id + "/" + f.path, {hfRepo: parsed.repo, revision: parsed.revision,
+          fileName: f.path, sha256: f.sha256, sizeBytes: f.expectedSizeBytes, sha256Measured: true});
+      }
+      if (model.files?.length || !model.sha256) continue;
+      const parsed = parseFixedHfUrl(model.downloadUrl);
+      if (parsed) add(model.id, {hfRepo: parsed.repo, revision: parsed.revision,
+        fileName: parsed.path, sha256: model.sha256, sizeBytes: model.expectedSizeBytes, sha256Measured: true});
     }
   }
   return targets;
@@ -651,17 +646,14 @@ export function parseGithubAssetUrl(url) {
 /**
  * Every committed pin that lives in a GitHub release, as an asset to look up.
  *
- * `localAsr.sherpa` **and** `localAsr.diarization`. It read only the first
- * until 2026-09-01, which was correct while sherpa held the only such pins and
- * became a hole the moment the two diarization models were committed: the
- * expensive check covered them and the cheap one did not, so a swapped asset
- * would have gone unnoticed by every run short of a full re-download. All four
- * sherpa archives sit under one rolling `asr-models` tag; the diarization pair
- * sits under two others in the same repository, which the tag comes from the
- * URL rather than being assumed.
- *
- * A model with no `sha256` is skipped for the reason [`pinnedTargets`] gives.
- * As of 2026-09-01 nothing is skipped.
+ * Reads `localAsr.sherpa` and `localAsr.diarization`. File manifests and
+ * fixed-commit Hugging Face single files are covered by `statedTargets`.
+ * Until 2026-09-01 this read only `localAsr.sherpa`, leaving diarization pins
+ * covered by the expensive download check but absent from this cheap check.
+ * No GitHub asset targets remain in the committed registry; support stays for
+ * future release pins, with the tag read from each URL rather than assumed.
+ * A pinned URL on neither supported host must die, so it cannot silently
+ * disappear from the cheap check. A model without a digest has no pin to read.
  *
  * **These are bytes this project hashed**, unlike the GGUF pins. Re-reading
  * what GitHub states about them is strictly weaker than the download
@@ -677,10 +669,11 @@ export function githubAssetTargets(reg = registry()) {
   ]) {
     for (const model of models) {
       if (model.files?.length || !model.sha256) continue;
+      if (parseFixedHfUrl(model.downloadUrl)) continue;
       const parsed = parseGithubAssetUrl(model.downloadUrl);
       if (!parsed) {
         die(
-          `${kind}/${model.id} is pinned but its downloadUrl is not a GitHub release asset: ` +
+          `${kind}/${model.id} is pinned but its downloadUrl is neither a GitHub release asset nor a fixed-commit Hugging Face URL: ` +
             `${model.downloadUrl}. This mode does not know how to re-read that host.`
         );
       }
@@ -905,8 +898,8 @@ export async function verifyStated(only) {
     }
   }
 
-  // The k2-fsa assets, from the other host. One request per release: three
-  // today, `asr-models` and the two diarization releases.
+  // One request per release, only when release assets exist. An empty list
+  // must not contact GitHub: all current model pins use Hugging Face.
   const assets = only ? [] : githubAssetTargets();
   const assetWrong = [];
   const assetNotes = [];
@@ -1001,12 +994,18 @@ export function parseHfUrl(url) {
   return { repo: match[1], revision: match[2], path: match[3] };
 }
 
+/** Only immutable HF single-file URLs belong in the stated metadata check. */
+function parseFixedHfUrl(url) {
+  if (!/^https:\/\/huggingface\.co\/[^/?#]+\/[^/?#]+\/resolve\/[0-9a-f]{40}\/[^?#]+$/.test(String(url))) return null;
+  return parseHfUrl(url);
+}
+
 /**
  * Every Hugging Face repository the registry downloads from, once each.
  *
- * Both families, because both are served by the same host under the same
- * branch pointer: whisper URLs are stored whole and parsed back apart, GGUF
- * URLs are composed from `hfRepo` and so are read directly. The `from` string
+ * Whisper, sherpa, diarization and GGUF models all name fixed revisions on
+ * this host. Whole URLs are parsed back apart; GGUF repositories are read
+ * directly from `hfRepo`. The `from` string
  * is carried so a repository that cannot be read names the models that would
  * stop installing, rather than only itself.
  */
@@ -1026,9 +1025,15 @@ export function hfRepos(reg = registry()) {
     if (parsed) add(parsed.repo, `whisper/${model.id}`);
   }
   for (const models of [reg.localAsr?.sherpa ?? [], reg.localAsr?.diarization ?? []]) {
-    for (const model of models) for (const file of model.files ?? []) {
-      const parsed = parseHfUrl(file.url);
-      if (parsed) add(parsed.repo, model.id);
+    for (const model of models) {
+      for (const file of model.files ?? []) {
+        const parsed = parseHfUrl(file.url);
+        if (parsed) add(parsed.repo, model.id);
+      }
+      if (!model.files?.length && model.sha256) {
+        const parsed = parseFixedHfUrl(model.downloadUrl);
+        if (parsed) add(parsed.repo, model.id);
+      }
     }
   }
   for (const provider of reg.localLlm ?? []) {

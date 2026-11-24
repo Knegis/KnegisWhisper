@@ -4,8 +4,8 @@ Validated 2026-11-10 in an isolated worktree from dev at f4d5bde.
 No merge, push, publication, or changes to the user's installed profile.
 
 **Status:** reviewed and merged into dev on 2026-11-10, with the review follow-up
-in 26220ba. All four issues were closed in Linear the same day. The remaining CAM++
-embedding mirror gap is KNEG-546.
+in 26220ba. All four issues were closed in Linear the same day. KNEG-546 moves
+the CAM++ embedding download to a byte-equivalent fixed-commit mirror.
 
 Implementation commits: ec420d6 (checksums), 24eec8a (layout),
 2102334 (notices), 83e7252 (model downloads).
@@ -27,9 +27,15 @@ Implementation commits: ec420d6 (checksums), 24eec8a (layout),
   compatible. New downloads are bounded, staged and verified before publication, with
   OS locking and preservation of an existing complete installation.
 
-The English CAM++ embedding download is still on its existing verified GitHub URL.
-No byte-equivalent publisher mirror was established; no model was substituted.
-KNEG-532 closed without it; it is now KNEG-546.
+The English CAM++ embedding download now uses `csukuangfj/speaker-embedding-models`
+at commit `0743f301363dec56491a490f6d6cbc9d67f9a3bf` (KNEG-546). Measured
+2026-11-24 by downloading from that commit and hashing: 29,596,978 bytes, SHA-256
+`357a834f702b80161e5b981182c038e18553c1f2ca752ed6cec2052365d4129b`,
+matching the copy the application installed on the development machine on
+2026-09-03, from the GitHub asset before it was replaced, and the tree API's LFS
+metadata. The single-file layout, size and digest stay unchanged. A publisher can still delete
+or rewrite repository history; the download then fails its check and installs
+nothing. Different weights cannot be installed.
 
 ## Initial implementation checks
 
