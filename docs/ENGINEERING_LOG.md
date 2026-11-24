@@ -13,6 +13,83 @@ maintained in place rather than appended to, because its purpose is to be curren
 ---
 
 
+## 2026-11-24 — Five fixes: the exit, a failed start, the servers, the import report and the CAM++ address
+
+Five issues that needed no decision from the owner, done in one pass through the Codex orchestrator: five
+workstreams from one base, each a worker's patch reviewed before it was committed, then merged into `dev`.
+
+**The CAM++ speaker model downloads from a fixed commit (KNEG-546).** k2-fsa replaced the GitHub release asset
+on 2026-11-19 with a file one byte larger (29,596,979 bytes, SHA-256 `98daf9bc…`). The scheduled pin check of
+2026-11-23 failed on it, and by the code a new install of speaker labels fails its size and digest check. The
+Hugging Face repository `csukuangfj/speaker-embedding-models` was changed the same day, but its earlier commit
+`0743f301` still holds the original file. Measured 2026-11-24: downloaded from that commit, 29,596,978 bytes,
+SHA-256 `357a834f…`, byte-identical to the copy this machine installed on 2026-09-03. So the address changed and
+the weights did not, and nothing about Known voices moves. The registry generator overrides this one model's
+`downloadUrl`; `model-pin` reads a single-file Hugging Face pin from the repository tree. No model is left on a
+GitHub release, so `--verify-stated` no longer calls GitHub's API, which is what its second failure on
+2026-11-23 was (HTTP 403, the unauthenticated rate limit). Run on the changed tree the same day:
+`--verify --only 3dspeaker-campplus-en` matched, and `--verify-stated` passed over 57 objects.
+**Not verified:** an install of speaker labels in the application.
+
+**The exit waits for a dictation in flight (KNEG-568).** The wait is in the cleanup every exit passes through
+(`automation::on_event`), inside its existing ten seconds, and not in `quit.rs`: a Quit with no meeting asks
+nothing and goes straight to the exit, so a check there would have missed the common case. It polls the
+session's state until it is neither transcribing nor inserting; the session goes idle only after the history
+row is written. Once the exit has started, a press that would start a recording is ignored, while a key release
+and a press that finishes an open recording still work. **Verified by unit tests only.** **Not covered:** a
+dictation still recording at Quit is dropped as before, including the moment between the key release and
+transcription starting, and a transcription that outlasts ten seconds is still lost, with a warning in the log.
+
+**A failed start is reported (KNEG-570).** The body of the `setup` closure moved, unchanged, into `fn setup`;
+the closure calls it and on an error reports and exits, so Tauri never sees the error and never panics.
+`startup_failure` builds the message (what failed, its causes, where the log is) and on Windows shows a
+blocking `MessageBoxW`, which needs no window. It exits as a refused second copy does, `cleanup_before_exit`
+then `process::exit(1)`, because the exit handlers ask for state a failed `setup` never managed. `main` reports
+a failed build through the same function. **Verified once by hand in a debug build:** with a directory where
+the database file should be, a box titled KnegisWhisper showed the reason and the log's path, the log had the
+error line, and the process exited with code 1. The moved body was compared with the old closure and differs
+only in whitespace and trailing commas. The reason shown repeated "unable to open database file" three times,
+because that step's error already embeds its own chain; the message is true and ugly. **Not verified:** a
+release build. **Not covered:** macOS and Linux print to stderr and show no box.
+
+**Model servers and the diarizer end with the application on Windows (KNEG-569).** `kw_sidecar::job` holds one
+process-wide kill-on-close Job Object. The program never closes its handle; Windows does when the process ends
+by any route, and that ends every child in the job. Only children are assigned, so Explorer and the browser the
+application opens are untouched. A failed assignment is logged and the child carries on, with the PID reaper as
+the fallback. A PID record now outlives a normal Quit while its process does not, so the three `reap_stale`
+wrappers log that case at debug. **Verified by a test on Windows:** a child started through `start` is gone
+within five seconds of its parent calling `process::exit` without stopping it. The worker reports the test
+fails with the assignment removed; that was not repeated here. **Not verified:** a real model server or the
+diarizer at a real Quit. **Not covered:** macOS and Linux, and the moment between spawn and assignment.
+
+**The import says what is true and reports what it left (KNEG-507).** The screen, the module doc,
+`ARCHITECTURE.md` and the integration manifest no longer say the source is never written to. They say the
+import only reads the database, and that SQLite may update the small `-shm` index beside a write-ahead
+database. The report gains every source table outside the copy plan with its row count (token tables and
+full-text tables left out), and per table the rows passed over as deleted. Counting a table the plan does not
+know puts a source-supplied name into SQL for the first time: one statement, a count, quoted, on the read-only
+connection, and the module's note says so. "What is copied" had listed voice fingerprints since `f526c8e`
+stopped copying them. **Verified by tests**, including a write-ahead source held open whose main file and
+`-wal` are byte-identical after the import, and a table whose name carries a quote and a semicolon. **Seen** in
+headless Edge against dev fixtures, light and dark, not in the Tauri window. **Not verified:** a rerun against
+a real `transcriptions.db`.
+
+**What review sent back.** Four of the five went back once. Two were this run's own wording leaking into the
+repository: documents that said a measurement was made "by the orchestrator", which means nothing to a reader
+here. One was a user-facing claim stated more strongly than the code promises (that servers always end at Quit;
+a failed assignment says otherwise). One was `#[rustfmt::skip]` put on `setup` and `run` so the moved body would
+show as a small diff: the brief said "unchanged" and meant statements, not indentation.
+
+**The bootstrap.** `kw-sidecar` had no Windows API dependency. Its manifest now declares `windows` with the
+three features the job needs (`d3b568b`); 0.58 was already in the lockfile and nothing new was resolved. The
+notices check passes unchanged.
+
+**Gates, on the merged tree:** Clippy clean on 1.99.0, workspace tests 2388 passed, the `tauri-test` lib run
+647 passed, the uninstall helper's 11 passed, frontend 601 passed, and every contract audit and tool self-test
+CI runs. Nothing was pushed.
+
+---
+
 ## 2026-11-22 — Fields that are typed in lose the focus ring
 
 The owner asked why every search field and the note's title drew a blue line when clicked. It was the keyboard
@@ -208,10 +285,11 @@ added there wrote the summary setting through `kw_notes_core::summary::SETTINGS_
 scanner cannot resolve. It now uses `summaries::SUMMARY_SETTINGS_KEY`, the same key under the name
 the audit knows. The audits were not run before that commit, which is how it got through.
 
-**Found on the way, not fixed.** Quit during a dictation that is being transcribed loses it: the
-audio exists only in memory (KNEG-568). Local model servers outlive Quit and are reaped at the next
-launch (KNEG-569). A failed `setup` panics, and a release panic aborts, so the comment on `run`
-about reporting a startup failure holds only for a failed build (KNEG-570).
+**Found on the way, fixed on 2026-11-24.** Quit during a dictation that was being transcribed lost
+it: the audio exists only in memory (KNEG-568). Local model servers outlived Quit and were reaped at
+the next launch (KNEG-569). A failed `setup` panicked, and a release panic aborts, so the comment on
+`run` about reporting a startup failure held only for a failed build (KNEG-570). See the entry of
+2026-11-24 for what each fix covers and what it leaves.
 
 ## 2026-11-16 — The repository is public, with rulesets
 
