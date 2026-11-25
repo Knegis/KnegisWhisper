@@ -86,10 +86,14 @@ pub async fn scan(db: &Db, directory: &Path) -> Result<Vec<RecoverableRecording>
 /// caller holds the meeting lifecycle idle, which is what keeps this off the
 /// recording being made and the one being recovered.
 ///
-/// The audio goes first. If that fails nothing else is touched and the
-/// recording is still recoverable with its notes; if it succeeds, the typed
-/// notes, the plan and the running-meeting marker have nothing left to
-/// describe, and a failure to remove one of them is logged, not returned.
+/// The typed notes go first, then the plan with its name, folder and calendar
+/// details, then the audio. Each failure stops deletion and is returned. The
+/// WAV keeps the recording listed so Delete can be pressed again: if the notes
+/// were removed but the WAV cannot be, it stays listed without its typed notes.
+/// The person asked to delete both, and the error says which went. Removing
+/// the WAV first could leave notes on disk that nothing lists or removes.
+/// Only the empty running-meeting marker is removed quietly at the end: without
+/// its WAV it says nothing and nothing reads it.
 pub async fn delete(db: &Db, directory: &Path, storage_key: &str) -> Result<(), String> {
     let path = kw_notes_core::recordings::resolve(directory, storage_key)
         .filter(|path| path.extension().is_some_and(|ext| ext == "wav"))
@@ -99,9 +103,18 @@ pub async fn delete(db: &Db, directory: &Path, storage_key: &str) -> Result<(), 
         .into_iter()
         .find(|candidate| candidate.storage_key == storage_key)
         .ok_or("This recording is no longer here to delete")?;
-    std::fs::remove_file(&path)
-        .map_err(|error| format!("Could not delete the recording {storage_key}: {error}"))?;
-    draft::remove_sidecars(&path);
+    draft::try_remove_sidecar(&path).map_err(|error| {
+        format!(
+            "Could not delete the notes typed during {storage_key}: {error}. Nothing was deleted."
+        )
+    })?;
+    draft::try_remove_plan(&path).map_err(|error| {
+        format!("Could not delete the name and folder kept beside {storage_key}: {error}. Any notes typed during it were deleted; the recording was not.")
+    })?;
+    std::fs::remove_file(&path).map_err(|error| {
+        format!("Could not delete the recording {storage_key}: {error}. Any notes typed during it, and the name and folder kept beside it, were deleted.")
+    })?;
+    draft::clear_unfinished(&path);
     Ok(())
 }
 
@@ -109,6 +122,60 @@ pub async fn delete(db: &Db, directory: &Path, storage_key: &str) -> Result<(), 
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    /// Notes that cannot be removed leave the plan and WAV listed for a retry.
+    #[tokio::test]
+    async fn a_notes_removal_failure_keeps_the_recording_available_to_delete_again() {
+        let db = Db::open_in_memory().await.unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let key = "20261124-090000-a.wav";
+        let wav = dir.path().join(key);
+        std::fs::write(&wav, b"wav").unwrap();
+        std::fs::create_dir(draft::sidecar_path(&wav)).unwrap();
+        std::fs::write(draft::plan_path(&wav), b"{}").unwrap();
+        draft::mark_unfinished(&wav);
+
+        let error = delete(&db, dir.path(), key).await.unwrap_err();
+        assert!(error.contains("notes typed"), "{error}");
+        assert!(draft::sidecar_path(&wav).is_dir());
+        assert!(wav.exists());
+        assert!(draft::plan_path(&wav).exists());
+        assert!(draft::is_unfinished(&wav));
+        let listed = scan(&db, dir.path()).await.unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed.first().unwrap().storage_key, key);
+
+        std::fs::remove_dir(draft::sidecar_path(&wav)).unwrap();
+        delete(&db, dir.path(), key).await.unwrap();
+        assert!(!wav.exists());
+        assert!(!draft::plan_path(&wav).exists());
+        assert!(!draft::is_unfinished(&wav));
+        assert!(scan(&db, dir.path()).await.unwrap().is_empty());
+    }
+
+    /// A plan removal failure is reported after notes go, with the WAV still listed.
+    #[tokio::test]
+    async fn a_plan_removal_failure_leaves_the_recording_listed_without_typed_notes() {
+        let db = Db::open_in_memory().await.unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let key = "20261124-090000-a.wav";
+        let wav = dir.path().join(key);
+        std::fs::write(&wav, b"wav").unwrap();
+        std::fs::write(draft::sidecar_path(&wav), b"typed").unwrap();
+        std::fs::create_dir(draft::plan_path(&wav)).unwrap();
+        draft::mark_unfinished(&wav);
+
+        let error = delete(&db, dir.path(), key).await.unwrap_err();
+        assert!(error.contains("name and folder"), "{error}");
+        assert!(!draft::sidecar_path(&wav).exists());
+        assert!(draft::plan_path(&wav).is_dir());
+        assert!(wav.exists());
+        assert!(draft::is_unfinished(&wav));
+        let listed = scan(&db, dir.path()).await.unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed.first().unwrap().storage_key, key);
+        assert!(!listed.first().unwrap().has_notes);
+    }
 
     /// KNEG-575. The audio, the typed notes, the plan and the marker all go,
     /// and the recording is no longer offered.
