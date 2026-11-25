@@ -112,6 +112,7 @@ import { microphoneState } from "../lib/microphone";
 import type { ViewId } from "../lib/navigation";
 import { dictationReadiness } from "../lib/readiness";
 import { chooseRoute } from "../lib/routeChoice";
+import { guideShown } from "../lib/setupGuide";
 import { useRefresh } from "../lib/useRefresh";
 
 /**
@@ -220,6 +221,10 @@ export function DictationView({
   const [lastInserted, setLastInserted] = useState<InsertedDictation | null>(null);
   /** The setup guide was closed in this visit; the stored answer is read on the next. */
   const [guideClosed, setGuideClosed] = useState(false);
+  const [guideWasShown, setGuideWasShown] = useState(false);
+  useEffect(() => {
+    if (data?.setupPending) setGuideWasShown(true);
+  }, [data?.setupPending]);
   /**
    * The route switch being applied, from its choice until the re-read after
    * it. The chip says what is starting, and Start waits: the backend resolves
@@ -386,10 +391,10 @@ export function DictationView({
       }
     }
   };
-  // Shown until it is closed, on a profile that has never dictated. Closing
-  // is written here, where the settings gate looks for it. A dictation made
-  // with the guide open leaves it open until Done, so the result can be read.
-  const showGuide = data.setupPending && !guideClosed;
+  // Once shown in this visit, keep the guide until it is closed (KNEG-329):
+  // the first history row ends setupPending, but its result needs to stay
+  // readable here. Closing is written where the settings gate looks for it.
+  const showGuide = guideShown(data.setupPending, guideWasShown, guideClosed);
   const closeGuide = () => {
     setGuideClosed(true);
     void guard(dismissSetupGuide);
@@ -510,10 +515,11 @@ export function DictationView({
             <SetupGuide
               route={route}
               providers={providers}
+              choices={routes.choices}
               pressable={pressable}
               tried={lastInserted?.text ?? null}
               canInsert={canInsert}
-              onInstallLocal={() => onGoTo("transcription")}
+              onOpenTranscription={() => onGoTo("transcription")}
               onUseService={useService}
               onKeySaved={reload}
               onClose={closeGuide}
