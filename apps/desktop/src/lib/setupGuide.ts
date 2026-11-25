@@ -15,6 +15,34 @@
  */
 
 import type { ProviderSummary, RouteReport } from "../generated/ipc-types.js";
+import type { RouteChoice } from "./dictationRoute.js";
+
+/** Keep the first result readable even after its history row ends first-run setup (KNEG-329). */
+export function guideShown(pending: boolean, wasShown: boolean, closed: boolean): boolean {
+  return !closed && (pending || wasShown);
+}
+
+export type ServiceOffer =
+  | { kind: "use" }
+  | { kind: "settings"; line: string }
+  | null;
+
+/** Offer a switch only when the route menu can make it; a key alone may not suffice. */
+export function serviceOffer(
+  service: Pick<ProviderSummary, "id" | "name" | "configured">,
+  inUse: string | null,
+  choices: ReadonlyMap<string, RouteChoice>,
+): ServiceOffer {
+  if (!service.configured) return null;
+  for (const choice of choices.values()) {
+    if (choice.kind === "cloud" && choice.provider === service.id) return { kind: "use" };
+  }
+  if (service.id === inUse) return null;
+  return {
+    kind: "settings",
+    line: `${service.name} needs more than a key before dictation can use it. Finish setting it up under Settings › Transcription.`,
+  };
+}
 
 export type RouteStep = { done: boolean; line: string };
 

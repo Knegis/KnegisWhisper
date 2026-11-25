@@ -12,6 +12,11 @@
  * credential store worked. And it sends nothing: a key goes to its provider
  * when that provider is used, not when it is saved here.
  *
+ * State belongs to one credential slot (KNEG-572). Switching slots unmounts
+ * the form and unregisters its settings draft, dropping any unsaved key and
+ * feedback. A save already in flight still completes into its original slot:
+ * `persist` closed over that slot before the switch.
+ *
  * Providers keeps its own form. That one opens one row at a time, moves the
  * row between lists and resets the page's connection test, none of which a
  * form standing under a select has any use for.
@@ -28,12 +33,11 @@ import { message } from "../lib/useRefresh";
 import { FailureLine } from "./FailureLine";
 import { useSettingsDraft } from "./SettingsDrafts";
 
-export function ProviderKeyForm({
-  slot,
-  name,
-  stored,
-  onSaved,
-}: {
+export function ProviderKeyForm(props: ProviderKeyFormProps) {
+  return <ProviderKeyFormInner key={props.slot} {...props} />;
+}
+
+type ProviderKeyFormProps = {
   /** The credential slot, from the provider's `credentialSlot`. Never written here as a literal. */
   slot: string;
   /** The provider's name, for the field's label and the sentences about it. */
@@ -42,7 +46,14 @@ export function ProviderKeyForm({
   stored: boolean;
   /** Called once a key has been stored or removed, so the caller can re-read what it shows. */
   onSaved: () => void | Promise<void>;
-}) {
+};
+
+function ProviderKeyFormInner({
+  slot,
+  name,
+  stored,
+  onSaved,
+}: ProviderKeyFormProps) {
   const [draft, setDraft] = useState("");
   /** A stored key's field stays shut until Change is pressed; an empty slot's is open. */
   const [changing, setChanging] = useState(false);

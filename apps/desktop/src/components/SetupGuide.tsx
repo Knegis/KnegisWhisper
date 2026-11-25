@@ -28,9 +28,10 @@
 
 import { useState } from "react";
 
+import type { RouteChoice } from "../lib/dictationRoute";
 import { checkMicrophone, type MicrophoneCheck, type ProviderSummary, type RouteReport } from "../lib/ipc";
 import { MICROPHONE_CHECK_LISTENING, microphoneCheckLine } from "../lib/meetingView";
-import { closeLabel, routeStep, stepsDone } from "../lib/setupGuide";
+import { closeLabel, routeStep, serviceOffer, stepsDone } from "../lib/setupGuide";
 import { message } from "../lib/useRefresh";
 import { FailureLine } from "./FailureLine";
 import { Keycaps } from "./Keycaps";
@@ -40,24 +41,26 @@ import { ProviderKeyForm } from "./ProviderKeyForm";
 export function SetupGuide({
   route,
   providers,
+  choices,
   pressable,
   tried,
   canInsert,
-  onInstallLocal,
+  onOpenTranscription,
   onUseService,
   onKeySaved,
   onClose,
 }: {
   route: RouteReport;
   providers: readonly ProviderSummary[];
+  choices: ReadonlyMap<string, RouteChoice>;
   /** The dictation shortcut as it can be pressed, for the keycaps. Empty when none works. */
   pressable: readonly string[];
   /** The text of a dictation made since the page opened, or `null`. */
   tried: string | null;
   /** Whether this platform can type into other applications at all. */
   canInsert: boolean;
-  /** Go to where a model for this computer is installed. */
-  onInstallLocal: () => void;
+  /** Go to Settings > Transcription to install a local model or finish a service's setup. */
+  onOpenTranscription: () => void;
   /** Point dictation at a service that has a key. */
   onUseService: (providerId: string) => void;
   /** A key was saved or removed: re-read what the page shows. */
@@ -71,6 +74,7 @@ export function SetupGuide({
   const inUse = route.isLocal ? null : (providers.find((p) => p.id === route.destination)?.id ?? null);
   const [picked, setPicked] = useState<string | null>(null);
   const service = services.find((p) => p.id === (picked ?? inUse ?? "")) ?? null;
+  const offer = service ? serviceOffer(service, inUse, choices) : null;
 
   const [listening, setListening] = useState(false);
   const [check, setCheck] = useState<MicrophoneCheck | null>(null);
@@ -111,7 +115,7 @@ export function SetupGuide({
                 <div className="setup-choice">
                   <p className="setup-choice-name">On this computer</p>
                   <p className="muted">Audio never leaves it. You install a speech model first.</p>
-                  <button type="button" className="pill" onClick={onInstallLocal}>
+                  <button type="button" className="pill" onClick={onOpenTranscription}>
                     Choose a model to install
                   </button>
                 </div>
@@ -132,10 +136,17 @@ export function SetupGuide({
                     {service ? (
                       <ProviderKeyForm slot={service.credentialSlot} name={service.name} stored={service.configured} onSaved={onKeySaved} />
                     ) : null}
-                    {service && service.configured && service.id !== inUse ? (
+                    {service && offer?.kind === "use" ? (
                       <button type="button" className="pill" onClick={() => onUseService(service.id)}>
                         {`Use ${service.name} for dictation`}
                       </button>
+                    ) : offer?.kind === "settings" ? (
+                      <>
+                        <p className="muted">{offer.line}</p>
+                        <button type="button" className="pill" onClick={onOpenTranscription}>
+                          Open Transcription settings
+                        </button>
+                      </>
                     ) : null}
                   </div>
                 ) : null}
