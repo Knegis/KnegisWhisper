@@ -13,6 +13,72 @@ maintained in place rather than appended to, because its purpose is to be curren
 ---
 
 
+## 2026-11-25 — A review of the fourteen commits: four defects, all in the UI work
+
+A second reviewer (one Codex session, `gpt-6.1-sol`) read the fourteen commits of 2026-11-24 as one diff,
+`d51f70a..b91aff9`, and reported six findings. Each was checked against the code. Four were defects and are
+fixed here. All four were in the one UI commit, `d64d449`; nothing was found in the five fixes before it, though
+the reviewer could not run Quit, the Job Object or the startup message box, so those still rest on the checks
+recorded in the entries below.
+
+**A key typed for one provider could be saved under another (KNEG-572).** `ProviderKeyForm` kept the typed key
+in component state and wrote it to whichever slot it was handed. Under a select, React keeps the instance when
+the provider changes, so the text typed for A was still in the field, and Save, Enter or the unsaved-changes
+dialog stored it under B. Three of the five call sites were open to it: the setup card and both forms on
+Cleanup & summaries. The fix is in the component, not at the call sites: the exported form renders its body
+keyed by slot. A key typed and not saved is dropped when another provider is picked. That is deliberate; it was
+the first provider's key.
+
+**The setup card closed itself after the first dictation (KNEG-329).** The page re-reads "is setup pending"
+after every dictation, and one history row makes that false, so the card went before its third step could show
+what was heard. A comment beside the line said the card stayed open until Done. It was written from intent and
+never checked: a first dictation through the card is on yesterday's not-verified list. Once shown in a visit the
+card now stays until Skip or Done.
+
+**"Use Corti for dictation" did nothing (KNEG-329).** The card offered the button for any service with a key.
+Corti needs an environment and a tenant too, so the route menu has no choice to make for it, and the handler
+returned without a word. The card now asks the route menu's own choices; where there is none it says the
+service needs more than a key and offers Open Transcription settings. One test runs through the real
+`routeMenu`, so the card and the menu cannot drift apart.
+
+**Delete could leave typed notes behind and report success (KNEG-575).** The WAV went first, then the notes,
+plan and marker through calls that only log a failure. A recording is listed only while its WAV is there, so
+notes that could not be removed were left on disk with nothing that lists them. Yesterday's comment recorded
+audio-first as a decision, made so that a failed delete left the recording recoverable with its notes. That
+weighed the wrong failure. The order is now notes, plan, WAV, and the first failure is returned with the
+recording still listed. The cost is stated in the code: if the notes go and the WAV then cannot, the recording
+stays listed without them, after a question that asked to delete both.
+
+**Not acted on.** With one to three recordings and no note, the list is open and there is no Review button. The
+approved plan said one row with Review; keeping up to three open was a choice made while building, written in
+the docs but never put to the owner as a deviation. It is the owner's to rule on (KNEG-575). The reviewer also
+noted that each delete rescans the whole folder. True, unmeasured, and small at the sizes seen (24 recordings on
+the owner's profile); the rescan is what holds delete and the list to one rule.
+
+**How it was done.** Two Codex workers in the worktree pool, one for the Rust and one for the three frontend
+fixes, from briefs that fixed the design. One repair round on the Rust: two error sentences said typed notes
+"were deleted" for recordings that never had any.
+
+**Verified.**
+
+- On the merged tree with CI's toolchain: frontend tests 628 passed, typecheck and build; workspace tests 2396
+  passed; the `tauri-test` lib run 655 passed; Clippy clean on 1.99.0; the contract audits and both generator
+  checks.
+- **Read by instrument in headless Edge against dev fixtures**, not in the Tauri window: a key typed for Mistral
+  is gone when Corti is picked and nothing is stored for Mistral; on Cleanup & summaries a key typed for
+  Anthropic is gone when OpenAI is picked and nothing reads as unsaved; Corti with a key shows the sentence and
+  no Use button, Mistral shows Use; the card stays after a re-read with pending false, and Skip closes it. The
+  same script against `b91aff9` shows all three defects, so it tells the two apart.
+- `summary-setup` and `settings-return` pass.
+- The delete order by unit tests only: a directory standing where the notes file, or the plan, would be.
+
+**Not verified.** Any of it in the Tauri window. A real first dictation through the card, as before. A delete
+against a file that a real program holds open.
+
+Nothing was pushed.
+
+---
+
 ## 2026-11-24 — The design review's six: Settings cut down, Meetings' Start back in view, a first run
 
 A design review of the running application scored it 22 of 40 (`.impeccable/critique/`, not in this
