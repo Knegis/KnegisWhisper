@@ -79,22 +79,30 @@ saved meetings, read "Not transcribed", and the page could say "No meetings save
 yet." above them; read from Notes, the meeting looked deleted. From then until
 2026-11-24 each was a card of its own ahead of every saved meeting (KNEG-575).
 
-**Delete** (2026-11-24, KNEG-575) removes the recording, the notes typed during
-it, its plan and its marker, after a question that says so. **Delete all**
+**Delete** (2026-11-24, KNEG-575) removes the notes typed during the meeting,
+then its name and folder kept in the plan, then the recording, after a question
+that says so. A failure stops the delete, is shown as an error, and leaves the
+recording listed so Delete can be pressed again. If the notes went before a
+later failure, the recording stays listed without them; the error says what went.
+The empty running-meeting marker is removed last, with failures only logged.
+Until 2026-11-25 the recording was removed first and a failure to remove the
+notes was only logged, leaving notes on disk that nothing listed. **Delete all**
 asks once for all of them and stops at the first that fails. It is refused while
 a meeting is being recorded, saved or recovered, and for any recording a note
 owns, a note in Trash included. Until it existed a recording could only be
 recovered, and one with nothing in it could not be: Recover refuses a recording
 that transcribes to nothing and has no typed notes, so it was listed for ever.
 
-Automated, on Windows: the delete removes the four files and leaves a second
-recording alone; a recording a note owns is refused and left in place; a name
-outside the folder, a file that is not a WAV and a missing one are refused; a
-second delete says the recording is gone (`meeting::recovery`, four tests).
-Run once in the application on a throwaway profile, read by instrument: five
-recordings listed behind Review, one deleted with its notes and marker gone from
-the folder, Cancel leaving the rest, Delete all removing them, and
-`../knegiswhisper.db` refused with the database still there.
+Automated, on Windows: unit tests check that delete removes the four files and
+leaves a second recording alone; a recording a note owns is refused and left in
+place; a name outside the folder, a file that is not a WAV and a missing one are refused; a
+second delete says the recording is gone; notes that cannot be removed leave the
+plan and recording listed and deletion succeeds after the obstruction is removed;
+a plan that cannot be removed leaves the recording listed without its typed notes
+(`meeting::recovery`, six delete tests). Two more unit tests in `meeting::draft`
+check fallible notes and plan removal: an existing file is removed, an absent file
+is accepted, and a directory is an error. These unit tests do not exercise the
+application.
 
 Quit from the tray no longer cuts a meeting short without asking. While a
 meeting is being recorded it offers **Stop and save, then quit** or **Keep

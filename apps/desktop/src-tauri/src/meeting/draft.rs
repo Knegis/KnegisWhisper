@@ -180,6 +180,14 @@ pub fn remove_sidecar(recording: &Path) {
     remove_quietly(&sidecar_path(recording), "meeting notes sidecar");
 }
 
+/// Remove the typed notes, allowing deletion to stop if they remain on disk.
+pub fn try_remove_sidecar(recording: &Path) -> std::io::Result<()> {
+    match std::fs::remove_file(sidecar_path(recording)) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        result => result,
+    }
+}
+
 /// Remove both sidecars, the notes and the plan, once the recording no longer
 /// needs them: it belongs to a saved note, or it was deleted. Where the
 /// recording is left with no note -- offered for recovery -- only
@@ -195,6 +203,14 @@ pub fn remove_sidecars(recording: &Path) {
 /// notes beside it could not be saved and stay on disk.
 pub fn remove_plan(recording: &Path) {
     remove_quietly(&plan_path(recording), "meeting plan");
+}
+
+/// Remove the plan, allowing deletion to stop if its meeting details remain.
+pub fn try_remove_plan(recording: &Path) -> std::io::Result<()> {
+    match std::fs::remove_file(plan_path(recording)) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        result => result,
+    }
 }
 
 fn remove_quietly(path: &Path, what: &str) {
@@ -271,6 +287,36 @@ mod tests {
             sidecar_path(Path::new("x.wav")),
             PathBuf::from("x.notes.md")
         );
+    }
+
+    /// Fallible notes removal accepts an absent file but reports a directory.
+    #[test]
+    fn trying_to_remove_the_sidecar_reports_whether_it_was_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let wav = dir.path().join("x.wav");
+        let sidecar = sidecar_path(&wav);
+        std::fs::write(&sidecar, b"typed").unwrap();
+        assert!(try_remove_sidecar(&wav).is_ok());
+        assert!(!sidecar.exists());
+        assert!(try_remove_sidecar(&wav).is_ok());
+        std::fs::create_dir(&sidecar).unwrap();
+        assert!(try_remove_sidecar(&wav).is_err());
+        assert!(sidecar.is_dir());
+    }
+
+    /// Fallible plan removal accepts an absent file but reports a directory.
+    #[test]
+    fn trying_to_remove_the_plan_reports_whether_it_was_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let wav = dir.path().join("x.wav");
+        let plan = plan_path(&wav);
+        std::fs::write(&plan, b"{}").unwrap();
+        assert!(try_remove_plan(&wav).is_ok());
+        assert!(!plan.exists());
+        assert!(try_remove_plan(&wav).is_ok());
+        std::fs::create_dir(&plan).unwrap();
+        assert!(try_remove_plan(&wav).is_err());
+        assert!(plan.is_dir());
     }
 
     /* ------------------------------------------------------- the plan (KNEG-365) */
