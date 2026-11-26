@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { getSummarySettings, getSummaryReadiness, setSummarySettings, getReasoningStatus, getLocalLlmStatus, type SummarySettings, type SummaryReadiness, type ReasoningProviderSummary, type LocalLlmModelStatus } from "../lib/ipc";
 import { FailureLine } from "./FailureLine";
 import { LearnMore } from "./LearnMore";
+import { ProviderKeyForm } from "./ProviderKeyForm";
 
 /**
  * Settings > Cleanup & summaries: meeting summaries.
@@ -59,6 +60,15 @@ export function SummarySettingsPanel({ focusRequest, onGoToProviders, onGoToLoca
   const local = settings.provider === "local" && !settings.selfHostedUrl;
   const selfHosted = settings.selfHostedUrl !== null;
   const models = local ? localModels : selected?.models ?? [];
+  // A company account is offered only where one is already set up or chosen
+  // (KNEG-571), as on the cleanup list below.
+  const offered = providers.filter(p => p.id !== "local" && (!p.enterprise || p.configured || p.id === settings.provider));
+  // After a key is saved here: what the providers say about themselves, and
+  // whether summaries are now ready.
+  const keySaved = async () => {
+    setProviders((await getReasoningStatus()).providers);
+    try { setReadiness(await getSummaryReadiness()); setReadinessError(null); } catch (cause) { setReadinessError(String(cause)); }
+  };
   const save = async () => {
     setBusy(true); setError(null);
     try { await draftGuard.run(persist); } catch (cause) { setError({ text: "Couldn't save the summary settings.", detail: String(cause) }); setBusy(false); return; }
@@ -77,7 +87,7 @@ export function SummarySettingsPanel({ focusRequest, onGoToProviders, onGoToLoca
     <div className="row"><label className="row-label" htmlFor="summary-provider">Provider</label><span className="row-value"><select id="summary-provider" value={selfHosted ? "self-hosted" : settings.provider} onChange={e => {
       const provider = e.target.value;
       change({ provider, model: "", selfHostedUrl: provider === "self-hosted" ? "" : null, enterprise: providers.find(p => p.id === provider)?.enterprise ?? false });
-    }}><option value="">Choose a provider</option><option value="local">This computer</option><option value="self-hosted">Your own server</option>{providers.filter(p => p.id !== "local").map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></span></div>
+    }}><option value="">Choose a provider</option><option value="local">This computer</option><option value="self-hosted">Your own server</option>{offered.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select>{!selfHosted && !local && selected && !selected.enterprise && selected.credentialSlot ? <ProviderKeyForm slot={selected.credentialSlot} name={selected.name} stored={selected.configured} onSaved={keySaved} /> : null}</span></div>
     {selfHosted && <div className="row"><label className="row-label" htmlFor="summary-endpoint">Server address</label><span className="row-value"><input id="summary-endpoint" type="url" value={settings.selfHostedUrl ?? ""} placeholder="http://localhost:8080/v1" onChange={e => change({ selfHostedUrl: e.target.value })} /><p className="muted">Requests go without a key unless you save one under Providers › Your own server.</p></span></div>}
     <div className="row"><label className="row-label" htmlFor="summary-model">Model</label><span className="row-value"><input id="summary-model" list="summary-models" value={settings.model} placeholder={local ? "Choose an installed model" : "Model name, or deployment for Azure"} onChange={e => change({ model: e.target.value })} /><datalist id="summary-models">{models.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}</datalist>{local && <p className="muted">Install a model under Local text models first. A summary never downloads one by itself.</p>}</span></div>
     <div className="row"><label className="row-label" htmlFor="summary-language">Summary language</label><span className="row-value"><select id="summary-language" value={settings.language} onChange={e => change({ language: e.target.value })}><option value="match">Match meeting</option><option value="sv">Swedish</option><option value="en">English</option></select></span></div>

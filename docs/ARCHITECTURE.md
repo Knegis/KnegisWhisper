@@ -210,9 +210,11 @@ We do not reproduce that. Instead:
 2. **Version properly from day one.** `sqlx::migrate!` with a `_migrations` table. Every later
    change is a numbered file. No `IF NOT EXISTS` schema-drift patching, ever.
 3. **Import rather than migrate.** An OpenWhispr database is a *foreign* database, so it gets a
-   one-way importer: attach read-only, introspect with `pragma table_info` (the source column set
-   is genuinely unknowable up front), copy what we keep, drop every cloud/sync column, and rebuild
-   the FTS index. It never writes to the source file, which makes it inherently reversible.
+   one-way importer: open a second read-only connection pool, introspect with `pragma table_info`
+   (the source column set is unknowable up front), copy what we keep, and drop every cloud/sync
+   column. Triggers fill the FTS index as notes are inserted. The import changes none of the
+   source's notes or settings; SQLite may update its transient `-shm` wal-index while reading a
+   WAL database. The target can be deleted to try again.
 4. **Relocate secrets during import.** Upstream stores calendar refresh tokens in plaintext
    SQLite columns. The importer moves them into the OS credential store and leaves only a key
    reference behind. Google Calendar and Outlook resolve an Advanced custom client before the

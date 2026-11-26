@@ -2026,7 +2026,7 @@ export const PROVIDER_REGISTRY = {
         "files": [],
         "id": "3dspeaker-campplus-en",
         "name": "CAM++ Speaker Embedding (English)",
-        "downloadUrl": "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx",
+        "downloadUrl": "https://huggingface.co/csukuangfj/speaker-embedding-models/resolve/0743f301363dec56491a490f6d6cbc9d67f9a3bf/3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx",
         "extractDir": null,
         "fileName": "3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx",
         "sizeMb": 28.2,

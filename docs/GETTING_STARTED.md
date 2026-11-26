@@ -19,6 +19,12 @@ release's installation notes and [known limitations](KNOWN_LIMITATIONS.md).
 
 ## Your first local dictation
 
+The first time KnegisWhisper opens, **Dictation** shows a short setup: where
+speech becomes text, a five-second microphone check, and a first try. It
+downloads nothing and sends nothing by itself, and **Skip setup** closes it for
+good. It is not shown on a profile that has already dictated. The steps below
+are the same ground, by hand.
+
 1. Open **Settings > Transcription** and select a local Whisper route.
 2. Install its required runtime and model through the app. Downloads require a
    connection and disk space; the installer does not contain every model.
@@ -33,8 +39,10 @@ start with Whisper rather than Parakeet.
 
 ## Use a cloud provider
 
-Add your own credentials in **Settings > Providers**, then choose the provider in
-**Settings > Transcription**. Requests go directly to the selected provider and
+Add a key where you choose the service: under **Add a cloud service** in
+**Settings > Transcription**, beside the provider in **Settings > Meetings** and
+**Settings > Cleanup & summaries**, or in the first-run setup. Every key is also
+listed in **Settings > Providers**, which is where a saved key can be tested. Requests go directly to the selected provider and
 provider charges may apply. No KnegisWhisper account is required.
 
 Optional cleanup and summaries have independent model choices in
@@ -144,9 +152,10 @@ that a folder was removed.
    `%APPDATA%\KnegisWhisper` folder. Credentials are stored separately.
 2. If the app is still installed, clear saved provider keys in **Settings >
    Providers** and disconnect calendar accounts in **Settings > Calendar**.
-   Quit from the tray. Stop any remaining KnegisWhisper transcription/model
-   processes before deleting files; check their executable paths so you do not
-   stop another application's runtime.
+   Quit from the tray. On Windows, model servers normally end with the application.
+   If a KnegisWhisper transcription or model process is still running, stop it
+   before deleting files; check its executable path so you do not stop another
+   application's runtime.
 3. Sign into the Windows account that used the app. In File Explorer, enter
    `%APPDATA%\KnegisWhisper` and verify the full resolved path and folder name.
    Delete that specific folder only when you intend to erase its contents,

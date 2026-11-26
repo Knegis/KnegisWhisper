@@ -45,6 +45,7 @@
 pub mod catalog;
 pub mod install;
 pub mod integrity;
+pub mod job;
 pub mod manifest;
 pub mod pid;
 pub mod port;

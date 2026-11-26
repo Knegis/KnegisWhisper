@@ -22,6 +22,7 @@
 import type {
   HotkeyReport,
   MeetingProviderSummary,
+  ProviderSummary,
   Registration,
   RouteReport,
   SystemAudioSupport,
@@ -96,12 +97,32 @@ export function dictationReadiness(i: {
   route: RouteReport;
   hotkeys: HotkeyReport;
   canInsert: boolean;
+  /**
+   * The cloud speech services, for whether the one dictation is set to has a
+   * key. Optional: without it this answers as it did before KNEG-329.
+   */
+  providers?: readonly Pick<ProviderSummary, "id" | "name" | "configured">[];
 }): Readiness<DictationFix> {
   if (i.route.problem) {
     return {
       state: "needs-setup",
       problem: "Choose where your speech is turned into text.",
       detail: i.route.problem,
+      fix: { view: "transcription", label: "Open Transcription" },
+    };
+  }
+
+  // A service with no key (KNEG-329). The route resolves without one -- a new
+  // profile's default is OpenAI, and the resolver has no case for a missing
+  // key -- so the page read "ready" and named the service, and the first
+  // dictation failed at Stop with "no credential is stored". Nothing was sent
+  // meanwhile; it only looked as if it would work.
+  const service = i.route.isLocal ? undefined : i.providers?.find((p) => p.id === i.route.destination);
+  if (service && !service.configured) {
+    return {
+      state: "needs-setup",
+      problem: `${service.name} needs a key before it can transcribe.`,
+      detail: `Dictation is set to ${service.name}, and no key is saved for it. Add its key, or install a model that runs on this computer.`,
       fix: { view: "transcription", label: "Open Transcription" },
     };
   }

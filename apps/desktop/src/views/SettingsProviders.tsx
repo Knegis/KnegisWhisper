@@ -12,7 +12,8 @@ import { useSettingsDraft, useSettingsNavigation } from "../components/SettingsD
  *
  * 1. **The slot list comes from Rust.** `credential_slots` reads
  *    `config/provider-registry.json`, so no provider id or slot name is written
- *    here. Eighteen slots, twelve providers and six custom endpoints — up
+ *    here. Eighteen slots, twelve providers and six custom endpoints (of which
+ *    the page lists the one something reads, see `lib/providerRows.ts`) — up
  *    from fifteen and ten once AssemblyAI and Deepgram gained their own BYOK
  *    slots for meeting streaming, and your own server's key, which cleanup
  *    and summaries share (KNEG-415). (Three further enterprise
@@ -534,7 +535,7 @@ export function SettingsProviders({ onGoTo }: { onGoTo: (id: ViewId) => void }) 
           "custom",
           "custom endpoints",
           custom,
-          "For servers of your own. Your own server's key goes with cleanup and summary requests to the address you enter under Cleanup & summaries. The others do nothing yet: the screens where you enter their servers' addresses aren't built.",
+          "For a server of your own. Its key goes with cleanup and summary requests to the address you enter under Cleanup & summaries.",
         )}
         {group(
           "company",

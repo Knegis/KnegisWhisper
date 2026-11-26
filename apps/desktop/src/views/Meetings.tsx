@@ -143,6 +143,7 @@ import {
   onMeetingOutcome,
   onMeetingState,
   onMeetingTranscript,
+  deleteMeetingRecording,
   recoverMeetingRecording,
   setInputDevice,
   setSummarySettings,
@@ -190,7 +191,7 @@ import {
   sameMeetingStart,
   summaryPrivacyLine,
 } from "../lib/meetingView";
-import { interruptedMeta, interruptedNotice } from "../lib/interruptedNotice";
+import { deleteUnfinishedQuestion, interruptedMeta, interruptedNotice, unfinishedSummary, UNFINISHED_SHOWN_OPEN } from "../lib/interruptedNotice";
 import type { ViewId } from "../lib/navigation";
 import { localProviderProblem, meetingReadiness } from "../lib/readiness";
 import { summaryConfigured } from "../lib/summaryConfigured";
@@ -362,6 +363,10 @@ export function Meetings({
   const languageMenuRef = useRef<ChipMenuHandle>(null);
   const [recoveringKey, setRecoveringKey] = useState<string | null>(null);
   const [recoveryError, setRecoveryError] = useState<string | null>(null);
+  /** The recording being deleted, or "*" while all of them are. */
+  const [deletingKey, setDeletingKey] = useState<string | null>(null);
+  /** Whether the list of recordings with no note is open, when there are too many to show at once. */
+  const [reviewing, setReviewing] = useState(false);
   const [recoveryOutcome, setRecoveryOutcome] = useState<MeetingOutcome | null>(null);
   /** Detection as last read, by the load or by the poll -- whichever was later. */
   const [detected, setDetected] = useState<readonly Detected[] | null>(null);
@@ -813,6 +818,29 @@ export function Meetings({
       .finally(() => setRecoveringKey(null));
   };
 
+  /**
+   * Delete recordings that have no note (KNEG-575). One question for however
+   * many; they go one at a time, and the first that fails stops the rest and
+   * says which, so "Delete all" never reports a success it did not have.
+   */
+  const deleteRecordings = (candidates: readonly RecoverableRecording[]) => {
+    void (async () => {
+      const question = deleteUnfinishedQuestion(candidates.length, candidates.some((c) => c.hasNotes));
+      if (!(await askConfirm(question, { confirm: candidates.length === 1 ? "Delete recording" : `Delete ${candidates.length} recordings`, destructive: true }))) return;
+      setDeletingKey(candidates.length === 1 ? candidates[0]!.storageKey : "*");
+      setRecoveryError(null);
+      setRecoveryOutcome(null);
+      try {
+        for (const candidate of candidates) await deleteMeetingRecording(candidate.storageKey);
+      } catch (cause: unknown) {
+        setRecoveryError(String(cause));
+      } finally {
+        setDeletingKey(null);
+        await reloadAll();
+      }
+    })();
+  };
+
   // Visible wherever they apply, live or idle: each is something that failed
   // or something to do now.
   const caveats = (
@@ -867,7 +895,7 @@ export function Meetings({
         type="button"
         className="pill"
         aria-label={`${busy ? "Recovering" : "Recover"} ${candidate.title ?? lowerFirst(title)}`}
-        disabled={recording || current === "finishing" || recoveringKey !== null}
+        disabled={recording || current === "finishing" || recoveringKey !== null || deletingKey !== null}
         onClick={() => recover(candidate)}
       >
         {busy ? "Recovering…" : "Recover"}
@@ -910,35 +938,92 @@ export function Meetings({
       ) : null}
       {recent === null && recentRead.error === null ? <p className="history-note">Loading recent meetings…</p> : null}
       {recent !== null && recent.length === 0 && recoverable.length === 0 ? <p className="history-note">No meetings saved yet.</p> : null}
-      {(recent !== null && recent.length > 0) || recoverable.length > 0 ? (
+      {/*
+        Recordings with no note, first, as KNEG-562 ruled: one is the thing to
+        act on, and after twenty saved meetings it was below everything else.
+        One line for all of them, where each was a card ahead of every saved
+        meeting (KNEG-575). A few open straight away; more wait behind Review.
+        Each can be recovered or deleted, and deleting asks first.
+      */}
+      {!compact && recoverable.length > 0 ? (
+        <div className="unfinished">
+          <div className="unfinished-head">
+            <span className="unfinished-count">
+              <span className="recent-interrupted-mark" aria-hidden="true" />
+              {unfinishedSummary(recoverable.length)}
+            </span>
+            <span className="unfinished-note">Not notes yet. The recordings are kept on this computer.</span>
+            {recoverable.length > UNFINISHED_SHOWN_OPEN ? (
+              <button type="button" className="pill" aria-expanded={reviewing} aria-controls="unfinished-list" onClick={() => setReviewing((open) => !open)}>
+                {reviewing ? "Hide" : "Review"}
+              </button>
+            ) : null}
+          </div>
+          {reviewing || recoverable.length <= UNFINISHED_SHOWN_OPEN ? (
+            <>
+              <ul className="unfinished-list" id="unfinished-list">
+                {recoverable.map((candidate) => {
+                  // The name it was given before Start, from the plan Rust kept
+                  // beside it (KNEG-365); otherwise when it started. The storage
+                  // key is the title's tooltip.
+                  const title = candidate.title ?? interruptedTitle(candidate.storageKey, now);
+                  const deleting = deletingKey === candidate.storageKey || deletingKey === "*";
+                  return (
+                    <li className="unfinished-item" key={candidate.storageKey}>
+                      <span className="unfinished-text">
+                        <span className="recent-interrupted-title" title={candidate.storageKey}>{title}</span>
+                        <span className="recent-interrupted-meta">{interruptedMeta(candidate)}</span>
+                      </span>
+                      <span className="unfinished-actions">
+                        {recoverButton(candidate, title)}
+                        <button
+                          type="button"
+                          className="pill"
+                          aria-label={`${deleting ? "Deleting" : "Delete"} ${candidate.title ?? lowerFirst(title)}`}
+                          disabled={recording || current === "finishing" || recoveringKey !== null || deletingKey !== null}
+                          onClick={() => deleteRecordings([candidate])}
+                        >
+                          {deleting ? "Deleting…" : "Delete"}
+                        </button>
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+              {recoverable.length > 1 ? (
+                <button
+                  type="button"
+                  className="pill unfinished-all"
+                  disabled={recording || current === "finishing" || recoveringKey !== null || deletingKey !== null}
+                  onClick={() => deleteRecordings(recoverable)}
+                >
+                  {`Delete all ${recoverable.length}`}
+                </button>
+              ) : null}
+            </>
+          ) : null}
+        </div>
+      ) : null}
+      {(recent !== null && recent.length > 0) || (compact && recoverable.length > 0) ? (
         <div className={compact ? "recent-pills" : "recent-grid"}>
-          {/* Interrupted recordings first: a meeting with no note yet is the one to act on, and
-              after twenty saved ones it was below everything else. */}
-          {recoverable.map((candidate) => {
-            // The name it was given before Start, from the plan Rust kept
-            // beside it (KNEG-365); otherwise when it started. The storage key
-            // is the title's tooltip.
+          {/* While a meeting has the page, the same recordings as a line of
+              pills, the first few of them: nothing can be recovered or deleted
+              until the meeting ends, so the rest are a count. */}
+          {compact ? recoverable.slice(0, UNFINISHED_SHOWN_OPEN).map((candidate) => {
             const title = candidate.title ?? interruptedTitle(candidate.storageKey, now);
-            return compact ? (
+            return (
               <div className="recent-pill recent-pill-interrupted" key={candidate.storageKey}>
                 <span className="recent-interrupted-label">interrupted</span>
                 <span className="recent-title" title={candidate.storageKey}>{title}</span>
                 {recoverButton(candidate, title)}
               </div>
-            ) : (
-              <div className="recent-interrupted" key={candidate.storageKey}>
-                <span className="recent-interrupted-label">interrupted</span>
-                <span className="recent-interrupted-body">
-                  <span className="recent-interrupted-title" title={candidate.storageKey}>{title}</span>
-                  <span className="recent-interrupted-meta">
-                    <span className="recent-interrupted-mark" aria-hidden="true" />
-                    {interruptedMeta(candidate)}
-                  </span>
-                </span>
-                {recoverButton(candidate, title)}
-              </div>
             );
-          })}
+          }) : null}
+          {compact && recoverable.length > UNFINISHED_SHOWN_OPEN ? (
+            <div className="recent-pill recent-pill-interrupted recent-pill-more">
+              <span className="recent-interrupted-label">{`and ${recoverable.length - UNFINISHED_SHOWN_OPEN} more unfinished`}</span>
+            </div>
+          ) : null}
           {(recent ?? []).map((note, position) => {
             const meta = recentMeta(note.createdAt, note.audioDurationSeconds, now).toLowerCase();
             return compact ? (
@@ -1332,7 +1417,9 @@ export function Meetings({
             <div className="picture-tile tile-dusk" data-tone={statusView.tone}>
               <div className="tile-weather" aria-hidden="true" />
               <span className="tile-label"><span className="tile-label-dot" aria-hidden="true" />{statusView.tile} · {timeOfDay(now)}</span>
-              <p className="tile-clock" aria-hidden="true">00:00:00</p>
+              {/* No idle clock (KNEG-575): "00:00:00" filled the tile and, with
+                  the options card grown beside it, put Start under the fold at
+                  1280x800. The clock appears when there is time to show. */}
               <div className="tile-form">
                 {candidates && candidates.events.length > 0 ? <div className="calendar-choice">
                   <div className="calendar-line">
@@ -1474,14 +1561,15 @@ export function Meetings({
               {recoverable.length > 0 ? (
                 <>
                   <p className="caveat">
-                    {interruptedNotice(recoverable) ?? "A recording from an earlier session has no note."}{" "}
-                    Recover it from Recent, below; the audio may end abruptly.
+                    {interruptedNotice(recoverable) ?? (recoverable.length === 1 ? "A recording from an earlier session has no note." : `${recoverable.length} recordings from earlier sessions have no note.`)}{" "}
+                    {recoverable.length === 1 ? "Recover or delete it" : "Recover or delete them"} under Recent, below; recovered audio may end abruptly.
                   </p>
                   <LearnMore>
                     <p>
                       These recordings are not attached to a saved note. Recover
                       uses the local whole-recording transcriber and saves any
-                      notes typed during the meeting.
+                      notes typed during the meeting. Delete removes the
+                      recording and those notes for good.
                     </p>
                   </LearnMore>
                 </>

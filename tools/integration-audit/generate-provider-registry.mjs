@@ -1284,8 +1284,9 @@ for (const id of Object.keys(SHERPA_PINS)) {
  *
  * **Both digests are measurements.** `tools/model-pin/pin.mjs` fetched each
  * end to end, hashing as the bytes passed through and taking the length from
- * `stat` afterwards. Read that for what it is: the committed digest matches the
- * bytes k2-fsa's release serves today. Re-measure with `--verify`.
+ * `stat` afterwards. Downloaded from the fixed Hugging Face commit and hashed
+ * on 2026-11-24, the CAM++ mirror file matches the original pinned bytes,
+ * unlike the replaced GitHub release asset. Re-measure with `--verify`.
  *
  * **Only the segmentation model is an archive**, so only it carries a
  * `maxExtractedSizeBytes`. Its real extracted footprint was measured at
@@ -1312,6 +1313,7 @@ const DIARIZATION_PINS = {
     maxExtractedSizeBytes: 32 * 1024 * 1024,
   },
   "3dspeaker-campplus-en": {
+    downloadUrl: "https://huggingface.co/csukuangfj/speaker-embedding-models/resolve/0743f301363dec56491a490f6d6cbc9d67f9a3bf/3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx",
     role: "embedding",
     sha256: "357a834f702b80161e5b981182c038e18553c1f2ca752ed6cec2052365d4129b",
     expectedSizeBytes: 29_596_978,
@@ -1319,11 +1321,20 @@ const DIARIZATION_PINS = {
   },
 };
 
+// An override must name a fixed publisher commit, so changing a branch or a
+// release asset cannot silently change which object the digest describes.
+for (const [id, pin] of Object.entries(DIARIZATION_PINS)) {
+  if (pin.downloadUrl !== undefined &&
+      !/^https:\/\/huggingface\.co\/[^/?#]+\/[^/?#]+\/resolve\/[0-9a-f]{40}\/[^?#]+$/.test(pin.downloadUrl)) {
+    die(`DIARIZATION_PINS/${id} downloadUrl must be a fixed-commit Hugging Face URL without a query string.`);
+  }
+}
+
 const diarization = Object.entries(R.diarizationModels).map(([id, m]) => ({
   files: MODEL_FILES[id] ?? [],
   id,
   name: m.name,
-  downloadUrl: m.downloadUrl,
+  downloadUrl: DIARIZATION_PINS[id]?.downloadUrl ?? m.downloadUrl,
   // Null rather than absent for the embedding model, which is a single file
   // and has nothing to extract -- the same shape-does-not-change rule the
   // sherpa pins follow.

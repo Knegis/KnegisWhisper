@@ -496,6 +496,35 @@ async fn reapply(
 
 /* -------------------------------------------------------------------- history */
 
+/// Whether the setup guide on Dictation is still to be shown (KNEG-329).
+///
+/// Shown until it is dismissed or finished, and never to a profile that has
+/// already dictated: somebody with history has found their way, and a guide
+/// appearing over a working setup after an update would be noise. A profile
+/// whose history is switched off and empty sees it once and can skip it.
+#[tauri::command]
+pub async fn setup_guide_pending(state: State<'_, AppState>) -> CmdResult<bool> {
+    let pool = state.db().pool();
+    let dismissed: bool = settings::get_or(pool, "setup.guideDismissed", false)
+        .await
+        .map_err(|e| fail("could not read the setup guide's state", e))?;
+    if dismissed {
+        return Ok(false);
+    }
+    let dictated = transcriptions::recent(pool, 1, None)
+        .await
+        .map_err(|e| fail("could not read history", e))?;
+    Ok(dictated.is_empty())
+}
+
+/// The setup guide was finished or skipped; it is not shown again.
+#[tauri::command]
+pub async fn setup_guide_dismiss(state: State<'_, AppState>) -> CmdResult<()> {
+    settings::set(state.db().pool(), "setup.guideDismissed", &true)
+        .await
+        .map_err(|e| fail("could not save that the setup guide was closed", e))
+}
+
 /// Recent dictation history, newest first.
 #[tauri::command]
 pub async fn history(
@@ -1218,7 +1247,8 @@ pub struct ImportRequest {
     pub path: String,
 }
 
-/// Import an OpenWhispr database, read-only, into this one.
+/// Import through a read-only source connection into this database.
+/// SQLite may update the transient `-shm` index beside a WAL source.
 ///
 /// **The path must be one a real dialog returned** — see [`DialogGrants`].
 /// `kw_storage::import::from_openwhispr` checks `exists()` rather than

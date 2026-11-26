@@ -32,7 +32,9 @@ import { FailureLine } from "../components/FailureLine";
 import { LearnMore } from "../components/LearnMore";
 import { LocalModelRow } from "../components/LocalModelRow";
 import { MicrophoneSettings } from "../components/MicrophoneSettings";
+import { ProviderKeyForm } from "../components/ProviderKeyForm";
 import { Row } from "../components/Row";
+import { cloudServices } from "../lib/cloudServices";
 import { destinationName, LANGUAGES, languageNote, privacyLines } from "../lib/controlBar";
 import { languagesApply, localEngine } from "../lib/dictationRoute";
 import {
@@ -67,6 +69,7 @@ import {
 import {
   filterByLanguage,
   localModelRows,
+  localModelSections,
   modelLanguageLabel,
   type LocalModelRow as ModelRow,
 } from "../lib/localModels";
@@ -213,7 +216,7 @@ export function SettingsTranscription({
     if (p.id === "corti" && (!scopes.environment || !scopes.tenant)) throw new Error("Corti needs both an environment and a tenant.");
     await setCloudProvider(p.id, model, p.id === "corti" ? scopes : undefined);
     if (p.id === "corti") cortiSaved.current = submitted;
-    setChosen(p.configured ? `Dictation now goes to ${p.name} (${model}). Audio is sent to ${p.name}.` : `Set to ${p.name} (${model}). Add a key on the Providers page.`);
+    setChosen(p.configured ? `Dictation now goes to ${p.name} (${model}). Audio is sent to ${p.name}.` : `Set to ${p.name} (${model}). It needs a key: add one on its card.`);
     await reload();
   };
   const routeDraft = useSettingsDraft({ label: "Corti dictation configuration", dirty: JSON.stringify(scopesNow.current) !== JSON.stringify(cortiSaved.current),
@@ -331,10 +334,28 @@ export function SettingsTranscription({
 
   const { providers, local, sherpa, route, languages } = data;
   const engine = localEngine(route, sherpa);
-  const withKeys = providers.filter((p) => p.configured);
+  const cloud = cloudServices(providers, route);
   const serverFreshness = freshnessLabel(local.serverFreshness);
   const sherpaFreshness = freshnessLabel(sherpa.cliFreshness);
-  const shown = filterByLanguage(localModelRows(local, sherpa, route), language);
+  const rows = localModelRows(local, sherpa, route);
+  const parts = localModelSections(rows);
+  // The language filter narrows the catalogue. What is installed and what is
+  // recommended stay as they are: hiding an installed model behind a filter
+  // would make it look uninstalled.
+  const more = filterByLanguage(parts.more, language);
+  const modelList = (list: readonly ModelRow[]) => (
+    <ul className="model-list">
+      {list.map((row) => (
+        <LocalModelRow
+          key={row.id}
+          row={row}
+          progress={installingId === row.id ? installing : null}
+          onUse={() => chooseModel(row)}
+          onInstall={() => installModel(row)}
+        />
+      ))}
+    </ul>
+  );
 
   return (
     <div className="view">{routeDraft.feedback}
@@ -345,7 +366,7 @@ export function SettingsTranscription({
       <section data-surface="settings.transcription">
         <h2>cloud providers</h2>
         <p className="muted">
-          Add keys and test them on the Providers page.
+          A service appears here once it has a key. Saved keys can be tested on the Providers page.
         </p>
         <Row
           label="Dictation goes to"
@@ -376,32 +397,27 @@ export function SettingsTranscription({
             />
           </div>
         </div>
-        <Row
-          label="Keys saved"
-          value={
-            withKeys.length === 0
-              ? "None"
-              : withKeys.map((p) => p.name).join(", ")
-          }
-          detail={
-            withKeys.length === 0
-              ? "add one on the Providers page to use a cloud provider"
-              : undefined
-          }
-        />
+        {/*
+          A card for a service with a key, or the one dictation is set to
+          (KNEG-573). The page used to draw all seven, each reading "No key
+          saved" beside an enabled Use for dictation.
+        */}
+        {cloud.cards.length > 0 ? (
         <div className="provider-cards">
-        {providers.map((p) => {
+        {cloud.cards.map((p) => {
           const dispatch = dispatchLabel(p.dispatch);
+          const using = cloud.inUse === p.id;
           return (
           <div key={p.id} className="provider-card">
               <div className="provider-card-head">
                 <span className="provider-card-name">{p.name}</span>
-                <span className="model-chip" data-tone={p.configured ? "installed" : "plain"}>{p.configured ? "Key saved" : "No key saved"}</span>
+                {using ? <span className="model-chip" data-tone="installed">Dictation uses this</span> : null}
               </div>
               <em className="row-detail">
                 {dispatch.text} · {p.modelCount} model
                 {p.modelCount === 1 ? "" : "s"}
               </em>
+              <ProviderKeyForm slot={p.credentialSlot} name={p.name} stored={p.configured} onSaved={reload} />
               <LearnMore summary="Details">
                 {dispatch.more ? <p>{dispatch.more}</p> : null}
                 <p>
@@ -424,35 +440,54 @@ export function SettingsTranscription({
                   />
                 </span>
               ) : null}
-              {p.dispatch.state !== "needs-client" ? (
-                <span className="controls">
-                  <select
-                    aria-label={`model for ${p.name}`}
-                    value={selected[p.id] ?? p.models[0] ?? ""}
-                    onChange={(e) =>
-                      setSelected((prev) => ({ ...prev, [p.id]: e.target.value }))
-                    }
-                  >
-                    {/* Straight from the registry. No model id is written here. */}
-                    {p.models.map((m) => (
-                      <option key={m} value={m}>
-                        {m}
-                      </option>
-                    ))}
-                  </select>
-                  <button
-                    type="button"
-                    onClick={() => choose(p)}
-                    disabled={p.models.length === 0}
-                  >
-                    Use for dictation
-                  </button>
-                </span>
-              ) : null}
+              <span className="controls">
+                <select
+                  aria-label={`model for ${p.name}`}
+                  value={selected[p.id] ?? p.models[0] ?? ""}
+                  onChange={(e) =>
+                    setSelected((prev) => ({ ...prev, [p.id]: e.target.value }))
+                  }
+                >
+                  {/* Straight from the registry. No model id is written here. */}
+                  {p.models.map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={() => choose(p)}
+                  disabled={p.models.length === 0}
+                >
+                  Use for dictation
+                </button>
+              </span>
           </div>
           );
         })}
         </div>
+        ) : null}
+        {/*
+          Everything else that could be used, behind one fold, each with its
+          key field in place (KNEG-572): saving one moves the service up into
+          the cards, where it can be chosen. No trip to Providers and back.
+        */}
+        {cloud.addable.length > 0 ? (
+          <LearnMore summary={cloud.cards.length === 0 ? "Add a cloud service" : "Add another cloud service"}>
+            <p className="muted">
+              Paste a key from the service. Saving it sends nothing; audio goes to a service only once you choose it for dictation.
+            </p>
+            <ul className="service-list">
+              {cloud.addable.map((p) => (
+                <li key={p.id} className="service-row">
+                  <span className="service-name">{p.name}</span>
+                  <ProviderKeyForm slot={p.credentialSlot} name={p.name} stored={false} onSaved={reload} />
+                </li>
+              ))}
+            </ul>
+          </LearnMore>
+        ) : null}
         {/*
           Always rendered, never conditional, and below every control it reports
           on. The slot holds its height empty, so a press fills it instead of
@@ -476,42 +511,51 @@ export function SettingsTranscription({
           Speech models that run on this computer. Nothing downloads until you
           press Install.
         </p>
-        <div className="model-filter">
-          <label htmlFor="show-models-for">Show models for</label>
-            <select
-              id="show-models-for"
-              aria-label="Show models for"
-              value={language ?? ""}
-              onChange={(e) => setLanguage(e.target.value === "" ? null : e.target.value)}
-            >
-              <option value="">Any language</option>
-              {LANGUAGES.map(([code, name]) => (
-                <option key={code} value={code}>
-                  {name}
-                </option>
-              ))}
-            </select>
-        </div>
         {/*
-          One list, Whisper and Parakeet together (KNEG-330): dictation models
-          first, then the meetings models, each smallest first. Which engine a
-          model runs on is under its Details; the in-use rules are
+          Installed, then recommended, then the rest behind a fold (KNEG-573).
+          Whisper and Parakeet together, as before (KNEG-330); which engine a
+          model runs on is under its Details, and the in-use rules are
           `lib/localModels.ts`'s.
         */}
-        {shown.length > 0 ? (
-          <ul className="model-list">
-            {shown.map((row) => (
-              <LocalModelRow
-                key={row.id}
-                row={row}
-                progress={installingId === row.id ? installing : null}
-                onUse={() => chooseModel(row)}
-                onInstall={() => installModel(row)}
-              />
-            ))}
-          </ul>
-        ) : language !== null ? (
-          <p className="muted">{localModelRows(local, sherpa, route).length === 0 ? "No local speech models are available on this platform." : `No available model here is listed for ${modelLanguageLabel([language])}.`}</p>
+        {rows.length === 0 ? (
+          <p className="muted">No local speech models are available on this platform.</p>
+        ) : null}
+        {parts.installed.length > 0 ? (
+          <>
+            <p className="model-group-label">Installed</p>
+            {modelList(parts.installed)}
+          </>
+        ) : null}
+        {parts.recommended.length > 0 ? (
+          <>
+            <p className="model-group-label">{parts.installed.length > 0 ? "Recommended" : "Recommended to start with"}</p>
+            {modelList(parts.recommended)}
+          </>
+        ) : null}
+        {parts.more.length > 0 ? (
+          <LearnMore summary={`All models (${parts.more.length} more)`}>
+            <div className="model-filter">
+              <label htmlFor="show-models-for">Show models for</label>
+              <select
+                id="show-models-for"
+                aria-label="Show models for"
+                value={language ?? ""}
+                onChange={(e) => setLanguage(e.target.value === "" ? null : e.target.value)}
+              >
+                <option value="">Any language</option>
+                {LANGUAGES.map(([code, name]) => (
+                  <option key={code} value={code}>
+                    {name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            {more.length > 0 ? (
+              modelList(more)
+            ) : (
+              <p className="muted">{`No other model here is listed for ${language === null ? "any language" : modelLanguageLabel([language])}.`}</p>
+            )}
+          </LearnMore>
         ) : null}
         <p className="muted">
           Dictation uses one model at a time, so choosing one for dictation

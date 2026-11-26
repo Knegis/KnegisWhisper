@@ -224,6 +224,9 @@ pub async fn turns(
     let mut child = command
         .spawn()
         .map_err(|err| format!("the speaker diarization step could not start: {err}"))?;
+    if let Err(error) = kw_sidecar::job::assign(&child) {
+        tracing::warn!(%error, "could not tie the speaker diarizer to the application lifetime");
+    }
     let stdout = child
         .stdout
         .take()

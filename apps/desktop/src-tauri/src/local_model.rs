@@ -391,6 +391,9 @@ impl LocalTranscription {
 
         match outcome {
             kw_sidecar::Outcome::NoRecord => {}
+            kw_sidecar::Outcome::AlreadyExited => tracing::debug!(
+                "the local model server had already ended; its PID record was cleared"
+            ),
             other => tracing::info!(?other, "reaped a stale local model server"),
         }
     }
@@ -1911,8 +1914,8 @@ impl LocalTranscription {
 #[tauri::command]
 pub async fn local_server_stop(local: State<'_, Arc<LocalTranscription>>) -> Result<(), String> {
     // Refused while something is using the server, as the local text model's
-    // stop is while it answers (KNEG-414). Only this command: nothing at exit
-    // or in the tray stops the server.
+    // stop is while it answers (KNEG-414). On Windows the server also ends with
+    // the application through its job; on macOS and Linux it can outlive Quit.
     let _change = local.begin_change(None)?;
     local.stop().await;
     Ok(())

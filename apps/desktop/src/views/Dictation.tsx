@@ -58,6 +58,7 @@ import { LearnMore } from "../components/LearnMore";
 import { LevelMeter } from "../components/LevelMeter";
 import { LocalLanguagePicker } from "../components/LocalLanguagePicker";
 import { LocalServerHealth } from "../components/LocalServerHealth";
+import { SetupGuide } from "../components/SetupGuide";
 import { StatusNotice } from "../components/StatusNotice";
 import { cleanupConfigured, effectiveCleanup } from "../lib/cleanup";
 import {
@@ -83,6 +84,7 @@ import {
   getDictationRoute,
   getDictationState,
   getHistory,
+  dismissSetupGuide,
   getHistoryEnabled,
   getHotkeys,
   getInputDevice,
@@ -93,6 +95,7 @@ import {
   getProviders,
   getReasoningStatus,
   getSherpaStatus,
+  isSetupGuidePending,
   isInsertionSupported,
   onDictationOutcome,
   onDictationState,
@@ -109,6 +112,7 @@ import { microphoneState } from "../lib/microphone";
 import type { ViewId } from "../lib/navigation";
 import { dictationReadiness } from "../lib/readiness";
 import { chooseRoute } from "../lib/routeChoice";
+import { guideShown } from "../lib/setupGuide";
 import { useRefresh } from "../lib/useRefresh";
 
 /**
@@ -165,6 +169,7 @@ export function DictationView({
       providers,
       local,
       sherpa,
+      setupPending,
     ] = await Promise.all([
       getHotkeys(),
       getDictationState(),
@@ -180,6 +185,9 @@ export function DictationView({
       getProviders(),
       getLocalStatus(),
       getSherpaStatus(),
+      // Whether the first-run guide is still to be shown (KNEG-329). A failed
+      // read shows no guide: the page works without it.
+      isSetupGuidePending().catch(() => false),
     ]);
     // Every route but a Parakeet model's has languages to choose -- that model
     // uses its own -- so the languages are asked for unless it is in use.
@@ -201,6 +209,7 @@ export function DictationView({
       providers,
       local,
       sherpa,
+      setupPending,
     };
   }, []);
 
@@ -210,6 +219,12 @@ export function DictationView({
   const [session, setSession] = useState<SessionState | null>(null);
   const [lastOutcome, setLastOutcome] = useState<LastOutcome | null>(null);
   const [lastInserted, setLastInserted] = useState<InsertedDictation | null>(null);
+  /** The setup guide was closed in this visit; the stored answer is read on the next. */
+  const [guideClosed, setGuideClosed] = useState(false);
+  const [guideWasShown, setGuideWasShown] = useState(false);
+  useEffect(() => {
+    if (data?.setupPending) setGuideWasShown(true);
+  }, [data?.setupPending]);
   /**
    * The route switch being applied, from its choice until the re-read after
    * it. The chip says what is starting, and Start waits: the backend resolves
@@ -327,7 +342,7 @@ export function DictationView({
   // The microphone chip and its menu, including one chosen earlier and
   // unplugged since (`microphoneMenu` says why it is listed as itself).
   const microphone = microphoneMenu(devices, device);
-  const readiness = dictationReadiness({ route, hotkeys, canInsert });
+  const readiness = dictationReadiness({ route, hotkeys, canInsert, providers });
   // Off on a broken route: the backend resolves the route only at Stop and
   // cancels on failure (`toggle`, src-tauri/src/dictation.rs), so Start would
   // record words that are then thrown away. A missing shortcut does not
@@ -364,6 +379,25 @@ export function DictationView({
         throw cause;
       }
     }).finally(() => setSwitching(null));
+  };
+  // The setup guide's "Use <service> for dictation": the same write the route
+  // chip makes for that service, found by what it writes rather than by the
+  // menu's row id.
+  const useService = (providerId: string) => {
+    for (const [id, choice] of routes.choices) {
+      if (choice.kind === "cloud" && choice.provider === providerId) {
+        chooseRouteRow(id);
+        return;
+      }
+    }
+  };
+  // Once shown in this visit, keep the guide until it is closed (KNEG-329):
+  // the first history row ends setupPending, but its result needs to stay
+  // readable here. Closing is written where the settings gate looks for it.
+  const showGuide = guideShown(data.setupPending, guideWasShown, guideClosed);
+  const closeGuide = () => {
+    setGuideClosed(true);
+    void guard(dismissSetupGuide);
   };
   // Tidy up is a switch once a provider or a URL is stored; until then it is
   // the way to set one up. The switch writes the stored setting with only
@@ -476,6 +510,21 @@ export function DictationView({
         </div>
         <section data-surface="dictation.task" className="task" aria-labelledby="dictation-title">
           <div className="task-hero" data-tone={status.tone}>{hero}</div>
+
+          {showGuide ? (
+            <SetupGuide
+              route={route}
+              providers={providers}
+              choices={routes.choices}
+              pressable={pressable}
+              tried={lastInserted?.text ?? null}
+              canInsert={canInsert}
+              onOpenTranscription={() => onGoTo("transcription")}
+              onUseService={useService}
+              onKeySaved={reload}
+              onClose={closeGuide}
+            />
+          ) : null}
 
           <div className="task-grid">
           <ControlBar

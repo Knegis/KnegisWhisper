@@ -17,6 +17,37 @@ No installer release is claimed by this entry. See
 - Starting KnegisWhisper a second time shows the copy that is already running (KNEG-564).
 - Search fields, the note title and other text fields no longer draw a blue ring when clicked.
   They show focus by lifting to white. Buttons and checkboxes keep the ring for keyboard use.
+- Speaker labels can be installed again. The English speaker model's download address had
+  started serving a different file, which the install rightly refused; it now downloads the
+  original file from a fixed address. The model itself is unchanged (KNEG-546).
+- Quitting while a dictation is being transcribed or inserted waits up to ten seconds for it
+  to finish, so the text is inserted and kept in history. A dictation still being recorded
+  when you quit is dropped, as before (KNEG-568).
+- If KnegisWhisper cannot start, Windows now shows a message saying why and where the log
+  file is. Before, the application simply did not open (KNEG-570).
+- On Windows, local model servers end when KnegisWhisper quits. They used to keep running,
+  holding their models in memory, until the next launch (KNEG-569).
+- The first time KnegisWhisper opens, Dictation shows three setup steps: where speech becomes
+  text, a microphone check, and a first try. Nothing is downloaded or sent unless you choose it,
+  and Skip setup closes it for good. Dictation no longer reads as ready while it is set to a
+  cloud service with no key (KNEG-329).
+- A key for a cloud service is entered where the service is chosen, under Transcription,
+  Meeting settings and Cleanup & summaries. It was only possible on the Providers page
+  (KNEG-572).
+- Settings lists what can be used. Shortcuts shows the actions that work; unbuilt actions,
+  endpoints and company accounts are no longer listed unless you have already set one up
+  (KNEG-571).
+- Speech and text models are listed as Installed, then Recommended, then all the others behind
+  a fold; the text models can be searched (KNEG-573).
+- Meetings: Start recording is back in view at the default window size. Recordings that never
+  became a note are one row at the top of Recent, and each can be deleted as well as recovered
+  (KNEG-575).
+- Technical details about how meetings are detected moved from Meeting settings to Diagnostics
+  (KNEG-574).
+- The OpenWhispr import lists the tables it did not copy, with row counts, and how many rows
+  it passed over because they were deleted in OpenWhispr. Its description no longer says the
+  source file is never touched: the import only reads your data and changes none of it, but
+  SQLite may update a small index file beside the database (KNEG-507).
 
 ## 0.2.0 — 2026-11-13
 

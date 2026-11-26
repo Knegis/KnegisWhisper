@@ -53,6 +53,7 @@ import { useSettingsDraft } from "../components/SettingsDrafts";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { LearnMore } from "../components/LearnMore";
+import { ProviderKeyForm } from "../components/ProviderKeyForm";
 import { Row } from "../components/Row";
 import {
   getDiarizationStatus,
@@ -80,7 +81,6 @@ import {
 } from "../lib/ipc";
 import {
   availabilityLabel,
-  captureExclusionLabel,
   detectedLabel,
   diarizationBlocker,
   diarizationRoleDetail,
@@ -88,7 +88,6 @@ import {
   keytermReviewLabel,
   languageRequiredWarning,
   meetingIsLive,
-  microphoneDetail,
   microphoneValue,
 } from "../lib/labels";
 import { AUTOMATIC_MODEL, meetingModelDetail, meetingModelOptions } from "../lib/meetingModel";
@@ -241,6 +240,10 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
   const effectiveAllowText = allowDraft ?? detect.allow.join("\n");
   const effectiveBlockText = blockDraft ?? detect.block.join("\n");
   const selectedProvider = providers.find((p) => p.id === selected) ?? null;
+  // The services a key would make usable, with the slot each one reads.
+  const needKey = providers.flatMap((provider) =>
+    provider.availability.state === "needs-credential" ? [{ provider, slot: provider.availability.slot }] : [],
+  );
   const savedProvider = savedUnusable
     ? (providers.find((p) => p.id === savedUnusable) ?? null)
     : null;
@@ -318,6 +321,25 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
               ))}
             </select>
               {providerGuard.feedback}
+              {/* A service that only lacks a key is not in the list above, so
+                  it could not be chosen and nothing here said how to get it
+                  there (KNEG-572). Its key goes in here; once saved, the
+                  service joins the list. */}
+              {needKey.length > 0 ? (
+                <LearnMore summary="Add a cloud service">
+                  <p className="muted">
+                    Paste a key from the service. Saving it sends nothing; audio goes to a service only while a meeting is recorded with it.
+                  </p>
+                  <ul className="service-list">
+                    {needKey.map(({ provider, slot }) => (
+                      <li key={provider.id} className="service-row">
+                        <span className="service-name">{provider.name}</span>
+                        <ProviderKeyForm slot={slot} name={provider.name} stored={false} onSaved={reload} />
+                      </li>
+                    ))}
+                  </ul>
+                </LearnMore>
+              ) : null}
               {selectedProvider ? (
                 <p className="caveat">
                   {/* Some summaries end in a full stop already: Deepgram's read
@@ -562,24 +584,29 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
               {microphoneValue(status.microphone)}
             </span>
           }
-          detail={microphoneDetail(status.microphone)}
         />
+        {/* How the microphone is watched, and what proves it, are on
+            Diagnostics now (KNEG-574): they are read, never changed. The
+            applications stay, folded, because the names in the two lists
+            below are copied from them. */}
         {status.detected.length === 0 ? (
           <p className="muted">No meeting application is running.</p>
         ) : (
-          status.detected.map((d) => (
-            <Row
-              key={`${d.provider}-${d.evidence}`}
-              label={d.name}
-              value={
-                <span className="state-tag" data-tone={d.inCall ? "call" : "open"}>
-                  {d.inCall ? <span className="state-tag-dot" aria-hidden="true" /> : null}
-                  {d.inCall ? "In a call" : "Open"}
-                </span>
-              }
-              detail={detectedLabel(d)}
-            />
-          ))
+          <LearnMore summary={`Meeting applications running now (${status.detected.length})`}>
+            {status.detected.map((d) => (
+              <Row
+                key={`${d.provider}-${d.evidence}`}
+                label={d.name}
+                value={
+                  <span className="state-tag" data-tone={d.inCall ? "call" : "open"}>
+                    {d.inCall ? <span className="state-tag-dot" aria-hidden="true" /> : null}
+                    {d.inCall ? "In a call" : "Open"}
+                  </span>
+                }
+                detail={detectedLabel(d)}
+              />
+            ))}
+          </LearnMore>
         )}
         {/*
           * The lists are edited here, under the applications they act on,
@@ -624,20 +651,13 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
           <p>
             Names are matched against the running program's own filename, not its
             window title, and capitalisation does not matter — the name each
-            detection above is reported by is the one to copy. A name in the second
+            running application above is reported by is the one to copy. A name in the second
             list is never offered even when this application recognises it on its
             own, which is how a false positive is silenced without waiting for a
             release. A program you list yourself is reported as running, never as
             being in a call: only you know whether it is.
           </p>
         </LearnMore>
-        {status.notificationExcluded ? (
-          <Row
-            label="The recording window"
-            value={captureExclusionLabel(status.notificationExcluded).text}
-            detail={captureExclusionLabel(status.notificationExcluded).detail}
-          />
-        ) : null}
       </section>
 
       <section>
@@ -657,19 +677,29 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
             <code>Speaker 3</code> in the next.
           </p>
         </LearnMore>
-        <p className="caveat warn">
-          Measured on this machine: the pass costs about 8% of the meeting’s
-          length, so an hour-long recording takes roughly five minutes, even
-          with a streaming model. The note is saved first and the labels are
-          added to it afterwards.
-          That is why it is off unless you turn it on.
+        {/* What switching it on costs and what it gets wrong, in one sentence
+            that stays in view; the measurements behind it are folded
+            (KNEG-574). They were two warning boxes of about fifty words each. */}
+        <p className="caveat">
+          Labels take roughly five minutes per hour of recording and are added
+          after the note is saved. They are less accurate in languages other
+          than English.
         </p>
-        <p className="caveat warn">
-          The speaker model shipped here is English. Measured: the same recording
-          put through an English and a language-matched model gave three speakers
-          and four. Meetings in another language still get labels, and they will
-          be worse — nothing in the note will say which.
-        </p>
+        <LearnMore summary="What was measured">
+          <p>
+            Measured on the computer this was developed on: the pass costs
+            about 8% of the meeting’s length, so an hour-long recording takes
+            roughly five minutes, even with a streaming model. The note is saved
+            first and the labels are added to it afterwards. That is why it is
+            off unless you turn it on.
+          </p>
+          <p>
+            The speaker model shipped here is English. Measured: the same recording
+            put through an English and a language-matched model gave three speakers
+            and four. Meetings in another language still get labels, and they will
+            be worse — nothing in the note will say which.
+          </p>
+        </LearnMore>
         <Row
           label="Status"
           value={<span className="state-pixel" data-ready={diarization.ready}>{diarization.ready ? "ready" : "not ready"}</span>}
@@ -700,7 +730,6 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
         <ul className="model-cards">
           {diarization.models.map((m) => (
             <li key={m.id} className="model-card">
-              <span className="model-card-id">{m.id.toUpperCase()}</span>
               <span className="model-card-name">{m.name}{m.sizeMb ? ` · ${m.sizeMb} MB` : ""}</span>
               <em className="row-detail">
                 {diarizationRoleDetail(m.role)} ·{" "}
@@ -742,20 +771,26 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
             <code>Settings &gt; Transcription &gt; Local</code> uses, so if you already have a local model
             it is already there.
           </p>
+          <p>
+            Their ids: {diarization.models.map((m, i) => (
+              <span key={m.id}>{i > 0 ? ", " : ""}<code>{m.id}</code></span>
+            ))}.
+          </p>
         </LearnMore>
       </section>
 
       <KnownVoices refreshKey={`${diarization.enabled}:${diarization.ready}`} />
 
+      {/* A catalogue, not a setting, so it is folded (KNEG-574). A service
+          this application declines to build a client for is not in it
+          (KNEG-571): it can never be chosen, whatever is set up. */}
       <section>
-        <h2>all meeting providers</h2>
-        <LearnMore>
-          <p>
-            Every provider this application knows the wire details for. A provider
-            with no client is listed rather than hidden, so the reason is visible.
+        <LearnMore summary="Every meeting provider, and why some can't be used">
+          <p className="muted">
+            Every provider this application has a client for, with what it
+            does with your audio and its limits.
           </p>
-        </LearnMore>
-        {providers.map((p) => (
+        {providers.filter((p) => p.availability.state !== "declined").map((p) => (
           <div key={p.id} className="row">
             <span className="row-label">{p.name}</span>
             <span className="row-value">
@@ -788,6 +823,7 @@ export function SettingsMeetings({ onGoToVocabulary }: { onGoToVocabulary: () =>
             </span>
           </div>
         ))}
+        </LearnMore>
       </section>
     </div>
   );

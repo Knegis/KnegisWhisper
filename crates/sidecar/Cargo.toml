@@ -31,6 +31,21 @@ kw-security.workspace = true
 async-trait.workspace = true
 reqwest.workspace = true
 
+# The kill-on-close Job Object the servers this crate starts are put in
+# (`job.rs`, KNEG-569). Listed in full, as `kw-security` and `kw-platform` do:
+# features unify across the build, so relying on another crate happening to
+# enable one would be a dependency on nothing declared anywhere.
+[target.'cfg(windows)'.dependencies.windows]
+workspace = true
+features = [
+    # HANDLE, CloseHandle
+    "Win32_Foundation",
+    # SECURITY_ATTRIBUTES, which gates CreateJobObjectW's signature
+    "Win32_Security",
+    # CreateJobObjectW, SetInformationJobObject, AssignProcessToJobObject
+    "Win32_System_JobObjects",
+]
+
 [dev-dependencies]
 tempfile.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "fs"] }

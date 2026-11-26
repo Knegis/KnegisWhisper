@@ -1119,27 +1119,37 @@ credential and identify the Git author as Fangjun Kuang. This establishes an
 upstream-operated distribution account; no personal-account identity claim is
 needed. Checked 2026-11-10.
 
-The English CAM++ embedding model still uses its original size/digest-pinned
-GitHub URL. No byte-equivalent publisher mirror has been verified for it.
-KNEG-546 tracks it. It is not a reason to replace its weights.
+The English CAM++ embedding model uses the single-file mirror at
+`csukuangfj/speaker-embedding-models`, commit
+`0743f301363dec56491a490f6d6cbc9d67f9a3bf` (KNEG-546). Measured 2026-11-24 by
+downloading from that commit and hashing: 29,596,978 bytes, SHA-256
+`357a834f702b80161e5b981182c038e18553c1f2ca752ed6cec2052365d4129b`,
+byte-identical to the copy the application installed on the development machine
+on 2026-09-03, from the GitHub asset before it was replaced. The tree API's
+`lfs.oid` and size agreed. The rolling release asset was replaced on 2026-11-19; its new bytes
+disagree with this pin. Installed paths, size and digest stay unchanged.
 
 **What this proves and what it does not.** A matching digest proves equality to
 our pinned bytes, not who trained a model or its recognition quality. The six
 Whisper URLs remain fixed to `5359861c739e955e79d9a303bcbc70fb988958b1`
-(`HF_REVISIONS`), as established for KNEG-103. The five migrated sherpa/segmentation
-repositories now also name full commits. The remaining CAM++ GitHub asset can
-still be replaced or removed upstream, in which case its pinned checks fail.
+(`HF_REVISIONS`), as established for KNEG-103. Sherpa and both diarization models
+also name full commits. A publisher can still delete or rewrite a repository's
+history, in which case the download fails its check and installs nothing;
+different weights cannot be installed.
 
 The weekly `node tools/model-pin/pin.mjs --verify` downloads and hashes model
 bytes. `--verify-stated` compares committed sizes/digests with host metadata;
 it is a cheaper independent check, not a re-download of the large weights.
-The pin verifier now checks individual immutable files. For Git-tracked token
-files without LFS metadata, stated verification downloads and hashes the small
-file; ONNX files are compared with LFS digests. Only the remaining embedding
-download is checked through GitHub's asset metadata; that older asset has no
-stated digest, so its metadata check establishes size only. Fixed commits protect
-against replacement under a release asset name; they do not guarantee permanent
-hosting or establish model quality.
+For Git-tracked token files without LFS metadata, stated verification downloads
+and hashes the small file; ONNX files, including CAM++, are compared with LFS
+digests at their pinned commits. No model targets remain on GitHub, so stated
+verification makes no GitHub API requests. Fixed commits do not guarantee
+permanent hosting or establish model quality.
+
+Measured 2026-11-24: `node tools/model-pin/pin.mjs --verify --only 3dspeaker-campplus-en`
+re-downloaded the file from the fixed commit and it matched the committed pin.
+Measured 2026-11-24: `node tools/model-pin/pin.mjs --verify-stated` passed over
+57 objects in 42 tree requests and made no request to `api.github.com`.
 
 **Consequence for an install.** All six models are now held to
 `kw_sidecar::integrity::verify`, so the *Verified by* column reads `digest` for

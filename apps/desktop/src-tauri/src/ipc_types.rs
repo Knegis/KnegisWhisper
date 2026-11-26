@@ -230,6 +230,7 @@ fn render() -> String {
         ],
         "import" => [
             kw_storage::import::TableReport,
+            kw_storage::import::LeftBehindTable,
             kw_storage::import::RelocatedCredential,
             kw_storage::import::ImportReport,
             crate::commands::ImportPickKind,

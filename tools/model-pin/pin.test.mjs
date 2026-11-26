@@ -577,13 +577,13 @@ test("hfRepos skips a whisper model hosted off Hugging Face rather than guessing
 });
 
 test("hfRepos reads every repository the committed registry downloads from", () => {
-  // 36 GGUF repositories plus ggerganov/whisper.cpp and five KB repositories.
+  // GGUF, Whisper, and six sherpa/diarization repositories, including CAM++.
   // The count is asserted for
   // the reason the 39-object count is: a repository silently dropping out of
   // the registry would make --revisions read fewer and still report success.
   const repos = hfRepos();
-  assert.equal(repos.length, 47);
-  assert.equal(repos.filter(r => r.repo.startsWith("csukuangfj")).length, 5);
+  assert.equal(repos.length, 48);
+  assert.equal(repos.filter(r => r.repo.startsWith("csukuangfj")).length, 6);
   assert.ok(repos.some((r) => r.repo === "ggerganov/whisper.cpp"));
   assert.deepEqual(
     repos.filter((r) => r.repo.startsWith("KBLab/")),
@@ -614,7 +614,7 @@ test("parseGithubAssetUrl splits a release-asset URL into its three parts", () =
 
 test("parseGithubAssetUrl returns null for anything that is not one", () => {
   // A caller has to handle this rather than assume it away -- `githubAssetTargets`
-  // dies on it, because a pinned model whose host this cannot read would
+  // dies unless it is a fixed-commit HF URL, because an unreadable host would
   // otherwise be skipped and reported as covered.
   assert.equal(parseGithubAssetUrl("https://huggingface.co/a/b/resolve/main/c.bin"), null);
   assert.equal(parseGithubAssetUrl("https://github.com/k2-fsa/sherpa-onnx/releases"), null);
@@ -665,8 +665,8 @@ test("compareAsset fails a stated digest that disagrees, and a stated size that 
 });
 
 test("compareAsset notes a missing digest rather than failing on it (KNEG-358)", () => {
-  // The two diarization models were uploaded in October 2024, before GitHub
-  // stated digests, and the API returns `digest: null` for both. Failing on
+  // The original diarization release assets were uploaded in October 2024,
+  // before GitHub stated digests; the API returned `digest: null`. Failing on
   // that turned the weekly job red every week from 2026-09-07 for a reason
   // that cannot clear.
   const { wrong, note } = compareAsset(asset, { digest: null, size: 123, updated_at: "2024-10-08T12:54:10Z" });
@@ -689,10 +689,10 @@ test("compareAsset fails an asset that is no longer in its release", () => {
   });
 });
 
-test("only the unmirrored embedding model remains on GitHub", () => {
-  assert.deepEqual(githubAssetTargets().map(t => t.id), ["3dspeaker-campplus-en"]);
+test("no model remains on GitHub and 18 non-GGUF files have stated pins", () => {
+  assert.deepEqual(githubAssetTargets(), []);
   const files = statedTargets().filter(t => !t.file.endsWith(".gguf"));
-  assert.equal(files.length, 17);
+  assert.equal(files.length, 18);
   for (const f of files) {
     assert.match(f.revision, /^[0-9a-f]{40}$/);
     assert.match(f.sha256, /^[0-9a-f]{64}$/);
@@ -723,4 +723,32 @@ test("the two diarization models are one segmentation and one embedding", () => 
   assert.ok(byRole.segmentation.maxExtractedSizeBytes > 0);
   assert.equal(byRole.embedding.maxExtractedSizeBytes, null);
   assert.equal(byRole.embedding.extractDir, null);
+});
+
+test("the embedding model is a measured fixed-commit stated target", () => {
+  assert.deepEqual(statedTargets().find(t => t.id === "3dspeaker-campplus-en"), {
+    id: "3dspeaker-campplus-en",
+    repo: "csukuangfj/speaker-embedding-models",
+    revision: "0743f301363dec56491a490f6d6cbc9d67f9a3bf",
+    file: "3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx",
+    sha256: "357a834f702b80161e5b981182c038e18553c1f2ca752ed6cec2052365d4129b",
+    sizeBytes: 29_596_978,
+    measured: true,
+  });
+});
+
+test("hfRepos includes the embedding repository", () => {
+  assert.deepEqual(hfRepos().find(r => r.repo === "csukuangfj/speaker-embedding-models"), {
+    repo: "csukuangfj/speaker-embedding-models", from: ["3dspeaker-campplus-en"],
+  });
+});
+
+test("githubAssetTargets refuses a pinned single file on an unknown host", (t) => {
+  t.mock.method(process, "exit", (code) => { throw new Error(`exit ${code}`); });
+  const stderr = t.mock.method(console, "error", () => {});
+  assert.throws(() => githubAssetTargets({localAsr: {diarization: [{
+    id: "unknown", files: [], downloadUrl: "https://example.invalid/model.onnx",
+    sha256: "a".repeat(64), expectedSizeBytes: 123,
+  }]}}), /exit 1/);
+  assert.match(stderr.mock.calls[0].arguments[0], /neither a GitHub release asset nor a fixed-commit Hugging Face URL/);
 });

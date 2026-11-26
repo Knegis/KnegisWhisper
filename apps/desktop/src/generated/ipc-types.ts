@@ -1374,6 +1374,10 @@ copied: number,
  */
 skipped: number,
 /**
+ * Source rows deleted in OpenWhispr and excluded from the copy.
+ */
+deletedLeftOut: number,
+/**
  * Columns this importer wanted that the source did not have.
  */
 absentColumns: Array<string>,
@@ -1386,6 +1390,15 @@ droppedColumns: Array<string>,
  * nothing they can act on.
  */
 skipReason: string | null, };
+
+/**
+ * A source table deliberately not copied, excluding tokens and derived search data.
+ */
+export type LeftBehindTable = { table: string,
+/**
+ * Source rows; zero can also mean the table could not be counted.
+ */
+rows: number, };
 
 /**
  * A token moved out of SQLite and into the OS credential store.
@@ -1412,6 +1425,10 @@ export type ImportReport = { source: string, tables: Array<TableReport>, relocat
  * Tables named in the copy plan that the source did not have at all.
  */
 absentTables: Array<string>,
+/**
+ * Source tables not copied, sorted by name, excluding tokens and derived search data.
+ */
+leftBehindTables: Array<LeftBehindTable>,
 /**
  * Rows in `notes_fts` after the import. The triggers populate it as notes
  * are inserted, so this is an assertion that they fired, not a rebuild.

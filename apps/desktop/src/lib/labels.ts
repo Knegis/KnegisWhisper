@@ -289,6 +289,28 @@ export function hotkeyActionLabel(action: HotkeyAction): string {
 }
 
 /**
+ * The actions Settings > Shortcuts lists: the ones something handles.
+ *
+ * Four of the five actions have nothing behind them, and their cards used to
+ * be drawn with a red "… is not built yet" line beside a working field and a
+ * Set button, on the first screen in Settings (KNEG-571). They are left out
+ * until they do something. Nothing is lost by it: an unhandled action's keys
+ * are saved and never offered to the system (`register_all`,
+ * src-tauri/src/shortcuts.rs), so a card for one configured nothing a person
+ * could use.
+ *
+ * Which actions are handled is Rust's answer, `HotkeyReport.unhandled`, and
+ * there is no second list here: the day one of them is built it appears.
+ */
+export function listedActions<T extends { action: HotkeyAction }>(
+  bindings: readonly T[],
+  unhandled: readonly { action: HotkeyAction }[],
+): T[] {
+  const hidden = new Set(unhandled.map((u) => u.action));
+  return bindings.filter((b) => !hidden.has(b.action));
+}
+
+/**
  * Whether an action toggles or is held, in the words a control needs.
  *
  * The `detail` is the cost, not a restatement of the name. Push-to-talk turns
@@ -871,6 +893,21 @@ export function droppedColumnsByTable(
   return report.tables
     .filter((t) => t.droppedColumns.length > 0)
     .map((t) => ({ table: t.table, columns: t.droppedColumns }));
+}
+
+/** Tables with rows get their own lines; empty or uncountable tables share one. */
+export function leftBehindTableLabels(report: ImportReport): string[] {
+  const tables = [...report.leftBehindTables].sort((a, b) => a.table.localeCompare(b.table));
+  const lines = tables.filter((t) => t.rows > 0)
+    .map((t) => `${t.table}: ${t.rows} row${t.rows === 1 ? "" : "s"}`);
+  const empty = tables.filter((t) => t.rows === 0).map((t) => t.table);
+  if (empty.length > 0) lines.push(`Empty, or could not be counted: ${empty.join(", ")}`);
+  return lines;
+}
+
+/** Deleted rows are separate from rows that failed to copy. */
+export function deletedLeftOutLabel(count: number): string {
+  return count > 0 ? `, ${count} deleted in OpenWhispr and not copied` : "";
 }
 
 /** A relocated credential, without ever naming its value. */

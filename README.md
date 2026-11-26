@@ -33,11 +33,13 @@ Run speech models locally or connect your own provider.
 preview. It has not yet been through the installation checks on a clean machine.
 You can also [run from source](docs/DEVELOPMENT.md#development).
 
-For your first dictation:
+For your first dictation, follow the three steps **Dictation** shows the first time it opens:
 
-1. Open **Settings > Transcription** and install a local Whisper runtime and model.
-2. Choose your microphone and language on **Dictation**.
-3. Set your shortcut in **Settings > Shortcuts**, focus another app and speak.
+1. Choose where speech becomes text: install a model that runs on this computer, or add a key for a cloud service.
+2. Test your microphone.
+3. Focus another app, press the shortcut and speak.
+
+The steps can be skipped. Everything in them is also under **Settings**.
 
 [Follow the first-use guide](docs/GETTING_STARTED.md)
 

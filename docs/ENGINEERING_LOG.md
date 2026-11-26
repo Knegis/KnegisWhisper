@@ -13,6 +13,230 @@ maintained in place rather than appended to, because its purpose is to be curren
 ---
 
 
+## 2026-11-25 — A review of the fourteen commits: four defects, all in the UI work
+
+A second reviewer (one Codex session, `gpt-6.1-sol`) read the fourteen commits of 2026-11-24 as one diff,
+`d51f70a..b91aff9`, and reported six findings. Each was checked against the code. Four were defects and are
+fixed here. All four were in the one UI commit, `d64d449`; nothing was found in the five fixes before it, though
+the reviewer could not run Quit, the Job Object or the startup message box, so those still rest on the checks
+recorded in the entries below.
+
+**A key typed for one provider could be saved under another (KNEG-572).** `ProviderKeyForm` kept the typed key
+in component state and wrote it to whichever slot it was handed. Under a select, React keeps the instance when
+the provider changes, so the text typed for A was still in the field, and Save, Enter or the unsaved-changes
+dialog stored it under B. Three of the five call sites were open to it: the setup card and both forms on
+Cleanup & summaries. The fix is in the component, not at the call sites: the exported form renders its body
+keyed by slot. A key typed and not saved is dropped when another provider is picked. That is deliberate; it was
+the first provider's key.
+
+**The setup card closed itself after the first dictation (KNEG-329).** The page re-reads "is setup pending"
+after every dictation, and one history row makes that false, so the card went before its third step could show
+what was heard. A comment beside the line said the card stayed open until Done. It was written from intent and
+never checked: a first dictation through the card is on yesterday's not-verified list. Once shown in a visit the
+card now stays until Skip or Done.
+
+**"Use Corti for dictation" did nothing (KNEG-329).** The card offered the button for any service with a key.
+Corti needs an environment and a tenant too, so the route menu has no choice to make for it, and the handler
+returned without a word. The card now asks the route menu's own choices; where there is none it says the
+service needs more than a key and offers Open Transcription settings. One test runs through the real
+`routeMenu`, so the card and the menu cannot drift apart.
+
+**Delete could leave typed notes behind and report success (KNEG-575).** The WAV went first, then the notes,
+plan and marker through calls that only log a failure. A recording is listed only while its WAV is there, so
+notes that could not be removed were left on disk with nothing that lists them. Yesterday's comment recorded
+audio-first as a decision, made so that a failed delete left the recording recoverable with its notes. That
+weighed the wrong failure. The order is now notes, plan, WAV, and the first failure is returned with the
+recording still listed. The cost is stated in the code: if the notes go and the WAV then cannot, the recording
+stays listed without them, after a question that asked to delete both.
+
+**Not acted on.** With one to three recordings and no note, the list is open and there is no Review button. The
+approved plan said one row with Review; keeping up to three open was a choice made while building, written in
+the docs but never put to the owner as a deviation. It is the owner's to rule on (KNEG-575). The reviewer also
+noted that each delete rescans the whole folder. True, unmeasured, and small at the sizes seen (24 recordings on
+the owner's profile); the rescan is what holds delete and the list to one rule.
+
+**How it was done.** Two Codex workers in the worktree pool, one for the Rust and one for the three frontend
+fixes, from briefs that fixed the design. One repair round on the Rust: two error sentences said typed notes
+"were deleted" for recordings that never had any.
+
+**Verified.**
+
+- On the merged tree with CI's toolchain: frontend tests 628 passed, typecheck and build; workspace tests 2396
+  passed; the `tauri-test` lib run 655 passed; Clippy clean on 1.99.0; the contract audits and both generator
+  checks.
+- **Read by instrument in headless Edge against dev fixtures**, not in the Tauri window: a key typed for Mistral
+  is gone when Corti is picked and nothing is stored for Mistral; on Cleanup & summaries a key typed for
+  Anthropic is gone when OpenAI is picked and nothing reads as unsaved; Corti with a key shows the sentence and
+  no Use button, Mistral shows Use; the card stays after a re-read with pending false, and Skip closes it. The
+  same script against `b91aff9` shows all three defects, so it tells the two apart.
+- `summary-setup` and `settings-return` pass.
+- The delete order by unit tests only: a directory standing where the notes file, or the plan, would be.
+
+**Not verified.** Any of it in the Tauri window. A real first dictation through the card, as before. A delete
+against a file that a real program holds open.
+
+Nothing was pushed.
+
+---
+
+## 2026-11-24 — The design review's six: Settings cut down, Meetings' Start back in view, a first run
+
+A design review of the running application scored it 22 of 40 (`.impeccable/critique/`, not in this
+repository's history). The owner chose its six P1 issues, and ruled on four things first: the audience is a
+technical user, so the precise vocabulary stays and its volume and place change; the approved look stays; Settings
+is fixed in place, twelve screens with the names they have; unbuilt features are hidden outright; and an
+interrupted recording can be deleted.
+
+**Two of the review's findings were wrong** and were not acted on. The speech-model list was already sorted, and
+six text models are flagged recommended, one per family, not two.
+
+**Hidden, not deleted (KNEG-571).** Shortcuts lists only the actions Rust does not report as unhandled, which
+today is dictation alone; four cards with a red "… is not built yet" beside a working field are gone, and the
+headings are names where they were ids ("chat-agent"). Providers lists a custom endpoint only when something
+reads its key, and a company account only once one is set up. The Apple Calendar row and the Tinfoil rows are not
+drawn. Known voices is not drawn until it can be used. The rule everywhere: whatever is already set up on a
+profile stays visible, so no saved setting becomes unreachable. Twelve settings keys and eight manifest entries are
+now `reachable: false`, with the reason, so the manifests say what the screens do.
+
+**A key where the service is chosen (KNEG-572).** `ProviderKeyForm` is the Providers page's field on its own. It
+stands under the provider on Transcription, Meeting settings and Cleanup & summaries. Providers keeps its own
+form: that one opens a row at a time and resets the page's connection test, which a field under a select has no
+use for. The plan said Providers would use the shared one; it does not, and the difference is deliberate.
+
+**Lists in parts (KNEG-573).** Speech models and text models come as Installed, Recommended, then the catalogue
+behind a fold. The text models' fold has a search and family headings. Transcription draws a card only for a
+service with a key or the one in use; the rest are under "Add a cloud service". "Recommended" is the registry's
+flag and the label says no more: memory and processor do not reach the frontend, so nothing is sized to this
+computer. The dev fixture drew no text-model list at all (its platform was "not published") and two of that
+screen's commands threw for want of a stub; both are fixed.
+
+**Verification lines, to Diagnostics (KNEG-574).** The capture-session interface, the display-affinity readback
+and the per-application evidence moved to a "meeting detection" section there. Meeting settings keeps the switch,
+the two lists, and a folded list of what is running, because the names in the lists are copied from it. The two
+provider catalogues are one closed fold each. The speaker-label cost is one sentence, with the measurements
+folded; it said "measured on this machine", which was true of the machine it was written on and no other.
+
+**Meetings (KNEG-575).** Start recording was cut off by the fold at 1280x800. Nothing set the tile's height: it
+stretched to the options card beside it, which has grown with every note added since the 2026-11-04 measurement,
+and Start is pinned to the tile's foot. The idle 00:00:00 clock is gone and the tile keeps its own height.
+Recordings with no note are one row at the head of Recent, where each was a card ahead of every saved meeting;
+they stay first, as KNEG-562 ruled. A new command, `meeting_delete_recording`, removes the audio, the typed notes,
+the plan and the marker. It makes the same check recovery makes and is refused while a meeting is being recorded,
+saved or recovered. Without it a recording that transcribes to nothing could never leave the list.
+
+**A first run (KNEG-329).** `dictationReadiness` now says a cloud service with no key is not ready. A new
+profile's route resolves to OpenAI with no problem, so the page read "Press … to dictate" and the first dictation
+failed at Stop. A setup card on Dictation gives three steps: where speech becomes text, a five-second microphone
+check, and a first try shown in the card. It installs nothing and sends nothing; it is closed for good by Skip or
+Done, and never shown to a profile with dictation history. Its first step is done by the readiness check's own
+reading, so the card cannot say ready when the page does not.
+
+**Verified.**
+
+- Frontend tests 622 passed; workspace tests 2392 passed; the `tauri-test` lib run 651 passed; Clippy clean on
+  1.99.0; every contract audit and tool self-test CI runs.
+- **In the application, on a throwaway profile, read by instrument** (`target/ui-p1`, a debug build with the
+  frontend embedded): the setup card on a fresh profile, "0 / 3", step one reading "OpenAI is chosen, and it has no
+  key yet", the page's title saying the same; Skip remembered. On Meetings, Start's bottom edge at 679 of 800px
+  and no idle clock; five recordings behind Review; one deleted, with its typed notes and marker gone from the
+  folder; Cancel leaving the rest; Delete all removing them; `../knegiswhisper.db` refused and the database still
+  there.
+- **Seen in headless Edge against dev fixtures**, not in the Tauri window: every changed settings screen in
+  light, the setup card in light and dark, Start at 672 of 800px and 655 of 720px.
+- `local-models`, `meeting-plan`, `settings-return`, `summary-setup` and `shell-title-bar` pass.
+  `local-models` was updated for the two parts.
+
+**Not verified.** The microphone check and a real first dictation through the card: neither was run, the first
+because it opens the microphone and the second because it needs a model or a key. A key saved through the new
+field against a real provider. The settings screens in the Tauri window on the owner's profile. A window narrower
+than 1000px for the setup card. No before-and-after count of controls on one profile: the review's numbers were
+taken on the owner's data and these were taken on fixtures, so they are not compared here.
+
+**Found on the way, not fixed.** `tools/visual-check/three-issues.mjs` fails at its Calendar step, waiting for
+"Synthetic calendar failure", and fails the same way on `dev` before any of this. The step it reached before that,
+Corti's field, did need a key stored first, and that is updated.
+
+Nothing was pushed.
+
+---
+
+## 2026-11-24 — Five fixes: the exit, a failed start, the servers, the import report and the CAM++ address
+
+Five issues that needed no decision from the owner, done in one pass through the Codex orchestrator: five
+workstreams from one base, each a worker's patch reviewed before it was committed, then merged into `dev`.
+
+**The CAM++ speaker model downloads from a fixed commit (KNEG-546).** k2-fsa replaced the GitHub release asset
+on 2026-11-19 with a file one byte larger (29,596,979 bytes, SHA-256 `98daf9bc…`). The scheduled pin check of
+2026-11-23 failed on it, and by the code a new install of speaker labels fails its size and digest check. The
+Hugging Face repository `csukuangfj/speaker-embedding-models` was changed the same day, but its earlier commit
+`0743f301` still holds the original file. Measured 2026-11-24: downloaded from that commit, 29,596,978 bytes,
+SHA-256 `357a834f…`, byte-identical to the copy this machine installed on 2026-09-03. So the address changed and
+the weights did not, and nothing about Known voices moves. The registry generator overrides this one model's
+`downloadUrl`; `model-pin` reads a single-file Hugging Face pin from the repository tree. No model is left on a
+GitHub release, so `--verify-stated` no longer calls GitHub's API, which is what its second failure on
+2026-11-23 was (HTTP 403, the unauthenticated rate limit). Run on the changed tree the same day:
+`--verify --only 3dspeaker-campplus-en` matched, and `--verify-stated` passed over 57 objects.
+**Not verified:** an install of speaker labels in the application.
+
+**The exit waits for a dictation in flight (KNEG-568).** The wait is in the cleanup every exit passes through
+(`automation::on_event`), inside its existing ten seconds, and not in `quit.rs`: a Quit with no meeting asks
+nothing and goes straight to the exit, so a check there would have missed the common case. It polls the
+session's state until it is neither transcribing nor inserting; the session goes idle only after the history
+row is written. Once the exit has started, a press that would start a recording is ignored, while a key release
+and a press that finishes an open recording still work. **Verified by unit tests only.** **Not covered:** a
+dictation still recording at Quit is dropped as before, including the moment between the key release and
+transcription starting, and a transcription that outlasts ten seconds is still lost, with a warning in the log.
+
+**A failed start is reported (KNEG-570).** The body of the `setup` closure moved, unchanged, into `fn setup`;
+the closure calls it and on an error reports and exits, so Tauri never sees the error and never panics.
+`startup_failure` builds the message (what failed, its causes, where the log is) and on Windows shows a
+blocking `MessageBoxW`, which needs no window. It exits as a refused second copy does, `cleanup_before_exit`
+then `process::exit(1)`, because the exit handlers ask for state a failed `setup` never managed. `main` reports
+a failed build through the same function. **Verified once by hand in a debug build:** with a directory where
+the database file should be, a box titled KnegisWhisper showed the reason and the log's path, the log had the
+error line, and the process exited with code 1. The moved body was compared with the old closure and differs
+only in whitespace and trailing commas. The reason shown repeated "unable to open database file" three times,
+because that step's error already embeds its own chain; the message is true and ugly. **Not verified:** a
+release build. **Not covered:** macOS and Linux print to stderr and show no box.
+
+**Model servers and the diarizer end with the application on Windows (KNEG-569).** `kw_sidecar::job` holds one
+process-wide kill-on-close Job Object. The program never closes its handle; Windows does when the process ends
+by any route, and that ends every child in the job. Only children are assigned, so Explorer and the browser the
+application opens are untouched. A failed assignment is logged and the child carries on, with the PID reaper as
+the fallback. A PID record now outlives a normal Quit while its process does not, so the three `reap_stale`
+wrappers log that case at debug. **Verified by a test on Windows:** a child started through `start` is gone
+within five seconds of its parent calling `process::exit` without stopping it. The worker reports the test
+fails with the assignment removed; that was not repeated here. **Not verified:** a real model server or the
+diarizer at a real Quit. **Not covered:** macOS and Linux, and the moment between spawn and assignment.
+
+**The import says what is true and reports what it left (KNEG-507).** The screen, the module doc,
+`ARCHITECTURE.md` and the integration manifest no longer say the source is never written to. They say the
+import only reads the database, and that SQLite may update the small `-shm` index beside a write-ahead
+database. The report gains every source table outside the copy plan with its row count (token tables and
+full-text tables left out), and per table the rows passed over as deleted. Counting a table the plan does not
+know puts a source-supplied name into SQL for the first time: one statement, a count, quoted, on the read-only
+connection, and the module's note says so. "What is copied" had listed voice fingerprints since `f526c8e`
+stopped copying them. **Verified by tests**, including a write-ahead source held open whose main file and
+`-wal` are byte-identical after the import, and a table whose name carries a quote and a semicolon. **Seen** in
+headless Edge against dev fixtures, light and dark, not in the Tauri window. **Not verified:** a rerun against
+a real `transcriptions.db`.
+
+**What review sent back.** Four of the five went back once. Two were this run's own wording leaking into the
+repository: documents that said a measurement was made "by the orchestrator", which means nothing to a reader
+here. One was a user-facing claim stated more strongly than the code promises (that servers always end at Quit;
+a failed assignment says otherwise). One was `#[rustfmt::skip]` put on `setup` and `run` so the moved body would
+show as a small diff: the brief said "unchanged" and meant statements, not indentation.
+
+**The bootstrap.** `kw-sidecar` had no Windows API dependency. Its manifest now declares `windows` with the
+three features the job needs (`d3b568b`); 0.58 was already in the lockfile and nothing new was resolved. The
+notices check passes unchanged.
+
+**Gates, on the merged tree:** Clippy clean on 1.99.0, workspace tests 2388 passed, the `tauri-test` lib run
+647 passed, the uninstall helper's 11 passed, frontend 601 passed, and every contract audit and tool self-test
+CI runs. Nothing was pushed.
+
+---
+
 ## 2026-11-22 — Fields that are typed in lose the focus ring
 
 The owner asked why every search field and the note's title drew a blue line when clicked. It was the keyboard
@@ -208,10 +432,11 @@ added there wrote the summary setting through `kw_notes_core::summary::SETTINGS_
 scanner cannot resolve. It now uses `summaries::SUMMARY_SETTINGS_KEY`, the same key under the name
 the audit knows. The audits were not run before that commit, which is how it got through.
 
-**Found on the way, not fixed.** Quit during a dictation that is being transcribed loses it: the
-audio exists only in memory (KNEG-568). Local model servers outlive Quit and are reaped at the next
-launch (KNEG-569). A failed `setup` panics, and a release panic aborts, so the comment on `run`
-about reporting a startup failure holds only for a failed build (KNEG-570).
+**Found on the way, fixed on 2026-11-24.** Quit during a dictation that was being transcribed lost
+it: the audio exists only in memory (KNEG-568). Local model servers outlived Quit and were reaped at
+the next launch (KNEG-569). A failed `setup` panicked, and a release panic aborts, so the comment on
+`run` about reporting a startup failure held only for a failed build (KNEG-570). See the entry of
+2026-11-24 for what each fix covers and what it leaves.
 
 ## 2026-11-16 — The repository is public, with rulesets
 
